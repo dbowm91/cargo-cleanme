@@ -6,5 +6,7 @@ pub mod discovery;
 pub mod domain;
 pub mod error;
 pub mod policy;
+pub mod progress;
 pub mod report;
 pub mod traverse;
+pub mod workspace;

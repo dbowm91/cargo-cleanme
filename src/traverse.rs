@@ -350,6 +350,109 @@ fn is_excluded(project: &Path, target: &Path, path: &Path, is_dir: bool) -> bool
     false
 }
 
+/// Scan one workspace member root for recent activity, excluding *all*
+/// resolved output roots contained in the member tree.
+///
+/// VCS directories and nested-repository boundaries (directories containing a
+/// nested VCS marker) are excluded including their own boundary mtime, so
+/// activity inside an independent nested repo never protects the outer member.
+/// Any walk/metadata failure is conservative (`Err(())`).
+pub fn workspace_member_activity(
+    member_root: &Path,
+    output_roots: &[PathBuf],
+    start: SystemTime,
+    cutoff: SystemTime,
+) -> Result<SourceActivity, ()> {
+    let root = member_root.to_path_buf();
+    let outputs = output_roots.to_vec();
+    let outputs_for_closure = outputs.clone();
+    let is_recent = move |time: SystemTime| time >= cutoff || time > start;
+    let descend_root = root.clone();
+    let walk = dua_core::walk(
+        &root,
+        worker_threads(),
+        dua_core::Order::ParentFirst,
+        walk_options(),
+        move |entry| {
+            let path = entry.path();
+            if path != descend_root
+                && outputs_for_closure
+                    .iter()
+                    .any(|o| path == *o || path.starts_with(o))
+            {
+                return false;
+            }
+            if path != descend_root
+                && path
+                    .file_name()
+                    .is_some_and(|n| is_vcs_name(&n.to_string_lossy()))
+            {
+                return false;
+            }
+            if path != descend_root
+                && entry.file_type.is_dir()
+                && fs::read_dir(&path).ok().is_some_and(|mut children| {
+                    children.any(|child| {
+                        child
+                            .ok()
+                            .is_some_and(|child| is_vcs_name(&child.file_name().to_string_lossy()))
+                    })
+                })
+            {
+                return false;
+            }
+            true
+        },
+    );
+    let mut newest: Option<SystemTime> = None;
+    for item in walk {
+        let entry = match item {
+            Ok(entry) => entry,
+            Err(_) => return Err(()),
+        };
+        let path = entry.path();
+        if is_excluded_multi(&root, &outputs, &path, entry.file_type.is_dir()) {
+            continue;
+        }
+        let modified = fs::metadata(&path)
+            .map_err(|_| ())?
+            .modified()
+            .map_err(|_| ())?;
+        newest = newest_time(newest, modified);
+        if is_recent(modified) {
+            return Ok(SourceActivity::Recent(modified));
+        }
+    }
+    Ok(SourceActivity::Quiet(newest))
+}
+
+fn is_excluded_multi(member_root: &Path, outputs: &[PathBuf], path: &Path, is_dir: bool) -> bool {
+    if path == member_root {
+        return false;
+    }
+    if outputs.iter().any(|o| path == *o || path.starts_with(o)) {
+        return true;
+    }
+    if path
+        .file_name()
+        .is_some_and(|n| is_vcs_name(&n.to_string_lossy()))
+    {
+        return true;
+    }
+    if is_dir
+        && fs::read_dir(path).ok().is_some_and(|mut children| {
+            children.any(|child| {
+                child
+                    .ok()
+                    .is_some_and(|child| is_vcs_name(&child.file_name().to_string_lossy()))
+            })
+        })
+    {
+        return true;
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

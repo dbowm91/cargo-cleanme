@@ -10,6 +10,9 @@ use std::path::{Component, Path, PathBuf};
 pub struct Cli {
     #[arg(long, global = true)]
     pub config: Option<PathBuf>,
+    /// Disable transient progress UI (useful for benchmarks and debugging).
+    #[arg(long, global = true)]
+    pub no_progress: bool,
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -316,5 +319,16 @@ mod tests {
         assert_eq!(up, PathBuf::from("/a/outside"));
         let rooted = absolutize_relative(Path::new("/a"), Path::new("../../x"));
         assert_eq!(rooted, PathBuf::from("/x"));
+    }
+
+    #[test]
+    fn no_progress_flag_parses_globally() {
+        let c = Cli::try_parse_from(["cargo-cleanme", "--no-progress", "scan", "/tmp"]).unwrap();
+        assert!(c.no_progress);
+        let c = Cli::try_parse_from(["cargo-cleanme", "scan", "/tmp"]).unwrap();
+        assert!(!c.no_progress);
+        let c = Cli::try_parse_from(["cargo-cleanme", "--no-progress"]).unwrap();
+        assert!(c.no_progress);
+        assert!(c.command.is_none());
     }
 }
