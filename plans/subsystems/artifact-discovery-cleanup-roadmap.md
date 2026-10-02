@@ -225,7 +225,7 @@ C001 is a hard implementation-baseline dependency for M005. M005 design research
 
 ## 10. Milestone M005 — Workspace-aware redirected/shared output
 
-Status: staged implementation. ADR 001 accepted. M005A closed; M005B ready.
+Status: complete. ADR 001 accepted. M005A closed; M005B closed.
 
 Accepted decision:
 
@@ -257,7 +257,11 @@ Expected outcome:
 
 ### M005B — Authorized redirected cleanup and simulation
 
-Status: ready (unblocked by M005A closure).
+Status: closed.
+
+Closure:
+
+- plans/closure/artifact-discovery-cleanup/005b-status.md
 
 Plan:
 

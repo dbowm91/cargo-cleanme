@@ -1,6 +1,8 @@
 # M005B — Authorized Redirected Cleanup and Full Simulation Mode
 
-Status: ready
+Status: closed
+
+Closure: `plans/closure/artifact-discovery-cleanup/005b-status.md`
 
 Repository planning baseline: `50461442c0d4d783a5a4f1e86a35001f68f8d8db`
 
