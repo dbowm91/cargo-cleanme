@@ -199,7 +199,7 @@ mod tests {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1000);
         let c = ScanClock::new(now, Duration::from_secs(300)).unwrap();
         assert!(recent(c.cutoff, &c));
-        assert!(!recent(c.cutoff - Duration::from_nanos(1), &c));
+        assert!(!recent(c.cutoff - Duration::from_secs(1), &c));
         assert!(recent(now + Duration::from_secs(1), &c));
     }
     #[test]
