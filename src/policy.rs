@@ -40,8 +40,8 @@ fn global_roots() -> Vec<PathBuf> {
 #[cfg(windows)]
 fn global_roots() -> Vec<PathBuf> {
     use windows_sys::Win32::{
-        Storage::FileSystem::{DRIVE_FIXED, DRIVE_REMOVABLE, GetDriveTypeW},
-        System::SystemInformation::GetLogicalDrives,
+        Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives},
+        System::WindowsProgramming::{DRIVE_FIXED, DRIVE_REMOVABLE},
     };
     let mask = unsafe { GetLogicalDrives() };
     (0..26)
