@@ -13,6 +13,14 @@ pub const CONFIG_TEMPLATE: &str = include_str!("../config.toml");
 pub struct Config {
     #[serde(default)]
     pub scan: ScanConfig,
+    #[serde(default)]
+    pub cleanup: CleanupConfig,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct CleanupConfig {
+    #[serde(default)]
+    pub allowed_output_roots: Vec<PathBuf>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -82,6 +90,9 @@ pub fn load(path: &Path) -> Result<Config, AppError> {
     }
     for p in &c.scan.unignore {
         require_absolute(p, "unignore")?;
+    }
+    for p in &c.cleanup.allowed_output_roots {
+        require_absolute(p, "cleanup.allowed_output_roots")?;
     }
     Ok(c)
 }
@@ -214,6 +225,12 @@ mod tests {
         assert!(load(&p).is_err());
         fs::write(&p, "[scan]\nroot = \"relative\"\n").unwrap();
         assert!(load(&p).is_err());
+        fs::write(
+            &p,
+            "[cleanup]\nallowed_output_roots = [\"relative/root\"]\n",
+        )
+        .unwrap();
+        assert!(load(&p).is_err());
     }
     #[test]
     fn checked_in_template_parses_and_matches_defaults() {
@@ -223,11 +240,16 @@ mod tests {
         assert!(config.scan.root.is_none());
         assert!(config.scan.ignore.is_empty());
         assert!(config.scan.unignore.is_empty());
+        assert!(config.cleanup.allowed_output_roots.is_empty());
         let defaults = Config::default();
         assert_eq!(config.scan.recency_seconds, defaults.scan.recency_seconds);
         assert_eq!(config.scan.root, defaults.scan.root);
         assert_eq!(config.scan.ignore, defaults.scan.ignore);
         assert_eq!(config.scan.unignore, defaults.scan.unignore);
+        assert_eq!(
+            config.cleanup.allowed_output_roots,
+            defaults.cleanup.allowed_output_roots
+        );
     }
     #[test]
     fn config_template_matches_repository_file() {

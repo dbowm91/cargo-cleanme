@@ -19,6 +19,9 @@ pub enum ScanPhase {
     Resolution,
     Analysis,
     Reporting,
+    CleanupPreview,
+    CleanupSimulate,
+    CleanupExecute,
 }
 
 /// Narrow observer: domain/traversal code emits state, never formatting.
@@ -302,6 +305,9 @@ impl ProgressObserver for IndicatifRenderer {
                 ScanPhase::Resolution => "resolving workspaces…",
                 ScanPhase::Analysis => "analyzing output…",
                 ScanPhase::Reporting => "reporting…",
+                ScanPhase::CleanupPreview => "previewing cleanup…",
+                ScanPhase::CleanupSimulate => "simulating cleanup…",
+                ScanPhase::CleanupExecute => "cleaning…",
             };
             main.set_prefix(label.to_owned());
         }

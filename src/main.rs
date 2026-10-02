@@ -30,20 +30,36 @@ fn run() -> Result<i32, AppError> {
         }
         Some(Command::Clean {
             root,
-            dry_run: _,
+            dry_run,
+            dryrun,
             yes,
         }) => {
             let config = config::load(&path)?;
+            // Distinct spellings, distinct semantics:
+            // `--dry-run` (Cargo preview, default) vs `--dryrun` (simulation).
             let mode = if yes {
                 cargo_cleanme::cleanup::CleanMode::Execute
+            } else if dryrun {
+                cargo_cleanme::cleanup::CleanMode::Simulate
             } else {
-                cargo_cleanme::cleanup::CleanMode::DryRun
+                // Default and explicit `--dry-run` both preview via Cargo.
+                let _ = dry_run;
+                cargo_cleanme::cleanup::CleanMode::Preview
             };
             // Accept a relative CLI root for ergonomics, but keep the
             // cleanup safety boundary absolute.
             let effective_root = cli::absolutize_root(&root);
-            let report =
-                cargo_cleanme::cleanup::clean(&effective_root, config.scan.recency_seconds, mode)?;
+            let show = cargo_cleanme::progress::should_show_progress(no_progress);
+            let renderer = cargo_cleanme::progress::IndicatifRenderer::new(!show);
+            let report = cargo_cleanme::cleanup::clean_with(
+                &effective_root,
+                config.scan.recency_seconds,
+                &config.cleanup.allowed_output_roots,
+                mode,
+                &cargo_cleanme::cleanup::SystemCleanupRunner,
+                &renderer,
+            )?;
+            renderer.finish_and_clear();
             println!("{}", report.render());
             Ok(if report.failed > 0 { 1 } else { 0 })
         }

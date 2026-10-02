@@ -29,11 +29,16 @@ pub enum Command {
     Clean {
         /// Required sandbox root. Cleanup never scans the whole machine.
         root: PathBuf,
-        /// Print Cargo's verbose dry-run plan (the default mode).
-        #[arg(long, conflicts_with = "yes")]
+        /// Cargo preview: invoke Cargo's own dry-run (the default mode).
+        /// Distinct from `--dryrun` (cargo-cleanme simulation).
+        #[arg(long, conflicts_with = "yes", conflicts_with = "dryrun")]
         dry_run: bool,
-        /// Execute Cargo clean after per-project revalidation.
-        #[arg(long, conflicts_with = "dry_run")]
+        /// Application simulation: run the full decision/progress/report path
+        /// but invoke no Cargo clean command. Distinct from `--dry-run`.
+        #[arg(long = "dryrun", conflicts_with = "yes", conflicts_with = "dry_run")]
+        dryrun: bool,
+        /// Execute Cargo clean after per-workspace revalidation.
+        #[arg(long, conflicts_with = "dry_run", conflicts_with = "dryrun")]
         yes: bool,
     },
 }
@@ -170,6 +175,35 @@ mod tests {
         assert!(
             Cli::try_parse_from(["cargo-cleanme", "clean", "/tmp", "--yes", "--dry-run"]).is_err()
         );
+    }
+    #[test]
+    fn clean_modes_conflict_pairwise_and_default_is_preview() {
+        // Default (no flag) parses; mode mapping is tested in cleanup.
+        assert!(Cli::try_parse_from(["cargo-cleanme", "clean", "/tmp"]).is_ok());
+        assert!(Cli::try_parse_from(["cargo-cleanme", "clean", "/tmp", "--dry-run"]).is_ok());
+        assert!(Cli::try_parse_from(["cargo-cleanme", "clean", "/tmp", "--dryrun"]).is_ok());
+        // Pairwise conflicts.
+        assert!(
+            Cli::try_parse_from(["cargo-cleanme", "clean", "/tmp", "--yes", "--dry-run"]).is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["cargo-cleanme", "clean", "/tmp", "--yes", "--dryrun"]).is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["cargo-cleanme", "clean", "/tmp", "--dry-run", "--dryrun"])
+                .is_err()
+        );
+        // External subcommand form works for all modes.
+        for args in [
+            vec!["cargo-cleanme", "cleanme", "clean", "/x"],
+            vec!["cargo-cleanme", "cleanme", "clean", "/x", "--dry-run"],
+            vec!["cargo-cleanme", "cleanme", "clean", "/x", "--dryrun"],
+            vec!["cargo-cleanme", "cleanme", "clean", "/x", "--yes"],
+        ] {
+            let normalized: Vec<OsString> = args.iter().map(OsString::from).collect::<Vec<_>>();
+            let parsed = Cli::try_parse_from(normalize_cargo_argv(normalized)).unwrap();
+            assert!(matches!(parsed.command, Some(Command::Clean { .. })));
+        }
     }
 
     fn argv(items: &[&str]) -> Vec<OsString> {

@@ -20,3 +20,10 @@ ignore = []
 
 # Exact absolute directories re-included beneath ignored trees.
 unignore = []
+
+[cleanup]
+# Explicit cleanup authorization for private redirected output outside the
+# `clean ROOT` sandbox. Entries must be absolute directory roots (not globs);
+# symlink roots are invalid. Shared and uncertain output remains forbidden
+# even inside an allowed root. An empty list preserves M004-style containment.
+allowed_output_roots = []
