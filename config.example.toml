@@ -1,0 +1,15 @@
+[scan]
+recency_seconds = 300
+
+# Optional exclusive scope. A CLI scan root takes precedence.
+# root = "/path/to/projects"
+
+# These absolute glob-style filters apply only to global discovery.
+ignore = [
+  "/path/to/ignore/*",
+]
+
+# Exact absolute directories re-included beneath ignored trees.
+unignore = [
+  "/path/to/ignore/except-this-one",
+]
