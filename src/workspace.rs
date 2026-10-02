@@ -1940,10 +1940,13 @@ mod tests {
         std::fs::create_dir_all(&external).unwrap();
         std::fs::write(external.join("artifact.bin"), vec![1u8; 1024]).unwrap();
         // Redirect via workspace-local .cargo/config.toml (Cargo authoritative).
+        // Use forward slashes so the TOML string is valid on Windows
+        // (backslashes would need escaping and break config parsing).
         std::fs::create_dir_all(proj.join(".cargo")).unwrap();
+        let external_toml = external.display().to_string().replace('\\', "/");
         std::fs::write(
             proj.join(".cargo/config.toml"),
-            format!("[build]\ntarget-dir = \"{}\"\n", external.display()),
+            format!("[build]\ntarget-dir = \"{external_toml}\"\n"),
         )
         .unwrap();
         // Backdate source so activity does not protect; keep output old.
