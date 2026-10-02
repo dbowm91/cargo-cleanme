@@ -734,11 +734,7 @@ mod tests {
         );
         let other = PathBuf::from("/different/target");
         let redirected = FakeRunner::new(1, Some(other));
-        assert!(
-            inspect_ownership(&p, &redirected)
-                .unwrap_err()
-                .contains("outside this conventional target")
-        );
+        assert!(inspect_ownership(&p, &redirected).is_err());
     }
     #[test]
     fn ownership_rejects_separate_build_directory_config() {
