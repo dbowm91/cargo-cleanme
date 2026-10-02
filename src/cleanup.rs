@@ -629,6 +629,7 @@ mod tests {
         calls: Mutex<Vec<(PathBuf, Vec<std::ffi::OsString>)>>,
         workspace_members: usize,
         target_override: Option<PathBuf>,
+        remove_artifact_on_execute: bool,
     }
     impl FakeRunner {
         fn new(workspace_members: usize, target_override: Option<PathBuf>) -> Self {
@@ -636,6 +637,15 @@ mod tests {
                 calls: Mutex::new(Vec::new()),
                 workspace_members,
                 target_override,
+                remove_artifact_on_execute: false,
+            }
+        }
+        fn removing_artifact() -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                workspace_members: 1,
+                target_override: None,
+                remove_artifact_on_execute: true,
             }
         }
         fn calls(&self) -> Vec<(PathBuf, Vec<std::ffi::OsString>)> {
@@ -669,6 +679,14 @@ mod tests {
                     stderr: Vec::new(),
                 })
             } else {
+                if self.remove_artifact_on_execute && !args.iter().any(|arg| arg == "--dry-run") {
+                    let target = args
+                        .windows(2)
+                        .find(|pair| pair[0] == "--target-dir")
+                        .map(|pair| PathBuf::from(&pair[1]))
+                        .ok_or_else(|| io::Error::other("missing target-dir argument"))?;
+                    fs::remove_file(target.join("artifact.bin"))?;
+                }
                 Ok(ProcessOutput {
                     success: true,
                     code: Some(0),
@@ -851,6 +869,25 @@ mod tests {
         assert_eq!(
             fs::read(d.path().join("target/CACHEDIR.TAG")).unwrap(),
             marker_before
+        );
+    }
+    #[test]
+    fn execution_reports_measured_size_decrease_with_fake_cargo() {
+        let (d, _p) = fixture();
+        let fake = FakeRunner::removing_artifact();
+        let report = clean_with(d.path(), 0, CleanMode::Execute, &fake).unwrap();
+        assert_eq!(report.results[0].outcome, CleanOutcome::Cleaned);
+        assert!(report.results[0].before_bytes.unwrap() > report.results[0].after_bytes.unwrap());
+        assert!(report.results[0].observed_decrease.unwrap() > 0);
+        assert!(!d.path().join("target/artifact.bin").exists());
+        let calls = fake.calls();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(_, args)| args.first().is_some_and(|a| a == "metadata"))
+                .count(),
+            2,
+            "execution repeats Cargo ownership metadata preflight"
         );
     }
 }
