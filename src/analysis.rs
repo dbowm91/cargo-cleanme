@@ -264,22 +264,23 @@ mod analysis_fixtures {
         fs::create_dir_all(&target).unwrap();
         fs::write(target.join("artifact.bin"), vec![1u8; 512]).unwrap();
         // Nested independent repository: activity inside it must not
-        // activate the outer project because the nested boundary is pruned.
+        // activate the outer project because the nested boundary (including
+        // the boundary directory's own mtime) carries no source evidence.
         let nested = d.path().join("nested");
         fs::create_dir_all(nested.join(".git")).unwrap();
-        fs::write(nested.join("fresh.rs"), "recent").unwrap();
-        let old = SystemTime::now() - Duration::from_secs(3600);
-        // Backdate everything except the nested fresh file, then reset the
-        // boundary directory's own mtime so the test isolates descendant
-        // pruning (directory mtimes update when direct children are added,
-        // and yielded boundary directories retain their own mtime check).
-        filetime_backdate(&target, old);
-        filetime_backdate(&nested.join(".git"), old);
-        backdate_single(&nested, old);
-        backdate_single(d.path(), old);
-        // The nested fresh file stays recent; only descendant pruning keeps
-        // the outer project quiet.
-        let clock = clock_for(old);
+        let fresh = nested.join("fresh.rs");
+        fs::write(&fresh, "recent").unwrap();
+        // Forward-date the nested file and run the clock after the project
+        // setup: the project root (created now) is old relative to the
+        // future clock, while the nested file is recent. No directory mtime
+        // manipulation is needed because excluded boundaries (target, nested)
+        // carry no evidence on any platform.
+        let start = SystemTime::now() + Duration::from_secs(3600);
+        let fresh_time = start;
+        if let Ok(file) = fs::OpenOptions::new().write(true).open(&fresh) {
+            let _ = file.set_modified(fresh_time);
+        }
+        let clock = ScanClock::new(start, Duration::from_secs(300)).unwrap();
         match source_activity(d.path(), &target, &clock) {
             Ok(Some(t)) if recent(t, &clock) => {
                 panic!("nested VCS activity must be pruned")
@@ -337,20 +338,6 @@ mod analysis_fixtures {
         let link_target = d.path().join("link-target");
         symlink(&target, &link_target).unwrap();
         assert!(measure(&link_target, &clock).is_err());
-    }
-    fn clock_for(old: SystemTime) -> ScanClock {
-        // A clock whose cutoff is after `old` but before now: old files are
-        // quiet, while newly created files are recent.
-        let now = SystemTime::now() + Duration::from_secs(1);
-        assert!(old < now - Duration::from_secs(300));
-        ScanClock::new(now, Duration::from_secs(300)).unwrap()
-    }
-    fn backdate_single(path: &Path, old: SystemTime) {
-        if let Ok(file) = fs::OpenOptions::new().write(true).open(path) {
-            let _ = file.set_modified(old);
-        } else if let Ok(dir) = fs::File::open(path) {
-            let _ = dir.set_modified(old);
-        }
     }
     fn filetime_backdate(path: &Path, old: SystemTime) {
         let mut stack = vec![path.to_path_buf()];

@@ -247,9 +247,10 @@ pub enum SourceActivity {
 /// Scan one project source tree for recent activity with early exit.
 ///
 /// The target subtree, VCS directories, and directories containing a nested
-/// VCS marker are pruned exactly as before. Any walk or metadata failure is
-/// conservative (`Err(())`). Timestamps use `fs::metadata` (following) to
-/// preserve the previous source-activity semantics.
+/// VCS marker are excluded from activity evidence, including the boundary
+/// entries themselves. Any walk or metadata failure is conservative
+/// (`Err(())`). Timestamps use `fs::metadata` (following) to preserve the
+/// previous source-activity semantics for included entries.
 pub fn source_activity(
     project: &Path,
     target: &Path,
@@ -260,6 +261,8 @@ pub fn source_activity(
     let target_root = target.to_path_buf();
     let is_recent = move |time: SystemTime| time >= cutoff || time > start;
     let walk_root = project_root.clone();
+    let descend_project = project_root.clone();
+    let descend_target = target_root.clone();
     let walk = dua_core::walk(
         &walk_root,
         worker_threads(),
@@ -267,17 +270,19 @@ pub fn source_activity(
         walk_options(),
         move |entry| {
             let path = entry.path();
-            if path != project_root && (path == target_root || path.starts_with(&target_root)) {
+            if path != descend_project
+                && (path == descend_target || path.starts_with(&descend_target))
+            {
                 return false;
             }
-            if path != project_root
+            if path != descend_project
                 && path
                     .file_name()
                     .is_some_and(|n| is_vcs_name(&n.to_string_lossy()))
             {
                 return false;
             }
-            if path != project_root
+            if path != descend_project
                 && entry.file_type.is_dir()
                 && fs::read_dir(&path).ok().is_some_and(|mut children| {
                     children.any(|child| {
@@ -299,6 +304,13 @@ pub fn source_activity(
             Err(_) => return Err(()),
         };
         let path = entry.path();
+        // Pruned boundary entries carry no source-activity evidence, even for
+        // their own directory mtime (which updates when excluded descendants
+        // change). This keeps nested-repository activity from protecting the
+        // parent through the boundary directory's own timestamp.
+        if is_excluded(&project_root, &target_root, &path, entry.file_type.is_dir()) {
+            continue;
+        }
         let modified = fs::metadata(&path)
             .map_err(|_| ())?
             .modified()
@@ -309,6 +321,33 @@ pub fn source_activity(
         }
     }
     Ok(SourceActivity::Quiet(newest))
+}
+
+fn is_excluded(project: &Path, target: &Path, path: &Path, is_dir: bool) -> bool {
+    if path == project {
+        return false;
+    }
+    if path == target || path.starts_with(target) {
+        return true;
+    }
+    if path
+        .file_name()
+        .is_some_and(|n| is_vcs_name(&n.to_string_lossy()))
+    {
+        return true;
+    }
+    if is_dir
+        && fs::read_dir(path).ok().is_some_and(|mut children| {
+            children.any(|child| {
+                child
+                    .ok()
+                    .is_some_and(|child| is_vcs_name(&child.file_name().to_string_lossy()))
+            })
+        })
+    {
+        return true;
+    }
+    false
 }
 
 #[cfg(test)]
