@@ -39,10 +39,10 @@ fn vcs(n: &str) -> bool {
 }
 fn system_prune(path: &Path) -> bool {
     #[cfg(target_os = "linux")]
-    if matches!(
-        path,
-        Path::new("/proc") | Path::new("/sys") | Path::new("/dev") | Path::new("/run")
-    ) {
+    if ["/proc", "/sys", "/dev", "/run"]
+        .iter()
+        .any(|excluded| path == Path::new(excluded))
+    {
         return true;
     }
     #[cfg(target_os = "macos")]
