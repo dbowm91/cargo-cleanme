@@ -2,7 +2,7 @@
 
 Plan: `plans/implementation/artifact-discovery-cleanup/003-activity-size-analysis-and-read-only-reporting.md`
 
-Disposition: **conditionally closed**
+Disposition: **closed**
 
 Implementation commits: `64b13a7b7746bd4ed60f8d8f6c481517b50bcb9a` through `0709d240154f1a96cf0f02764b9c0f4694390b19` (branch `implementation/artifact-discovery-cleanup`).
 
@@ -39,10 +39,10 @@ Implementation commits: `64b13a7b7746bd4ed60f8d8f6c481517b50bcb9a` through `0709
 - Hosted Linux, macOS, and Windows CI passed in run [37052261642](https://github.com/dbowm91/cargo-cleanme/actions/runs/37052261642).
 - No separate Windows allocated-size measurement was run.
 - JSON output is intentionally omitted; the plan made it optional.
-- The real-tree run is one read-only local observation. Its candidate set still needs human field review before destructive work is planned.
+- The real-tree run is one read-only local observation. The user reviewed the report and approved proceeding to M004 on 2026-10-02. This satisfies M003 field review for planning M004.
 
-Severity: no known correctness or security findings. Human review of the real-tree candidate report remains the named prerequisite for M004 planning.
+Severity: no known correctness or security findings.
 
 ## Dependency disposition
 
-M003 provides the first complete local read-only capability. M004 remains **deferred**: the one local observation still needs human review. Hosted Linux/macOS/Windows CI has passed. Do not write or implement destructive cleanup from this closure alone.
+M003 is closed. The user accepted the real-tree read-only observation and authorized continuing to M004. This closes the field-review dependency; M004 still owns separate destructive-safety acceptance gates.

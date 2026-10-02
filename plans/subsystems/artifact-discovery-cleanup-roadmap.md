@@ -17,9 +17,9 @@ This workstream owns Cargo project discovery, search-scope policy, activity clas
 
 It does not own Cargo global cache GC, arbitrary build-system caches, a general disk-usage browser, filesystem indexing, Git repository management, background watchers, or a general-purpose deletion engine.
 
-## 2. Initial invariants
+## 2. Discovery invariants
 
-- V0.1 is read-only.
+- Scanning is read-only; cleanup is a separate opt-in operation.
 - No symlink directory is followed.
 - scan_start_time is captured once.
 - default recency_seconds is 300.
@@ -32,7 +32,7 @@ It does not own Cargo global cache GC, arbitrary build-system caches, a general 
 - filesystem errors never silently turn uncertain candidates into eligible results.
 - output ordering is deterministic.
 - internal traversal types do not leak into the domain/CLI model.
-- cleanup is not introduced before read-only closure.
+- cleanup is limited to the separately planned and revalidated M004 capability.
 
 ## 3. Current-state evidence
 
@@ -108,7 +108,7 @@ M003 activity / size / reporting / V0.1 qualification
 read-only field qualification + release
                   |
                   v
-M004 cleanup execution [deferred, no handoff plan]
+M004 cleanup execution [active]
                   |
                   v
 M005 redirected/shared Cargo output [deferred]
@@ -158,7 +158,7 @@ Outcome:
 
 ## 8. Milestone M003 — Activity, size analysis, and read-only reporting
 
-Status: conditionally closed.
+Status: closed.
 
 Primary class: capability / invariant.
 
@@ -180,9 +180,9 @@ M003 is the first product-capability closure boundary.
 
 ## 9. Milestone M004 — Revalidated cleanup execution
 
-Status: deferred. Do not write or implement the handoff until M003 closes and read-only behavior has been field-qualified.
+Status: closed. M003 is closed and field-reviewed; M004 implementation and hosted matrix are complete. M005 ownership/ADR design is unblocked, while implementation remains deferred.
 
-Expected direction:
+Implemented direction:
 
 - explicit destructive subcommand;
 - revalidation immediately before each clean;
@@ -191,13 +191,13 @@ Expected direction:
 - per-project result isolation;
 - cancellation/process handling;
 - post-clean measurement;
-- actual recovered-byte report.
+- observed pre/post target-size report; it does not promise reclaimed disk space.
 
 Conventional local target ownership is the first cleanup target. External/shared target-dir/build-dir remains out of scope.
 
 ## 10. Milestone M005 — Redirected/shared output
 
-Status: deferred.
+Status: proposed for ownership/ADR design; implementation remains deferred until the shared/redirected-output ownership model is resolved. M004 closure evidence satisfies its predecessor dependency.
 
 Expected direction:
 
@@ -269,4 +269,4 @@ The implementation should specifically verify:
 
 ## 14. Completion definition
 
-The initial workstream reaches its first closure boundary when M001-M003 are closed with evidence that cargo cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, produces trustworthy deterministic size output, and has no destructive execution path.
+The initial read-only boundary was reached when M001-M003 closed with evidence that cargo cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004 adds separately scoped Cargo-mediated cleanup while scans remain read-only.

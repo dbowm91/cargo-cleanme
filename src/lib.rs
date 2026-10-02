@@ -1,4 +1,5 @@
 pub mod analysis;
+pub mod cleanup;
 pub mod cli;
 pub mod config;
 pub mod discovery;

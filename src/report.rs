@@ -5,7 +5,7 @@ fn path_text(p: &Path) -> String {
         .map(str::to_owned)
         .unwrap_or_else(|| format!("{:?}", p.as_os_str()))
 }
-fn human(n: u64) -> String {
+pub fn format_bytes(n: u64) -> String {
     let units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
     let mut v = n as f64;
     let mut i = 0;
@@ -30,7 +30,7 @@ pub fn render(report: &mut ScanReport) -> String {
     for p in &report.eligible {
         o.push_str(&format!(
             "{}  {}\n",
-            human(p.artifact.bytes),
+            format_bytes(p.artifact.bytes),
             path_text(&p.project_root)
         ));
     }
@@ -38,7 +38,7 @@ pub fn render(report: &mut ScanReport) -> String {
     let noun = if count == 1 { "project" } else { "projects" };
     o.push_str(&format!(
         "\n{} reclaimable across {count} inactive Cargo {noun}\n",
-        human(total)
+        format_bytes(total)
     ));
     o
 }

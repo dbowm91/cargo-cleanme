@@ -4,7 +4,7 @@ use std::path::PathBuf;
 #[command(
     name = "cargo-cleanme",
     version,
-    about = "Read-only inventory of inactive Cargo artifacts"
+    about = "Find inactive Cargo artifacts and safely preview their cleanup"
 )]
 pub struct Cli {
     #[arg(long, global = true)]
@@ -20,6 +20,17 @@ pub enum Command {
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
+    },
+    /// Preview or execute cleanup of revalidated Cargo build artifacts.
+    Clean {
+        /// Required sandbox root. Cleanup never scans the whole machine.
+        root: PathBuf,
+        /// Print Cargo's verbose dry-run plan (the default mode).
+        #[arg(long, conflicts_with = "yes")]
+        dry_run: bool,
+        /// Execute Cargo clean after per-project revalidation.
+        #[arg(long, conflicts_with = "dry_run")]
+        yes: bool,
     },
 }
 #[derive(Debug, Subcommand)]
@@ -54,5 +65,13 @@ mod tests {
     #[test]
     fn config_command_parses() {
         assert!(Cli::try_parse_from(["cargo-cleanme", "config", "path"]).is_ok());
+    }
+    #[test]
+    fn clean_requires_root_and_accepts_explicit_execution() {
+        assert!(Cli::try_parse_from(["cargo-cleanme", "clean"]).is_err());
+        assert!(Cli::try_parse_from(["cargo-cleanme", "clean", "/tmp", "--yes"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["cargo-cleanme", "clean", "/tmp", "--yes", "--dry-run"]).is_err()
+        );
     }
 }
