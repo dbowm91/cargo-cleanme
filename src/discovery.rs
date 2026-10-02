@@ -184,6 +184,29 @@ mod tests {
         discover_root(d.path(), &f, true, &mut r).unwrap();
         assert_eq!(r.eligible.len(), 1);
         assert_eq!(r.eligible[0].project_root, p);
+        assert_eq!(
+            r.visited_entries, 4,
+            "target descendants must be pruned during discovery"
+        );
+    }
+    #[test]
+    fn discovery_reaches_unignored_project_without_entering_ignored_sibling() {
+        let d = tempdir().unwrap();
+        let archive = d.path().join("archive");
+        for name in ["keep", "skip"] {
+            let p = archive.join(name);
+            fs::create_dir_all(p.join("target")).unwrap();
+            fs::write(p.join("Cargo.toml"), "").unwrap();
+        }
+        let f = Filters::new(
+            &[format!("{}/*", archive.display())],
+            &[archive.join("keep")],
+        )
+        .unwrap();
+        let mut r = ScanReport::default();
+        discover_root(d.path(), &f, false, &mut r).unwrap();
+        assert_eq!(r.eligible.len(), 1);
+        assert_eq!(r.eligible[0].project_root, archive.join("keep"));
     }
     #[cfg(unix)]
     #[test]
