@@ -509,6 +509,24 @@ pub fn clean_with(
         };
 
         // At this point the group is authorized private + freshly revalidated.
+        // Require Cargo's cache marker so `cargo clean` (newer Cargo enforces
+        // CACHEDIR.TAG) does not fail as `Failed`; missing marker is a clean
+        // `Skipped` with a clear reason, preserving M004 containment safety.
+        if mode != CleanMode::Simulate
+            && let Err(msg) = require_cargo_markers(&raw.covering)
+        {
+            report.results.push(CleanResult {
+                display_path: raw.display.clone(),
+                workspace_roots: revalidated.workspace_roots.clone(),
+                ownership: raw.ownership,
+                outcome: CleanOutcome::Skipped,
+                before_bytes: Some(measured.bytes),
+                after_bytes: None,
+                observed_decrease: None,
+                detail: msg,
+            });
+            continue;
+        }
         match mode {
             CleanMode::Simulate => {
                 // Full path through revalidation, but no `cargo clean`.
@@ -959,6 +977,25 @@ fn clean_args(ctx: &RevalidatedContext, mode: CleanMode) -> Vec<OsString> {
     args
 }
 
+fn require_cargo_markers(covering: &[PathBuf]) -> Result<(), String> {
+    for root in covering {
+        let tag = root.join("CACHEDIR.TAG");
+        let meta = fs::symlink_metadata(&tag)
+            .map_err(|_| "Cargo CACHEDIR.TAG marker is missing; cleanup deferred".to_owned())?;
+        if !meta.is_file() || meta.file_type().is_symlink() {
+            return Err("Cargo CACHEDIR.TAG is not a regular file; cleanup deferred".into());
+        }
+        let bytes = fs::read(&tag).map_err(|e| format!("cannot read Cargo cache marker: {e}"))?;
+        if !bytes.starts_with(b"Signature: 8a477f597d28d172789f06886806bc55") {
+            return Err(
+                "target directory does not have Cargo's cache marker signature; cleanup deferred"
+                    .into(),
+            );
+        }
+    }
+    Ok(())
+}
+
 fn measure_union(covering: &[PathBuf]) -> io::Result<u64> {
     let mut total = 0u64;
     for root in covering {
@@ -1149,6 +1186,11 @@ mod tests {
         std::fs::write(root.join("Cargo.lock"), "version = 4\n").unwrap();
         let target = root.join("target");
         std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(
+            target.join("CACHEDIR.TAG"),
+            b"Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .unwrap();
         std::fs::write(target.join("artifact.bin"), vec![7u8; 4096]).unwrap();
         // Backdate everything so activity gates pass with recency 0 + future clock?
         // Use recency 0 and future start in clean_with? clean_with uses
@@ -1703,6 +1745,11 @@ mod tests {
         std::fs::write(proj.join("Cargo.lock"), "version = 4\n").unwrap();
         let external = root.join("ext-target");
         std::fs::create_dir_all(&external).unwrap();
+        std::fs::write(
+            external.join("CACHEDIR.TAG"),
+            b"Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .unwrap();
         std::fs::write(external.join("artifact.bin"), vec![1u8; 2048]).unwrap();
         std::fs::create_dir_all(proj.join(".cargo")).unwrap();
         let external_toml = external.display().to_string().replace('\\', "/");
@@ -1805,5 +1852,21 @@ mod tests {
         .unwrap();
         assert_eq!(allowed.results.len(), 1);
         assert_eq!(allowed.results[0].outcome, CleanOutcome::Simulated);
+    }
+
+    #[test]
+    fn missing_marker_skips_instead_of_failing() {
+        let (_d, root, target) = valid_fixture(1);
+        // Remove marker to trigger clean skip (not failure).
+        std::fs::remove_file(target.join("CACHEDIR.TAG")).unwrap();
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        backdate(&root, old);
+        let runner = FakeCleanupRunner::new(&root, &target, 1);
+        let noop = NoopObserver;
+        let report = clean_with(&root, 0, &[], CleanMode::Preview, &runner, &noop).unwrap();
+        assert_eq!(report.results.len(), 1);
+        assert_eq!(report.results[0].outcome, CleanOutcome::Skipped);
+        assert!(report.results[0].detail.contains("CACHEDIR.TAG"));
+        assert!(runner.clean_calls().is_empty());
     }
 }
