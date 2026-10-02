@@ -443,6 +443,17 @@ pub fn inspect_ownership(
     project: &EligibleProject,
     runner: &dyn ProcessRunner,
 ) -> Result<Ownership, String> {
+    inspect_ownership_with_build_dir_env(
+        project,
+        runner,
+        env::var_os("CARGO_BUILD_BUILD_DIR").is_some(),
+    )
+}
+fn inspect_ownership_with_build_dir_env(
+    project: &EligibleProject,
+    runner: &dyn ProcessRunner,
+    build_dir_env_is_set: bool,
+) -> Result<Ownership, String> {
     let root = &project.project_root;
     let manifest = root.join("Cargo.toml");
     let target = root.join("target");
@@ -464,7 +475,7 @@ pub fn inspect_ownership(
     if !tag_bytes.starts_with(b"Signature: 8a477f597d28d172789f06886806bc55") {
         return Err("target directory does not have Cargo's cache marker signature".into());
     }
-    if env::var_os("CARGO_BUILD_BUILD_DIR").is_some() {
+    if build_dir_env_is_set {
         return Err(
             "CARGO_BUILD_BUILD_DIR is set; separate build directories are not supported".into(),
         );
@@ -770,6 +781,17 @@ mod tests {
             inspect_ownership(&p, &runner)
                 .unwrap_err()
                 .contains("build.build-dir")
+        );
+        assert!(runner.calls().is_empty());
+    }
+    #[test]
+    fn ownership_rejects_separate_build_directory_environment() {
+        let (_d, p) = fixture();
+        let runner = FakeRunner::new(1, None);
+        assert!(
+            inspect_ownership_with_build_dir_env(&p, &runner, true)
+                .unwrap_err()
+                .contains("CARGO_BUILD_BUILD_DIR")
         );
         assert!(runner.calls().is_empty());
     }
