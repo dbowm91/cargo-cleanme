@@ -36,7 +36,7 @@ It does not own Cargo global cache GC, arbitrary build-system caches, a general 
 
 ## 3. Current-state evidence
 
-At the current audit baseline, M001-M004 are implemented and merged on main. The repository contains a Rust 1.89 / edition-2024 package with CLI/config/domain layers, dua-core-backed project discovery, filesystem activity and size analysis, deterministic reporting, and a separately scoped Cargo-mediated cleanup path. Post-M004 review identified a bounded corrective set: Cargo external-subcommand argv normalization, configuration-template drift, relative cleanup-root UX, explicit MSRV CI evidence, duplicated traversal ownership/performance work, and stale planning text. These findings are tracked by corrective C001 rather than reopening the historical milestone closures.
+At the current audit baseline, M001-M004 are implemented and merged on main. The repository contains a Rust 1.89 / edition-2024 package with CLI/config/domain layers, dua-core-backed project discovery, filesystem activity and size analysis, deterministic reporting, and a separately scoped Cargo-mediated cleanup path. Corrective C001 is implemented and awaiting closure: Cargo external-subcommand argv is normalized before clap (`cargo cleanme` ≡ direct form, proven by unit + `cargo cleanme --help` integration), the checked-in top-level `config.toml` is the single `include_str!` source for `config init` with explicit atomic `--force` replacement, relative `clean ROOT` values are resolved lexically to an absolute sandbox root without weakening the absolute/symlink boundary, Rust 1.89 is qualified by a dedicated locked CI job alongside the stable Linux/macOS/Windows matrix, and all traversal (discovery, source activity, target sizing, post-clean measurement) goes through the new `src/traverse.rs` ownership boundary sharing one bounded `dua-core` pool (≤8 workers; batched `walk_roots` target sizing). `walkdir` has been removed from direct dependencies. Historical M001-M004 closures are preserved; C001 is tracked separately rather than rewriting them.
 
 Relevant current ecosystem evidence:
 
@@ -109,11 +109,11 @@ read-only field qualification + release
                   |
                   v
 M004 cleanup execution [closed]
-                  |
-                  v
-C001 public-contract/MSRV/traversal reconciliation [ready]
-                  |
-                  v
+                   |
+                   v
+C001 public-contract/MSRV/traversal reconciliation [closing; implementation landed]
+                   |
+                   v
 M005 redirected/shared Cargo output [design proposed; implementation blocked]
 ~~~
 
@@ -201,7 +201,7 @@ Conventional local target ownership is the first cleanup target. External/shared
 
 ## 9A. Corrective C001 — Public contract, MSRV, traversal, and planning reconciliation
 
-Status: ready.
+Status: closing. Implementation landed; closure evidence is being gathered.
 
 Primary class: corrective / invariant / polish.
 

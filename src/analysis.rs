@@ -1,11 +1,9 @@
 #![allow(clippy::collapsible_if, clippy::items_after_test_module)]
-use crate::domain::*;
+use crate::{domain::*, traverse};
 use std::{
-    fs,
     path::{Path, PathBuf},
     time::{Duration, SystemTime},
 };
-use walkdir::WalkDir;
 
 pub struct ScanClock {
     pub start: SystemTime,
@@ -22,90 +20,30 @@ impl ScanClock {
 fn recent(t: SystemTime, c: &ScanClock) -> bool {
     t >= c.cutoff || t > c.start
 }
-fn newest(a: Option<SystemTime>, b: SystemTime) -> Option<SystemTime> {
-    Some(a.map_or(b, |x| x.max(b)))
-}
-fn time(path: &Path) -> std::io::Result<SystemTime> {
-    fs::metadata(path)?.modified()
-}
-fn internal(n: &str) -> bool {
-    matches!(n, ".git" | ".hg" | ".svn")
-}
 fn source_activity(
     project: &Path,
     target: &Path,
     clock: &ScanClock,
 ) -> Result<Option<SystemTime>, ()> {
-    let mut newest_time = None;
-    let walker = WalkDir::new(project)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|entry| {
-            let p = entry.path();
-            if p != project && (p == target || p.starts_with(target)) {
-                return false;
-            }
-            if p != project
-                && p.file_name()
-                    .is_some_and(|n| internal(&n.to_string_lossy()))
-            {
-                return false;
-            }
-            if p != project && entry.file_type().is_dir() {
-                if fs::read_dir(p).ok().is_some_and(|mut children| {
-                    children.any(|x| {
-                        x.ok()
-                            .is_some_and(|x| internal(&x.file_name().to_string_lossy()))
-                    })
-                }) {
-                    return false;
-                }
-            }
-            true
-        });
-    for e in walker {
-        let e = e.map_err(|_| ())?;
-        let p = e.path();
-        let t = time(p).map_err(|_| ())?;
-        newest_time = newest(newest_time, t);
-        if recent(t, clock) {
-            return Ok(Some(t));
-        }
+    match traverse::source_activity(project, target, clock.start, clock.cutoff) {
+        Err(()) => Err(()),
+        Ok(traverse::SourceActivity::Recent(t)) => Ok(Some(t)),
+        Ok(traverse::SourceActivity::Quiet(newest)) => Ok(newest),
     }
-    Ok(newest_time)
 }
 fn measure(target: &Path, clock: &ScanClock) -> Result<(ArtifactAnalysis, bool), ()> {
-    let meta = fs::symlink_metadata(target).map_err(|_| ())?;
-    if !meta.is_dir() || meta.file_type().is_symlink() {
+    let stats = traverse::measure_single_target(target);
+    if stats.uncertain {
         return Err(());
     }
-    let mut bytes = 0u64;
-    let mut entries = 0u64;
-    let mut newest_time = None;
-    let mut active = false;
-    for e in WalkDir::new(target).follow_links(false).into_iter() {
-        let e = e.map_err(|_| ())?;
-        let p = e.path();
-        if p == target {
-            continue;
-        }
-        let m = fs::symlink_metadata(p).map_err(|_| ())?;
-        let t = m.modified().map_err(|_| ())?;
-        newest_time = newest(newest_time, t);
-        active |= recent(t, clock);
-        entries = entries.checked_add(1).ok_or(())?;
-        if m.is_file() {
-            let sz = filesize::file_real_size_fast(p, &m).map_err(|_| ())?;
-            bytes = bytes.checked_add(sz).ok_or(())?;
-        }
-    }
+    let active = stats.newest.is_some_and(|t| recent(t, clock));
     Ok((
         ArtifactAnalysis {
             target_path: target.to_path_buf(),
-            bytes,
+            bytes: stats.bytes,
             metric: metric(),
-            newest_mtime: newest_time,
-            artifact_entries: entries,
+            newest_mtime: stats.newest,
+            artifact_entries: stats.entries,
         },
         active,
     ))
@@ -141,6 +79,75 @@ pub fn analyze(
         }
     }
 }
+
+/// Analyze many candidates while sharing one bounded worker pool for the
+/// expensive target-sizing phase.
+///
+/// Source activity stays candidate-sequential to preserve cheap early
+/// rejection: a recently edited project never pays for target sizing.
+/// Survivors are then sized together with
+/// [`traverse::measure_many_targets`], so candidate count grows work, not
+/// worker pools. Eligibility, ordering, and uncertainty semantics match
+/// [`analyze`].
+pub fn analyze_many(
+    projects: &[DiscoveredProject],
+    clock: &ScanClock,
+) -> (Vec<EligibleProject>, Vec<ScanDiagnostic>) {
+    let mut survivors: Vec<(usize, DiscoveredProject)> = Vec::new();
+    let mut eligible = Vec::new();
+    let mut diagnostics = Vec::new();
+    for (index, project) in projects.iter().enumerate() {
+        match source_activity(&project.project_root, &project.target_path, clock) {
+            Err(_) => diagnostics.push(problem(
+                &project.project_root,
+                "source activity could not be established",
+            )),
+            Ok(Some(t)) if recent(t, clock) => {}
+            _ => survivors.push((index, project.clone())),
+        }
+    }
+    if survivors.is_empty() {
+        return (eligible, diagnostics);
+    }
+    let targets: Vec<(usize, PathBuf)> = survivors
+        .iter()
+        .map(|(index, project)| (*index, project.target_path.clone()))
+        .collect();
+    let sized = traverse::measure_many_targets(&targets);
+    let by_index: std::collections::HashMap<usize, traverse::TargetStats> =
+        sized.into_iter().collect();
+    for (index, project) in survivors {
+        let Some(stats) = by_index.get(&index) else {
+            diagnostics.push(problem(
+                &project.target_path,
+                "target activity or size could not be established",
+            ));
+            continue;
+        };
+        if stats.uncertain {
+            diagnostics.push(problem(
+                &project.target_path,
+                "target activity or size could not be established",
+            ));
+            continue;
+        }
+        let active = stats.newest.is_some_and(|t| recent(t, clock));
+        if active || stats.entries == 0 {
+            continue;
+        }
+        eligible.push(EligibleProject {
+            project_root: project.project_root.clone(),
+            artifact: ArtifactAnalysis {
+                target_path: project.target_path.clone(),
+                bytes: stats.bytes,
+                metric: metric(),
+                newest_mtime: stats.newest,
+                artifact_entries: stats.entries,
+            },
+        });
+    }
+    (eligible, diagnostics)
+}
 fn problem(path: &Path, msg: &str) -> ScanDiagnostic {
     ScanDiagnostic {
         severity: DiagnosticSeverity::Error,
@@ -152,15 +159,18 @@ fn problem(path: &Path, msg: &str) -> ScanDiagnostic {
 #[cfg(test)]
 mod analysis_fixtures {
     use super::*;
+    use std::fs;
     use tempfile::tempdir;
+    fn quiet_clock() -> ScanClock {
+        ScanClock::new(SystemTime::now() + Duration::from_secs(5), Duration::ZERO).unwrap()
+    }
     #[test]
     fn sizing_counts_artifact_entries_and_bytes() {
         let d = tempdir().unwrap();
         let target = d.path().join("target");
         fs::create_dir_all(&target).unwrap();
         fs::write(target.join("artifact.bin"), vec![1u8; 4096]).unwrap();
-        let clock =
-            ScanClock::new(SystemTime::now() + Duration::from_secs(5), Duration::ZERO).unwrap();
+        let clock = quiet_clock();
         let (a, active) = measure(&target, &clock).unwrap();
         assert_eq!(a.artifact_entries, 1);
         assert!(a.bytes >= 4096);
@@ -184,10 +194,189 @@ mod analysis_fixtures {
         let d = tempdir().unwrap();
         let target = d.path().join("target");
         fs::create_dir(&target).unwrap();
-        let clock =
-            ScanClock::new(SystemTime::now() + Duration::from_secs(5), Duration::ZERO).unwrap();
+        let clock = quiet_clock();
         let (a, _) = measure(&target, &clock).unwrap();
         assert_eq!(a.artifact_entries, 0);
+    }
+    #[test]
+    fn batched_and_single_analysis_agree() {
+        let d = tempdir().unwrap();
+        let mut projects = Vec::new();
+        for name in ["one", "two", "three"] {
+            let root = d.path().join(name);
+            let target = root.join("target");
+            fs::create_dir_all(&target).unwrap();
+            fs::write(
+                root.join("Cargo.toml"),
+                "[package]\nname='x'\nversion='0.1.0'\n",
+            )
+            .unwrap();
+            fs::write(target.join("artifact.bin"), vec![3u8; 1024]).unwrap();
+            // Backdate everything so the quiet clock treats them as inactive.
+            let old = SystemTime::now() - Duration::from_secs(3600);
+            filetime_backdate(&root, old);
+            projects.push(DiscoveredProject {
+                project_root: root.clone(),
+                manifest_path: root.join("Cargo.toml"),
+                target_path: target,
+            });
+        }
+        let clock = quiet_clock();
+        let mut singles = Vec::new();
+        for project in &projects {
+            if let Some(eligible) = analyze(project, &clock).unwrap() {
+                singles.push(eligible);
+            }
+        }
+        let (mut batched, diagnostics) = analyze_many(&projects, &clock);
+        assert!(diagnostics.is_empty());
+        singles.sort_by(|a, b| a.project_root.cmp(&b.project_root));
+        batched.sort_by(|a, b| a.project_root.cmp(&b.project_root));
+        assert_eq!(singles.len(), batched.len());
+        for (single, batch) in singles.iter().zip(batched.iter()) {
+            assert_eq!(single.project_root, batch.project_root);
+            assert_eq!(single.artifact.bytes, batch.artifact.bytes);
+            assert_eq!(
+                single.artifact.artifact_entries,
+                batch.artifact.artifact_entries
+            );
+        }
+    }
+    #[test]
+    fn analysis_bytes_match_traverse_measure() {
+        let d = tempdir().unwrap();
+        let target = d.path().join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("artifact.bin"), vec![5u8; 2048]).unwrap();
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        filetime_backdate(&target, old);
+        let clock = quiet_clock();
+        let (measured, _) = measure(&target, &clock).unwrap();
+        let direct = traverse::measure_single_target(&target);
+        assert!(!direct.uncertain);
+        assert_eq!(measured.bytes, direct.bytes);
+        assert_eq!(measured.artifact_entries, direct.entries);
+    }
+    #[test]
+    fn nested_vcs_boundary_excludes_nested_repo_activity() {
+        let d = tempdir().unwrap();
+        let target = d.path().join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("artifact.bin"), vec![1u8; 512]).unwrap();
+        // Nested independent repository: activity inside it must not
+        // activate the outer project because the nested boundary is pruned.
+        let nested = d.path().join("nested");
+        fs::create_dir_all(nested.join(".git")).unwrap();
+        fs::write(nested.join("fresh.rs"), "recent").unwrap();
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        // Backdate everything except the nested fresh file, then reset the
+        // boundary directory's own mtime so the test isolates descendant
+        // pruning (directory mtimes update when direct children are added,
+        // and yielded boundary directories retain their own mtime check).
+        filetime_backdate(&target, old);
+        filetime_backdate(&nested.join(".git"), old);
+        backdate_single(&nested, old);
+        backdate_single(d.path(), old);
+        // The nested fresh file stays recent; only descendant pruning keeps
+        // the outer project quiet.
+        let clock = clock_for(old);
+        match source_activity(d.path(), &target, &clock) {
+            Ok(Some(t)) if recent(t, &clock) => {
+                panic!("nested VCS activity must be pruned")
+            }
+            Ok(_) => {}
+            Err(()) => panic!("nested boundary must not be uncertain"),
+        }
+    }
+    #[test]
+    fn disappearing_target_is_uncertain() {
+        let d = tempdir().unwrap();
+        let missing = d.path().join("missing-target");
+        let clock = quiet_clock();
+        assert!(measure(&missing, &clock).is_err());
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn non_utf8_paths_are_measured() {
+        use std::os::unix::ffi::OsStringExt;
+        let d = tempdir().unwrap();
+        let target = d.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let bad = target.join(std::ffi::OsString::from_vec(b"bad-\xff.bin".to_vec()));
+        fs::write(&bad, vec![1u8; 256]).unwrap();
+        let clock = quiet_clock();
+        let (a, _) = measure(&target, &clock).unwrap();
+        assert_eq!(a.artifact_entries, 1);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn symlink_entries_are_not_followed() {
+        use std::os::unix::fs::symlink;
+        let d = tempdir().unwrap();
+        let target = d.path().join("target");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("real.bin"), vec![1u8; 512]).unwrap();
+        let external = d.path().join("external");
+        fs::create_dir(&external).unwrap();
+        fs::write(external.join("external.bin"), vec![2u8; 8192]).unwrap();
+        symlink(&external, target.join("linked-dir")).unwrap();
+        symlink(
+            external.join("external.bin"),
+            target.join("linked-file.bin"),
+        )
+        .unwrap();
+        let clock = quiet_clock();
+        let (a, _) = measure(&target, &clock).unwrap();
+        // real file + two symlinks; linked directory contents are not walked.
+        assert_eq!(a.artifact_entries, 3);
+        assert!(
+            a.bytes < 8192 + 512,
+            "linked directory contents must not be sized"
+        );
+        // A symlinked target root itself is uncertain, never eligible.
+        let link_target = d.path().join("link-target");
+        symlink(&target, &link_target).unwrap();
+        assert!(measure(&link_target, &clock).is_err());
+    }
+    fn clock_for(old: SystemTime) -> ScanClock {
+        // A clock whose cutoff is after `old` but before now: old files are
+        // quiet, while newly created files are recent.
+        let now = SystemTime::now() + Duration::from_secs(1);
+        assert!(old < now - Duration::from_secs(300));
+        ScanClock::new(now, Duration::from_secs(300)).unwrap()
+    }
+    fn backdate_single(path: &Path, old: SystemTime) {
+        if let Ok(file) = fs::OpenOptions::new().write(true).open(path) {
+            let _ = file.set_modified(old);
+        } else if let Ok(dir) = fs::File::open(path) {
+            let _ = dir.set_modified(old);
+        }
+    }
+    fn filetime_backdate(path: &Path, old: SystemTime) {
+        let mut stack = vec![path.to_path_buf()];
+        while let Some(current) = stack.pop() {
+            if let Ok(meta) = fs::symlink_metadata(&current) {
+                if meta.file_type().is_symlink() {
+                    continue;
+                }
+                if meta.is_dir() {
+                    if let Ok(children) = fs::read_dir(&current) {
+                        for child in children.flatten() {
+                            stack.push(child.path());
+                        }
+                    }
+                }
+            }
+            if let Ok(file) = fs::OpenOptions::new().write(true).open(&current) {
+                let _ = file.set_modified(old);
+            } else if let Ok(dir) = fs::File::open(&current) {
+                let _ = dir.set_modified(old);
+            }
+        }
+        // Ensure the root itself is also backdated (directories need reopen).
+        if let Ok(dir) = fs::File::open(path) {
+            let _ = dir.set_modified(old);
+        }
     }
 }
 

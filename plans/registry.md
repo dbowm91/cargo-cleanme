@@ -28,7 +28,7 @@ Current repository audit baseline: 811e7d0833cda3d9eec35b2c77bbc3deb17aa379
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | C001 ready | Post-M004 review found public CLI/config, MSRV-evidence, traversal-maintenance/performance, and planning-state gaps. M005 ownership design remains proposed; M005 implementation is blocked until C001 closes and its own ownership/ADR decision is complete. |
+| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | C001 closing | C001 implementation landed; closure evidence is being gathered. M005 ownership design remains proposed; M005 implementation is blocked until C001 closes and its own ownership/ADR decision is complete. |
 
 ## Implementation handoffs
 
@@ -38,7 +38,7 @@ Current repository audit baseline: 811e7d0833cda3d9eec35b2c77bbc3deb17aa379
 | Artifact discovery and cleanup | M002 fast discovery and scope filters | **closed** | plans/implementation/artifact-discovery-cleanup/002-fast-project-discovery-and-scope-filters.md | Closure: plans/closure/artifact-discovery-cleanup/002-status.md. Traversal consolidation/performance follow-up is tracked by C001. |
 | Artifact discovery and cleanup | M003 activity, sizing, read-only report | **closed** | plans/implementation/artifact-discovery-cleanup/003-activity-size-analysis-and-read-only-reporting.md | Closure: plans/closure/artifact-discovery-cleanup/003-status.md. Activity/eligibility semantics remain authoritative during C001. |
 | Artifact discovery and cleanup | M004 revalidated cleanup execution | **closed** | plans/implementation/artifact-discovery-cleanup/004-revalidated-cleanup-execution.md | Closure: plans/closure/artifact-discovery-cleanup/004-status.md. M004 safety/ownership boundary must not regress during C001. |
-| Artifact discovery and cleanup | C001 public contract, MSRV, traversal, and planning reconciliation | **ready** | plans/implementation/artifact-discovery-cleanup/c001-public-contract-msrv-traversal-reconciliation.md | Start here. Corrects post-M004 findings without broadening cleanup ownership. |
+| Artifact discovery and cleanup | C001 public contract, MSRV, traversal, and planning reconciliation | **closing** | plans/implementation/artifact-discovery-cleanup/c001-public-contract-msrv-traversal-reconciliation.md | Implementation landed; closure evidence is being gathered. Corrects post-M004 findings without broadening cleanup ownership. |
 
 ## Proposed / blocked follow-on work
 

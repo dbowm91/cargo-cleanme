@@ -1,6 +1,6 @@
 # Artifact Discovery and Cleanup Corrective C001 — Public Contract, Planning, MSRV, and Traversal Reconciliation
 
-Status: ready for handoff
+Status: active
 
 Repository baseline: `811e7d0833cda3d9eec35b2c77bbc3deb17aa379`
 

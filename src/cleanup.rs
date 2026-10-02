@@ -4,7 +4,7 @@ use crate::{
     discovery,
     domain::*,
     error::AppError,
-    policy,
+    policy, traverse,
 };
 use serde::Deserialize;
 use std::{
@@ -13,7 +13,6 @@ use std::{
     process::Command,
     time::{Duration, SystemTime},
 };
-use walkdir::WalkDir;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum CleanMode {
@@ -614,20 +613,15 @@ fn measure_target(target: &Path) -> io::Result<u64> {
         }
         Ok(_) => {}
     }
-    let mut bytes = 0u64;
-    for entry in WalkDir::new(target).follow_links(false).into_iter() {
-        let entry = entry.map_err(|e| io::Error::other(e.to_string()))?;
-        if entry.path() == target {
-            continue;
-        }
-        let meta = fs::symlink_metadata(entry.path())?;
-        if meta.is_file() {
-            bytes = bytes
-                .checked_add(filesize::file_real_size_fast(entry.path(), &meta)?)
-                .ok_or_else(|| io::Error::other("size overflow"))?;
-        }
+    // Post-clean sizing uses the same shared traversal and allocated-bytes
+    // semantics as pre-clean analysis.
+    let stats = traverse::measure_single_target(target);
+    if stats.uncertain {
+        return Err(io::Error::other(
+            "post-clean target measurement was uncertain",
+        ));
     }
-    Ok(bytes)
+    Ok(stats.bytes)
 }
 
 #[cfg(test)]
@@ -834,6 +828,60 @@ mod tests {
         let err = clean_with(Path::new("."), 0, CleanMode::DryRun, &runner).unwrap_err();
         assert!(err.to_string().contains("absolute sandbox root"));
         assert!(runner.calls().is_empty());
+    }
+    #[test]
+    fn relative_cli_root_reaches_cleanup_as_absolute_scope() {
+        let (d, _p) = fixture();
+        // Simulate `clean <name>` invoked from the fixture parent: lexical
+        // absolutization must yield the fixture dir, which then cleans.
+        let base = d.path().parent().unwrap().to_path_buf();
+        let name = d.path().file_name().expect("fixture tempdir has a name");
+        let absolute = crate::cli::absolutize_root_for_test(&base, Path::new(name));
+        assert!(absolute.is_absolute());
+        assert_eq!(absolute, d.path());
+        let runner = FakeRunner::new(1, None);
+        let report = clean_with(&absolute, 0, CleanMode::DryRun, &runner).unwrap();
+        assert_eq!(report.results.len(), 1);
+        assert_eq!(report.results[0].outcome, CleanOutcome::Previewed);
+    }
+    #[test]
+    fn nonexistent_relative_root_fails_as_invalid_root() {
+        let base = tempfile::tempdir().unwrap();
+        let absolute =
+            crate::cli::absolutize_root_for_test(base.path(), Path::new("does-not-exist"));
+        assert!(absolute.is_absolute());
+        let runner = FakeRunner::new(1, None);
+        let err = clean_with(&absolute, 0, CleanMode::DryRun, &runner).unwrap_err();
+        assert!(err.to_string().contains("invalid scan root"));
+        assert!(runner.calls().is_empty());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn symlink_root_remains_rejected_after_normalization() {
+        use std::os::unix::fs::symlink;
+        let base = tempfile::tempdir().unwrap();
+        let real = base.path().join("real");
+        fs::create_dir(&real).unwrap();
+        symlink(&real, base.path().join("linked")).unwrap();
+        let absolute = crate::cli::absolutize_root_for_test(base.path(), Path::new("linked"));
+        assert!(absolute.is_absolute());
+        let runner = FakeRunner::new(1, None);
+        let err = clean_with(&absolute, 0, CleanMode::DryRun, &runner).unwrap_err();
+        assert!(err.to_string().contains("expected a real directory"));
+        assert!(runner.calls().is_empty());
+    }
+    #[test]
+    fn dotdot_segments_resolve_lexically_without_escaping_caller_intent() {
+        let base = tempfile::tempdir().unwrap();
+        let inner = base.path().join("inner");
+        fs::create_dir(&inner).unwrap();
+        // `inner/../inner` must resolve back to `inner`, not escape.
+        let resolved =
+            crate::cli::absolutize_root_for_test(base.path(), Path::new("inner/../inner"));
+        assert_eq!(resolved, inner);
+        // A `..` above the base resolves to the parent the caller selected.
+        let parent = crate::cli::absolutize_root_for_test(&inner, Path::new("../inner"));
+        assert_eq!(parent, inner);
     }
     #[test]
     fn dry_run_calls_only_cargo_dry_run_and_execution_is_explicit() {

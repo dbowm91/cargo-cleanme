@@ -1,5 +1,5 @@
 #![allow(clippy::collapsible_if)]
-use crate::{domain::*, error::AppError};
+use crate::{domain::*, error::AppError, traverse};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use std::{
     fs,
@@ -103,9 +103,7 @@ fn discover_root(
     };
     let mut walk = dua_core::walk(
         &walker_root,
-        std::thread::available_parallelism()
-            .map_or(1, usize::from)
-            .min(8),
+        traverse::worker_threads(),
         dua_core::Order::ParentFirst,
         dua_core::Options::default(),
         move |entry| {

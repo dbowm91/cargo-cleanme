@@ -1,9 +1,8 @@
 use cargo_cleanme::{
-    cli::{Cli, Command, ConfigCommand},
+    cli::{self, Cli, Command, ConfigCommand},
     config::{self, ConfigPathResolver},
     error::AppError,
 };
-use clap::Parser;
 fn main() {
     match run() {
         Ok(code) => std::process::exit(code),
@@ -14,14 +13,14 @@ fn main() {
     }
 }
 fn run() -> Result<i32, AppError> {
-    let cli = Cli::parse();
+    let cli = Cli::parse_normalized();
     let path = ConfigPathResolver::new(cli.config.clone()).path()?;
     match cli.command {
         Some(Command::Config { command }) => {
             match command {
                 ConfigCommand::Path => println!("{}", path.display()),
-                ConfigCommand::Init => {
-                    config::init(&path)?;
+                ConfigCommand::Init { force } => {
+                    config::init(&path, force)?;
                     println!("created {}", path.display())
                 }
                 ConfigCommand::Show => println!("{}", config::show(&config::load(&path)?)?),
@@ -39,7 +38,11 @@ fn run() -> Result<i32, AppError> {
             } else {
                 cargo_cleanme::cleanup::CleanMode::DryRun
             };
-            let report = cargo_cleanme::cleanup::clean(&root, config.scan.recency_seconds, mode)?;
+            // Accept a relative CLI root for ergonomics, but keep the
+            // cleanup safety boundary absolute.
+            let effective_root = cli::absolutize_root(&root);
+            let report =
+                cargo_cleanme::cleanup::clean(&effective_root, config.scan.recency_seconds, mode)?;
             println!("{}", report.render());
             Ok(if report.failed > 0 { 1 } else { 0 })
         }
@@ -61,20 +64,19 @@ fn run_scan(
     let clock = cargo_cleanme::analysis::ScanClock::new(scan_start, p.recency)
         .ok_or_else(|| AppError::Config("recency window exceeds system time range".into()))?;
     let candidates = std::mem::take(&mut report.eligible);
-    for candidate in candidates {
-        match cargo_cleanme::analysis::analyze(
-            &cargo_cleanme::domain::DiscoveredProject {
-                project_root: candidate.project_root.clone(),
-                manifest_path: candidate.project_root.join("Cargo.toml"),
-                target_path: candidate.artifact.target_path,
-            },
-            &clock,
-        ) {
-            Ok(Some(eligible)) => report.eligible.push(eligible),
-            Ok(None) => {}
-            Err(d) => report.diagnostics.push(d),
-        }
-    }
+    // Candidate analysis shares one bounded worker pool for target sizing;
+    // source activity still short-circuits sequentially per candidate.
+    let discovered: Vec<cargo_cleanme::domain::DiscoveredProject> = candidates
+        .into_iter()
+        .map(|candidate| cargo_cleanme::domain::DiscoveredProject {
+            project_root: candidate.project_root.clone(),
+            manifest_path: candidate.project_root.join("Cargo.toml"),
+            target_path: candidate.artifact.target_path,
+        })
+        .collect();
+    let (eligible, diagnostics) = cargo_cleanme::analysis::analyze_many(&discovered, &clock);
+    report.eligible = eligible;
+    report.diagnostics.extend(diagnostics);
     println!("{}", cargo_cleanme::report::render(&mut report));
     if !report.diagnostics.is_empty() {
         eprintln!(
