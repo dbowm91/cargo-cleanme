@@ -37,16 +37,16 @@ impl Filters {
 fn vcs(n: &str) -> bool {
     matches!(n, ".git" | ".hg" | ".svn")
 }
-fn system_prune(path: &Path) -> bool {
+fn system_prune(_path: &Path) -> bool {
     #[cfg(target_os = "linux")]
     if ["/proc", "/sys", "/dev", "/run"]
         .iter()
-        .any(|excluded| path == Path::new(excluded))
+        .any(|excluded| _path == Path::new(excluded))
     {
         return true;
     }
     #[cfg(target_os = "macos")]
-    if path == Path::new("/dev") {
+    if _path == Path::new("/dev") {
         return true;
     }
     false
