@@ -23,6 +23,20 @@ cargo cleanme
 - deterministic, size-descending read-only output;
 - later, separately qualified `cargo clean` execution with space-recovery reporting.
 
+## Usage
+
+```sh
+cargo-cleanme                  # scan platform-defined global roots
+cargo-cleanme scan ./projects  # scan one explicit scope
+cargo-cleanme config path
+cargo-cleanme config init
+cargo-cleanme config show
+```
+
+Pass `--config PATH` to read a specific TOML config. Explicit CLI roots take precedence over `scan.root`; either explicit scope bypasses user ignore/unignore filters. Filters apply during global discovery only. On Unix, global discovery starts at `/`; Linux prunes `/proc`, `/sys`, `/dev`, and `/run`, and macOS prunes `/dev`. Windows enumerates fixed and removable local drive letters. Traversal does not follow symlinks. Filesystem access failures are summarized on stderr.
+
+The scanner reports only conventional direct-child `target/` directories. Source edits and target entries newer than the fixed 300-second default window protect a project. Unix and Windows report allocated bytes through platform metadata; other platforms report apparent file bytes. This is a read-only inventory estimate. Cleanup is not implemented.
+
 ## Planning
 
 The repository starts planning-first. Canonical product direction, roadmap, bounded implementation plans, and active status are maintained under `plans/` using the same long-term/interim/closure separation used by CodeGG.

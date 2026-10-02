@@ -1,0 +1,32 @@
+[package]
+name = "cargo-cleanme"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+description = "Read-only inventory of inactive Cargo build artifacts"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "cargo_cleanme"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cargo-cleanme"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+directories = "6"
+dua-core = "4.1"
+filesize = "0.2"
+globset = "0.4"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+toml = "0.8"
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_System_WindowsProgramming"] }

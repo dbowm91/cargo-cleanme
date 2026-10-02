@@ -116,7 +116,7 @@ M005 redirected/shared Cargo output [deferred]
 
 ## 6. Milestone M001 — Foundation, CLI, config, and domain contracts
 
-Status: ready.
+Status: closed.
 
 Primary class: infrastructure / invariant.
 
@@ -137,7 +137,7 @@ Outcome:
 
 ## 7. Milestone M002 — Fast project discovery and scope filters
 
-Status: blocked on M001 closure.
+Status: closed.
 
 Primary class: infrastructure / capability.
 
@@ -158,7 +158,7 @@ Outcome:
 
 ## 8. Milestone M003 — Activity, size analysis, and read-only reporting
 
-Status: blocked on M002 closure.
+Status: conditionally closed.
 
 Primary class: capability / invariant.
 
