@@ -402,6 +402,7 @@ fn clean_args(ownership: &Ownership, mode: CleanMode) -> Vec<std::ffi::OsString>
     let mut args = vec!["clean".into()];
     if mode == CleanMode::DryRun {
         args.push("--dry-run".into());
+        args.push("--verbose".into());
     }
     args.push("--offline".into());
     args.push("--locked".into());
@@ -806,6 +807,7 @@ mod tests {
         assert!(calls[0].1[0] == "metadata");
         assert!(calls[1].1[0] == "clean");
         assert!(calls[1].1.iter().any(|a| a == "--dry-run"));
+        assert!(calls[1].1.iter().any(|a| a == "--verbose"));
         assert!(d.path().join("target/artifact.bin").exists());
         let exec = FakeRunner::new(1, None);
         let report = clean_with(d.path(), 0, CleanMode::Execute, &exec).unwrap();

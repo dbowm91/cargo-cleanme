@@ -89,7 +89,7 @@ Metadata invocation uses `cargo metadata --offline --locked --no-deps --format-v
 
 ### C — Dry-run and execution process adapter
 
-Build Cargo argument vectors without a shell. Preview mode invokes `cargo clean --dry-run --offline --locked --manifest-path PATH --target-dir TARGET`. Execute mode is gated by `--yes`, repeats revalidation immediately before the real Cargo command, and invokes `cargo clean --offline --locked --manifest-path PATH --target-dir TARGET`.
+Build Cargo argument vectors without a shell. Preview mode invokes `cargo clean --dry-run --verbose --offline --locked --manifest-path PATH --target-dir TARGET`. Execute mode is gated by `--yes`, repeats revalidation immediately before the real Cargo command, and invokes `cargo clean --offline --locked --manifest-path PATH --target-dir TARGET`.
 
 Capture stdout/stderr and exit code per candidate. Continue to later candidates after a candidate-specific failure.
 
