@@ -28,7 +28,7 @@ Current repository audit baseline: 811e7d0833cda3d9eec35b2c77bbc3deb17aa379
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | C001 closing | C001 implementation landed; closure evidence is being gathered. M005 ownership design remains proposed; M005 implementation is blocked until C001 closes and its own ownership/ADR decision is complete. |
+| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | C001 closed; M005 design proposed | C001 closure accepted. M005 design research may proceed against the corrected baseline; M005 implementation remains blocked until the shared/redirected-output ownership model and ADR decision are complete. |
 
 ## Implementation handoffs
 
@@ -38,26 +38,25 @@ Current repository audit baseline: 811e7d0833cda3d9eec35b2c77bbc3deb17aa379
 | Artifact discovery and cleanup | M002 fast discovery and scope filters | **closed** | plans/implementation/artifact-discovery-cleanup/002-fast-project-discovery-and-scope-filters.md | Closure: plans/closure/artifact-discovery-cleanup/002-status.md. Traversal consolidation/performance follow-up is tracked by C001. |
 | Artifact discovery and cleanup | M003 activity, sizing, read-only report | **closed** | plans/implementation/artifact-discovery-cleanup/003-activity-size-analysis-and-read-only-reporting.md | Closure: plans/closure/artifact-discovery-cleanup/003-status.md. Activity/eligibility semantics remain authoritative during C001. |
 | Artifact discovery and cleanup | M004 revalidated cleanup execution | **closed** | plans/implementation/artifact-discovery-cleanup/004-revalidated-cleanup-execution.md | Closure: plans/closure/artifact-discovery-cleanup/004-status.md. M004 safety/ownership boundary must not regress during C001. |
-| Artifact discovery and cleanup | C001 public contract, MSRV, traversal, and planning reconciliation | **closing** | plans/implementation/artifact-discovery-cleanup/c001-public-contract-msrv-traversal-reconciliation.md | Implementation landed; closure evidence is being gathered. Corrects post-M004 findings without broadening cleanup ownership. |
+| Artifact discovery and cleanup | C001 public contract, MSRV, traversal, and planning reconciliation | **closed** | plans/implementation/artifact-discovery-cleanup/c001-public-contract-msrv-traversal-reconciliation.md | Closure: plans/closure/artifact-discovery-cleanup/c001-status.md. Corrects post-M004 findings without broadening cleanup ownership. |
 
 ## Proposed / blocked follow-on work
 
 | Subsystem | Milestone | Status | Plan | Blocker |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | M005 redirected/shared output | **proposed / implementation blocked** | not yet implementation-ready | C001 closure plus explicit shared/redirected-output ownership model and ADR decision. Design research may continue, but no production implementation should start. |
+| Artifact discovery and cleanup | M005 redirected/shared output | **proposed / implementation blocked** | not yet implementation-ready | C001 baseline satisfied; blocker is now only the explicit shared/redirected-output ownership model and ADR decision. Design research may proceed against the post-C001 tree, but no production implementation should start until the ownership decision and a new implementation handoff exist. |
 
 ## Immediate handoff
 
-Implement C001.
+C001 is closed.
 
 Expected order:
 
 ~~~text
 M001-M004 -> closed
-C001 corrective/reconciliation -> ready
-C001 -> closure
-M005 ownership/ADR design -> reconcile against corrected baseline
+C001 corrective/reconciliation -> closed
+M005 ownership/ADR design -> reconcile against corrected baseline (may proceed)
 M005 implementation plan -> only after ownership decision
 ~~~
 
-The corrective pass must preserve M004's deliberately narrow destructive boundary: explicit cleanup scope, dry-run by default, --yes for execution, fresh activity revalidation, Cargo ownership checks, and no direct recursive deletion.
+The corrective pass preserved M004's deliberately narrow destructive boundary: explicit cleanup scope, dry-run by default, --yes for execution, fresh activity revalidation, Cargo ownership checks, and no direct recursive deletion.

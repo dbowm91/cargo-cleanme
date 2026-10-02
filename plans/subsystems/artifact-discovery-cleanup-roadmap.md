@@ -111,7 +111,7 @@ read-only field qualification + release
 M004 cleanup execution [closed]
                    |
                    v
-C001 public-contract/MSRV/traversal reconciliation [closing; implementation landed]
+C001 public-contract/MSRV/traversal reconciliation [closed]
                    |
                    v
 M005 redirected/shared Cargo output [design proposed; implementation blocked]
@@ -201,7 +201,7 @@ Conventional local target ownership is the first cleanup target. External/shared
 
 ## 9A. Corrective C001 — Public contract, MSRV, traversal, and planning reconciliation
 
-Status: closing. Implementation landed; closure evidence is being gathered.
+Status: closed. Implementation landed in `d04b9bb` through `59de87b`; closure: `plans/closure/artifact-discovery-cleanup/c001-status.md`.
 
 Primary class: corrective / invariant / polish.
 
@@ -222,7 +222,7 @@ C001 is a hard implementation-baseline dependency for M005. M005 design research
 
 ## 10. Milestone M005 — Redirected/shared output
 
-Status: proposed for ownership/ADR design. Production implementation is blocked on C001 closure plus resolution of the shared/redirected-output ownership model and any required ADR. M004 closure evidence satisfies the original predecessor dependency, but C001 must establish the corrected implementation baseline before an M005 implementation handoff is registered.
+Status: proposed for ownership/ADR design. Production implementation remains blocked until the shared/redirected-output ownership model and any required ADR are decided. C001 is now closed, so the corrected-implementation-baseline half of the original blocker is satisfied and design research may proceed against the post-C001 tree; M004 closure evidence satisfies the original predecessor dependency. An M005 implementation handoff must still wait for the ownership decision and be written against the post-C001 state.
 
 Expected direction:
 
