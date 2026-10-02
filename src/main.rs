@@ -23,6 +23,7 @@ fn run() -> Result<(), AppError> {
             ConfigCommand::Show => println!("{}", config::show(&config::load(&path)?)?),
         },
         _ => {
+            let scan_start = std::time::SystemTime::now();
             let root = cli.scan_root();
             let c = config::load(&path)?;
             let p = cargo_cleanme::policy::resolve(
@@ -30,11 +31,9 @@ fn run() -> Result<(), AppError> {
                 &c.scan,
             )?;
             let mut report = cargo_cleanme::discovery::scan(&p)?;
-            let clock =
-                cargo_cleanme::analysis::ScanClock::new(std::time::SystemTime::now(), p.recency)
-                    .ok_or_else(|| {
-                        AppError::Config("recency window exceeds system time range".into())
-                    })?;
+            let clock = cargo_cleanme::analysis::ScanClock::new(scan_start, p.recency).ok_or_else(
+                || AppError::Config("recency window exceeds system time range".into()),
+            )?;
             let candidates = std::mem::take(&mut report.eligible);
             for candidate in candidates {
                 match cargo_cleanme::analysis::analyze(

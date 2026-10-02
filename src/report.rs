@@ -45,6 +45,24 @@ pub fn render(report: &mut ScanReport) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn report_escapes_non_utf8_paths() {
+        use std::os::unix::ffi::OsStringExt;
+        let mut r = ScanReport::default();
+        let p = std::path::PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/bad-\xff".to_vec()));
+        r.eligible.push(EligibleProject {
+            project_root: p.clone(),
+            artifact: ArtifactAnalysis {
+                target_path: p.join("target"),
+                bytes: 1,
+                metric: SizeMetric::Allocated,
+                newest_mtime: None,
+                artifact_entries: 1,
+            },
+        });
+        assert!(render(&mut r).contains("\\x"));
+    }
     #[test]
     fn report_ordering_and_zero_report() {
         let mut r = ScanReport::default();
