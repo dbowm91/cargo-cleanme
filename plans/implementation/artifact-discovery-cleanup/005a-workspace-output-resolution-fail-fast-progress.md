@@ -1,6 +1,8 @@
 # M005A — Workspace Output Resolution, Fail-Fast Scan, and Inline Progress
 
-Status: ready
+Status: closed
+
+Closure: `plans/closure/artifact-discovery-cleanup/005a-status.md`
 
 Repository baseline: `50461442c0d4d783a5a4f1e86a35001f68f8d8db`
 

@@ -32,7 +32,7 @@ Current repository planning baseline: 50461442c0d4d783a5a4f1e86a35001f68f8d8db
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M005A ready | ADR 001 accepted; M004/C001 closed. Implement M005A before redirected cleanup. |
+| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M005B ready | ADR 001 accepted; M004/C001/M005A closed. Implement M005B authorized redirected cleanup. |
 
 ## Implementation handoffs
 
@@ -43,12 +43,12 @@ Current repository planning baseline: 50461442c0d4d783a5a4f1e86a35001f68f8d8db
 | Artifact discovery and cleanup | M003 activity, sizing, read-only report | **closed** | plans/implementation/artifact-discovery-cleanup/003-activity-size-analysis-and-read-only-reporting.md | Closure: plans/closure/artifact-discovery-cleanup/003-status.md. |
 | Artifact discovery and cleanup | M004 revalidated cleanup execution | **closed** | plans/implementation/artifact-discovery-cleanup/004-revalidated-cleanup-execution.md | Closure: plans/closure/artifact-discovery-cleanup/004-status.md. |
 | Artifact discovery and cleanup | C001 public-contract/MSRV/traversal reconciliation | **closed** | plans/implementation/artifact-discovery-cleanup/c001-public-contract-msrv-traversal-reconciliation.md | Closure: plans/closure/artifact-discovery-cleanup/c001-status.md. |
-| Artifact discovery and cleanup | M005A workspace output resolution, fail-fast scan, inline progress | **ready** | plans/implementation/artifact-discovery-cleanup/005a-workspace-output-resolution-fail-fast-progress.md | Start here. No broadened destructive cleanup in this handoff. |
-| Artifact discovery and cleanup | M005B authorized redirected cleanup + full simulation | **blocked** | plans/implementation/artifact-discovery-cleanup/005b-authorized-redirected-cleanup-and-dryrun.md | Hard dependency: M005A closure/final interfaces. ADR 001 already satisfies ownership-policy decision. |
+| Artifact discovery and cleanup | M005A workspace output resolution, fail-fast scan, inline progress | **closed** | plans/implementation/artifact-discovery-cleanup/005a-workspace-output-resolution-fail-fast-progress.md | Closure: plans/closure/artifact-discovery-cleanup/005a-status.md. |
+| Artifact discovery and cleanup | M005B authorized redirected cleanup + full simulation | **ready** | plans/implementation/artifact-discovery-cleanup/005b-authorized-redirected-cleanup-and-dryrun.md | Start here. Hard dependency satisfied: M005A closed. ADR 001 accepted. |
 
 ## Immediate handoff
 
-Implement M005A.
+Implement M005B.
 
 Expected order:
 
@@ -56,9 +56,8 @@ Expected order:
 M001-M004 -> closed
 C001 -> closed
 ADR 001 -> accepted
-M005A resolution/output graph/fail-fast/progress -> ready
-M005A -> closure
-M005B private redirected cleanup/--dryrun -> ready after M005A closure
+M005A resolution/output graph/fail-fast/progress -> closed
+M005B private redirected cleanup/--dryrun -> ready
 M005B -> closure
 ~~~
 

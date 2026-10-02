@@ -1,6 +1,6 @@
 # M005B — Authorized Redirected Cleanup and Full Simulation Mode
 
-Status: blocked
+Status: ready
 
 Repository planning baseline: `50461442c0d4d783a5a4f1e86a35001f68f8d8db`
 
