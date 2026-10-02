@@ -2,7 +2,7 @@
 
 Status: active
 
-Repository audit baseline: 54dfc5440a8bca51b768f59df2d16ba5d2b3b242
+Repository audit baseline: 811e7d0833cda3d9eec35b2c77bbc3deb17aa379
 
 Canonical references:
 
@@ -36,7 +36,7 @@ It does not own Cargo global cache GC, arbitrary build-system caches, a general 
 
 ## 3. Current-state evidence
 
-At the audit baseline the repository contains only README.md and no Rust implementation.
+At the current audit baseline, M001-M004 are implemented and merged on main. The repository contains a Rust 1.89 / edition-2024 package with CLI/config/domain layers, dua-core-backed project discovery, filesystem activity and size analysis, deterministic reporting, and a separately scoped Cargo-mediated cleanup path. Post-M004 review identified a bounded corrective set: Cargo external-subcommand argv normalization, configuration-template drift, relative cleanup-root UX, explicit MSRV CI evidence, duplicated traversal ownership/performance work, and stale planning text. These findings are tracked by corrective C001 rather than reopening the historical milestone closures.
 
 Relevant current ecosystem evidence:
 
@@ -108,10 +108,13 @@ M003 activity / size / reporting / V0.1 qualification
 read-only field qualification + release
                   |
                   v
-M004 cleanup execution [active]
+M004 cleanup execution [closed]
                   |
                   v
-M005 redirected/shared Cargo output [deferred]
+C001 public-contract/MSRV/traversal reconciliation [ready]
+                  |
+                  v
+M005 redirected/shared Cargo output [design proposed; implementation blocked]
 ~~~
 
 ## 6. Milestone M001 — Foundation, CLI, config, and domain contracts
@@ -195,9 +198,31 @@ Implemented direction:
 
 Conventional local target ownership is the first cleanup target. External/shared target-dir/build-dir remains out of scope.
 
+
+## 9A. Corrective C001 — Public contract, MSRV, traversal, and planning reconciliation
+
+Status: ready.
+
+Primary class: corrective / invariant / polish.
+
+Plan:
+
+- plans/implementation/artifact-discovery-cleanup/c001-public-contract-msrv-traversal-reconciliation.md
+
+Purpose:
+
+- repair advertised Cargo external-subcommand invocation;
+- make the shipped configuration template a single source of truth and add explicit safe force initialization;
+- reconcile relative cleanup-root CLI ergonomics with the absolute internal sandbox invariant;
+- continuously qualify the declared Rust 1.89 MSRV;
+- reconcile duplicated dua-core/walkdir traversal ownership and use measured bounded parallelism for expensive analysis where justified;
+- update stale README/roadmap/registry state without broadening M004 cleanup ownership.
+
+C001 is a hard implementation-baseline dependency for M005. M005 design research may continue in parallel, but an M005 production handoff must be written against the corrected post-C001 repository state.
+
 ## 10. Milestone M005 — Redirected/shared output
 
-Status: proposed for ownership/ADR design; implementation remains deferred until the shared/redirected-output ownership model is resolved. M004 closure evidence satisfies its predecessor dependency.
+Status: proposed for ownership/ADR design. Production implementation is blocked on C001 closure plus resolution of the shared/redirected-output ownership model and any required ADR. M004 closure evidence satisfies the original predecessor dependency, but C001 must establish the corrected implementation baseline before an M005 implementation handoff is registered.
 
 Expected direction:
 
