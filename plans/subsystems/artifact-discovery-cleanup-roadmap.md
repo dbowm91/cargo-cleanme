@@ -180,7 +180,7 @@ M003 is the first product-capability closure boundary.
 
 ## 9. Milestone M004 — Revalidated cleanup execution
 
-Status: closing. M003 is closed and field-reviewed; implementation is complete and hosted matrix evidence is pending. M005 redirected/shared output remains deferred.
+Status: closed. M003 is closed and field-reviewed; M004 implementation and hosted matrix are complete. M005 ownership/ADR design is unblocked, while implementation remains deferred.
 
 Implemented direction:
 
@@ -197,7 +197,7 @@ Conventional local target ownership is the first cleanup target. External/shared
 
 ## 10. Milestone M005 — Redirected/shared output
 
-Status: deferred pending M004 closure evidence and an ownership model for redirected/shared output.
+Status: proposed for ownership/ADR design; implementation remains deferred until the shared/redirected-output ownership model is resolved. M004 closure evidence satisfies its predecessor dependency.
 
 Expected direction:
 
