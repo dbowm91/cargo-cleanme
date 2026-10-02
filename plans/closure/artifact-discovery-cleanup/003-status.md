@@ -4,7 +4,7 @@ Plan: `plans/implementation/artifact-discovery-cleanup/003-activity-size-analysi
 
 Disposition: **conditionally closed**
 
-Implementation commits: `64b13a7b7746bd4ed60f8d8f6c481517b50bcb9a` through `9a4e7af9f88b9dbe866131a104877500975bb4df` (branch `implementation/artifact-discovery-cleanup`).
+Implementation commits: `64b13a7b7746bd4ed60f8d8f6c481517b50bcb9a` through `0709d240154f1a96cf0f02764b9c0f4694390b19` (branch `implementation/artifact-discovery-cleanup`).
 
 ## Requirement-to-evidence matrix
 
@@ -14,7 +14,7 @@ Implementation commits: `64b13a7b7746bd4ed60f8d8f6c481517b50bcb9a` through `9a4e
 | Recent source activity short-circuits target access | Test uses a recent source tree and a missing target; result is inactive-scan exclusion rather than target uncertainty | Pass |
 | Target artifacts measured, empty targets excluded, uncertainty disqualifies | Sizing tests and end-to-end fixture | Pass |
 | Source walk excludes target, VCS metadata, and nested VCS boundaries | `source_activity` traversal filter | Implemented |
-| Unix/Windows allocated-size metric; apparent fallback elsewhere | `filesize::file_real_size_fast`; explicit `SizeMetric` classification | Implemented; Windows runtime evidence pending |
+| Unix/Windows allocated-size metric; apparent fallback elsewhere | `filesize::file_real_size_fast`; explicit `SizeMetric` classification | Implemented; Windows CI passed; no separate allocated-size runtime measurement was run |
 | Stable size-descending report and deterministic ties | Report golden assertions and end-to-end fixture | Pass |
 | Non-UTF-8 output strategy | Valid UTF-8 paths print plainly; non-UTF-8 paths use escaped `OsStr` debug formatting | Pass; `report_escapes_non_utf8_paths` |
 | Diagnostics separated from stdout | Report goes to stdout; summary count goes to stderr | Pass |
@@ -36,13 +36,13 @@ Implementation commits: `64b13a7b7746bd4ed60f8d8f6c481517b50bcb9a` through `9a4e
 
 ## Limitations and unresolved findings
 
-- Hosted Linux and Windows CI remain pending. Local Windows cross-check was unavailable because the active compiler lacked its target standard library.
+- Hosted Linux, macOS, and Windows CI passed in run [37052261642](https://github.com/dbowm91/cargo-cleanme/actions/runs/37052261642).
 - No separate Windows allocated-size measurement was run.
 - JSON output is intentionally omitted; the plan made it optional.
 - The real-tree run is one read-only local observation. Its candidate set still needs human field review before destructive work is planned.
 
-Severity: no known correctness or security findings. Read-only field qualification and cross-platform qualification remain open prerequisites for M004.
+Severity: no known correctness or security findings. Human review of the real-tree candidate report remains the named prerequisite for M004 planning.
 
 ## Dependency disposition
 
-M003 provides the first complete local read-only capability. M004 remains **deferred**: the one local observation does not establish field qualification, and hosted Linux/macOS/Windows CI must pass first. Do not write or implement destructive cleanup from this closure alone.
+M003 provides the first complete local read-only capability. M004 remains **deferred**: the one local observation still needs human review. Hosted Linux/macOS/Windows CI has passed. Do not write or implement destructive cleanup from this closure alone.
