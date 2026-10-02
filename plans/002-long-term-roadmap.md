@@ -1,0 +1,213 @@
+# cargo-cleanme Long-Term Roadmap
+
+Status: canonical ordered roadmap
+
+This roadmap decomposes the product specification into dependency-ordered phases. Milestone implementation plans under plans/implementation/ are bounded handoff artifacts and may evolve without rewriting this roadmap.
+
+## Phase 0 — Planning and contracts
+
+Status: complete for initial implementation handoff.
+
+Deliverables:
+
+- canonical product specification;
+- canonical terminology;
+- planning governance;
+- active registry;
+- artifact-discovery/cleanup subsystem roadmap;
+- bounded M001-M003 implementation plans.
+
+Exit condition:
+
+- V0.1 behavior is specified without requiring destructive implementation.
+
+## Phase 1 — Foundation, CLI, configuration, and domain contracts
+
+Roadmap milestone: M001.
+
+Objective:
+
+Create a small Rust crate/binary foundation whose public behavior can support the scanner without prematurely coupling CLI, config, traversal, and reporting.
+
+Deliverables:
+
+- cargo-cleanme binary usable as cargo cleanme;
+- default no-argument read-only scan command surface;
+- typed configuration and path validation;
+- platform config location and config init/path commands;
+- domain records for scan scope, discovered project, activity result, artifact analysis, diagnostic, and report;
+- library/CLI separation suitable for deterministic tests;
+- Rust 1.89+ / Rust 2024 toolchain contract;
+- baseline CI and lint/test gates.
+
+Exit condition:
+
+- configuration precedence and CLI behavior are testable without real machine-wide traversal;
+- no destructive function exists.
+
+## Phase 2 — Fast discovery and search-scope filtering
+
+Roadmap milestone: M002.
+
+Objective:
+
+Find conventional Cargo project/target pairs quickly while pruning irrelevant filesystem work.
+
+Deliverables:
+
+- traversal adapter with dua-core 4.1 as the preferred implementation;
+- global vs explicit scope resolution;
+- absolute ignore glob matcher;
+- exact unignore path semantics with ancestry-preserving traversal;
+- platform safety pruning;
+- symlink refusal;
+- Cargo.toml + direct target discovery;
+- nested/workspace duplicate behavior;
+- bounded diagnostics and permission-error handling;
+- fixture and performance-regression coverage.
+
+Exit condition:
+
+- discovery can enumerate candidate project roots without recursively sizing target trees;
+- root/filter precedence exactly matches the specification.
+
+## Phase 3 — Activity analysis, sizing, and V0.1 reporting
+
+Roadmap milestone: M003.
+
+Objective:
+
+Turn discovered candidates into trustworthy inactive-project inventory results.
+
+Deliverables:
+
+- fixed scan-start cutoff;
+- source activity short-circuit;
+- target activity plus artifact-presence and size analysis;
+- allocated/on-disk size metric with documented platform fallback;
+- deterministic size-descending report;
+- summary totals and diagnostic summary;
+- optional machine-readable report if it does not expand the milestone materially;
+- end-to-end Linux/macOS/Windows fixture qualification;
+- representative real-tree performance evidence.
+
+Exit condition:
+
+- cargo cleanme can be used safely as a read-only inventory utility;
+- no active project within the guard window appears as eligible in qualification fixtures;
+- no deletion or cargo clean invocation exists.
+
+## Phase 4 — V0.1 release and field qualification
+
+Status: deferred until M001-M003 close.
+
+Objective:
+
+Ship and observe the read-only scanner before adding cleanup.
+
+Expected work:
+
+- packaging/release workflow;
+- install documentation;
+- cross-platform binaries if warranted;
+- real-machine validation on large developer trees;
+- performance and diagnostic polish;
+- config migration policy once real usage exists.
+
+Exit condition:
+
+- the scanner has enough operational evidence to freeze its eligibility contract.
+
+## Phase 5 — Revalidated Cargo cleanup execution
+
+Status: deferred; no implementation plan until read-only qualification closes.
+
+Objective:
+
+Add a destructive command that cleans only freshly revalidated, ownership-safe candidates and reports actual recovered space.
+
+Required direction:
+
+- re-run recency checks immediately before cleanup;
+- validate manifest/artifact ownership;
+- use Cargo semantics rather than arbitrary recursive deletion;
+- provide dry-run/confirmation policy;
+- keep per-project failures isolated;
+- measure post-clean storage;
+- report actual recovered bytes;
+- define interruption/cancellation behavior;
+- preserve an audit-friendly per-candidate result.
+
+Hard dependency:
+
+Phase 4 closure.
+
+## Phase 6 — Redirected/shared Cargo output awareness
+
+Status: deferred.
+
+Objective:
+
+Understand Cargo configurations in which target-dir and build-dir differ from conventional workspace-local target.
+
+This phase MUST explicitly solve shared-directory ownership and deduplication before any destructive action is permitted against external paths.
+
+Expected cases:
+
+- .cargo/config.toml target-dir;
+- build-dir distinct from target-dir;
+- environment-provided target directories when observable;
+- workspace-relative path resolution;
+- intentionally shared build caches.
+
+## Phase 7 — Selective cleanup and policy
+
+Status: deferred.
+
+Potential capabilities:
+
+- minimum reclaimable size;
+- age classes;
+- profile/package-aware cleanup where Cargo supports it safely;
+- include/exclude project policy;
+- non-interactive automation only after stable machine-readable contracts exist.
+
+## Phase 8 — Distribution and operational polish
+
+Status: deferred.
+
+Potential work:
+
+- crates.io publication;
+- release binaries for common Linux/macOS/Windows architectures;
+- package-manager integration;
+- optional shell installer/self-update only if justified;
+- shell completion/manpage;
+- benchmark tracking;
+- support policy and release documentation.
+
+## Dependency summary
+
+~~~text
+Phase 0 planning
+      |
+      v
+M001 foundation
+      |
+      v
+M002 discovery
+      |
+      v
+M003 activity + size + report
+      |
+      v
+read-only V0.1 field qualification
+      |
+      v
+M004+ destructive cleanup
+      |
+      v
+redirected/shared-output support
+~~~
+
+Destructive work MUST NOT be pulled forward merely to make the tool feel complete.
