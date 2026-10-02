@@ -69,7 +69,7 @@ The implementation therefore has no legacy API or migration burden.
 - clap-based CLI.
 - serde + toml configuration.
 - platform configuration directory resolution, preferably through a small wrapper over the directories crate.
-- repository-shipped config.example.toml.
+- repository-shipped config.toml.
 - config path/init/show or equivalent bounded config inspection surface.
 - typed path/scope/filter configuration.
 - typed domain records for later M002/M003 consumers.
@@ -99,7 +99,7 @@ Prefer a small layout resembling:
 
 ~~~text
 Cargo.toml
-config.example.toml
+config.toml
 src/
   lib.rs
   main.rs
@@ -138,10 +138,13 @@ cargo-cleanme scan
 cargo-cleanme scan /explicit/root
 cargo-cleanme config path
 cargo-cleanme config init
+cargo-cleanme config init --force
 cargo-cleanme config show
 ~~~
 
 No arguments MUST normalize to scan intent.
+
+Cargo custom-subcommand invocation requires an explicit argv normalization step. Cargo invokes `cargo-cleanme` with `cleanme` as argv[1] before forwarding user arguments. The CLI boundary MUST recognize and remove only that Cargo-injected token so `cargo-cleanme scan` and `cargo cleanme scan` are behaviorally identical. `cargo help cleanme` must likewise reach the normal help surface. Add focused tests using Cargo's documented argv shape.
 
 The M001 scan handler MAY terminate with a clearly classified "scanner not implemented in M001" internal path in focused tests, but the handoff should prefer a clean orchestration seam that M002 can fill without rewriting CLI parsing.
 
@@ -170,7 +173,7 @@ unignore = [
 
 The config file is optional. Absence means defaults.
 
-The repository ships config.example.toml with commented root and explanatory precedence.
+The repository MUST ship a top-level `config.toml` containing the canonical defaults plus commented root/filter examples. The executable SHOULD embed that exact file with `include_str!` (or an equivalent single-source mechanism) so `config init` writes the shipped template rather than maintaining a second copy. `config init` MUST refuse to overwrite an existing user config unless `--force` is supplied.
 
 The platform config file is named config.toml under the cargo-cleanme application config directory.
 
@@ -350,7 +353,7 @@ Make implemented behavior match planning.
 Required changes:
 
 - README usage/config section;
-- config.example.toml;
+- config.toml;
 - module-level comments only where ownership is non-obvious.
 
 ## 8. Failure, cancellation, restart, and contention semantics
@@ -411,7 +414,7 @@ Hosted CI should run the broad set on Linux, macOS, and Windows, with reasonable
 ## 12. Documentation updates
 
 - README.md
-- config.example.toml
+- config.toml
 - plans/registry.md only through closure/status reconciliation, not ad-hoc implementation edits
 - closure record after implementation
 
