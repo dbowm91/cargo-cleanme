@@ -144,21 +144,36 @@ Phase 4 closure.
 
 ## Phase 6 — Redirected/shared Cargo output awareness
 
-Status: deferred.
+Roadmap milestone: M005.
+
+Status: ready for staged implementation under ADR 001.
 
 Objective:
 
-Understand Cargo configurations in which target-dir and build-dir differ from conventional workspace-local target.
+Resolve Cargo workspaces and target/build output through Cargo itself, deduplicate physical output, inventory shared/external caches safely, reject expensive work as early as possible, provide immediate inline scan status, and then extend Cargo-mediated cleanup only to private authorized redirected output.
 
-This phase MUST explicitly solve shared-directory ownership and deduplication before any destructive action is permitted against external paths.
+Accepted decision:
 
-Expected cases:
+- plans/adr/001-workspace-output-ownership-and-cleanup-authorization.md
 
-- .cargo/config.toml target-dir;
-- build-dir distinct from target-dir;
-- environment-provided target directories when observable;
-- workspace-relative path resolution;
-- intentionally shared build caches.
+Implementation sequence:
+
+1. M005A — workspace/output resolution, physical-output grouping, fail-fast scan pipeline, and inline progress/status.
+2. M005B — authorized private redirected cleanup plus explicit `--dryrun` full simulation mode.
+
+Required cases:
+
+- multi-member workspaces;
+- .cargo/config.toml / environment target-dir resolved by Cargo;
+- target/build directories equal or distinct;
+- Cargo 1.89-1.90 runtime behavior vs Cargo 1.91+ build-dir capability;
+- workspace-relative/path-template resolution delegated to Cargo;
+- identical/nested/overlapping physical output;
+- intentionally shared caches;
+- external private output requiring explicit authorization;
+- non-TTY progress suppression and deterministic final output.
+
+Shared, uncertain, and externally unproven physical output remains inventory-only in M005.
 
 ## Phase 7 — Selective cleanup and policy
 

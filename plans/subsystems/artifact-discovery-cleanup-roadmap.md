@@ -2,7 +2,7 @@
 
 Status: active
 
-Repository audit baseline: 811e7d0833cda3d9eec35b2c77bbc3deb17aa379
+Repository audit baseline: 50461442c0d4d783a5a4f1e86a35001f68f8d8db
 
 Canonical references:
 
@@ -36,7 +36,7 @@ It does not own Cargo global cache GC, arbitrary build-system caches, a general 
 
 ## 3. Current-state evidence
 
-At the current audit baseline, M001-M004 are implemented and merged on main. The repository contains a Rust 1.89 / edition-2024 package with CLI/config/domain layers, dua-core-backed project discovery, filesystem activity and size analysis, deterministic reporting, and a separately scoped Cargo-mediated cleanup path. Corrective C001 is implemented and awaiting closure: Cargo external-subcommand argv is normalized before clap (`cargo cleanme` ≡ direct form, proven by unit + `cargo cleanme --help` integration), the checked-in top-level `config.toml` is the single `include_str!` source for `config init` with explicit atomic `--force` replacement, relative `clean ROOT` values are resolved lexically to an absolute sandbox root without weakening the absolute/symlink boundary, Rust 1.89 is qualified by a dedicated locked CI job alongside the stable Linux/macOS/Windows matrix, and all traversal (discovery, source activity, target sizing, post-clean measurement) goes through the new `src/traverse.rs` ownership boundary sharing one bounded `dua-core` pool (≤8 workers; batched `walk_roots` target sizing). `walkdir` has been removed from direct dependencies. Historical M001-M004 closures are preserved; C001 is tracked separately rather than rewriting them.
+At the current audit baseline, M001-M004 and corrective C001 are closed on main. The repository contains a Rust 1.89 / edition-2024 package with normalized Cargo-external CLI handling, canonical config initialization, bounded dua-core traversal through `src/traverse.rs`, deterministic activity/size reporting, dedicated Rust 1.89 plus Linux/macOS/Windows CI, and a narrowly scoped Cargo-mediated cleanup path for conventional private output. M005 research has now selected ADR 001: the Cargo workspace becomes the logical owner, Cargo itself resolves workspace/target/build configuration, physical output is grouped/deduplicated before sizing, shared/unproven external output remains inventory-only, and external private cleanup requires an explicit authorization boundary. M005 is staged as M005A (resolution/fail-fast/progress) followed by M005B (authorized redirected cleanup/`--dryrun`).
 
 Relevant current ecosystem evidence:
 
@@ -114,7 +114,10 @@ M004 cleanup execution [closed]
 C001 public-contract/MSRV/traversal reconciliation [closed]
                    |
                    v
-M005 redirected/shared Cargo output [design proposed; implementation blocked]
+M005A workspace/output resolution + fail-fast progress [ready]
+                   |
+                   v
+M005B authorized redirected cleanup + --dryrun [blocked on M005A]
 ~~~
 
 ## 6. Milestone M001 — Foundation, CLI, config, and domain contracts
@@ -220,19 +223,53 @@ Purpose:
 
 C001 is a hard implementation-baseline dependency for M005. M005 design research may continue in parallel, but an M005 production handoff must be written against the corrected post-C001 repository state.
 
-## 10. Milestone M005 — Redirected/shared output
+## 10. Milestone M005 — Workspace-aware redirected/shared output
 
-Status: proposed for ownership/ADR design. Production implementation remains blocked until the shared/redirected-output ownership model and any required ADR are decided. C001 is now closed, so the corrected-implementation-baseline half of the original blocker is satisfied and design research may proceed against the post-C001 tree; M004 closure evidence satisfies the original predecessor dependency. An M005 implementation handoff must still wait for the ownership decision and be written against the post-C001 state.
+Status: staged implementation. ADR 001 accepted. M005A is ready; M005B is blocked on M005A closure.
 
-Expected direction:
+Accepted decision:
 
-- resolve Cargo config hierarchy safely;
-- model final target-dir and intermediate build-dir separately;
-- detect/shared ownership;
-- refuse destructive ambiguity;
-- avoid duplicate reporting for one physical shared directory.
+- plans/adr/001-workspace-output-ownership-and-cleanup-authorization.md
 
-This milestone may require an ADR once M004 evidence exists.
+### M005A — Workspace output resolution, fail-fast scan, and inline progress
+
+Status: ready.
+
+Plan:
+
+- plans/implementation/artifact-discovery-cleanup/005a-workspace-output-resolution-fail-fast-progress.md
+
+Expected outcome:
+
+- discover manifests independently of a direct local target;
+- resolve workspace identity and target/build output through Cargo;
+- support multi-member workspace inventory;
+- group equal/nested/shared physical output and count it once;
+- retain shared/external-unproven output as inventory-only;
+- order exclusion gates so ignored, empty, active, and uncertain candidates avoid unnecessary Cargo/source/deep-size work;
+- emit structured progress events;
+- show immediate inline attended-terminal status with an indeterminate discovery bar, bounded candidate rows with sizes, and clear-before-final behavior;
+- preserve plain deterministic output when stderr is non-interactive.
+
+### M005B — Authorized redirected cleanup and simulation
+
+Status: blocked on M005A closure.
+
+Plan:
+
+- plans/implementation/artifact-discovery-cleanup/005b-authorized-redirected-cleanup-and-dryrun.md
+
+Expected outcome:
+
+- authorize private output under the clean sandbox or configured absolute cleanup-output roots;
+- preserve shared/uncertain/unproven output as non-destructive;
+- re-resolve/freeze workspace target/build paths immediately before Cargo cleanup;
+- support multi-member workspace Cargo cleanup where ownership is private;
+- add `--dryrun` simulation that runs the full cargo-cleanme decision/progress/report path but invokes no Cargo clean command;
+- keep existing Cargo `--dry-run` preview semantically distinct;
+- clear transient progress and then print every cleaned/would-clean physical output group with sizes and a deduplicated total.
+
+M005 does not parse Cargo-private build-cache layout and does not add selective package cleanup.
 
 ## 11. Cross-cutting reliability concerns
 

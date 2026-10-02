@@ -1,6 +1,6 @@
 # cargo-cleanme Active Planning Registry
 
-This file is the compact control surface for active planning. Detailed requirements live in canonical documents, the subsystem roadmap, implementation plans, and closure records.
+This file is the compact control surface for active planning. Detailed requirements live in canonical documents, accepted ADRs, the subsystem roadmap, implementation plans, and closure records.
 
 Canonical direction:
 
@@ -9,8 +9,12 @@ Canonical direction:
 - plans/002-long-term-roadmap.md
 - plans/003-planning-process.md
 
+Accepted architecture decisions:
+
+- plans/adr/001-workspace-output-ownership-and-cleanup-authorization.md
+
 Planning framework baseline: 97dee9fa64868534cedf3a9310e7160335a91be2
-Current repository audit baseline: 811e7d0833cda3d9eec35b2c77bbc3deb17aa379
+Current repository planning baseline: 50461442c0d4d783a5a4f1e86a35001f68f8d8db
 
 ## Status vocabulary
 
@@ -21,42 +25,47 @@ Current repository audit baseline: 811e7d0833cda3d9eec35b2c77bbc3deb17aa379
 - closing — implementation landed and closure evidence is being gathered.
 - closed — closure record accepted.
 - conditionally closed — substantial work landed but named evidence remains.
-- superseded — replaced by another plan.
+- superseded — replaced by a newer plan.
 - archived — retained for traceability only.
 
 ## Active subsystem roadmaps
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | C001 closed; M005 design proposed | C001 closure accepted. M005 design research may proceed against the corrected baseline; M005 implementation remains blocked until the shared/redirected-output ownership model and ADR decision are complete. |
+| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M005A ready | ADR 001 accepted; M004/C001 closed. Implement M005A before redirected cleanup. |
 
 ## Implementation handoffs
 
 | Subsystem | Milestone | Status | Implementation plan | Dependency / handoff note |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | M001 foundation, CLI, config, domain | **closed** | plans/implementation/artifact-discovery-cleanup/001-foundation-cli-config-and-domain-model.md | Closure: plans/closure/artifact-discovery-cleanup/001-status.md. Later public-contract drift is tracked by C001. |
-| Artifact discovery and cleanup | M002 fast discovery and scope filters | **closed** | plans/implementation/artifact-discovery-cleanup/002-fast-project-discovery-and-scope-filters.md | Closure: plans/closure/artifact-discovery-cleanup/002-status.md. Traversal consolidation/performance follow-up is tracked by C001. |
-| Artifact discovery and cleanup | M003 activity, sizing, read-only report | **closed** | plans/implementation/artifact-discovery-cleanup/003-activity-size-analysis-and-read-only-reporting.md | Closure: plans/closure/artifact-discovery-cleanup/003-status.md. Activity/eligibility semantics remain authoritative during C001. |
-| Artifact discovery and cleanup | M004 revalidated cleanup execution | **closed** | plans/implementation/artifact-discovery-cleanup/004-revalidated-cleanup-execution.md | Closure: plans/closure/artifact-discovery-cleanup/004-status.md. M004 safety/ownership boundary must not regress during C001. |
-| Artifact discovery and cleanup | C001 public contract, MSRV, traversal, and planning reconciliation | **closed** | plans/implementation/artifact-discovery-cleanup/c001-public-contract-msrv-traversal-reconciliation.md | Closure: plans/closure/artifact-discovery-cleanup/c001-status.md. Corrects post-M004 findings without broadening cleanup ownership. |
-
-## Proposed / blocked follow-on work
-
-| Subsystem | Milestone | Status | Plan | Blocker |
-|---|---|---|---|---|
-| Artifact discovery and cleanup | M005 redirected/shared output | **proposed / implementation blocked** | not yet implementation-ready | C001 baseline satisfied; blocker is now only the explicit shared/redirected-output ownership model and ADR decision. Design research may proceed against the post-C001 tree, but no production implementation should start until the ownership decision and a new implementation handoff exist. |
+| Artifact discovery and cleanup | M001 foundation, CLI, config, domain | **closed** | plans/implementation/artifact-discovery-cleanup/001-foundation-cli-config-and-domain-model.md | Closure: plans/closure/artifact-discovery-cleanup/001-status.md. |
+| Artifact discovery and cleanup | M002 fast discovery and scope filters | **closed** | plans/implementation/artifact-discovery-cleanup/002-fast-project-discovery-and-scope-filters.md | Closure: plans/closure/artifact-discovery-cleanup/002-status.md. |
+| Artifact discovery and cleanup | M003 activity, sizing, read-only report | **closed** | plans/implementation/artifact-discovery-cleanup/003-activity-size-analysis-and-read-only-reporting.md | Closure: plans/closure/artifact-discovery-cleanup/003-status.md. |
+| Artifact discovery and cleanup | M004 revalidated cleanup execution | **closed** | plans/implementation/artifact-discovery-cleanup/004-revalidated-cleanup-execution.md | Closure: plans/closure/artifact-discovery-cleanup/004-status.md. |
+| Artifact discovery and cleanup | C001 public-contract/MSRV/traversal reconciliation | **closed** | plans/implementation/artifact-discovery-cleanup/c001-public-contract-msrv-traversal-reconciliation.md | Closure: plans/closure/artifact-discovery-cleanup/c001-status.md. |
+| Artifact discovery and cleanup | M005A workspace output resolution, fail-fast scan, inline progress | **ready** | plans/implementation/artifact-discovery-cleanup/005a-workspace-output-resolution-fail-fast-progress.md | Start here. No broadened destructive cleanup in this handoff. |
+| Artifact discovery and cleanup | M005B authorized redirected cleanup + full simulation | **blocked** | plans/implementation/artifact-discovery-cleanup/005b-authorized-redirected-cleanup-and-dryrun.md | Hard dependency: M005A closure/final interfaces. ADR 001 already satisfies ownership-policy decision. |
 
 ## Immediate handoff
 
-C001 is closed.
+Implement M005A.
 
 Expected order:
 
 ~~~text
 M001-M004 -> closed
-C001 corrective/reconciliation -> closed
-M005 ownership/ADR design -> reconcile against corrected baseline (may proceed)
-M005 implementation plan -> only after ownership decision
+C001 -> closed
+ADR 001 -> accepted
+M005A resolution/output graph/fail-fast/progress -> ready
+M005A -> closure
+M005B private redirected cleanup/--dryrun -> ready after M005A closure
+M005B -> closure
 ~~~
 
-The corrective pass preserved M004's deliberately narrow destructive boundary: explicit cleanup scope, dry-run by default, --yes for execution, fresh activity revalidation, Cargo ownership checks, and no direct recursive deletion.
+M005 safety boundary:
+
+- Cargo resolves workspace/output configuration.
+- Shared, uncertain, and external-unproven physical output is inventory-only.
+- External private output needs an explicit cleanup authorization boundary.
+- Progress UI is transient stderr state and is cleared before deterministic final stdout.
+- `--dryrun` in M005B runs the full cargo-cleanme path but invokes no Cargo clean command.

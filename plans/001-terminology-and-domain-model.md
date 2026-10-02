@@ -180,3 +180,72 @@ No V0.1 type named cleanup candidate should imply cleanup is currently available
 A future post-clean measurement of storage no longer occupied after a successful cleanup operation.
 
 Pre-clean artifact size MUST NOT be labeled recovered bytes.
+
+
+## 24. Resolved workspace
+
+A Cargo workspace identity resolved by Cargo itself from one or more discovered manifests.
+
+It includes the workspace root/root manifest, workspace members needed for source-activity analysis, Cargo runtime capability information, and the resolved output set.
+
+Multiple discovered member manifests may map to one resolved workspace.
+
+## 25. Output root
+
+One logical Cargo output location for a resolved workspace.
+
+Kinds:
+
+- target output root — final/user-facing Cargo output;
+- build output root — intermediate Cargo/rustc output when Cargo distinguishes it.
+
+Target and build roots may be equal.
+
+## 26. Output set
+
+The target/build output roots associated with one resolved workspace under one Cargo resolution context.
+
+The output set is logical. Physical overlap is resolved separately.
+
+## 27. Physical output group
+
+One connected physical filesystem region formed by canonical equal/ancestor/descendant relationships among output roots.
+
+A physical output group is the unit for deduplicated size/activity measurement. Equal or nested logical roots are counted once.
+
+A group may have one or many workspace owners.
+
+## 28. Output ownership class
+
+The cleanup-safety classification of a physical output group:
+
+- PrivateBounded — one workspace owner and all destructive paths lie within an authorized cleanup boundary;
+- ExternalUnproven — one observed owner but external exclusivity/authorization is not proven;
+- Shared — multiple workspaces resolve to equal/overlapping physical output;
+- Uncertain — resolution/path/activity/ownership evidence is incomplete.
+
+Only PrivateBounded is eligible for M005 destructive cleanup.
+
+## 29. Cleanup output authorization root
+
+An explicit absolute directory root under which otherwise external private Cargo output may be cleaned.
+
+Authorization is not ownership proof. It never makes a Shared or Uncertain group cleanable.
+
+The explicit clean source sandbox implicitly authorizes private output physically contained within that sandbox.
+
+## 30. Inline progress status
+
+Transient attended-terminal status rendered while a scan/cleanup is executing.
+
+It is not a report and has no effect on eligibility. It is written to stderr, rate-limited, limited to a small number of visible candidate rows, and cleared before final deterministic output.
+
+## 31. Cargo preview
+
+A non-mutating cleanup mode that may invoke `cargo clean --dry-run --verbose` for an otherwise authorized candidate.
+
+## 32. Simulation / --dryrun
+
+A cargo-cleanme debugging/performance mode that executes cargo-cleanme's own discovery, Cargo resolution/metadata, filtering, sizing, authorization, revalidation, progress, and final reporting but invokes no Cargo `clean` command.
+
+Simulation reports would-clean/estimated bytes, never recovered bytes.

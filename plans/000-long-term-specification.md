@@ -29,7 +29,7 @@ With no destructive subcommand, the default operation is a read-only scan.
 
 The product MUST:
 
-1. discover Cargo project roots that have conventional local target/ build output;
+1. discover Cargo project/workspace roots and, initially, conventional local target/ output; later milestones may resolve redirected target/build output through Cargo itself;
 2. avoid presenting projects that appear to be in active development;
 3. default the activity guard to 300 seconds;
 4. allow the activity guard to be changed in config.toml;
@@ -57,7 +57,7 @@ The first release does not:
 - follow symlinks;
 - use Git commit timestamps as the definition of project activity;
 - require a daemon, index database, filesystem watcher, or background service;
-- require a TUI.
+- require a full-screen/raw-mode TUI. A later milestone may provide a transient inline terminal progress display.
 
 Cargo currently permits build.target-dir and build.build-dir to redirect output. Those paths are deliberately deferred until cleanup ownership and shared-cache semantics can be proven safely.
 
@@ -92,6 +92,16 @@ Filesystem walking MUST sit behind a small internal boundary. dua-core 4.1 is th
 ### 4.6 Report disk use, not source-tree size
 
 The reported size represents the candidate artifact tree, not the entire repository. V0.1 SHOULD report allocated/on-disk bytes where the platform provides them and MUST document any platform fallback to apparent bytes.
+
+### 4.7 Fail fast before expensive analysis
+
+Later workspace/output-aware scanning MUST order its gates so paths that cannot become reportable are rejected before Cargo metadata, source traversal, or deep output sizing whenever safety permits. Ignore/safety pruning occurs before Cargo subprocesses; absent/empty resolved output is rejected before source/deep-size analysis; recent source activity rejects a workspace before deep output sizing.
+
+A progress display MUST NOT require a second filesystem traversal merely to compute a percentage.
+
+### 4.8 Interactive status is transient
+
+When stderr is an attended terminal, the default CLI MAY render a small inline progress/status surface while scanning. It remains on the main screen, MUST NOT require raw mode, is rate-limited, and is cleared before deterministic final output. Non-terminal output MUST contain no progress-control sequences.
 
 ## 5. Canonical V0.1 scan pipeline
 
@@ -236,6 +246,8 @@ V0.1 is an inventory estimate, not a promise of exact bytes eventually reclaimed
 
 Human output is size-descending by default and deterministic for equal sizes.
 
+Interactive progress, when enabled, is ephemeral stderr state only. It is cleared before this final report and is never part of the machine-readable or deterministic human-output contract.
+
 A successful scan prints one line per eligible Cargo project and a summary, for example:
 
 ~~~text
@@ -274,6 +286,18 @@ The design SHOULD:
 
 Performance qualification MUST include representative synthetic deep/wide trees and at least one real developer tree. Absolute timing gates are secondary to regression comparisons because storage hardware varies substantially.
 
+## 15A. Workspace/output-aware extension
+
+After the conventional V0.1 scanner is qualified, redirected/shared-output support uses the Cargo workspace as the logical ownership unit.
+
+Cargo itself is authoritative for workspace/output resolution. cargo-cleanme does not reproduce Cargo configuration-merging semantics.
+
+Target and build output are separate logical roots that may be equal, nested, external, or shared. Existing roots are grouped by physical identity/containment before activity, sizing, or cleanup so bytes are not double-counted.
+
+Shared, uncertain, or externally unproven output MAY be inventoried but MUST NOT be destructively cleaned. External private output requires an explicit cleanup-output authorization boundary in addition to ownership evidence.
+
+Source activity in any workspace member and output activity anywhere in a physical output group protect the workspace/group.
+
 ## 16. Cleanup capability requirements
 
 A later cleanup milestone MAY invoke Cargo only after V0.1 discovery is closed.
@@ -286,7 +310,11 @@ Before cleaning a candidate it MUST:
 4. invoke Cargo against the intended manifest/artifact contract rather than blindly deleting arbitrary directories;
 5. capture process failure independently per candidate;
 6. measure disk state after cleanup;
-7. report attempted, cleaned, skipped, failed, and actually recovered bytes separately.
+7. report attempted, cleaned, skipped, failed, and actually recovered bytes separately;
+8. preserve physical target/build output identity so overlapping roots are measured once;
+9. refuse shared, uncertain, or unauthorized external output.
+
+A later `--dryrun` simulation mode MAY exercise discovery, resolution, filtering, sizing, authorization, revalidation, progress, and final reporting while prohibiting every `cargo clean` subprocess. Such simulation output is estimated/would-clean space, not recovered bytes.
 
 The existence of cargo clean --dry-run MAY support later qualification but does not replace ownership validation.
 
