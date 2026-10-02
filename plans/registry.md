@@ -27,27 +27,27 @@ Planning framework baseline: 97dee9fa64868534cedf3a9310e7160335a91be2
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M001 ready | Fresh implementation. M002 hard-depends on M001 closure; M003 hard-depends on M002 closure. Destructive M004 remains deferred until read-only field qualification. |
+| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M003 conditionally closed | Local read-only implementation and real-tree observation complete. Hosted Linux/macOS/Windows CI and human field review are still required before M004 planning. |
 
 ## Implementation handoffs
 
 | Subsystem | Milestone | Status | Implementation plan | Dependency / handoff note |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | M001 foundation, CLI, config, domain | **ready** | plans/implementation/artifact-discovery-cleanup/001-foundation-cli-config-and-domain-model.md | No hard dependencies. Start here. No real recursive scan or destructive behavior. |
-| Artifact discovery and cleanup | M002 fast discovery and scope filters | **blocked** | plans/implementation/artifact-discovery-cleanup/002-fast-project-discovery-and-scope-filters.md | Hard dependency: M001 closure. Integrates dua-core-backed discovery, exact filter precedence, and candidate detection without sizing. |
-| Artifact discovery and cleanup | M003 activity, sizing, read-only report | **blocked** | plans/implementation/artifact-discovery-cleanup/003-activity-size-analysis-and-read-only-reporting.md | Hard dependency: M002 closure. First product-capability closure boundary. |
+| Artifact discovery and cleanup | M001 foundation, CLI, config, domain | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/001-foundation-cli-config-and-domain-model.md | Closure: plans/closure/artifact-discovery-cleanup/001-status.md. Hosted platform matrix is pending. |
+| Artifact discovery and cleanup | M002 fast discovery and scope filters | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/002-fast-project-discovery-and-scope-filters.md | Closure: plans/closure/artifact-discovery-cleanup/002-status.md. Platform qualification is pending. |
+| Artifact discovery and cleanup | M003 activity, sizing, read-only report | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/003-activity-size-analysis-and-read-only-reporting.md | Closure: plans/closure/artifact-discovery-cleanup/003-status.md. Field review and hosted platform qualification are pending. |
 | Artifact discovery and cleanup | M004 revalidated cleanup execution | **deferred** | not written | Do not plan/implement until M003 closes and read-only behavior has been exercised on real systems. |
 
 ## Immediate handoff
 
-M001 is the only dependency-ready implementation plan.
+M001-M003 are implemented with conditional closure records. M004 remains deferred pending hosted CI and real-world read-only field review.
 
 Expected implementation order:
 
 ~~~text
-M001 -> closure
-M002 -> closure
-M003 -> closure
+M001 -> conditional closure (CI pending)
+M002 -> conditional closure (CI pending)
+M003 -> conditional closure (CI and field review pending)
 read-only field qualification
 then consider M004 planning
 ~~~

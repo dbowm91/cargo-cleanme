@@ -1,6 +1,6 @@
 # Artifact Discovery and Cleanup Milestone 002 — Fast Project Discovery and Scope Filters
 
-Status: blocked on M001 closure
+Status: conditionally closed
 
 Repository baseline: 97dee9fa64868534cedf3a9310e7160335a91be2
 
