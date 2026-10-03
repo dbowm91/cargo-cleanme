@@ -13,6 +13,11 @@ pub struct Cli {
     /// Disable transient progress UI (useful for benchmarks and debugging).
     #[arg(long, global = true)]
     pub no_progress: bool,
+    /// Print detailed scan/cleanup counters and phase timings to stderr.
+    /// Never changes deterministic stdout. `--no-progress --stats` is the
+    /// canonical benchmark/debug combination.
+    #[arg(long, global = true)]
+    pub stats: bool,
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -364,5 +369,44 @@ mod tests {
         let c = Cli::try_parse_from(["cargo-cleanme", "--no-progress"]).unwrap();
         assert!(c.no_progress);
         assert!(c.command.is_none());
+    }
+
+    #[test]
+    fn stats_flag_parses_globally_in_direct_and_external_forms() {
+        // C002 §7.8: `--stats` is additive and global.
+        let c = Cli::try_parse_from(["cargo-cleanme", "--stats", "scan", "/tmp"]).unwrap();
+        assert!(c.stats);
+        let c = Cli::try_parse_from(["cargo-cleanme", "scan", "/tmp"]).unwrap();
+        assert!(!c.stats);
+        let c = Cli::try_parse_from(["cargo-cleanme", "--no-progress", "--stats", "scan", "/tmp"])
+            .unwrap();
+        assert!(c.no_progress);
+        assert!(c.stats);
+        // Clean modes.
+        for args in [
+            vec!["cargo-cleanme", "clean", "/x", "--stats"],
+            vec!["cargo-cleanme", "clean", "/x", "--dryrun", "--stats"],
+            vec!["cargo-cleanme", "clean", "/x", "--yes", "--stats"],
+        ] {
+            let c = Cli::try_parse_from(args.clone()).unwrap();
+            assert!(c.stats, "{args:?}");
+        }
+        // External subcommand forms.
+        for args in [
+            vec!["cargo-cleanme", "cleanme", "--stats", "scan", "/x"],
+            vec!["cargo-cleanme", "cleanme", "clean", "/x", "--stats"],
+            vec![
+                "cargo-cleanme",
+                "cleanme",
+                "--no-progress",
+                "--stats",
+                "scan",
+                "/x",
+            ],
+        ] {
+            let normalized: Vec<OsString> = args.iter().map(OsString::from).collect::<Vec<_>>();
+            let parsed = Cli::try_parse_from(normalize_cargo_argv(normalized)).unwrap();
+            assert!(parsed.stats, "{args:?}");
+        }
     }
 }

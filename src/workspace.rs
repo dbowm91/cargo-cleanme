@@ -5,7 +5,11 @@
 //! and `cargo metadata` through a test-injectable runner, caches by workspace,
 //! groups overlapping physical output, and measures each group once.
 
-use crate::{domain::*, progress::ProgressObserver, traverse};
+use crate::{
+    domain::*,
+    progress::{ProgressObserver, ScanPhase},
+    traverse,
+};
 use serde::Deserialize;
 use std::{
     collections::{HashMap, HashSet},
@@ -169,9 +173,18 @@ fn resolve_one_workspace(
         .chain(std::iter::once(manifest.as_os_str().to_owned()))
         .collect();
     counters.cargo_locate_calls += 1;
+    let locate_start = std::time::Instant::now();
     let locate_out = match runner.run(manifest.parent().unwrap_or(Path::new("/")), &locate_args) {
-        Ok(o) => o,
+        Ok(o) => {
+            counters.cargo_locate_nanos = counters
+                .cargo_locate_nanos
+                .saturating_add(locate_start.elapsed().as_nanos() as u64);
+            o
+        }
         Err(e) => {
+            counters.cargo_locate_nanos = counters
+                .cargo_locate_nanos
+                .saturating_add(locate_start.elapsed().as_nanos() as u64);
             counters.cargo_failures += 1;
             observer.cargo_failure();
             diagnostics.push(ScanDiagnostic {
@@ -249,9 +262,18 @@ fn resolve_one_workspace(
         .unwrap_or(Path::new("/"))
         .to_path_buf();
     counters.cargo_metadata_calls += 1;
+    let meta_start = std::time::Instant::now();
     let meta_out = match runner.run(&cwd, &meta_args) {
-        Ok(o) => o,
+        Ok(o) => {
+            counters.cargo_metadata_nanos = counters
+                .cargo_metadata_nanos
+                .saturating_add(meta_start.elapsed().as_nanos() as u64);
+            o
+        }
         Err(e) => {
+            counters.cargo_metadata_nanos = counters
+                .cargo_metadata_nanos
+                .saturating_add(meta_start.elapsed().as_nanos() as u64);
             counters.cargo_failures += 1;
             observer.cargo_failure();
             diagnostics.push(ScanDiagnostic {
@@ -371,10 +393,27 @@ fn resolve_one_workspace(
     })
 }
 
+/// Canonicalize a manifest path for member-cache lookup.
+///
+/// Discovered manifests exist; member manifests from Cargo metadata should
+/// also exist. Fall back to the absolute path when canonicalization fails so
+/// cache identity remains deterministic without guessing workspace membership.
+fn canonical_manifest_key(path: &Path) -> PathBuf {
+    canonical_or_absolute(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
 /// Resolve manifests to unique workspaces with caching.
 ///
 /// Returns workspaces in deterministic order plus diagnostics. Cache key is the
 /// canonical workspace root manifest from locate-project.
+///
+/// C002 §7.6: after the first successful metadata resolution for a workspace,
+/// every member manifest path returned by that authoritative metadata is
+/// registered as mapping to the workspace. Later discovered manifests known
+/// from that metadata require neither another locate nor another metadata
+/// process. For an N-member workspace discovered in arbitrary order, expected
+/// successful Cargo calls are one locate and one metadata. Membership is never
+/// inferred from path ancestry or hand-parsed TOML.
 pub fn resolve_workspaces(
     manifests: &[PathBuf],
     runner: &dyn CargoRunner,
@@ -384,13 +423,20 @@ pub fn resolve_workspaces(
 ) -> Vec<ResolvedWorkspace> {
     let mut cache: HashMap<PathBuf, ResolvedWorkspace> = HashMap::new();
     let mut ordered_keys: Vec<PathBuf> = Vec::new();
-    // For caching we need locate first; to avoid double locate for same
-    // workspace we still locate each manifest (cheap) but metadata once.
-    // Plan requires: do not repeat metadata for members of same workspace.
     let mut locate_cache: HashMap<PathBuf, PathBuf> = HashMap::new();
+    // Authoritative member -> root mapping seeded from Cargo metadata.
+    let mut member_to_root: HashMap<PathBuf, PathBuf> = HashMap::new();
     for manifest in manifests {
-        // Fast path: if manifest itself is already a known root manifest, reuse.
-        // We still need locate to collapse members to workspace identity.
+        // C002 fast path: if this manifest was listed as a member (or root)
+        // by an earlier successful metadata response, reuse that workspace
+        // without any Cargo subprocess.
+        let manifest_key = canonical_manifest_key(manifest);
+        if let Some(root_key) = member_to_root.get(&manifest_key)
+            && cache.contains_key(root_key)
+        {
+            counters.deduped_workspace_hits += 1;
+            continue;
+        }
         let locate_args: Vec<std::ffi::OsString> =
             ["locate-project", "--workspace", "--manifest-path"]
                 .into_iter()
@@ -398,10 +444,14 @@ pub fn resolve_workspaces(
                 .chain(std::iter::once(manifest.as_os_str().to_owned()))
                 .collect();
         counters.cargo_locate_calls += 1;
+        let locate_start = std::time::Instant::now();
         let cwd = manifest.parent().unwrap_or(Path::new("/"));
         let locate_out = match runner.run(cwd, &locate_args) {
             Ok(o) => o,
             Err(e) => {
+                counters.cargo_locate_nanos = counters
+                    .cargo_locate_nanos
+                    .saturating_add(locate_start.elapsed().as_nanos() as u64);
                 counters.cargo_failures += 1;
                 observer.cargo_failure();
                 diagnostics.push(ScanDiagnostic {
@@ -413,6 +463,9 @@ pub fn resolve_workspaces(
                 continue;
             }
         };
+        counters.cargo_locate_nanos = counters
+            .cargo_locate_nanos
+            .saturating_add(locate_start.elapsed().as_nanos() as u64);
         if !locate_out.success {
             counters.cargo_failures += 1;
             observer.cargo_failure();
@@ -443,11 +496,14 @@ pub fn resolve_workspaces(
         if let Some(cached) = locate_cache.get(&canonical_key) {
             let _ = cached;
             counters.deduped_workspace_hits += 1;
+            // Seed this manifest as a known member for future lookups.
+            member_to_root.insert(manifest_key, canonical_key);
             continue;
         }
         if cache.contains_key(&canonical_key) {
             counters.deduped_workspace_hits += 1;
-            locate_cache.insert(canonical_key, root_manifest);
+            locate_cache.insert(canonical_key.clone(), root_manifest);
+            member_to_root.insert(manifest_key, canonical_key);
             continue;
         }
         // Metadata once per workspace.
@@ -463,6 +519,18 @@ pub fn resolve_workspaces(
             counters.unique_workspaces += 1;
             observer.workspaces_resolved(1);
             ordered_keys.push(canonical_key.clone());
+            // Seed authoritative member cache from Cargo metadata (C002 §7.6).
+            member_to_root.insert(canonical_key.clone(), canonical_key.clone());
+            member_to_root.insert(manifest_key, canonical_key.clone());
+            for member in &ws.members {
+                let key = canonical_manifest_key(&member.manifest_path);
+                member_to_root.entry(key).or_insert(canonical_key.clone());
+            }
+            // Also register the canonical root manifest path itself.
+            let root_key = canonical_manifest_key(&ws.root_manifest);
+            member_to_root
+                .entry(root_key)
+                .or_insert(canonical_key.clone());
             cache.insert(canonical_key.clone(), ws);
             locate_cache.insert(canonical_key, root_manifest);
         }
@@ -497,9 +565,18 @@ fn resolve_one_workspace_cached(
     .collect();
     let cwd = root_manifest.parent().unwrap_or(Path::new("/"));
     counters.cargo_metadata_calls += 1;
+    let meta_start = std::time::Instant::now();
     let meta_out = match runner.run(cwd, &meta_args) {
-        Ok(o) => o,
+        Ok(o) => {
+            counters.cargo_metadata_nanos = counters
+                .cargo_metadata_nanos
+                .saturating_add(meta_start.elapsed().as_nanos() as u64);
+            o
+        }
         Err(e) => {
+            counters.cargo_metadata_nanos = counters
+                .cargo_metadata_nanos
+                .saturating_add(meta_start.elapsed().as_nanos() as u64);
             counters.cargo_failures += 1;
             observer.cargo_failure();
             diagnostics.push(ScanDiagnostic {
@@ -511,6 +588,9 @@ fn resolve_one_workspace_cached(
             return None;
         }
     };
+    // Count wall time for failed metadata responses as well.
+    // Success path already accumulated above; failure `success == false`
+    // still consumed a subprocess, so timing is already recorded.
     if !meta_out.success {
         counters.cargo_failures += 1;
         observer.cargo_failure();
@@ -798,6 +878,10 @@ pub fn analyze_groups(
     diagnostics: &mut Vec<ScanDiagnostic>,
     observer: &dyn ProgressObserver,
 ) -> Vec<PhysicalOutputGroup> {
+    // C002 §7.5: determinate analysis total once group count is known.
+    // Emitted through the observer trait so any renderer/test observer
+    // observes it without knowing the concrete type.
+    observer.units_total(ScanPhase::Analysis, groups.len() as u64);
     // Batch-measure all covering roots with one bounded pool.
     let mut all_covering: Vec<(usize, PathBuf)> = Vec::new();
     // Map group idx -> covering indices for later aggregation.
@@ -874,7 +958,12 @@ pub fn analyze_groups(
             ws_source_recent.insert(wi, false);
             continue;
         }
-        match workspace_source_activity(ws, &all_outputs, clock_start, clock_cutoff) {
+        let source_start = std::time::Instant::now();
+        let activity = workspace_source_activity(ws, &all_outputs, clock_start, clock_cutoff);
+        counters.source_activity_nanos = counters
+            .source_activity_nanos
+            .saturating_add(source_start.elapsed().as_nanos() as u64);
+        match activity {
             Ok(true) => {
                 ws_source_recent.insert(wi, true);
                 counters.active_skipped += 1;
@@ -945,11 +1034,15 @@ pub fn analyze_groups(
         .enumerate()
         .map(|(i, (_, p))| (i, p.clone()))
         .collect();
+    let sizing_start = std::time::Instant::now();
     let measured = if measure_targets.is_empty() {
         Vec::new()
     } else {
         traverse::measure_many_targets(&measure_targets)
     };
+    counters.output_sizing_nanos = counters
+        .output_sizing_nanos
+        .saturating_add(sizing_start.elapsed().as_nanos() as u64);
     let mut bytes_by_survivor: HashMap<usize, traverse::TargetStats> = HashMap::new();
     for (i, stats) in measured {
         bytes_by_survivor.insert(i, stats);
@@ -963,6 +1056,9 @@ pub fn analyze_groups(
     }
     for (gi, g) in groups.iter().enumerate() {
         let Some(survivors) = group_to_survivors.get(&gi) else {
+            // Early-skipped group (empty/active/uncertain before sizing):
+            // still advances determinate progress (C002 §7.5).
+            observer.unit_completed(ScanPhase::Analysis);
             continue;
         };
         let mut bytes = 0u64;
@@ -993,11 +1089,13 @@ pub fn analyze_groups(
                 path: Some(g.display.clone()),
                 message: "output activity or size could not be established".into(),
             });
+            observer.unit_completed(ScanPhase::Analysis);
             continue;
         }
         if entries == 0 {
             counters.empty_no_output_skipped += 1;
             observer.empty_skipped();
+            observer.unit_completed(ScanPhase::Analysis);
             continue;
         }
         // Output activity gate: recent output protects group.
@@ -1005,12 +1103,14 @@ pub fn analyze_groups(
         if is_recent {
             counters.active_skipped += 1;
             observer.active_skipped();
+            observer.unit_completed(ScanPhase::Analysis);
             continue;
         }
         // Survivor.
         counters.groups_measured += 1;
         counters.bytes_measured = counters.bytes_measured.saturating_add(bytes);
         observer.group_measured(bytes);
+        observer.unit_completed(ScanPhase::Analysis);
         let owners: Vec<WorkspaceId> = g.owners.iter().map(|o| workspaces[*o].id.clone()).collect();
         let metric = {
             #[cfg(any(unix, windows))]
@@ -1231,7 +1331,196 @@ mod tests {
                 .load(std::sync::atomic::Ordering::Relaxed),
             1
         );
+        // C002 §7.6: N-member workspace requires exactly one locate + one
+        // metadata after first authoritative resolution.
+        assert_eq!(counters.cargo_metadata_calls, 1);
+        assert_eq!(
+            counters.cargo_locate_calls, 1,
+            "member cache must eliminate redundant locates"
+        );
         assert_eq!(counters.deduped_workspace_hits, 1);
+    }
+
+    #[test]
+    fn n_member_workspace_requires_one_locate_one_metadata_regardless_of_order() {
+        // Discovery order with a member before the root still => one locate +
+        // one metadata (C002 §9).
+        for order in [false, true] {
+            let d = tempfile::tempdir().unwrap();
+            let ws_root = d.path().join("ws");
+            std::fs::create_dir_all(&ws_root).unwrap();
+            let root_manifest = ws_root.join("Cargo.toml");
+            std::fs::write(&root_manifest, "").unwrap();
+            let target = ws_root.join("target");
+            std::fs::create_dir_all(&target).unwrap();
+            let m0 = ws_root.join("member0/Cargo.toml");
+            let m1 = ws_root.join("member1/Cargo.toml");
+            let m2 = ws_root.join("member2/Cargo.toml");
+            for m in [&m0, &m1, &m2] {
+                std::fs::create_dir_all(m.parent().unwrap()).unwrap();
+                std::fs::write(m, "").unwrap();
+            }
+            let runner = FakeCargo {
+                locate_root: root_manifest.clone(),
+                target: target.clone(),
+                build: None,
+                members: 3,
+                fail_locate: false,
+                fail_metadata: false,
+                malformed: false,
+            };
+            let mut counters = ScanCounters::default();
+            let mut diags = Vec::new();
+            let noop = NoopObserver;
+            // Fake metadata lists member0..2; use member-before-root order when
+            // `order` is true.
+            let manifests = if order {
+                vec![m0.clone(), m1.clone(), m2.clone(), root_manifest.clone()]
+            } else {
+                vec![root_manifest.clone(), m0.clone(), m1.clone(), m2.clone()]
+            };
+            let ws = resolve_workspaces(&manifests, &runner, &mut counters, &mut diags, &noop);
+            assert_eq!(ws.len(), 1, "order={order}");
+            assert_eq!(counters.cargo_metadata_calls, 1, "order={order}");
+            assert_eq!(counters.cargo_locate_calls, 1, "order={order}");
+        }
+    }
+
+    #[test]
+    fn two_independent_workspaces_require_two_locate_two_metadata() {
+        let d = tempfile::tempdir().unwrap();
+        struct TwoWsRunner {
+            a_root: PathBuf,
+            b_root: PathBuf,
+            a_target: PathBuf,
+            b_target: PathBuf,
+        }
+        impl CargoRunner for TwoWsRunner {
+            fn run(&self, _cwd: &Path, args: &[std::ffi::OsString]) -> io::Result<ProcessOutput> {
+                if args.first().is_some_and(|a| a == "locate-project") {
+                    let manifest = args.last().unwrap().to_string_lossy().into_owned();
+                    let root = if manifest.contains("a_ws") {
+                        self.a_root.join("Cargo.toml")
+                    } else {
+                        self.b_root.join("Cargo.toml")
+                    };
+                    let json = serde_json::json!({"root": root});
+                    return Ok(ProcessOutput {
+                        success: true,
+                        code: Some(0),
+                        stdout: serde_json::to_vec(&json).unwrap(),
+                        stderr: Vec::new(),
+                    });
+                }
+                // metadata: return workspace matching manifest-path arg.
+                let manifest = args.last().unwrap().to_string_lossy().into_owned();
+                let (ws_root, target) = if manifest.contains("a_ws") {
+                    (&self.a_root, &self.a_target)
+                } else {
+                    (&self.b_root, &self.b_target)
+                };
+                let json = serde_json::json!({
+                    "packages": [{"id": "m", "name": "m", "manifest_path": ws_root.join("Cargo.toml")}],
+                    "workspace_members": ["m"],
+                    "workspace_root": ws_root,
+                    "target_directory": target,
+                });
+                Ok(ProcessOutput {
+                    success: true,
+                    code: Some(0),
+                    stdout: serde_json::to_vec(&json).unwrap(),
+                    stderr: Vec::new(),
+                })
+            }
+        }
+        let a_ws = d.path().join("a_ws");
+        let b_ws = d.path().join("b_ws");
+        for ws in [&a_ws, &b_ws] {
+            std::fs::create_dir_all(ws).unwrap();
+            std::fs::write(ws.join("Cargo.toml"), "").unwrap();
+            std::fs::create_dir_all(ws.join("target")).unwrap();
+        }
+        let runner = TwoWsRunner {
+            a_root: a_ws.clone(),
+            b_root: b_ws.clone(),
+            a_target: a_ws.join("target"),
+            b_target: b_ws.join("target"),
+        };
+        let manifests = vec![a_ws.join("Cargo.toml"), b_ws.join("Cargo.toml")];
+        let mut counters = ScanCounters::default();
+        let mut diags = Vec::new();
+        let noop = NoopObserver;
+        let ws = resolve_workspaces(&manifests, &runner, &mut counters, &mut diags, &noop);
+        assert_eq!(ws.len(), 2);
+        assert_eq!(counters.cargo_locate_calls, 2);
+        assert_eq!(counters.cargo_metadata_calls, 2);
+    }
+
+    #[test]
+    fn failed_first_locate_does_not_poison_unrelated_workspace() {
+        struct FailFirstRunner {
+            good_root: PathBuf,
+            good_target: PathBuf,
+        }
+        impl CargoRunner for FailFirstRunner {
+            fn run(&self, _cwd: &Path, args: &[std::ffi::OsString]) -> io::Result<ProcessOutput> {
+                if args.first().is_some_and(|a| a == "locate-project") {
+                    let manifest = args.last().unwrap().to_string_lossy().into_owned();
+                    if manifest.contains("bad") {
+                        return Ok(ProcessOutput {
+                            success: false,
+                            code: Some(1),
+                            stdout: Vec::new(),
+                            stderr: b"locate failed".to_vec(),
+                        });
+                    }
+                    let json = serde_json::json!({"root": self.good_root.join("Cargo.toml")});
+                    return Ok(ProcessOutput {
+                        success: true,
+                        code: Some(0),
+                        stdout: serde_json::to_vec(&json).unwrap(),
+                        stderr: Vec::new(),
+                    });
+                }
+                let json = serde_json::json!({
+                    "packages": [{"id": "m", "name": "m", "manifest_path": self.good_root.join("Cargo.toml")}],
+                    "workspace_members": ["m"],
+                    "workspace_root": self.good_root,
+                    "target_directory": self.good_target,
+                });
+                Ok(ProcessOutput {
+                    success: true,
+                    code: Some(0),
+                    stdout: serde_json::to_vec(&json).unwrap(),
+                    stderr: Vec::new(),
+                })
+            }
+        }
+        let d = tempfile::tempdir().unwrap();
+        let good = d.path().join("good");
+        std::fs::create_dir_all(&good).unwrap();
+        let good_manifest = good.join("Cargo.toml");
+        std::fs::write(&good_manifest, "").unwrap();
+        let bad_manifest = d.path().join("bad/Cargo.toml");
+        std::fs::create_dir_all(bad_manifest.parent().unwrap()).unwrap();
+        std::fs::write(&bad_manifest, "").unwrap();
+        let runner = FailFirstRunner {
+            good_root: good.clone(),
+            good_target: good.join("target"),
+        };
+        let mut counters = ScanCounters::default();
+        let mut diags = Vec::new();
+        let noop = NoopObserver;
+        let ws = resolve_workspaces(
+            &[bad_manifest, good_manifest],
+            &runner,
+            &mut counters,
+            &mut diags,
+            &noop,
+        );
+        assert_eq!(ws.len(), 1);
+        assert_eq!(ws[0].root, std::fs::canonicalize(&good).unwrap_or(good));
+        assert!(!diags.is_empty());
     }
 
     #[test]

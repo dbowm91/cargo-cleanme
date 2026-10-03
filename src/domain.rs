@@ -197,6 +197,9 @@ pub struct EligibleOutputGroup {
 }
 
 /// Fail-fast gate instrumentation. Counts workspaces/groups exiting at each gate.
+///
+/// Timing fields (`*_nanos`) accumulate wall time spent in each phase/process
+/// (C002 §7.7). They are `u64` nanosecond counts to preserve `Eq`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ScanCounters {
     pub directories_visited: u64,
@@ -215,4 +218,44 @@ pub struct ScanCounters {
     pub deduped_workspace_hits: u64,
     pub missing_output_skipped: u64,
     pub uncertain_skipped: u64,
+    pub discovery_nanos: u64,
+    pub cargo_locate_nanos: u64,
+    pub cargo_metadata_nanos: u64,
+    pub source_activity_nanos: u64,
+    pub output_sizing_nanos: u64,
+}
+
+impl ScanCounters {
+    /// One-line semantic counters for `--stats` stderr output.
+    pub fn stats_line(&self) -> String {
+        format!(
+            "visited={} pruned={} manifests={} workspaces={} locate={} metadata={} failures={} empty_skipped={} active_skipped={} groups_measured={} bytes={} reportable={} deduped_hits={} uncertain_skipped={}",
+            self.directories_visited,
+            self.directories_pruned,
+            self.manifests_found,
+            self.unique_workspaces,
+            self.cargo_locate_calls,
+            self.cargo_metadata_calls,
+            self.cargo_failures,
+            self.empty_no_output_skipped + self.missing_output_skipped,
+            self.active_skipped,
+            self.groups_measured,
+            self.bytes_measured,
+            self.reportable_groups,
+            self.deduped_workspace_hits,
+            self.uncertain_skipped,
+        )
+    }
+
+    /// Phase/process timing line for `--stats` stderr output.
+    pub fn timings_line(&self) -> String {
+        format!(
+            "discovery={:.2}ms locate={:.2}ms metadata={:.2}ms source_activity={:.2}ms output_sizing={:.2}ms",
+            self.discovery_nanos as f64 / 1_000_000.0,
+            self.cargo_locate_nanos as f64 / 1_000_000.0,
+            self.cargo_metadata_nanos as f64 / 1_000_000.0,
+            self.source_activity_nanos as f64 / 1_000_000.0,
+            self.output_sizing_nanos as f64 / 1_000_000.0,
+        )
+    }
 }
