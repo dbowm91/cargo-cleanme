@@ -131,7 +131,7 @@ C004 complete ownership-universe resolution coverage [closed]
                    |
                    v
 M006A global scan/pruning/path normalization [conditionally closed]
-M006B cleanup-proof resolution efficiency [closing]
+M006B cleanup-proof resolution efficiency [closed]
 M006C global traversal throughput without scope narrowing [ready]
 ~~~
 
@@ -374,9 +374,9 @@ Outcome: cleanup resolution now retains authoritative manifest coverage and unre
 
 ## 10D. Milestone M006 — Performance hardening
 
-Status: closing.
+Status: active.
 
-M006 is split into ordered implementation tracks for this handoff. M006A's policy, traversal, and path-normalization work is conditionally closed because the reference macOS scan still exceeded 120 seconds. M006B proceeds without weakening M006A's discovery contract. M006C is proposed to investigate traversal throughput while preserving writable project-bearing domains.
+M006 is split into ordered implementation tracks for this handoff. M006A's policy, traversal, and path-normalization work is conditionally closed because the reference macOS scan still exceeded 120 seconds. M006B is closed without weakening M006A's discovery contract. M006C is ready to investigate traversal throughput while preserving writable project-bearing domains.
 
 ### M006A — Global scan pruning, traversal policy, and path normalization
 
@@ -399,7 +399,7 @@ Closure requires the representative macOS no-argument scan to complete within th
 
 ### M006B — Cleanup proof resolution efficiency
 
-Status: active.
+Status: closed. Closure: `plans/closure/artifact-discovery-cleanup/006b-status.md`.
 
 Plan:
 

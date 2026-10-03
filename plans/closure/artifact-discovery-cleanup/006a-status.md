@@ -30,7 +30,7 @@ M006A's policy, traversal, Rustup-pruning, accounting, and source-root path-norm
 - `cargo clippy --all-targets --all-features -- -D warnings` — passed.
 - `rustup run 1.89.0 cargo test --all-targets --all-features` — passed, 163 tests.
 - `rustup run 1.89.0 cargo check --all-targets --all-features` — passed.
-- Hosted Linux, macOS, and Windows CI plus MSRV CI — run `37103172868`, pending when this record was written; final outcome is recorded in the follow-up closure commit.
+- Hosted Linux, macOS, and Windows CI plus MSRV CI — run [37103354510](https://github.com/dbowm91/cargo-cleanme/actions/runs/37103354510), all passed. The preceding run exposed one Windows-only POSIX-path test-fixture error; commit `755eb66` made the fixture platform-native, and the complete matrix passed on the corrected commit.
 
 ## Unresolved findings and downstream disposition
 

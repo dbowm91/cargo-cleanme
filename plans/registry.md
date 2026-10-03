@@ -32,7 +32,7 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M006 performance hardening | M006A implementation is conditionally closed but missed the 120-second scan target; ready M006C investigates throughput without pruning writable domains. M006B local implementation/evidence is closing pending hosted CI. M005 remains closed/green. |
+| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M006 performance hardening | M006A is conditionally closed after missing its 120-second scan target; M006B is closed with proof/performance evidence; ready M006C investigates throughput without pruning writable domains. M005 remains closed/green. |
 
 ## Implementation handoffs
 
@@ -49,19 +49,19 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 | Artifact discovery and cleanup | C003 workspace cleanup-unit atomicity + full ownership-graph revalidation | **closed** | plans/implementation/artifact-discovery-cleanup/c003-workspace-cleanup-unit-atomicity.md | Historical closure: plans/closure/artifact-discovery-cleanup/c003-status.md; post-closure unresolved-participant defect tracked by C004. |
 | Artifact discovery and cleanup | C004 complete ownership-universe resolution coverage | **closed** | plans/implementation/artifact-discovery-cleanup/c004-complete-ownership-resolution-coverage.md | Closure: plans/closure/artifact-discovery-cleanup/c004-status.md. M005 destructive release qualification is restored. |
 | Artifact discovery and cleanup | M006A global scan pruning, traversal policy, path normalization | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/006a-global-scan-pruning-and-path-normalization.md | Closure: plans/closure/artifact-discovery-cleanup/006a-status.md. Policy/path work landed; scan target miss is tracked by ready M006C. |
-| Artifact discovery and cleanup | M006B cleanup proof resolution efficiency | **closing** | plans/implementation/artifact-discovery-cleanup/006b-cleanup-proof-resolution-efficiency.md | Sequential handoff after M006A disposition; local implementation/evidence complete, hosted CI pending; MUST preserve C003/C004 freshness and fail-closed semantics. |
+| Artifact discovery and cleanup | M006B cleanup proof resolution efficiency | **closed** | plans/implementation/artifact-discovery-cleanup/006b-cleanup-proof-resolution-efficiency.md | Closure: plans/closure/artifact-discovery-cleanup/006b-status.md. Preserves C003/C004 freshness and fail-closed semantics; proof/process reductions are measured. |
 | Artifact discovery and cleanup | M006C global traversal throughput without scope narrowing | **ready** | plans/implementation/artifact-discovery-cleanup/006c-global-traversal-throughput-without-scope-narrowing.md | Unblocked by M006A's measured >120-second qualification miss and bounded subtree profile; no M006B dependency. Preserve writable/project-bearing global domains. |
 
 ## Immediate handoff
 
-M006A has been implemented and conditionally closed with a measured qualification miss; M006B has been implemented after that disposition and is closing after local performance and test evidence. M006C is ready: it has a measured trigger, dominant-tree profile, tests, and acceptance criteria; M006A/B commits will provide a stable baseline.
+M006A has been implemented and conditionally closed with a measured qualification miss; M006B is closed after that disposition and passed hosted Linux/macOS/Windows and Rust 1.89 CI. M006C is ready: it has a measured trigger, dominant-tree profile, tests, acceptance criteria, and the M006A/B commit baseline.
 
 Expected order:
 
 ~~~text
 M001-M005 + C001-C004 -> closed
 M006A global discovery/pruning/path normalization -> conditionally closed (macOS scan >120 s)
-M006B cleanup-proof resolution efficiency -> closing -> hosted CI -> closed
+M006B cleanup-proof resolution efficiency -> closed
 M006C traversal throughput without scope narrowing -> ready
 M006 performance hardening -> remains active until global scan throughput is qualified
 ~~~

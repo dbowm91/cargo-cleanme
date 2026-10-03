@@ -2,7 +2,7 @@
 
 Status: ready
 
-Repository baseline: `2d2a37f` (M006A/M006B implementation); current trigger measurements are recorded below and in `plans/closure/artifact-discovery-cleanup/006a-status.md`.
+Repository baseline: `755eb66` (M006A/M006B implementation and cross-platform test correction); current trigger measurements are recorded below and in `plans/closure/artifact-discovery-cleanup/006a-status.md`.
 
 Source milestone: M006 performance hardening and routine machine-wide qualification
 
