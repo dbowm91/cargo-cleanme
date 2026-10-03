@@ -2,7 +2,7 @@
 
 Status: active
 
-Repository audit baseline: 50461442c0d4d783a5a4f1e86a35001f68f8d8db
+Repository audit baseline: 8177d82cb4d6abf313665e169ca2bf1bbbc6e0a7
 
 Canonical references:
 
@@ -117,7 +117,10 @@ C001 public-contract/MSRV/traversal reconciliation [closed]
 M005A workspace/output resolution + fail-fast progress [ready]
                    |
                    v
-M005B authorized redirected cleanup + --dryrun [blocked on M005A]
+M005B authorized redirected cleanup + --dryrun [historically closed]
+                   |
+                   v
+C002 M005 safety/progress/performance reconciliation [ready]
 ~~~
 
 ## 6. Milestone M001 — Foundation, CLI, config, and domain contracts
@@ -225,7 +228,7 @@ C001 is a hard implementation-baseline dependency for M005. M005 design research
 
 ## 10. Milestone M005 — Workspace-aware redirected/shared output
 
-Status: complete. ADR 001 accepted. M005A closed; M005B closed.
+Status: corrective required. ADR 001 accepted. M005A/M005B historical closures remain recorded; post-closure C002 is ready and blocks M005 release qualification.
 
 Accepted decision:
 
@@ -278,6 +281,26 @@ Expected outcome:
 - clear transient progress and then print every cleaned/would-clean physical output group with sizes and a deduplicated total.
 
 M005 does not parse Cargo-private build-cache layout and does not add selective package cleanup.
+
+## 10A. Corrective C002 — M005 safety, progress, and global qualification
+
+Status: ready.
+
+Plan:
+
+- plans/implementation/artifact-discovery-cleanup/c002-m005-safety-progress-performance-reconciliation.md
+
+Purpose:
+
+- restore ADR 001 so ExternalUnproven output is inventory-only and authorization never substitutes for ownership proof;
+- make --dryrun consume the same non-mutating pre-spawn gates as Execute;
+- revalidate target, build, physical group, authorization, marker, source activity, and output activity immediately before destructive spawn;
+- coordinate the inline multi-line progress renderer and expose determinate cleanup totals through the observer contract;
+- seed workspace-member resolution from Cargo metadata so multi-member workspaces do not run one locate subprocess per manifest;
+- move detailed scan counters behind an explicit stats/debug flag;
+- qualify the generic no-argument scan on a representative developer host and optimize further only from measured evidence.
+
+C002 does not rewrite the M005A/M005B closure history. M005 should not be treated as release-qualified for destructive use until C002 closes.
 
 ## 11. Cross-cutting reliability concerns
 

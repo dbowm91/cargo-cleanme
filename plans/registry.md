@@ -14,7 +14,7 @@ Accepted architecture decisions:
 - plans/adr/001-workspace-output-ownership-and-cleanup-authorization.md
 
 Planning framework baseline: 97dee9fa64868534cedf3a9310e7160335a91be2
-Current repository planning baseline: 50461442c0d4d783a5a4f1e86a35001f68f8d8db
+Current repository planning baseline: 8177d82cb4d6abf313665e169ca2bf1bbbc6e0a7
 
 ## Status vocabulary
 
@@ -32,7 +32,7 @@ Current repository planning baseline: 50461442c0d4d783a5a4f1e86a35001f68f8d8db
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M005 complete | ADR 001 accepted; M001-M005A/M005B closed. No further implementation handoffs. |
+| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | C002 ready | Post-M005 source audit found ownership, simulation/preflight, progress, and generic-scan qualification defects. |
 
 ## Implementation handoffs
 
@@ -44,11 +44,12 @@ Current repository planning baseline: 50461442c0d4d783a5a4f1e86a35001f68f8d8db
 | Artifact discovery and cleanup | M004 revalidated cleanup execution | **closed** | plans/implementation/artifact-discovery-cleanup/004-revalidated-cleanup-execution.md | Closure: plans/closure/artifact-discovery-cleanup/004-status.md. |
 | Artifact discovery and cleanup | C001 public-contract/MSRV/traversal reconciliation | **closed** | plans/implementation/artifact-discovery-cleanup/c001-public-contract-msrv-traversal-reconciliation.md | Closure: plans/closure/artifact-discovery-cleanup/c001-status.md. |
 | Artifact discovery and cleanup | M005A workspace output resolution, fail-fast scan, inline progress | **closed** | plans/implementation/artifact-discovery-cleanup/005a-workspace-output-resolution-fail-fast-progress.md | Closure: plans/closure/artifact-discovery-cleanup/005a-status.md. |
-| Artifact discovery and cleanup | M005B authorized redirected cleanup + full simulation | **closed** | plans/implementation/artifact-discovery-cleanup/005b-authorized-redirected-cleanup-and-dryrun.md | Closure: plans/closure/artifact-discovery-cleanup/005b-status.md. |
+| Artifact discovery and cleanup | M005B authorized redirected cleanup + full simulation | **closed** | plans/implementation/artifact-discovery-cleanup/005b-authorized-redirected-cleanup-and-dryrun.md | Historical closure: plans/closure/artifact-discovery-cleanup/005b-status.md; post-closure defects tracked by C002. |
+| Artifact discovery and cleanup | C002 M005 ownership safety, simulation parity, progress, global qualification | **ready** | plans/implementation/artifact-discovery-cleanup/c002-m005-safety-progress-performance-reconciliation.md | Start here. Corrective must close before M005 is again considered release-qualified. |
 
 ## Immediate handoff
 
-M005 complete. No further eligible implementation plans.
+Implement C002.
 
 Expected order:
 
@@ -56,9 +57,14 @@ Expected order:
 M001-M004 -> closed
 C001 -> closed
 ADR 001 -> accepted
-M005A resolution/output graph/fail-fast/progress -> closed
-M005B private redirected cleanup/--dryrun -> closed
+M005A -> closed
+M005B -> historically closed
+C002 ownership/simulation/preflight/progress/performance correction -> ready
+C002 -> closure
+M005 release qualification -> only after C002 closure
 ~~~
+
+Post-M005 audit findings include: ExternalUnproven authorization violating ADR 001, incomplete Simulate/pre-spawn gate parity, incomplete final build/output preflight, unqualified multi-line progress/cleanup determinate state, redundant per-member locate calls, and unqualified generic-scan performance.
 
 M005 safety boundary:
 
