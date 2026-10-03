@@ -178,7 +178,7 @@ Required cases:
 
 Shared, uncertain, and externally unproven physical output remains inventory-only in M005.
 
-## Phase 7 — Performance hardening and routine machine-wide qualification
+## Phase 7 — Performance hardening and adaptive discovery
 
 Roadmap milestone: M006.
 
@@ -186,32 +186,60 @@ Status: active.
 
 Objective:
 
-Make the read-only global scan routine on representative developer machines and reduce cleanup-proof Cargo subprocess cost without weakening M005/C002-C004 semantics.
+Make routine read-only scanning proportional to the developer's actual working set while preserving explicit exhaustive discovery, and reduce cleanup-proof/traversal overhead without weakening M005/C002-C004 semantics.
 
 Implementation sequence:
 
-1. M006A — global scan pruning, platform traversal policy, one-pool multi-root discovery, and workspace member/output path normalization.
-2. M006B — cleanup proof resolution efficiency: direct Cargo metadata refresh from known root manifests, followed by evidence-gated bounded refresh concurrency if needed.
-3. M006C — bounded global traversal throughput without narrowing writable project-bearing roots (conditionally closed; reference scan still exceeds 120 seconds).
-4. M006D — global scan completion qualification (conditionally closed; exact scan exceeds 120 seconds).
-5. M006E — resolve the global scan scope-versus-latency policy before further scope changes.
-
-M006A and M006B may proceed in parallel.
+1. M006A — global scan pruning, platform traversal policy, one-pool multi-root discovery, and workspace member/output path normalization (conditionally closed).
+2. M006B — cleanup proof resolution efficiency (closed).
+3. M006C — bounded exhaustive traversal throughput without scope narrowing (conditionally closed).
+4. M006D — exhaustive scan completion qualification and bottleneck evidence (conditionally closed).
+5. M006E — adaptive Routine/Full discovery, machine-local learned state, 30-day configurable retention, first-run config bootstrap, and `config edit` (ready under ADR 002).
+6. M006F — exhaustive traversal hot-path qualification after the product scope split (ready after M006E).
 
 Hard constraints:
 
-- global performance pruning is evidence-based and must not silently remove writable user project domains;
-- explicit-root behavior remains authoritative;
+- Routine roots are bounded seeds plus learned developer roots;
+- Full discovery remains exhaustive under the established platform policy and can rediscover expired locations;
+- Explicit-root behavior remains authoritative;
+- only successful Full reconciliation may expire learned roots from absence/age;
+- machine-learned state never supplies cleanup ownership/authorization evidence;
 - cleanup proof still refreshes the complete bounded ownership universe immediately before each candidate disposition;
 - no cross-candidate stale ownership snapshot is introduced.
 
 Exit condition:
 
-- M006A's global policy and path/activity work is qualified across platforms; M006D documents the still-open 120-second no-argument reference-host scan bound, and proposed M006E owns the required policy decision;
-- M006B closes with zero redundant proof locate-project calls, material real-tree improvement, and the full C003/C004 regression matrix green.
-- M006C's and M006D's traversal changes preserve the full manifest set and global reachability; the exact 120-second bound remains unmet pending M006E's scope-versus-latency policy decision.
+- M006E closes with cross-platform Routine/Full/Explicit semantics, atomic discovery-state reconciliation, config bootstrap/edit, and materially faster Routine qualification;
+- M006F records the bare-walker/adapter cost split, removes optional attribution from the ordinary hot path, selects traversal defaults from matched evidence, and records a completed reference Full baseline;
+- M006B remains green with zero redundant proof locate-project calls and the C003/C004 regression matrix intact.
 
-## Phase 8 — Selective cleanup and policy
+The historical 120-second full-machine no-argument target is superseded by ADR 002. Routine and Full are separately qualified.
+
+## Phase 8 — Learned/full cleanup orchestration
+
+Roadmap milestone: M007.
+
+Status: proposed; hard-dependent on M006E closure.
+
+Objective:
+
+Let known/adaptive and exhaustive discovery select bounded cleanup scopes without turning cached discovery state into destructive proof.
+
+Expected direction:
+
+- retain existing `clean ROOT` semantics unchanged;
+- add mutually exclusive known/full cleanup selection;
+- require successful Full reconciliation before Full cleanup begins;
+- execute each selected root through the existing complete C003/C004 bounded cleanup proof;
+- preserve `--dryrun` as zero-`cargo clean` application simulation and `--dry-run` as Cargo preview;
+- deduplicate overlapping learned roots and physical outputs;
+- isolate per-scope failures and aggregate deterministic reporting.
+
+Plan:
+
+- `plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-orchestration.md`
+
+## Phase 9 — Selective cleanup and policy
 
 Status: deferred.
 
@@ -223,7 +251,7 @@ Potential capabilities:
 - include/exclude project policy;
 - non-interactive automation only after stable machine-readable contracts exist.
 
-## Phase 9 — Distribution and operational polish
+## Phase 10 — Distribution and operational polish
 
 Status: deferred.
 
@@ -261,7 +289,10 @@ M004 destructive cleanup
 M005 redirected/shared-output support
       |
       v
-M006 performance hardening
+M006 adaptive discovery/performance
+      |
+      v
+M007 learned/full cleanup orchestration
       |
       v
 selective cleanup / distribution
