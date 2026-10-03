@@ -33,7 +33,7 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M006E state-publication qualification | M006A/C/D retain historical conditional closure evidence; M006B is closed. M006E and M006F are conditionally closed; M007 is blocked by M006E state publication and multi-root proof scope. M005 remains closed/green. |
+| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M006E state-publication qualification | M006A/C/D retain historical conditional closure evidence; M006B and M006F are closed. M006E is conditional; M007 is blocked by M006E state publication and multi-root proof scope. M005 remains closed/green. |
 
 ## Implementation handoffs
 
@@ -55,12 +55,12 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 | Artifact discovery and cleanup | M006D global scan completion qualification | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/006d-global-scan-completion-qualification.md | Closure: plans/closure/artifact-discovery-cleanup/006d-status.md. Optimizations preserve scope and safety, but the exact native scan remains over 120 seconds. |
 | Artifact discovery and cleanup | M006E adaptive Routine/Full discovery + state/config UX | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/006e-adaptive-routine-full-discovery-state.md | Closure: plans/closure/artifact-discovery-cleanup/006e-status.md. Full traversal completes; uncertainty in manifest/workspace resolution prevents publishing a reconciled generation. |
 | Artifact discovery and cleanup | M006E old scope/latency decision | **superseded** | plans/implementation/artifact-discovery-cleanup/006e-global-scan-scope-and-latency-policy.md | Replaced by ADR 002 and the adaptive-discovery M006E plan. |
-| Artifact discovery and cleanup | M006F exhaustive traversal hot-path qualification | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/006f-exhaustive-traversal-hot-path-qualification.md | Closure: plans/closure/artifact-discovery-cleanup/006f-status.md. Local qualification passes; hosted Linux/macOS/Windows CI remains. |
+| Artifact discovery and cleanup | M006F exhaustive traversal hot-path qualification | **closed** | plans/implementation/artifact-discovery-cleanup/006f-exhaustive-traversal-hot-path-qualification.md | Closure: plans/closure/artifact-discovery-cleanup/006f-status.md. Hosted Linux/macOS/Windows and Rust 1.89 CI passed in run 37139155641. |
 | Artifact discovery and cleanup | M007 learned/full cleanup orchestration | **blocked** | plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-orchestration.md | Hard dependency M006E is conditional; per-root C003/C004 proofs cannot qualify cross-root redirected-output ownership. Multi-root Execute fails closed. |
 
 ## Immediate handoff
 
-M006A, M006C, and M006D remain conditionally closed as historical exhaustive-scan evidence; M006B is closed. ADR 002 resolved the product decision. M006E is conditionally closed pending complete reconciliation/state-publication evidence. M006F is conditionally closed pending hosted platform CI. M007 remains blocked pending M006E and a cross-root proof boundary.
+M006A, M006C, and M006D remain conditionally closed as historical exhaustive-scan evidence; M006B and M006F are closed. ADR 002 resolved the product decision. M006E is conditionally closed pending complete reconciliation/state-publication evidence. M007 remains blocked pending M006E and a cross-root proof boundary.
 
 Expected order:
 
@@ -72,7 +72,7 @@ M006C traversal throughput without scope narrowing -> conditionally closed (hist
 M006D global scan completion qualification -> conditionally closed (historical evidence)
 ADR 002 adaptive Routine/Full discovery -> accepted
 M006E adaptive Routine/Full discovery + state/config edit -> conditionally closed
-M006F exhaustive traversal hot-path qualification -> conditionally closed
+M006F exhaustive traversal hot-path qualification -> closed
 M007 learned/full cleanup orchestration -> blocked
 ~~~
 

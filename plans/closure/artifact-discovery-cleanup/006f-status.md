@@ -2,7 +2,7 @@
 
 Plan: `plans/implementation/artifact-discovery-cleanup/006f-exhaustive-traversal-hot-path-qualification.md`
 
-Disposition: **conditionally closed**
+Disposition: **closed**
 
 Implementation commit: `99b2bff` (`Implement adaptive discovery and qualify traversal hot path`).
 
@@ -18,7 +18,7 @@ Date: 2026-10-03
 | Revalidate worker count | Matched stage-1 native samples: 4 workers 25.00s; 8 workers 16.92s; 16 workers 33.24s. Keep the existing bounded eight-worker cap. | Pass on reference host |
 | Record Full baseline and host wait evidence | Production discovery stage 6: 17.56s, 4,670,246 entries, 1,803 manifests. `/usr/bin/time -lp` reported 10.32s user, 69.76s system, maximum RSS 174,776,320 bytes. The full CLI inventory invocation took 97.59s, completed traversal, but exited 1 due diagnostics and did not publish M006E state. | Traversal baseline complete; reconciliation remains M006E qualification |
 | Preserve exhaustive scope and safety | Harness uses platform Full roots/prunes. Existing discovery parity tests and complete suite pass locally; no production scope narrowing or cleanup proof change was introduced. | Pass locally |
-| Rust, lint, format, and MSRV | `rtk cargo fmt --all`; `rtk cargo test --all-targets --all-features` (168 passed across five suites); `rtk cargo clippy --all-targets --all-features -- -D warnings`; `rtk rustup run 1.89.0 cargo check --locked --all-targets --examples`; `rtk rustup run 1.89.0 cargo test --locked --all-targets` (164 library tests plus binary/integration targets); `rtk git diff --check`. | Pass locally |
+| Rust, lint, format, and MSRV | `rtk cargo fmt --all`; `rtk cargo test --all-targets --all-features` (168 passed across five suites); `rtk cargo clippy --all-targets --all-features -- -D warnings`; `rtk rustup run 1.89.0 cargo check --locked --all-targets --examples`; `rtk rustup run 1.89.0 cargo test --locked --all-targets` (164 library tests plus binary/integration targets); `rtk git diff --check`; hosted CI run [37139155641](https://github.com/dbowm91/cargo-cleanme/actions/runs/37139155641) passed Linux, macOS, Windows, and Rust 1.89 jobs. | Pass |
 
 ## Matched callback stage samples
 
@@ -26,9 +26,8 @@ Native release runs used the same Full roots, type-only metadata mode, and eight
 
 ## Verification commands
 
-Hosted Linux/macOS/Windows CI has not yet run for this commit and remains the named qualification before this milestone can be marked closed.
+Hosted CI run 37139155641 passed Linux, macOS, Windows, and Rust 1.89. M006F is closed; M006E's distinct state-publication qualification remains conditional.
 
 ## Limitations and findings
 
 - The native Full scan completed traversal but Cargo resolution produced 283 failures and 741 diagnostics; no complete state generation was published. This is tracked in M006E closure, not hidden as a completed reconciliation.
-- Hosted Linux/macOS/Windows evidence is required before release qualification.

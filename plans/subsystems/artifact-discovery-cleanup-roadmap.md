@@ -382,7 +382,7 @@ Outcome: cleanup resolution now retains authoritative manifest coverage and unre
 
 Status: active.
 
-M006 is split into ordered implementation tracks. M006A, M006C, and M006D are conditionally closed after preserving exhaustive reachability while documenting the reference-host traversal bottleneck; M006B is closed. ADR 002 resolves the former scope-versus-latency question by separating bounded adaptive Routine discovery from explicit exhaustive Full reconciliation. M006E implemented that product split, machine-local learned discovery state, configurable 30-day retention, automatic config bootstrap, and `config edit`. The reference Full traversal completed but yielded 741 filesystem diagnostics and 283 Cargo resolution failures; no reconciled state generation was published. M006E remains conditional pending reliable uncertainty-scoped successful publication. M006F completed its local exhaustive-walker hot-path qualification and awaits hosted platform CI.
+M006 is split into ordered implementation tracks. M006A, M006C, and M006D are conditionally closed after preserving exhaustive reachability while documenting the reference-host traversal bottleneck; M006B is closed. ADR 002 resolves the former scope-versus-latency question by separating bounded adaptive Routine discovery from explicit exhaustive Full reconciliation. M006E implemented that product split, machine-local learned discovery state, configurable 30-day retention, automatic config bootstrap, and `config edit`. The reference Full traversal completed but yielded 741 filesystem diagnostics and 283 Cargo resolution failures; no reconciled state generation was published. M006E remains conditional pending reliable uncertainty-scoped successful publication. M006F's exhaustive-walker hot-path qualification is closed after hosted Linux/macOS/Windows and Rust 1.89 CI passed in run 37139155641.
 
 ### M006A — Global scan pruning, traversal policy, and path normalization
 
@@ -445,7 +445,7 @@ The old scope-decision proposal at `006e-global-scan-scope-and-latency-policy.md
 
 ### M006F — Exhaustive traversal hot-path qualification
 
-Status: conditionally closed. Plan: `plans/implementation/artifact-discovery-cleanup/006f-exhaustive-traversal-hot-path-qualification.md`. Closure: `plans/closure/artifact-discovery-cleanup/006f-status.md`.
+Status: closed. Plan: `plans/implementation/artifact-discovery-cleanup/006f-exhaustive-traversal-hot-path-qualification.md`. Closure: `plans/closure/artifact-discovery-cleanup/006f-status.md`.
 
 M006F measures the bare dua-core ceiling versus cargo-cleanme callback overhead, removes first-level subtree attribution from the normal unprofiled hot path, qualifies completion-order versus parent-first delivery, and records a completed Full baseline without narrowing exhaustive scope.
 

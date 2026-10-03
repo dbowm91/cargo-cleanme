@@ -1,6 +1,6 @@
 # M006F — Exhaustive Traversal Hot-Path Qualification
 
-Status: conditionally closed
+Status: closed
 
 Closure: `plans/closure/artifact-discovery-cleanup/006f-status.md`. M006E is conditionally closed; the traversal hot-path qualification is complete and its state-publication limitation is recorded separately.
 
