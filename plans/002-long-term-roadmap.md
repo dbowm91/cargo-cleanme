@@ -194,8 +194,9 @@ Implementation sequence:
 2. M006B — cleanup proof resolution efficiency (closed).
 3. M006C — bounded exhaustive traversal throughput without scope narrowing (conditionally closed).
 4. M006D — exhaustive scan completion qualification and bottleneck evidence (conditionally closed).
-5. M006E — adaptive Routine/Full discovery, machine-local learned state, 30-day configurable retention, first-run config bootstrap, and `config edit` (ready under ADR 002).
-6. M006F — exhaustive traversal hot-path qualification after the product scope split (ready after M006E).
+5. M006E — adaptive Routine/Full discovery, machine-local learned state, 30-day configurable retention, first-run config bootstrap, and `config edit` (conditionally closed).
+6. M006F — exhaustive traversal hot-path qualification after the product scope split (closed).
+7. C005 — uncertainty-aware state reconciliation and config/edit hardening (ready corrective for M006E closure).
 
 Hard constraints:
 
@@ -209,8 +210,8 @@ Hard constraints:
 
 Exit condition:
 
-- M006E closes with cross-platform Routine/Full/Explicit semantics, atomic discovery-state reconciliation, config bootstrap/edit, and materially faster Routine qualification;
-- M006F records the bare-walker/adapter cost split, removes optional attribution from the ordinary hot path, selects traversal defaults from matched evidence, and records a completed reference Full baseline;
+- C005 closes M006E with path-scoped uncertainty-aware Full reconciliation that publishes positive project evidence on real hosts, conservative learned-root expiration, and cross-platform config/state qualification;
+- M006F remains closed with the bare-walker/adapter cost split, optional-attribution removal, traversal-default qualification, and completed reference Full traversal baseline;
 - M006B remains green with zero redundant proof locate-project calls and the C003/C004 regression matrix intact.
 
 The historical 120-second full-machine no-argument target is superseded by ADR 002. Routine and Full are separately qualified.
@@ -219,7 +220,7 @@ The historical 120-second full-machine no-argument target is superseded by ADR 0
 
 Roadmap milestone: M007.
 
-Status: proposed; hard-dependent on M006E closure.
+Status: blocked; C005 must close M006E and C006 must generalize the cleanup proof across all selected roots.
 
 Objective:
 
@@ -230,14 +231,16 @@ Expected direction:
 - retain existing `clean ROOT` semantics unchanged;
 - add mutually exclusive known/full cleanup selection;
 - require successful Full reconciliation before Full cleanup begins;
-- execute each selected root through the existing complete C003/C004 bounded cleanup proof;
-- preserve `--dryrun` as zero-`cargo clean` application simulation and `--dry-run` as Cargo preview;
+- construct one combined manifest-coverage and physical-output ownership universe from every selected known/full root;
+- refresh that complete selected-root universe before each CleanupUnit disposition;
+- preserve `--dryrun` as zero-`cargo clean` application simulation and `--dry-run` as Cargo preview, with the same combined safety disposition as Execute;
 - deduplicate overlapping learned roots and physical outputs;
-- isolate per-scope failures and aggregate deterministic reporting.
+- preserve the existing single-root `clean ROOT` safety boundary through the same combined-capable engine.
 
-Plan:
+Plans:
 
 - `plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-orchestration.md`
+- `plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md`
 
 ## Phase 9 — Selective cleanup and policy
 
@@ -290,6 +293,12 @@ M005 redirected/shared-output support
       |
       v
 M006 adaptive discovery/performance
+      |
+      v
+C005 M006E reconciliation corrective
+      |
+      v
+C006 combined-root cleanup proof
       |
       v
 M007 learned/full cleanup orchestration
