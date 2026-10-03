@@ -1,6 +1,6 @@
 # M007 — Learned/Full Cleanup Orchestration
 
-Status: blocked
+Status: closed by corrective C006. Historical status evidence: `plans/closure/artifact-discovery-cleanup/007-status.md`; corrective closure: `plans/closure/artifact-discovery-cleanup/c006-status.md`.
 
 Blockers: Corrective C005 must close M006E state publication. Corrective C006 (`plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md`) must generalize C003/C004 proof across the complete selected known/full root set. Until then, multi-root Execute remains fail-closed and independent Preview/Simulate results are not sufficient closure evidence.
 

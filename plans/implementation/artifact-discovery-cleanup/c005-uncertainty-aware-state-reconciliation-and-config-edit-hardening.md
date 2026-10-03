@@ -1,6 +1,6 @@
 # Corrective C005 — Uncertainty-Aware Discovery-State Reconciliation and Config/Edit Hardening
 
-Status: closing
+Status: closed
 
 Repository baseline: `cc37838b5a99298ae56e3d797b1ef2e4d345c4b3`
 
@@ -8,7 +8,7 @@ Corrects:
 
 - M006E adaptive Routine/Full discovery and state publication
 - M006E closure remains historical and is not rewritten
-- M007 remains blocked until C005 closes
+- M007 remains blocked at this plan's baseline until C006 supplies the combined-root proof; corrective closure is recorded in `plans/closure/artifact-discovery-cleanup/c006-status.md`
 
 Authoritative references:
 

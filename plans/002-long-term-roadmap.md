@@ -194,9 +194,9 @@ Implementation sequence:
 2. M006B — cleanup proof resolution efficiency (closed).
 3. M006C — bounded exhaustive traversal throughput without scope narrowing (conditionally closed).
 4. M006D — exhaustive scan completion qualification and bottleneck evidence (conditionally closed).
-5. M006E — adaptive Routine/Full discovery, machine-local learned state, 30-day configurable retention, first-run config bootstrap, and `config edit` (conditionally closed).
+5. M006E — adaptive Routine/Full discovery, machine-local learned state, 30-day configurable retention, first-run config bootstrap, and `config edit` (closed by C005).
 6. M006F — exhaustive traversal hot-path qualification after the product scope split (closed).
-7. C005 — uncertainty-aware state reconciliation and config/edit hardening (ready corrective for M006E closure).
+7. C005 — uncertainty-aware state reconciliation and config/edit hardening (closed; M006E corrective closure).
 
 Hard constraints:
 
@@ -220,7 +220,7 @@ The historical 120-second full-machine no-argument target is superseded by ADR 0
 
 Roadmap milestone: M007.
 
-Status: blocked; C005 must close M006E and C006 must generalize the cleanup proof across all selected roots.
+Status: closed by corrective C006; C005 closed M006E and C006 generalized the cleanup proof across all selected roots.
 
 Objective:
 

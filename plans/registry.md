@@ -33,7 +33,7 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | C005 M006E reconciliation corrective | M006A/C/D retain historical conditional closure evidence; M006B and M006F are closed. C005 is ready to close M006E state/config gaps. C006 is ready after C005 to close M007's combined-root proof gap. M005 remains closed/green. |
+| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M007 learned/full cleanup orchestration | C005 and C006 are closed with hosted Windows/macOS/Linux/Rust 1.89 qualification; M006E and M007 acceptance requirements are satisfied. M006A/C/D retain historical conditional closure evidence; M006B/F and M005 remain closed/green. |
 
 ## Implementation handoffs
 
@@ -53,16 +53,16 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 | Artifact discovery and cleanup | M006B cleanup proof resolution efficiency | **closed** | plans/implementation/artifact-discovery-cleanup/006b-cleanup-proof-resolution-efficiency.md | Closure: plans/closure/artifact-discovery-cleanup/006b-status.md. Preserves C003/C004 freshness and fail-closed semantics; proof/process reductions are measured. |
 | Artifact discovery and cleanup | M006C global traversal throughput without scope narrowing | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/006c-global-traversal-throughput-without-scope-narrowing.md | Closure: plans/closure/artifact-discovery-cleanup/006c-status.md. Bounded traversal and parity work landed; exact no-argument scan remains over 120 seconds. |
 | Artifact discovery and cleanup | M006D global scan completion qualification | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/006d-global-scan-completion-qualification.md | Closure: plans/closure/artifact-discovery-cleanup/006d-status.md. Optimizations preserve scope and safety, but the exact native scan remains over 120 seconds. |
-| Artifact discovery and cleanup | M006E adaptive Routine/Full discovery + state/config UX | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/006e-adaptive-routine-full-discovery-state.md | Closure: plans/closure/artifact-discovery-cleanup/006e-status.md. Full traversal completes; uncertainty in manifest/workspace resolution prevents publishing a reconciled generation. |
+| Artifact discovery and cleanup | M006E adaptive Routine/Full discovery + state/config UX | **closed** | plans/implementation/artifact-discovery-cleanup/006e-adaptive-routine-full-discovery-state.md | Historical closure: plans/closure/artifact-discovery-cleanup/006e-status.md. Corrective closure: plans/closure/artifact-discovery-cleanup/c005-status.md; localized uncertainty now reconciles conservatively and publishes a useful generation. |
 | Artifact discovery and cleanup | M006E old scope/latency decision | **superseded** | plans/implementation/artifact-discovery-cleanup/006e-global-scan-scope-and-latency-policy.md | Replaced by ADR 002 and the adaptive-discovery M006E plan. |
 | Artifact discovery and cleanup | M006F exhaustive traversal hot-path qualification | **closed** | plans/implementation/artifact-discovery-cleanup/006f-exhaustive-traversal-hot-path-qualification.md | Closure: plans/closure/artifact-discovery-cleanup/006f-status.md. Hosted Linux/macOS/Windows and Rust 1.89 CI passed in run 37139155641. |
-| Artifact discovery and cleanup | M007 learned/full cleanup orchestration | **blocked** | plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-orchestration.md | Hard dependency M006E is conditional; per-root C003/C004 proofs cannot qualify cross-root redirected-output ownership. Multi-root Execute fails closed. Corrective C006 owns the combined-root proof. |
-| Artifact discovery and cleanup | C005 uncertainty-aware state reconciliation + config/edit hardening | **closing** | plans/implementation/artifact-discovery-cleanup/c005-uncertainty-aware-state-reconciliation-and-config-edit-hardening.md | Implementation, local verification, and isolated real Full publication are complete; hosted platform qualification is pending. |
-| Artifact discovery and cleanup | C006 combined-root cleanup ownership universe | **closing after C005 implementation** | plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md | Combined discovery, coverage, ownership, authorization, and per-candidate final proof are implemented; hosted platform qualification is pending. |
+| Artifact discovery and cleanup | M007 learned/full cleanup orchestration | **closed** | plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-orchestration.md | Corrective closure: plans/closure/artifact-discovery-cleanup/c006-status.md. Combined selected-root proof, known/full orchestration, mode parity, zero-clean simulation, and platform/MSRV gates pass. Historical blocked record is unchanged. |
+| Artifact discovery and cleanup | C005 uncertainty-aware state reconciliation + config/edit hardening | **closed** | plans/implementation/artifact-discovery-cleanup/c005-uncertainty-aware-state-reconciliation-and-config-edit-hardening.md | Closure: plans/closure/artifact-discovery-cleanup/c005-status.md. Localized Full uncertainty reconciles conservatively; isolated real Full published schema 2; hosted platform/MSRV gates pass. |
+| Artifact discovery and cleanup | C006 combined-root cleanup ownership universe | **closed** | plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md | Closure: plans/closure/artifact-discovery-cleanup/c006-status.md. Combined discovery/coverage/ownership proof and final per-candidate refresh pass hosted platform/MSRV gates. |
 
 ## Immediate handoff
 
-M006A, M006C, and M006D remain conditionally closed as historical exhaustive-scan evidence; M006B and M006F are closed. ADR 002 resolved the product decision. C005 and C006 implementation is complete and both plans are closing. M007 remains blocked until hosted qualification and formal corrective closure.
+M006A, M006C, and M006D remain conditionally closed as historical exhaustive-scan evidence; M006B and M006F are closed. ADR 002 resolved the product decision. C005 formally closes M006E's remaining state/config requirements. C006 formally closes M007's combined-root proof and orchestration requirements. The historical M006E and M007 closure records remain unchanged; these corrective records carry the updated evidence.
 
 Expected order:
 
@@ -73,13 +73,14 @@ M006B cleanup-proof resolution efficiency -> closed
 M006C traversal throughput without scope narrowing -> conditionally closed (historical evidence)
 M006D global scan completion qualification -> conditionally closed (historical evidence)
 ADR 002 adaptive Routine/Full discovery -> accepted
-M006E adaptive Routine/Full discovery + state/config edit -> conditionally closed
+M006E adaptive Routine/Full discovery + state/config edit -> closed by C005
 M006F exhaustive traversal hot-path qualification -> closed
-C005 uncertainty-aware state reconciliation + config/edit hardening -> closing
-M006E -> close after C005 evidence
-C006 combined-root cleanup ownership universe -> closing after C005 implementation
-M007 learned/full cleanup orchestration -> close after C006 evidence
+C005 uncertainty-aware state reconciliation + config/edit hardening -> closed
+C006 combined-root cleanup ownership universe -> closed after C005
+M007 learned/full cleanup orchestration -> closed by C006
 ~~~
+
+No later implementation handoff is currently registered for selective cleanup or distribution; those roadmap topics remain future planning work and have no blocked status to clear.
 
 C005 replaces the global `diagnostics.is_empty()` publication gate with uncertainty-aware reconciliation, retains positive manifest evidence through Cargo resolution failures, collapses learned roots, hardens state diagnostics/publication, and adds fake-editor subprocess qualification. A local reference Full scan completed with 742 localized diagnostics and, under an isolated HOME, published 1,804 project observations and six learned roots. The existing invalid schema-0 state in the user's normal state directory was left untouched.
 

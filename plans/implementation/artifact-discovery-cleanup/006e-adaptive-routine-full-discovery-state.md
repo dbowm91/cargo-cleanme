@@ -1,8 +1,8 @@
 # M006E — Adaptive Routine Discovery and Full Reconciliation State
 
-Status: conditionally closed
+Status: closed by corrective C005. Historical closure: `plans/closure/artifact-discovery-cleanup/006e-status.md`; corrective closure: `plans/closure/artifact-discovery-cleanup/c005-status.md`.
 
-Closure: `plans/closure/artifact-discovery-cleanup/006e-status.md`. The Routine/Full/Explicit split and state/config surfaces landed. Full traversal completed on the reference host, but the all-or-nothing diagnostic gate prevented useful state publication. Corrective C005 (`plans/implementation/artifact-discovery-cleanup/c005-uncertainty-aware-state-reconciliation-and-config-edit-hardening.md`) is ready and owns uncertainty-scoped reconciliation plus the remaining state/config-editor qualification.
+Historical closure: `plans/closure/artifact-discovery-cleanup/006e-status.md`. The Routine/Full/Explicit split and state/config surfaces landed. Full traversal completed on the reference host, but the all-or-nothing diagnostic gate prevented useful state publication. Corrective C005 (`plans/implementation/artifact-discovery-cleanup/c005-uncertainty-aware-state-reconciliation-and-config-edit-hardening.md`) closed the uncertainty-scoped reconciliation and remaining state/config-editor qualification; see `plans/closure/artifact-discovery-cleanup/c005-status.md`.
 
 Repository baseline: `52018219860d3a5412929a848a142236de78ca58`
 

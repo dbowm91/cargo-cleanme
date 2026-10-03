@@ -1,13 +1,13 @@
 # Corrective C006 — Combined-Root Cleanup Ownership Universe and Simulation Parity
 
-Status: closing after C005 implementation
+Status: closed
 
 Repository baseline: C005 planning head
 
 Corrects:
 
 - M007 learned/full cleanup orchestration
-- M007 blocked status remains historical until this corrective closes
+- M007's blocked status is historical; this corrective closes its remaining acceptance requirements
 - C003/C004 single-root safety semantics are preserved and generalized, not weakened
 
 Authoritative references:
