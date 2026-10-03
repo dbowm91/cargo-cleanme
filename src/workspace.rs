@@ -30,6 +30,28 @@ pub trait CargoRunner {
     fn run(&self, cwd: &Path, args: &[std::ffi::OsString]) -> io::Result<ProcessOutput>;
 }
 
+/// Refresh one previously resolved root manifest directly through Cargo metadata.
+/// The caller must compare the returned identity and complete workspace shape
+/// with the state it is revalidating; this function never locates a new root.
+pub fn refresh_workspace_from_root_manifest(
+    root_manifest: &Path,
+    runner: &dyn CargoRunner,
+    counters: &mut ScanCounters,
+    diagnostics: &mut Vec<ScanDiagnostic>,
+    observer: &dyn ProgressObserver,
+) -> Option<ResolvedWorkspace> {
+    let canonical_key = canonical_manifest_key(root_manifest);
+    resolve_one_workspace_cached(
+        root_manifest,
+        &canonical_key,
+        runner,
+        counters,
+        diagnostics,
+        observer,
+        root_manifest,
+    )
+}
+
 pub struct SystemCargoRunner;
 
 impl CargoRunner for SystemCargoRunner {
@@ -240,157 +262,15 @@ fn resolve_one_workspace(
         }
     };
 
-    // Caller handles caching; this resolves metadata for a fresh workspace.
-    let _ = canonical_root_manifest;
-    // 2. metadata
-    let meta_args: Vec<std::ffi::OsString> = [
-        "metadata",
-        "--offline",
-        "--locked",
-        "--no-deps",
-        "--format-version",
-        "1",
-        "--manifest-path",
-    ]
-    .into_iter()
-    .map(Into::into)
-    .chain(std::iter::once(root_manifest_path.as_os_str().to_owned()))
-    .collect();
-    // Use workspace root dir as cwd for stable config resolution.
-    let cwd = root_manifest_path
-        .parent()
-        .unwrap_or(Path::new("/"))
-        .to_path_buf();
-    counters.cargo_metadata_calls += 1;
-    let meta_start = std::time::Instant::now();
-    let meta_out = match runner.run(&cwd, &meta_args) {
-        Ok(o) => {
-            counters.cargo_metadata_nanos = counters
-                .cargo_metadata_nanos
-                .saturating_add(meta_start.elapsed().as_nanos() as u64);
-            o
-        }
-        Err(e) => {
-            counters.cargo_metadata_nanos = counters
-                .cargo_metadata_nanos
-                .saturating_add(meta_start.elapsed().as_nanos() as u64);
-            counters.cargo_failures += 1;
-            observer.cargo_failure();
-            diagnostics.push(ScanDiagnostic {
-                severity: DiagnosticSeverity::Warning,
-                category: DiagnosticCategory::CandidateUncertain,
-                path: Some(manifest.to_path_buf()),
-                message: format!("cargo metadata could not start: {e}"),
-            });
-            return None;
-        }
-    };
-    if !meta_out.success {
-        counters.cargo_failures += 1;
-        observer.cargo_failure();
-        diagnostics.push(ScanDiagnostic {
-            severity: DiagnosticSeverity::Warning,
-            category: DiagnosticCategory::CandidateUncertain,
-            path: Some(manifest.to_path_buf()),
-            message: format!(
-                "cargo metadata failed: {}",
-                String::from_utf8_lossy(&meta_out.stderr).trim()
-            ),
-        });
-        return None;
-    }
-    let raw: RawMetadata = match serde_json::from_slice(&meta_out.stdout) {
-        Ok(v) => v,
-        Err(e) => {
-            counters.cargo_failures += 1;
-            observer.cargo_failure();
-            diagnostics.push(ScanDiagnostic {
-                severity: DiagnosticSeverity::Warning,
-                category: DiagnosticCategory::CandidateUncertain,
-                path: Some(manifest.to_path_buf()),
-                message: format!("cannot parse cargo metadata output: {e}"),
-            });
-            return None;
-        }
-    };
-    // Build resolved workspace. Unknown/malformed capability is conservative.
-    let had_build = raw.build_directory.is_some()
-        || String::from_utf8_lossy(&meta_out.stdout).contains("build_directory");
-    // Re-derive had_build from JSON presence: serde default None could mean
-    // absent or null; check raw string for field presence for fixture parity.
-    // If metadata JSON lacks the key, capability is Unavailable/Unknown.
-    let build_opt = raw.build_directory.as_deref();
-    let capability = capability_from_metadata(
-        had_build,
-        &raw.target_directory,
-        build_opt,
-        cargo_env_build_dir_set(),
-    );
-
-    let workspace_root = match canonical_or_absolute(Path::new(&raw.workspace_root)) {
-        Ok(p) => p,
-        Err(msg) => {
-            diagnostics.push(ScanDiagnostic {
-                severity: DiagnosticSeverity::Warning,
-                category: DiagnosticCategory::CandidateUncertain,
-                path: Some(manifest.to_path_buf()),
-                message: msg,
-            });
-            return None;
-        }
-    };
-    let root_manifest_canonical = match fs::canonicalize(&root_manifest_path)
-        .or_else(|_| canonical_or_absolute(&root_manifest_path))
-    {
-        Ok(p) => p,
-        Err(_) => root_manifest_path.clone(),
-    };
-    let mut members = Vec::new();
-    for pkg in &raw.packages {
-        let mp = PathBuf::from(&pkg.manifest_path);
-        // Only include packages that are workspace members? Raw packages with
-        // --no-deps are workspace members only, so include all.
-        let source_root = mp
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| mp.clone());
-        members.push(WorkspaceMember {
-            manifest_path: mp,
-            source_root,
-        });
-    }
-    // Ensure at least the root manifest is represented even if packages empty.
-    if members.is_empty() {
-        let source_root = root_manifest_canonical
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| workspace_root.clone());
-        members.push(WorkspaceMember {
-            manifest_path: root_manifest_canonical.clone(),
-            source_root,
-        });
-    }
-    members.sort_by(|a, b| a.source_root.cmp(&b.source_root));
-    members.dedup_by(|a, b| a.source_root == b.source_root);
-
-    let target_logical = PathBuf::from(&raw.target_directory);
-    let build_logical = build_opt
-        .map(PathBuf::from)
-        .unwrap_or_else(|| target_logical.clone());
-    let target_root = output_root(OutputRootKind::Target, target_logical);
-    let build_root = output_root(OutputRootKind::Build, build_logical);
-
-    Some(ResolvedWorkspace {
-        id: WorkspaceId(workspace_root.clone()),
-        root: workspace_root,
-        root_manifest: root_manifest_canonical,
-        members,
-        output: OutputSet {
-            target: target_root,
-            build: build_root,
-        },
-        capability,
-    })
+    resolve_one_workspace_cached(
+        &root_manifest_path,
+        &canonical_root_manifest,
+        runner,
+        counters,
+        diagnostics,
+        observer,
+        manifest,
+    )
 }
 
 /// Canonicalize a manifest path for member-cache lookup.
@@ -701,8 +581,20 @@ fn resolve_one_workspace_cached(
         let mp = PathBuf::from(&pkg.manifest_path);
         let source_root = mp
             .parent()
-            .map(Path::to_path_buf)
+            .and_then(|p| fs::canonicalize(p).ok())
             .unwrap_or_else(|| mp.clone());
+        if !source_root.is_absolute() || !source_root.is_dir() {
+            diagnostics.push(ScanDiagnostic {
+                severity: DiagnosticSeverity::Warning,
+                category: DiagnosticCategory::CandidateUncertain,
+                path: Some(original_manifest.to_path_buf()),
+                message: format!(
+                    "cannot establish physical workspace member source root for {}",
+                    mp.display()
+                ),
+            });
+            return None;
+        }
         members.push(WorkspaceMember {
             manifest_path: mp,
             source_root,
@@ -1651,6 +1543,206 @@ mod tests {
             "member cache must eliminate redundant locates"
         );
         assert_eq!(counters.deduped_workspace_hits, 1);
+    }
+
+    #[test]
+    fn direct_known_root_refresh_uses_one_metadata_call_and_no_locate() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("ws");
+        std::fs::create_dir_all(root.join("member0")).unwrap();
+        let root_manifest = root.join("Cargo.toml");
+        std::fs::write(&root_manifest, "").unwrap();
+        let member_manifest = root.join("member0/Cargo.toml");
+        std::fs::write(&member_manifest, "").unwrap();
+        let target = root.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        let runner = FakeCargo {
+            locate_root: root_manifest.clone(),
+            target,
+            build: None,
+            members: 1,
+            fail_locate: false,
+            fail_metadata: false,
+            malformed: false,
+        };
+        let mut counters = ScanCounters::default();
+        let mut diagnostics = Vec::new();
+        let refreshed = refresh_workspace_from_root_manifest(
+            &root_manifest,
+            &runner,
+            &mut counters,
+            &mut diagnostics,
+            &NoopObserver,
+        );
+        assert!(refreshed.is_some(), "{diagnostics:?}");
+        assert_eq!(counters.cargo_locate_calls, 0);
+        assert_eq!(counters.cargo_metadata_calls, 1);
+        let refreshed = refreshed.unwrap();
+        assert!(refreshed.members.iter().any(|member| {
+            member.manifest_path == member_manifest
+                && member.source_root
+                    == std::fs::canonicalize(member_manifest.parent().unwrap()).unwrap()
+        }));
+        let mut initial_counters = ScanCounters::default();
+        let mut initial_diagnostics = Vec::new();
+        let initial = resolve_workspaces(
+            std::slice::from_ref(&root_manifest),
+            &runner,
+            &mut initial_counters,
+            &mut initial_diagnostics,
+            &NoopObserver,
+        );
+        assert_eq!(
+            initial,
+            vec![refreshed],
+            "initial and proof parsing share the same metadata decoder"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolution_normalizes_member_roots_through_symlinked_ancestor() {
+        use std::os::unix::fs::symlink;
+
+        let d = tempfile::tempdir().unwrap();
+        let physical = d.path().join("physical");
+        let alias = d.path().join("alias");
+        let ws = physical.join("ws");
+        std::fs::create_dir_all(ws.join("member0/src")).unwrap();
+        std::fs::create_dir_all(ws.join("target/debug")).unwrap();
+        let physical_manifest = ws.join("Cargo.toml");
+        let reported_member_manifest = ws.join("member0/Cargo.toml");
+        std::fs::write(&physical_manifest, "").unwrap();
+        std::fs::write(&reported_member_manifest, "").unwrap();
+        std::fs::write(ws.join("member0/src/lib.rs"), "old source").unwrap();
+        std::fs::write(ws.join("target/debug/artifact.bin"), "old output").unwrap();
+        symlink(&physical, &alias).unwrap();
+        let alias_manifest = alias.join("ws/Cargo.toml");
+        let runner = FakeCargo {
+            locate_root: alias_manifest.clone(),
+            target: alias.join("ws/target"),
+            build: None,
+            members: 1,
+            fail_locate: false,
+            fail_metadata: false,
+            malformed: false,
+        };
+        let mut counters = ScanCounters::default();
+        let mut diagnostics = Vec::new();
+        let resolved = resolve_workspaces(
+            &[alias_manifest],
+            &runner,
+            &mut counters,
+            &mut diagnostics,
+            &NoopObserver,
+        );
+        assert_eq!(resolved.len(), 1, "{diagnostics:?}");
+        let member = resolved[0]
+            .members
+            .iter()
+            .find(|member| member.manifest_path.ends_with("member0/Cargo.toml"))
+            .unwrap();
+        assert_eq!(member.manifest_path, alias.join("ws/member0/Cargo.toml"));
+        assert_eq!(
+            member.source_root,
+            std::fs::canonicalize(ws.join("member0")).unwrap()
+        );
+        assert_eq!(
+            resolved[0].output.target.physical_path.as_deref(),
+            Some(std::fs::canonicalize(ws.join("target")).unwrap().as_path())
+        );
+        let physical_runner = FakeCargo {
+            locate_root: physical_manifest.clone(),
+            target: ws.join("target"),
+            build: None,
+            members: 1,
+            fail_locate: false,
+            fail_metadata: false,
+            malformed: false,
+        };
+        let mut physical_counters = ScanCounters::default();
+        let mut physical_diagnostics = Vec::new();
+        let physical_resolved = resolve_workspaces(
+            &[physical_manifest],
+            &physical_runner,
+            &mut physical_counters,
+            &mut physical_diagnostics,
+            &NoopObserver,
+        );
+        assert_eq!(
+            workspace_member_roots(&resolved[0]),
+            workspace_member_roots(&physical_resolved[0])
+        );
+        assert_eq!(
+            resolved[0].output.target.physical_path,
+            physical_resolved[0].output.target.physical_path
+        );
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        backdate_tree(d.path(), old);
+        let output = resolved[0].output.target.physical_path.as_ref().unwrap();
+        let start = SystemTime::now() + Duration::from_secs(1);
+        let cutoff = start.checked_sub(Duration::from_secs(300)).unwrap();
+        let mut alias_counters = ScanCounters::default();
+        let mut alias_diagnostics = Vec::new();
+        let alias_eligible = analyze_groups(
+            &resolved,
+            build_groups(&resolved),
+            start,
+            cutoff,
+            Duration::from_secs(300),
+            &mut alias_counters,
+            &mut alias_diagnostics,
+            &NoopObserver,
+        );
+        let mut physical_activity_counters = ScanCounters::default();
+        let mut physical_activity_diagnostics = Vec::new();
+        let physical_eligible = analyze_groups(
+            &physical_resolved,
+            build_groups(&physical_resolved),
+            start,
+            cutoff,
+            Duration::from_secs(300),
+            &mut physical_activity_counters,
+            &mut physical_activity_diagnostics,
+            &NoopObserver,
+        );
+        assert_eq!(alias_eligible, physical_eligible);
+        assert_eq!(
+            alias_eligible.len(),
+            1,
+            "old source and output remain eligible"
+        );
+        std::fs::write(ws.join("target/debug/artifact.bin"), "recent output").unwrap();
+        assert!(
+            matches!(
+                traverse::workspace_member_activity(
+                    &member.source_root,
+                    std::slice::from_ref(output),
+                    start,
+                    cutoff
+                ),
+                Ok(traverse::SourceActivity::Quiet(_))
+            ),
+            "recent output is excluded from source activity when member roots are canonical"
+        );
+        assert!(
+            traverse::measure_single_target(output)
+                .newest
+                .is_some_and(|mtime| mtime >= cutoff)
+        );
+        std::fs::write(ws.join("member0/src/lib.rs"), "recent source").unwrap();
+        assert!(
+            matches!(
+                traverse::workspace_member_activity(
+                    &member.source_root,
+                    std::slice::from_ref(output),
+                    start,
+                    cutoff
+                ),
+                Ok(traverse::SourceActivity::Recent(_))
+            ),
+            "recent source outside output still protects the workspace"
+        );
     }
 
     #[test]

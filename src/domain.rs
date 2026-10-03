@@ -220,6 +220,11 @@ pub struct EligibleOutputGroup {
 pub struct ScanCounters {
     pub directories_visited: u64,
     pub directories_pruned: u64,
+    pub platform_system_prunes: u64,
+    pub cargo_home_prunes: u64,
+    pub rustup_home_prunes: u64,
+    pub target_vcs_prunes: u64,
+    pub user_ignore_prunes: u64,
     pub manifests_found: u64,
     pub unique_workspaces: u64,
     pub cargo_locate_calls: u64,
@@ -245,6 +250,7 @@ pub struct ScanCounters {
     /// C003 §7.6: final-proof ownership-universe re-resolution work, kept
     /// separate from the initial discovery counters so `--stats` cannot hide it.
     pub proof_workspaces_refreshed: u64,
+    pub proof_metadata_peak_concurrency: u64,
     pub proof_cargo_locate_calls: u64,
     pub proof_cargo_metadata_calls: u64,
     pub proof_cargo_locate_nanos: u64,
@@ -257,9 +263,14 @@ impl ScanCounters {
     /// One-line semantic counters for `--stats` stderr output.
     pub fn stats_line(&self) -> String {
         format!(
-            "visited={} pruned={} manifests={} workspaces={} locate={} metadata={} failures={} unresolved_ownership={} empty_skipped={} active_skipped={} groups_measured={} bytes={} reportable={} deduped_hits={} uncertain_skipped={}",
+            "visited_entries={} pruned_directories={} platform_prunes={} cargo_home_prunes={} rustup_prunes={} target_vcs_prunes={} user_ignore_prunes={} manifests={} workspaces={} locate={} metadata={} failures={} unresolved_ownership={} empty_skipped={} active_skipped={} groups_measured={} bytes={} reportable={} deduped_hits={} uncertain_skipped={}",
             self.directories_visited,
             self.directories_pruned,
+            self.platform_system_prunes,
+            self.cargo_home_prunes,
+            self.rustup_home_prunes,
+            self.target_vcs_prunes,
+            self.user_ignore_prunes,
             self.manifests_found,
             self.unique_workspaces,
             self.cargo_locate_calls,
@@ -318,10 +329,11 @@ impl ScanCounters {
     /// Final-proof counter line for `cleanup --stats` stderr output.
     pub fn proof_stats_line(&self) -> String {
         format!(
-            "proof_universes_refreshed={} proof_locate={} proof_metadata={}",
+            "proof_universes_refreshed={} proof_locate={} proof_metadata={} proof_metadata_peak={}",
             self.proof_workspaces_refreshed,
             self.proof_cargo_locate_calls,
             self.proof_cargo_metadata_calls,
+            self.proof_metadata_peak_concurrency,
         )
     }
 

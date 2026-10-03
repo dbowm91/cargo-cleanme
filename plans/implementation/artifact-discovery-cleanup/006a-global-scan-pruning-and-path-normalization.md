@@ -1,6 +1,8 @@
 # M006A — Global Scan Pruning, Traversal Policy, and Path Normalization
 
-Status: ready
+Status: conditionally closed
+
+Closure: `plans/closure/artifact-discovery-cleanup/006a-status.md`. The policy/traversal/path-normalization work is implemented, but the required reference-host no-argument scan exceeded 120 seconds; traversal-throughput follow-up M006C is proposed. M006A is not fully qualified closed.
 
 Repository baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 

@@ -199,6 +199,15 @@ fn run_scan(
             counters.timings_line(),
             elapsed.as_secs_f64(),
         );
+        if !discovered.top_level_entries.is_empty() {
+            let attribution = discovered
+                .top_level_entries
+                .iter()
+                .map(|(path, count)| format!("{:?}={count}", path))
+                .collect::<Vec<_>>()
+                .join(" ");
+            eprintln!("scan top-level entries: {attribution}");
+        }
         let _ = Duration::from_secs(0);
     }
     Ok(0)

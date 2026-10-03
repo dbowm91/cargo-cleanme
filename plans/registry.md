@@ -32,7 +32,7 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M006 performance hardening | M006A and M006B are ready and may proceed in parallel; M005 destructive qualification remains closed/green. |
+| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M006 performance hardening | M006A implementation is conditionally closed but missed the 120-second scan target; ready M006C investigates throughput without pruning writable domains. M006B local implementation/evidence is closing pending hosted CI. M005 remains closed/green. |
 
 ## Implementation handoffs
 
@@ -48,26 +48,27 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 | Artifact discovery and cleanup | C002 M005 ownership safety, simulation parity, progress, global qualification | **closed** | plans/implementation/artifact-discovery-cleanup/c002-m005-safety-progress-performance-reconciliation.md | Historical closure: plans/closure/artifact-discovery-cleanup/c002-status.md; post-closure cleanup-unit defects tracked by C003. |
 | Artifact discovery and cleanup | C003 workspace cleanup-unit atomicity + full ownership-graph revalidation | **closed** | plans/implementation/artifact-discovery-cleanup/c003-workspace-cleanup-unit-atomicity.md | Historical closure: plans/closure/artifact-discovery-cleanup/c003-status.md; post-closure unresolved-participant defect tracked by C004. |
 | Artifact discovery and cleanup | C004 complete ownership-universe resolution coverage | **closed** | plans/implementation/artifact-discovery-cleanup/c004-complete-ownership-resolution-coverage.md | Closure: plans/closure/artifact-discovery-cleanup/c004-status.md. M005 destructive release qualification is restored. |
-| Artifact discovery and cleanup | M006A global scan pruning, traversal policy, path normalization | **ready** | plans/implementation/artifact-discovery-cleanup/006a-global-scan-pruning-and-path-normalization.md | Performance/read-only track. May proceed in parallel with M006B. |
-| Artifact discovery and cleanup | M006B cleanup proof resolution efficiency | **ready** | plans/implementation/artifact-discovery-cleanup/006b-cleanup-proof-resolution-efficiency.md | Destructive-proof performance track; MUST preserve C003/C004 freshness and fail-closed semantics. |
+| Artifact discovery and cleanup | M006A global scan pruning, traversal policy, path normalization | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/006a-global-scan-pruning-and-path-normalization.md | Closure: plans/closure/artifact-discovery-cleanup/006a-status.md. Policy/path work landed; scan target miss is tracked by ready M006C. |
+| Artifact discovery and cleanup | M006B cleanup proof resolution efficiency | **closing** | plans/implementation/artifact-discovery-cleanup/006b-cleanup-proof-resolution-efficiency.md | Sequential handoff after M006A disposition; local implementation/evidence complete, hosted CI pending; MUST preserve C003/C004 freshness and fail-closed semantics. |
+| Artifact discovery and cleanup | M006C global traversal throughput without scope narrowing | **ready** | plans/implementation/artifact-discovery-cleanup/006c-global-traversal-throughput-without-scope-narrowing.md | Unblocked by M006A's measured >120-second qualification miss and bounded subtree profile; no M006B dependency. Preserve writable/project-bearing global domains. |
 
 ## Immediate handoff
 
-M006A and M006B are ready and may proceed in parallel.
+M006A has been implemented and conditionally closed with a measured qualification miss; M006B has been implemented after that disposition and is closing after local performance and test evidence. M006C is ready: it has a measured trigger, dominant-tree profile, tests, and acceptance criteria; M006A/B commits will provide a stable baseline.
 
 Expected order:
 
 ~~~text
 M001-M005 + C001-C004 -> closed
-M006A global discovery/pruning/path normalization -> ready
-M006B cleanup-proof resolution efficiency -> ready
-M006A/M006B -> closure evidence
-M006 performance hardening -> closed when both tracks close
+M006A global discovery/pruning/path normalization -> conditionally closed (macOS scan >120 s)
+M006B cleanup-proof resolution efficiency -> closing -> hosted CI -> closed
+M006C traversal throughput without scope narrowing -> ready
+M006 performance hardening -> remains active until global scan throughput is qualified
 ~~~
 
-M006A owns the >120 s no-argument scan, global-only OS/tool-managed pruning, one-pool multi-root discovery, and the macOS member-source-root/output-exclusion identity mismatch.
+M006A owns the >120 s no-argument scan, global-only OS/tool-managed pruning, one-pool multi-root discovery, and the macOS member-source-root/output-exclusion identity mismatch. M006A's 120-second acceptance criterion remains unmet; `/Users` dominated the measured post-policy traversal.
 
-M006B owns cleanup proof subprocess cost. It removes redundant final-proof locate-project calls first and may add bounded parallel metadata refresh only after measurement. It MUST NOT reuse one stale ownership-universe snapshot across destructive candidates.
+M006B owns cleanup proof subprocess cost. It removes redundant final-proof locate-project calls and adds bounded parallel metadata refresh after measurement. It MUST NOT reuse one stale ownership-universe snapshot across destructive candidates.
 
 M005 destructive release qualification remains restored and is not blocked by M006; M006 is performance hardening, not a safety prerequisite.
 
@@ -81,4 +82,3 @@ M005 destructive release qualification remains restored and is not blocked by M0
 - cleanup.allowed_output_roots never manufactures ownership proof.
 - --dryrun remains zero-clean and shares the same completeness/final-proof gates as Execute.
 - --stats is the qualification/debug surface.
-

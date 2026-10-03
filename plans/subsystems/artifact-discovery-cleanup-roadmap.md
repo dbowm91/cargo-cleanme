@@ -130,8 +130,9 @@ C003 cleanup-unit atomicity/full ownership graph [historically closed]
 C004 complete ownership-universe resolution coverage [closed]
                    |
                    v
-M006A global scan/pruning/path normalization [ready]
-M006B cleanup-proof resolution efficiency [ready, parallel]
+M006A global scan/pruning/path normalization [conditionally closed]
+M006B cleanup-proof resolution efficiency [closing]
+M006C global traversal throughput without scope narrowing [ready]
 ~~~
 
 ## 6. Milestone M001 — Foundation, CLI, config, and domain contracts
@@ -373,11 +374,13 @@ Outcome: cleanup resolution now retains authoritative manifest coverage and unre
 
 ## 10D. Milestone M006 — Performance hardening
 
-Status: ready.
+Status: closing.
 
-M006 is split into two independent implementation tracks that may proceed in parallel.
+M006 is split into ordered implementation tracks for this handoff. M006A's policy, traversal, and path-normalization work is conditionally closed because the reference macOS scan still exceeded 120 seconds. M006B proceeds without weakening M006A's discovery contract. M006C is proposed to investigate traversal throughput while preserving writable project-bearing domains.
 
 ### M006A — Global scan pruning, traversal policy, and path normalization
+
+Status: conditionally closed. Closure: `plans/closure/artifact-discovery-cleanup/006a-status.md`.
 
 Plan:
 
@@ -396,6 +399,8 @@ Closure requires the representative macOS no-argument scan to complete within th
 
 ### M006B — Cleanup proof resolution efficiency
 
+Status: active.
+
 Plan:
 
 - plans/implementation/artifact-discovery-cleanup/006b-cleanup-proof-resolution-efficiency.md
@@ -409,6 +414,12 @@ Purpose:
 - explicitly reject cross-candidate stale snapshot reuse in this milestone.
 
 M006B changes performance only; C003/C004 destructive semantics remain authoritative.
+
+### M006C — Global traversal throughput without scope narrowing
+
+Status: ready. Plan: `plans/implementation/artifact-discovery-cleanup/006c-global-traversal-throughput-without-scope-narrowing.md`.
+
+M006C is triggered by M006A's 120-second qualification miss. The measured dominant work is `/Users`, followed by `/Library`, `/Applications`, `/opt`, and `/private`; these writable or project-bearing domains remain in scope.
 
 ## 11. Cross-cutting reliability concerns
 
