@@ -182,7 +182,7 @@ Shared, uncertain, and externally unproven physical output remains inventory-onl
 
 Roadmap milestone: M006.
 
-Status: active.
+Status: closed for current objectives; C007 is a bounded post-closure recovery/documentation corrective.
 
 Objective:
 
@@ -241,6 +241,7 @@ Plans:
 
 - `plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-orchestration.md`
 - `plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md`
+- post-closure corrective: `plans/implementation/artifact-discovery-cleanup/c007-discovery-state-recovery-and-post-m007-planning-cleanup.md`
 
 ## Phase 9 — Selective cleanup and policy
 
@@ -292,19 +293,22 @@ M004 destructive cleanup
 M005 redirected/shared-output support
       |
       v
-M006 adaptive discovery/performance
+M006 adaptive discovery/performance [closed]
       |
       v
-C005 M006E reconciliation corrective
+C005 M006E reconciliation corrective [closed]
       |
       v
-C006 combined-root cleanup proof
+C006 combined-root cleanup proof [closed]
       |
       v
-M007 learned/full cleanup orchestration
+M007 learned/full cleanup orchestration [closed]
       |
       v
-selective cleanup / distribution
+C007 state recovery/planning cleanup [ready]
+      |
+      v
+future selective cleanup / distribution planning
 ~~~
 
 Destructive work MUST NOT be pulled forward merely to make the tool feel complete.
