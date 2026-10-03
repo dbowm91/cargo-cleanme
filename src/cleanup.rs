@@ -2500,24 +2500,11 @@ mod tests {
             }
             let _ = build_a;
         }
-        // Unsupported/unknown build capability via env (both skip, no clean).
-        {
-            let (_d, root, target) = valid_fixture(1);
-            let prev = std::env::var_os("CARGO_BUILD_BUILD_DIR");
-            unsafe { std::env::set_var("CARGO_BUILD_BUILD_DIR", "/tmp/c002-unknown-build") };
-            let runner = FakeCleanupRunner::new(&root, &target, 1);
-            let noop = NoopObserver;
-            for mode in [CleanMode::Simulate, CleanMode::Preview] {
-                let report = clean_with(&root, 0, &[], mode, &runner, &noop).unwrap();
-                assert_eq!(report.results[0].outcome, CleanOutcome::Skipped, "{mode:?}");
-            }
-            assert!(runner.clean_calls().is_empty());
-            if let Some(v) = prev {
-                unsafe { std::env::set_var("CARGO_BUILD_BUILD_DIR", v) };
-            } else {
-                unsafe { std::env::remove_var("CARGO_BUILD_BUILD_DIR") };
-            }
-        }
+        // Unsupported/unknown build capability with a separate build dir is
+        // covered by `frozen_env_sets_target_and_build_dir` (Unknown +
+        // distinct build → Err, never clean) without touching global env.
+        // Global `CARGO_BUILD_BUILD_DIR` is never set in tests because it
+        // races with parallel real-Cargo tests (see C002 closure).
     }
 
     #[test]
