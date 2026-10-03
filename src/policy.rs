@@ -81,11 +81,27 @@ fn routine_roots(retention_days: u16) -> Vec<PathBuf> {
     let Some(home) = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf()) else {
         return Vec::new();
     };
-    let mut roots: Vec<PathBuf> = routine_seed_candidates(&home)
+    let (roots, warning) = routine_roots_from_state(
+        &home,
+        retention_days,
+        crate::discovery_state::load_default(),
+    );
+    if let Some(warning) = warning {
+        eprintln!("cargo-cleanme: {warning}; using seed/configured Routine roots");
+    }
+    roots
+}
+
+fn routine_roots_from_state(
+    home: &Path,
+    retention_days: u16,
+    load: crate::discovery_state::StateLoad,
+) -> (Vec<PathBuf>, Option<String>) {
+    let mut roots: Vec<PathBuf> = routine_seed_candidates(home)
         .into_iter()
         .filter(|p| p.is_dir())
         .collect();
-    match crate::discovery_state::load_default() {
+    let warning = match load {
         crate::discovery_state::StateLoad::Loaded(state) => {
             let now = crate::discovery_state::now_seconds();
             roots.extend(
@@ -100,14 +116,11 @@ fn routine_roots(retention_days: u16) -> Vec<PathBuf> {
                     })
                     .map(|r| r.path),
             );
+            None
         }
-        load => {
-            if let Some(error) = load.diagnostic() {
-                eprintln!("cargo-cleanme: {error}; using seed/configured Routine roots");
-            }
-        }
-    }
-    canonical_dedup_roots(roots)
+        load => load.diagnostic(),
+    };
+    (canonical_dedup_roots(roots), warning)
 }
 #[cfg(unix)]
 #[cfg(unix)]
@@ -274,5 +287,30 @@ mod tests {
             .scope,
             ScanScope::Explicit(_)
         ));
+    }
+
+    #[test]
+    fn routine_state_errors_fall_back_to_seeds_with_one_warning() {
+        let d = tempdir().unwrap();
+        let seed = d.path().join("Projects");
+        fs::create_dir(&seed).unwrap();
+        let states = [
+            crate::discovery_state::StateLoad::RecoverableInvalid(
+                crate::discovery_state::StateProblem::Invalid {
+                    path: d.path().join("state.json"),
+                    detail: "invalid schema 0".into(),
+                },
+            ),
+            crate::discovery_state::StateLoad::UnsupportedNewer {
+                path: d.path().join("state.json"),
+                schema: 99,
+                current: crate::discovery_state::CURRENT_SCHEMA,
+            },
+        ];
+        for state in states {
+            let (roots, warning) = routine_roots_from_state(d.path(), 30, state);
+            assert_eq!(roots, vec![fs::canonicalize(&seed).unwrap()]);
+            assert!(warning.is_some());
+        }
     }
 }
