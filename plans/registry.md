@@ -12,6 +12,7 @@ Canonical direction:
 Accepted architecture decisions:
 
 - plans/adr/001-workspace-output-ownership-and-cleanup-authorization.md
+- plans/adr/002-adaptive-routine-full-discovery-state.md
 
 Planning framework baseline: 97dee9fa64868534cedf3a9310e7160335a91be2
 M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
@@ -32,7 +33,7 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M006 performance hardening | M006A, M006C, and M006D are conditionally closed with named scan qualification misses; M006B is closed. Proposed M006E needs an explicit scope-versus-latency policy decision. M005 remains closed/green. |
+| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M006E adaptive Routine/Full discovery | M006A/C/D retain historical conditional closure evidence; M006B is closed. ADR 002 resolves the scope decision. M006E is ready; M006F follows for exhaustive hot-path qualification; M007 is proposed after M006E. M005 remains closed/green. |
 
 ## Implementation handoffs
 
@@ -52,29 +53,38 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 | Artifact discovery and cleanup | M006B cleanup proof resolution efficiency | **closed** | plans/implementation/artifact-discovery-cleanup/006b-cleanup-proof-resolution-efficiency.md | Closure: plans/closure/artifact-discovery-cleanup/006b-status.md. Preserves C003/C004 freshness and fail-closed semantics; proof/process reductions are measured. |
 | Artifact discovery and cleanup | M006C global traversal throughput without scope narrowing | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/006c-global-traversal-throughput-without-scope-narrowing.md | Closure: plans/closure/artifact-discovery-cleanup/006c-status.md. Bounded traversal and parity work landed; exact no-argument scan remains over 120 seconds. |
 | Artifact discovery and cleanup | M006D global scan completion qualification | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/006d-global-scan-completion-qualification.md | Closure: plans/closure/artifact-discovery-cleanup/006d-status.md. Optimizations preserve scope and safety, but the exact native scan remains over 120 seconds. |
-| Artifact discovery and cleanup | M006E global scan scope and latency policy | **proposed** | plans/implementation/artifact-discovery-cleanup/006e-global-scan-scope-and-latency-policy.md | Awaiting explicit product decision; current full-scope behavior and cleanup safety remain unchanged. |
+| Artifact discovery and cleanup | M006E adaptive Routine/Full discovery + state/config UX | **ready** | plans/implementation/artifact-discovery-cleanup/006e-adaptive-routine-full-discovery-state.md | ADR 002 accepted. Implements bounded Routine roots, explicit Full reconciliation, learned project/root state, 30-day configurable retention, automatic config bootstrap, and config edit. |
+| Artifact discovery and cleanup | M006E old scope/latency decision | **superseded** | plans/implementation/artifact-discovery-cleanup/006e-global-scan-scope-and-latency-policy.md | Replaced by ADR 002 and the ready adaptive-discovery M006E plan. |
+| Artifact discovery and cleanup | M006F exhaustive traversal hot-path qualification | **ready after M006E** | plans/implementation/artifact-discovery-cleanup/006f-exhaustive-traversal-hot-path-qualification.md | Measure bare dua-core ceiling, remove optional attribution from normal hot path, qualify traversal order/workers, record completed Full baseline. |
+| Artifact discovery and cleanup | M007 learned/full cleanup orchestration | **proposed** | plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-orchestration.md | Hard dependency: M006E closure. Learned state may select bounded roots but never provides cleanup ownership/authorization proof. |
 
 ## Immediate handoff
 
-M006A, M006C, and M006D have been implemented and conditionally closed with measured qualification misses; M006B is closed after that disposition and passed hosted Linux/macOS/Windows and Rust 1.89 CI. M006E is proposed to resolve the scope-versus-latency policy decision.
+M006A, M006C, and M006D remain conditionally closed as historical exhaustive-scan evidence; M006B is closed. ADR 002 has resolved the product decision. The immediate handoff is ready M006E.
 
 Expected order:
 
 ~~~text
 M001-M005 + C001-C004 -> closed
-M006A global discovery/pruning/path normalization -> conditionally closed (macOS scan >120 s)
+M006A global discovery/pruning/path normalization -> conditionally closed (historical evidence)
 M006B cleanup-proof resolution efficiency -> closed
-M006C traversal throughput without scope narrowing -> conditionally closed (macOS scan >120 s)
-M006D global scan completion qualification -> conditionally closed (exact native scan remains over 120 s)
-M006E global scan scope and latency policy -> proposed (awaiting explicit decision)
-M006 performance hardening -> remains active until global scan throughput is qualified
+M006C traversal throughput without scope narrowing -> conditionally closed (historical evidence)
+M006D global scan completion qualification -> conditionally closed (historical evidence)
+ADR 002 adaptive Routine/Full discovery -> accepted
+M006E adaptive Routine/Full discovery + state/config edit -> ready
+M006F exhaustive traversal hot-path qualification -> ready after M006E
+M007 learned/full cleanup orchestration -> proposed after M006E
 ~~~
 
-M006A owns the >120 s no-argument scan, global-only OS/tool-managed pruning, one-pool multi-root discovery, and the macOS member-source-root/output-exclusion identity mismatch. M006A's 120-second acceptance criterion remains unmet; `/Users` dominated the measured post-policy traversal.
+M006E owns the next implementation handoff: bounded Routine roots, explicit `scan --full`, exact project inventory, learned-root derivation, successful-Full-only retention pruning, 30-day configurable retention, atomic machine-local state, automatic config creation, removal of `config init`, and `config edit` with VISUAL/EDITOR/fallback resolution.
 
-M006B owns cleanup proof subprocess cost. It removes redundant final-proof locate-project calls and adds bounded parallel metadata refresh after measurement. It MUST NOT reuse one stale ownership-universe snapshot across destructive candidates.
+M006F owns the remaining implementation-side exhaustive traversal qualification. It does not own scope narrowing.
 
-M005 destructive release qualification remains restored and is not blocked by M006; M006 is performance hardening, not a safety prerequisite.
+M007 is intentionally separate because using learned/full discovery to select cleanup scopes must preserve the existing C003/C004 bounded fresh-proof model.
+
+M006B continues to own cleanup proof subprocess cost and MUST NOT reuse one stale ownership-universe snapshot across destructive candidates.
+
+M005 destructive release qualification remains restored and is not blocked by M006/M007 planning.
 
 ### Current destructive safety boundary
 
