@@ -36,7 +36,7 @@ It does not own Cargo global cache GC, arbitrary build-system caches, a general 
 
 ## 3. Current-state evidence
 
-At the current audit baseline, M001-M005 and corrective C001-C004 are closed on main. The repository is Rust 1.89 / edition 2024, uses manifest-first discovery plus Cargo-authoritative workspace/output resolution, groups physical target/build output, reports deterministic allocated bytes, provides coordinated inline progress, and performs Cargo-mediated workspace CleanupUnit execution only after complete manifest ownership coverage and fresh full-graph revalidation. M005 destructive qualification is restored. The active work is M006 performance hardening: routine no-argument global discovery and lower-cost cleanup proof resolution without weakening those safety contracts.
+At the current audit baseline, M001-M005 and corrective C001-C004 are closed on main. The repository is Rust 1.89 / edition 2024, uses manifest-first discovery plus Cargo-authoritative workspace/output resolution, groups physical target/build output, reports deterministic allocated bytes, provides coordinated inline progress, and performs Cargo-mediated workspace CleanupUnit execution only after complete manifest ownership coverage and fresh full-graph revalidation. M005 destructive qualification is restored. The active work is M006 performance hardening: implementing ADR 002's bounded adaptive Routine discovery, explicit exhaustive Full reconciliation, and remaining traversal qualification without weakening those safety contracts.
 
 Relevant current ecosystem evidence:
 
