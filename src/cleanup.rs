@@ -1971,8 +1971,18 @@ mod tests {
         let runner = SystemCleanupRunner;
         // Preview (Cargo dry-run) must not mutate.
         let preview = clean_with(&root, 0, &[], CleanMode::Preview, &runner, &noop).unwrap();
-        assert_eq!(preview.results.len(), 1);
-        assert_eq!(preview.results[0].outcome, CleanOutcome::Previewed);
+        assert_eq!(
+            preview.results.len(),
+            1,
+            "preview results: {:?}",
+            preview.results
+        );
+        assert_eq!(
+            preview.results[0].outcome,
+            CleanOutcome::Previewed,
+            "preview detail: {}",
+            preview.results[0].detail
+        );
         assert!(external.join("artifact.bin").exists());
         assert!(preview.render().contains("no cleanup executed"));
         // Simulate must not invoke clean and must match preview candidate set.
