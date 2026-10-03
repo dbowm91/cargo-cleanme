@@ -65,11 +65,15 @@ fn run() -> Result<i32, AppError> {
             println!("{}", report.render());
             if stats {
                 let elapsed = wall_start.elapsed();
+                // C003 §7.6: cleanup --stats must account for the final
+                // ownership-universe proof work, not only the initial scan.
                 eprintln!(
-                    "cleanup stats: mode={:?} {} {} elapsed={:.2}s",
+                    "cleanup stats: mode={:?} {} {} {} {} elapsed={:.2}s",
                     mode,
                     report.counters.stats_line(),
                     report.counters.timings_line(),
+                    report.counters.proof_stats_line(),
+                    report.counters.proof_timings_line(),
                     elapsed.as_secs_f64(),
                 );
             }

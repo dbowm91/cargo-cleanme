@@ -863,12 +863,54 @@ pub fn workspace_member_roots(ws: &ResolvedWorkspace) -> Vec<PathBuf> {
     outermost(&roots)
 }
 
-/// Full fail-fast pipeline for resolved workspaces.
+/// Why a physical output group did not become a measured candidate (C003 §7.2).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GroupSkipReason {
+    MissingOutput,
+    EmptyOutput,
+    ActiveSource,
+    UncertainSource,
+    UncertainOwnership,
+    UncertainMeasurement,
+    ActiveOutput,
+}
+
+impl GroupSkipReason {
+    pub fn detail(self) -> &'static str {
+        match self {
+            Self::MissingOutput => "output directory is missing",
+            Self::EmptyOutput => "output directory contains no artifacts",
+            Self::ActiveSource => "workspace source activity is recent",
+            Self::UncertainSource => "workspace source activity could not be established",
+            Self::UncertainOwnership => "output ownership could not be established",
+            Self::UncertainMeasurement => "output activity or size could not be established",
+            Self::ActiveOutput => "output activity is recent",
+        }
+    }
+}
+
+/// Per-group result of the fail-fast pipeline (C003 §7.2).
+///
+/// Either the measured candidate, or the blocking reason. A workspace
+/// CleanupUnit is authorized only when every physical group it can affect has
+/// a measured candidate.
+#[derive(Clone, Debug)]
+pub struct GroupOutcome {
+    pub group: RawGroup,
+    pub measured: Option<PhysicalOutputGroup>,
+    pub skip: Option<GroupSkipReason>,
+}
+
+/// Full fail-fast pipeline for resolved workspaces, per group.
 ///
 /// Gate order: existence/type -> artifact presence -> source activity -> deep
-/// sizing. Returns eligible groups, updated counters, and diagnostics.
+/// sizing. Returns one outcome per input group in deterministic display order.
+///
+/// C003: the skip reason is retained so a workspace-level cleanup decision can
+/// name the sibling output group that blocks the whole unit, instead of
+/// silently dropping one physical group from a multi-group OutputSet.
 #[allow(clippy::too_many_arguments)]
-pub fn analyze_groups(
+pub fn analyze_groups_detailed(
     workspaces: &[ResolvedWorkspace],
     groups: Vec<RawGroup>,
     clock_start: SystemTime,
@@ -877,31 +919,20 @@ pub fn analyze_groups(
     counters: &mut ScanCounters,
     diagnostics: &mut Vec<ScanDiagnostic>,
     observer: &dyn ProgressObserver,
-) -> Vec<PhysicalOutputGroup> {
+) -> Vec<GroupOutcome> {
     // C002 §7.5: determinate analysis total once group count is known.
     // Emitted through the observer trait so any renderer/test observer
     // observes it without knowing the concrete type.
     observer.units_total(ScanPhase::Analysis, groups.len() as u64);
-    // Batch-measure all covering roots with one bounded pool.
-    let mut all_covering: Vec<(usize, PathBuf)> = Vec::new();
-    // Map group idx -> covering indices for later aggregation.
-    let mut group_covering: Vec<Vec<PathBuf>> = Vec::new();
-    for g in &groups {
-        group_covering.push(g.covering.clone());
-        for c in &g.covering {
-            let idx = all_covering.len();
-            all_covering.push((idx, c.clone()));
-        }
-    }
     // Cheap presence gate before any source walk or deep sizing.
     // We check each covering root for at least one entry; groups with no
     // entries are skipped without source/deep work.
     let mut group_has_entries: Vec<bool> = Vec::new();
-    for (gi, covering) in group_covering.iter().enumerate() {
-        let _ = gi;
+    let mut group_missing_all: Vec<bool> = Vec::new();
+    for g in &groups {
         let mut any = false;
         let mut missing_all = true;
-        for c in covering {
+        for c in &g.covering {
             match has_artifact_entries(c) {
                 Some(true) => {
                     any = true;
@@ -922,6 +953,7 @@ pub fn analyze_groups(
             }
         }
         group_has_entries.push(any);
+        group_missing_all.push(missing_all);
     }
 
     // Source activity per workspace (cached), excluding all resolved outputs.
@@ -987,52 +1019,47 @@ pub fn analyze_groups(
 
     // Deep sizing only for survivors: groups with entries, all owners
     // source-quiet and certain, and not already uncertain.
-    let mut survivor_covering: Vec<(usize, PathBuf)> = Vec::new();
+    let mut survivor_covering: Vec<PathBuf> = Vec::new();
     let mut survivor_group_idx: Vec<usize> = Vec::new();
-    // Map covering global idx -> (group idx, path)
-    let mut covering_to_group: HashMap<usize, usize> = HashMap::new();
-    {
-        let mut global = 0usize;
-        for (gi, g) in groups.iter().enumerate() {
-            if !*group_has_entries.get(gi).unwrap_or(&false) {
-                // Already counted.
-                global += g.covering.len();
-                continue;
-            }
-            // If any owner source-recent, skip group without sizing.
-            // Already counted per workspace above; do not double-count here.
-            if g.owners
-                .iter()
-                .any(|o| *ws_source_recent.get(o).unwrap_or(&false))
-            {
-                global += g.covering.len();
-                continue;
-            }
-            if g.owners.iter().any(|o| ws_source_uncertain.contains(o)) {
-                counters.uncertain_skipped += 1;
-                global += g.covering.len();
-                continue;
-            }
-            if g.ownership == OutputOwnershipClass::Uncertain {
-                counters.uncertain_skipped += 1;
-                global += g.covering.len();
-                continue;
-            }
-            for c in &g.covering {
-                survivor_covering.push((global, c.clone()));
-                survivor_group_idx.push(gi);
-                covering_to_group.insert(global, gi);
-                global += 1;
-            }
+    let mut pre_skip: Vec<Option<GroupSkipReason>> = vec![None; groups.len()];
+    for (gi, g) in groups.iter().enumerate() {
+        if !*group_has_entries.get(gi).unwrap_or(&false) {
+            pre_skip[gi] = Some(if *group_missing_all.get(gi).unwrap_or(&false) {
+                GroupSkipReason::MissingOutput
+            } else {
+                GroupSkipReason::EmptyOutput
+            });
+            continue;
         }
-        // Adjust: survivor_covering indices must match all_covering? Simpler:
-        // measure survivor_covering directly with fresh indices.
+        // If any owner source-recent, skip group without sizing.
+        // Already counted per workspace above; do not double-count here.
+        if g.owners
+            .iter()
+            .any(|o| *ws_source_recent.get(o).unwrap_or(&false))
+        {
+            pre_skip[gi] = Some(GroupSkipReason::ActiveSource);
+            continue;
+        }
+        if g.owners.iter().any(|o| ws_source_uncertain.contains(o)) {
+            counters.uncertain_skipped += 1;
+            pre_skip[gi] = Some(GroupSkipReason::UncertainSource);
+            continue;
+        }
+        if g.ownership == OutputOwnershipClass::Uncertain {
+            counters.uncertain_skipped += 1;
+            pre_skip[gi] = Some(GroupSkipReason::UncertainOwnership);
+            continue;
+        }
+        for c in &g.covering {
+            survivor_covering.push(c.clone());
+            survivor_group_idx.push(gi);
+        }
     }
     // Measure survivors with one bounded pool.
     let measure_targets: Vec<(usize, PathBuf)> = survivor_covering
         .iter()
         .enumerate()
-        .map(|(i, (_, p))| (i, p.clone()))
+        .map(|(i, p)| (i, p.clone()))
         .collect();
     let sizing_start = std::time::Instant::now();
     let measured = if measure_targets.is_empty() {
@@ -1048,7 +1075,7 @@ pub fn analyze_groups(
         bytes_by_survivor.insert(i, stats);
     }
     // Aggregate per group.
-    let mut eligible = Vec::new();
+    let mut outcomes: Vec<GroupOutcome> = Vec::new();
     // Map group idx -> list of survivor positions.
     let mut group_to_survivors: HashMap<usize, Vec<usize>> = HashMap::new();
     for (pos, gi) in survivor_group_idx.iter().enumerate() {
@@ -1059,6 +1086,11 @@ pub fn analyze_groups(
             // Early-skipped group (empty/active/uncertain before sizing):
             // still advances determinate progress (C002 §7.5).
             observer.unit_completed(ScanPhase::Analysis);
+            outcomes.push(GroupOutcome {
+                group: g.clone(),
+                measured: None,
+                skip: pre_skip[gi],
+            });
             continue;
         };
         let mut bytes = 0u64;
@@ -1090,12 +1122,22 @@ pub fn analyze_groups(
                 message: "output activity or size could not be established".into(),
             });
             observer.unit_completed(ScanPhase::Analysis);
+            outcomes.push(GroupOutcome {
+                group: g.clone(),
+                measured: None,
+                skip: Some(GroupSkipReason::UncertainMeasurement),
+            });
             continue;
         }
         if entries == 0 {
             counters.empty_no_output_skipped += 1;
             observer.empty_skipped();
             observer.unit_completed(ScanPhase::Analysis);
+            outcomes.push(GroupOutcome {
+                group: g.clone(),
+                measured: None,
+                skip: Some(GroupSkipReason::EmptyOutput),
+            });
             continue;
         }
         // Output activity gate: recent output protects group.
@@ -1104,6 +1146,11 @@ pub fn analyze_groups(
             counters.active_skipped += 1;
             observer.active_skipped();
             observer.unit_completed(ScanPhase::Analysis);
+            outcomes.push(GroupOutcome {
+                group: g.clone(),
+                measured: None,
+                skip: Some(GroupSkipReason::ActiveOutput),
+            });
             continue;
         }
         // Survivor.
@@ -1137,8 +1184,42 @@ pub fn analyze_groups(
         };
         observer.reportable_group(&g.display, bytes);
         counters.reportable_groups += 1;
-        eligible.push(physical);
+        outcomes.push(GroupOutcome {
+            group: g.clone(),
+            measured: Some(physical),
+            skip: None,
+        });
     }
+    outcomes
+}
+
+/// Measured candidates only, in deterministic size-descending order.
+///
+/// The read-only scan report is physical-group oriented and unchanged by C003.
+#[allow(clippy::too_many_arguments)]
+pub fn analyze_groups(
+    workspaces: &[ResolvedWorkspace],
+    groups: Vec<RawGroup>,
+    clock_start: SystemTime,
+    clock_cutoff: SystemTime,
+    recency: Duration,
+    counters: &mut ScanCounters,
+    diagnostics: &mut Vec<ScanDiagnostic>,
+    observer: &dyn ProgressObserver,
+) -> Vec<PhysicalOutputGroup> {
+    let mut eligible: Vec<PhysicalOutputGroup> = analyze_groups_detailed(
+        workspaces,
+        groups,
+        clock_start,
+        clock_cutoff,
+        recency,
+        counters,
+        diagnostics,
+        observer,
+    )
+    .into_iter()
+    .filter_map(|o| o.measured)
+    .collect();
     // Deterministic size-descending with stable path tie-break.
     eligible.sort_by(|a, b| {
         b.bytes
@@ -1146,6 +1227,179 @@ pub fn analyze_groups(
             .then_with(|| a.display_path.cmp(&b.display_path))
     });
     eligible
+}
+
+/// Physical groups a workspace's complete OutputSet can touch (C003 §4).
+///
+/// Every existing, provably-identified physical target/build root of one
+/// workspace maps to exactly one physical group. Equal or nested roots map to
+/// the same group and are therefore counted once. Missing roots (nothing for
+/// Cargo clean to remove) and unprovable roots (symlink or unresolvable
+/// identity, which `build_groups` excludes) are not affected groups.
+///
+/// Returns group indices in deterministic display order.
+pub fn map_workspace_groups(ws: &ResolvedWorkspace, groups: &[RawGroup]) -> Vec<usize> {
+    let mut by_physical: HashMap<&Path, usize> = HashMap::new();
+    for (gi, g) in groups.iter().enumerate() {
+        for p in &g.physicals {
+            by_physical.insert(p.as_path(), gi);
+        }
+    }
+    let mut idxs: Vec<usize> = Vec::new();
+    for root in [&ws.output.target, &ws.output.build] {
+        if root.is_symlink || !root.exists {
+            continue;
+        }
+        let Some(physical) = root.physical_path.as_ref() else {
+            continue;
+        };
+        if let Some(&gi) = by_physical.get(physical.as_path())
+            && !idxs.contains(&gi)
+        {
+            idxs.push(gi);
+        }
+    }
+    idxs.sort_by(|a, b| groups[*a].display.cmp(&groups[*b].display));
+    idxs
+}
+
+/// Physical output group touched by one workspace's Cargo clean invocation.
+#[derive(Clone, Debug)]
+pub struct AffectedGroup {
+    pub display: PathBuf,
+    pub covering: Vec<PathBuf>,
+    pub ownership: OutputOwnershipClass,
+    /// Logical output kinds (target/build) of this workspace contained in the
+    /// group; both when target and build collapse into one physical group.
+    pub kinds: Vec<OutputRootKind>,
+    pub measured: Option<PhysicalOutputGroup>,
+    pub skip: Option<GroupSkipReason>,
+}
+
+impl AffectedGroup {
+    /// Human-readable output kind(s) for skip reasons.
+    pub fn kind_label(&self) -> String {
+        let mut kinds = self.kinds.clone();
+        kinds.sort_by_key(|k| match k {
+            OutputRootKind::Target => 0,
+            OutputRootKind::Build => 1,
+        });
+        kinds.dedup();
+        match kinds.as_slice() {
+            [] => "output".to_owned(),
+            [OutputRootKind::Target] => "target".to_owned(),
+            [OutputRootKind::Build] => "build".to_owned(),
+            [OutputRootKind::Target, OutputRootKind::Build] => "target+build".to_owned(),
+            _ => "output".to_owned(),
+        }
+    }
+}
+
+/// One Cargo workspace cleanup invocation and everything it can affect
+/// (C003 §4).
+///
+/// A CleanupUnit is the unit for destructive authorization, Cargo invocation,
+/// progress, and cleanup reporting. `covering` is the deduplicated union of the
+/// physical covering roots Cargo clean can affect, and `bytes` is the
+/// deduplicated pre-clean size of that union.
+#[derive(Clone, Debug)]
+pub struct CleanupUnit {
+    pub workspace_idx: usize,
+    pub id: WorkspaceId,
+    pub root: PathBuf,
+    pub root_manifest: PathBuf,
+    pub output: OutputSet,
+    pub capability: CargoCapabilities,
+    pub groups: Vec<AffectedGroup>,
+    /// Existing output roots with unprovable physical identity; any entry blocks
+    /// the whole unit because their cleanup footprint cannot be bounded.
+    pub unmapped: Vec<OutputRoot>,
+    pub covering: Vec<PathBuf>,
+    pub bytes: u64,
+}
+
+impl CleanupUnit {
+    /// Every affected group passed the fail-fast pipeline.
+    pub fn fully_measured(&self) -> bool {
+        self.unmapped.is_empty() && self.groups.iter().all(|g| g.measured.is_some())
+    }
+}
+
+/// Build one cleanup candidate per resolved workspace (C003 §7.1).
+///
+/// A workspace with no measured affected output does not become a unit. Equal
+/// and nested roots collapse to one physical group and are counted once.
+/// Order is deterministic: descending aggregated bytes, then workspace root.
+pub fn build_cleanup_units(
+    workspaces: &[ResolvedWorkspace],
+    outcomes: &[GroupOutcome],
+) -> Vec<CleanupUnit> {
+    let groups: Vec<RawGroup> = outcomes.iter().map(|o| o.group.clone()).collect();
+    let mut units = Vec::new();
+    for (wi, ws) in workspaces.iter().enumerate() {
+        let idxs = map_workspace_groups(ws, &groups);
+        let mut unmapped: Vec<OutputRoot> = Vec::new();
+        for root in [&ws.output.target, &ws.output.build] {
+            if root.is_symlink || !root.exists {
+                continue;
+            }
+            if root.physical_path.is_none() {
+                unmapped.push(root.clone());
+            }
+        }
+        if idxs.is_empty() && unmapped.is_empty() {
+            continue;
+        }
+        let mut affected: Vec<AffectedGroup> = Vec::new();
+        for gi in idxs {
+            let o = &outcomes[gi];
+            let mut kinds: Vec<OutputRootKind> = Vec::new();
+            for r in [&ws.output.target, &ws.output.build] {
+                if let Some(p) = r.physical_path.as_ref()
+                    && o.group.physicals.contains(p)
+                {
+                    kinds.push(r.kind);
+                }
+            }
+            affected.push(AffectedGroup {
+                display: o.group.display.clone(),
+                covering: o.group.covering.clone(),
+                ownership: o.group.ownership,
+                kinds,
+                measured: o.measured.clone(),
+                skip: o.skip,
+            });
+        }
+        // C003 §7.1: a workspace with no reportable affected output is not a
+        // cleanup unit at all.
+        if !affected.iter().any(|g| g.measured.is_some()) {
+            continue;
+        }
+        let covering = outermost(
+            &affected
+                .iter()
+                .flat_map(|g| g.covering.iter().cloned())
+                .collect::<Vec<_>>(),
+        );
+        let bytes = affected
+            .iter()
+            .filter_map(|g| g.measured.as_ref().map(|m| m.bytes))
+            .fold(0u64, |acc, b| acc.saturating_add(b));
+        units.push(CleanupUnit {
+            workspace_idx: wi,
+            id: ws.id.clone(),
+            root: ws.root.clone(),
+            root_manifest: ws.root_manifest.clone(),
+            output: ws.output.clone(),
+            capability: ws.capability,
+            groups: affected,
+            unmapped,
+            covering,
+            bytes,
+        });
+    }
+    units.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.root.cmp(&b.root)));
+    units
 }
 
 fn workspace_source_activity(
@@ -2291,5 +2545,284 @@ mod tests {
         let groups = build_groups(&ws);
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].ownership, OutputOwnershipClass::PrivateBounded);
+    }
+
+    // --- C003 §7.1 CleanupUnit mapping: one unit per workspace, not per group.
+
+    fn analyze_units(workspaces: &[ResolvedWorkspace]) -> (Vec<CleanupUnit>, ScanCounters) {
+        let groups = build_groups(workspaces);
+        let start = SystemTime::now();
+        let cutoff = start.checked_sub(Duration::ZERO).unwrap();
+        let mut counters = ScanCounters::default();
+        let mut diags = Vec::new();
+        let noop = NoopObserver;
+        let outcomes = analyze_groups_detailed(
+            workspaces,
+            groups,
+            start,
+            cutoff,
+            Duration::ZERO,
+            &mut counters,
+            &mut diags,
+            &noop,
+        );
+        (build_cleanup_units(workspaces, &outcomes), counters)
+    }
+
+    fn output_dir(path: &Path, bytes: usize) -> PathBuf {
+        std::fs::create_dir_all(path).unwrap();
+        std::fs::write(
+            path.join("CACHEDIR.TAG"),
+            b"Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .unwrap();
+        std::fs::write(path.join("artifact.bin"), vec![1u8; bytes]).unwrap();
+        path.to_path_buf()
+    }
+
+    #[test]
+    fn distinct_target_and_build_become_one_unit_with_deduped_union() {
+        let d = tempfile::tempdir().unwrap();
+        let ws_root = d.path().join("ws");
+        std::fs::create_dir_all(&ws_root).unwrap();
+        std::fs::write(ws_root.join("Cargo.toml"), "").unwrap();
+        std::fs::write(ws_root.join("lib.rs"), "old").unwrap();
+        let target = output_dir(&ws_root.join("target"), 4096);
+        let build = output_dir(&ws_root.join("build"), 8192);
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        backdate_tree(&ws_root, old);
+        let ws = make_workspace(
+            &ws_root,
+            Some(std::fs::canonicalize(&target).unwrap()),
+            Some(std::fs::canonicalize(&build).unwrap()),
+            vec![ws_root.clone()],
+        );
+        let groups = build_groups(std::slice::from_ref(&ws));
+        assert_eq!(groups.len(), 2, "distinct siblings are two physical groups");
+        assert!(
+            groups
+                .iter()
+                .all(|g| g.ownership == OutputOwnershipClass::PrivateBounded)
+        );
+        let (units, _c) = analyze_units(std::slice::from_ref(&ws));
+        assert_eq!(units.len(), 1, "one Cargo invocation => one CleanupUnit");
+        let unit = &units[0];
+        assert_eq!(unit.groups.len(), 2);
+        assert_eq!(unit.covering.len(), 2, "deduplicated union of both roots");
+        let target_group = unit
+            .groups
+            .iter()
+            .find(|g| g.kinds == vec![OutputRootKind::Target])
+            .unwrap();
+        let build_group = unit
+            .groups
+            .iter()
+            .find(|g| g.kinds == vec![OutputRootKind::Build])
+            .unwrap();
+        assert_eq!(target_group.kind_label(), "target");
+        assert_eq!(build_group.kind_label(), "build");
+        // Pre-clean union aggregates both affected groups exactly once.
+        let parts: u64 = unit
+            .groups
+            .iter()
+            .map(|g| g.measured.as_ref().unwrap().bytes)
+            .sum();
+        assert_eq!(unit.bytes, parts);
+        assert!(unit.bytes > 4096, "sibling build bytes are included");
+        assert!(unit.fully_measured());
+    }
+
+    #[test]
+    fn equal_and_nested_roots_collapse_to_one_physical_group() {
+        // target == build, and both nesting directions.
+        for shape in ["equal", "build_under_target", "target_under_build"] {
+            let d = tempfile::tempdir().unwrap();
+            let ws_root = d.path().join("ws");
+            std::fs::create_dir_all(&ws_root).unwrap();
+            std::fs::write(ws_root.join("Cargo.toml"), "").unwrap();
+            std::fs::write(ws_root.join("lib.rs"), "old").unwrap();
+            let (target, build) = match shape {
+                "equal" => {
+                    let t = output_dir(&ws_root.join("target"), 4096);
+                    (t.clone(), t)
+                }
+                "build_under_target" => {
+                    let t = ws_root.join("target");
+                    std::fs::create_dir_all(&t).unwrap();
+                    std::fs::write(
+                        t.join("CACHEDIR.TAG"),
+                        b"Signature: 8a477f597d28d172789f06886806bc55\n",
+                    )
+                    .unwrap();
+                    std::fs::write(t.join("artifact.bin"), vec![1u8; 4096]).unwrap();
+                    let b = output_dir(&t.join("build"), 2048);
+                    (t, b)
+                }
+                _ => {
+                    let b = ws_root.join("build");
+                    std::fs::create_dir_all(&b).unwrap();
+                    std::fs::write(
+                        b.join("CACHEDIR.TAG"),
+                        b"Signature: 8a477f597d28d172789f06886806bc55\n",
+                    )
+                    .unwrap();
+                    std::fs::write(b.join("artifact.bin"), vec![1u8; 4096]).unwrap();
+                    let t = output_dir(&b.join("target"), 2048);
+                    (t, b)
+                }
+            };
+            let old = SystemTime::now() - Duration::from_secs(3600);
+            backdate_tree(&ws_root, old);
+            let ws = make_workspace(
+                &ws_root,
+                Some(std::fs::canonicalize(&target).unwrap()),
+                Some(std::fs::canonicalize(&build).unwrap()),
+                vec![ws_root.clone()],
+            );
+            let groups = build_groups(std::slice::from_ref(&ws));
+            assert_eq!(groups.len(), 1, "{shape}: equal/nested is one group");
+            let (units, _c) = analyze_units(std::slice::from_ref(&ws));
+            assert_eq!(units.len(), 1, "{shape}: one unit");
+            assert_eq!(units[0].groups.len(), 1, "{shape}: one affected group");
+            assert_eq!(units[0].covering.len(), 1, "{shape}: deduplicated union");
+            assert_eq!(
+                units[0].groups[0].kinds,
+                vec![OutputRootKind::Target, OutputRootKind::Build],
+                "{shape}: both kinds collapse into one physical group"
+            );
+            assert_eq!(units[0].groups[0].kind_label(), "target+build");
+            assert_eq!(
+                units[0].bytes,
+                units[0].groups[0].measured.as_ref().unwrap().bytes
+            );
+        }
+    }
+
+    #[test]
+    fn unit_with_unmeasured_sibling_is_not_fully_measured() {
+        // Private target measured + active (unmeasured) build group: the unit
+        // exists but must not be cleanable.
+        let d = tempfile::tempdir().unwrap();
+        let ws_root = d.path().join("ws");
+        std::fs::create_dir_all(&ws_root).unwrap();
+        std::fs::write(ws_root.join("Cargo.toml"), "").unwrap();
+        std::fs::write(ws_root.join("lib.rs"), "old").unwrap();
+        let target = output_dir(&ws_root.join("target"), 4096);
+        let build = output_dir(&ws_root.join("build"), 4096);
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        backdate_tree(&ws_root, old);
+        // Make only the build output recent.
+        let future = SystemTime::now() + Duration::from_secs(3600);
+        if let Ok(f) = std::fs::OpenOptions::new()
+            .write(true)
+            .open(build.join("artifact.bin"))
+        {
+            let _ = f.set_modified(future);
+        }
+        let ws = make_workspace(
+            &ws_root,
+            Some(std::fs::canonicalize(&target).unwrap()),
+            Some(std::fs::canonicalize(&build).unwrap()),
+            vec![ws_root.clone()],
+        );
+        let (units, _c) = analyze_units(std::slice::from_ref(&ws));
+        assert_eq!(units.len(), 1);
+        assert!(!units[0].fully_measured());
+        let unmeasured = units[0]
+            .groups
+            .iter()
+            .find(|g| g.measured.is_none())
+            .expect("one unmeasured sibling");
+        assert_eq!(unmeasured.skip, Some(GroupSkipReason::ActiveOutput));
+        assert_eq!(unmeasured.kinds, vec![OutputRootKind::Build]);
+    }
+
+    #[test]
+    fn workspace_without_reportable_output_is_not_a_cleanup_unit() {
+        let d = tempfile::tempdir().unwrap();
+        let ws_root = d.path().join("ws");
+        std::fs::create_dir_all(&ws_root).unwrap();
+        std::fs::write(ws_root.join("Cargo.toml"), "").unwrap();
+        std::fs::write(ws_root.join("lib.rs"), "old").unwrap();
+        // Existing but empty output directory.
+        let target = ws_root.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        backdate_tree(&ws_root, old);
+        let ws = make_workspace(
+            &ws_root,
+            Some(std::fs::canonicalize(&target).unwrap()),
+            None,
+            vec![ws_root.clone()],
+        );
+        let (units, _c) = analyze_units(std::slice::from_ref(&ws));
+        assert!(units.is_empty(), "an empty output directory is not a unit");
+    }
+
+    #[test]
+    fn units_are_ordered_by_descending_aggregated_bytes() {
+        let d = tempfile::tempdir().unwrap();
+        let mut workspaces = Vec::new();
+        for (name, bytes) in [("small", 1024usize), ("large", 16384usize)] {
+            let ws_root = d.path().join(name);
+            std::fs::create_dir_all(&ws_root).unwrap();
+            std::fs::write(ws_root.join("Cargo.toml"), "").unwrap();
+            std::fs::write(ws_root.join("lib.rs"), "old").unwrap();
+            let t = output_dir(&ws_root.join("target"), bytes);
+            let b = output_dir(&ws_root.join("build"), bytes / 2);
+            let old = SystemTime::now() - Duration::from_secs(3600);
+            backdate_tree(&ws_root, old);
+            workspaces.push(make_workspace(
+                &ws_root,
+                Some(std::fs::canonicalize(&t).unwrap()),
+                Some(std::fs::canonicalize(&b).unwrap()),
+                vec![ws_root.clone()],
+            ));
+        }
+        let (units, _c) = analyze_units(&workspaces);
+        assert_eq!(units.len(), 2);
+        assert!(units[0].bytes > units[1].bytes);
+        assert!(units[0].groups.len() == 2 && units[1].groups.len() == 2);
+    }
+
+    #[test]
+    fn unprovable_output_identity_makes_the_group_uncertain() {
+        let d = tempfile::tempdir().unwrap();
+        let ws_root = d.path().join("ws");
+        std::fs::create_dir_all(&ws_root).unwrap();
+        std::fs::write(ws_root.join("Cargo.toml"), "").unwrap();
+        std::fs::write(ws_root.join("lib.rs"), "old").unwrap();
+        let target = output_dir(&ws_root.join("target"), 4096);
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        backdate_tree(&ws_root, old);
+        let mut ws = make_workspace(
+            &ws_root,
+            Some(std::fs::canonicalize(&target).unwrap()),
+            None,
+            vec![ws_root.clone()],
+        );
+        // Existing build directory whose physical identity cannot be proven.
+        let build = ws_root.join("build");
+        std::fs::create_dir_all(&build).unwrap();
+        backdate_tree(&ws_root, old);
+        ws.output.build = OutputRoot {
+            kind: OutputRootKind::Build,
+            logical_path: build.clone(),
+            physical_path: None,
+            exists: true,
+            is_symlink: false,
+        };
+        let groups = build_groups(std::slice::from_ref(&ws));
+        assert_eq!(groups.len(), 1);
+        assert_eq!(
+            groups[0].ownership,
+            OutputOwnershipClass::Uncertain,
+            "one unprovable output root makes every group of the workspace uncertain"
+        );
+        let (units, _c) = analyze_units(std::slice::from_ref(&ws));
+        assert!(
+            units.is_empty(),
+            "an unprovable output root can never produce a cleanup unit"
+        );
     }
 }

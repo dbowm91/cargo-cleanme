@@ -223,6 +223,15 @@ pub struct ScanCounters {
     pub cargo_metadata_nanos: u64,
     pub source_activity_nanos: u64,
     pub output_sizing_nanos: u64,
+    /// C003 §7.6: final-proof ownership-universe re-resolution work, kept
+    /// separate from the initial discovery counters so `--stats` cannot hide it.
+    pub proof_workspaces_refreshed: u64,
+    pub proof_cargo_locate_calls: u64,
+    pub proof_cargo_metadata_calls: u64,
+    pub proof_cargo_locate_nanos: u64,
+    pub proof_cargo_metadata_nanos: u64,
+    pub proof_source_activity_nanos: u64,
+    pub proof_output_sizing_nanos: u64,
 }
 
 impl ScanCounters {
@@ -256,6 +265,54 @@ impl ScanCounters {
             self.cargo_metadata_nanos as f64 / 1_000_000.0,
             self.source_activity_nanos as f64 / 1_000_000.0,
             self.output_sizing_nanos as f64 / 1_000_000.0,
+        )
+    }
+
+    /// Merge final-proof counters into the dedicated proof fields.
+    ///
+    /// C003-F4: final ownership-universe re-resolution work is real work that
+    /// `--stats` must account for. It is merged into separate `proof_*` fields
+    /// (never into the initial-scan counters) so the extra bounded Cargo cost
+    /// at the destructive boundary stays visible.
+    pub fn merge_proof(&mut self, proof: &ScanCounters) {
+        self.proof_cargo_locate_calls = self
+            .proof_cargo_locate_calls
+            .saturating_add(proof.cargo_locate_calls);
+        self.proof_cargo_metadata_calls = self
+            .proof_cargo_metadata_calls
+            .saturating_add(proof.cargo_metadata_calls);
+        self.proof_cargo_locate_nanos = self
+            .proof_cargo_locate_nanos
+            .saturating_add(proof.cargo_locate_nanos);
+        self.proof_cargo_metadata_nanos = self
+            .proof_cargo_metadata_nanos
+            .saturating_add(proof.cargo_metadata_nanos);
+        self.proof_source_activity_nanos = self
+            .proof_source_activity_nanos
+            .saturating_add(proof.source_activity_nanos);
+        self.proof_output_sizing_nanos = self
+            .proof_output_sizing_nanos
+            .saturating_add(proof.output_sizing_nanos);
+    }
+
+    /// Final-proof counter line for `cleanup --stats` stderr output.
+    pub fn proof_stats_line(&self) -> String {
+        format!(
+            "proof_universes_refreshed={} proof_locate={} proof_metadata={}",
+            self.proof_workspaces_refreshed,
+            self.proof_cargo_locate_calls,
+            self.proof_cargo_metadata_calls,
+        )
+    }
+
+    /// Final-proof timing line for `cleanup --stats` stderr output.
+    pub fn proof_timings_line(&self) -> String {
+        format!(
+            "proof_locate={:.2}ms proof_metadata={:.2}ms proof_source_activity={:.2}ms proof_output_sizing={:.2}ms",
+            self.proof_cargo_locate_nanos as f64 / 1_000_000.0,
+            self.proof_cargo_metadata_nanos as f64 / 1_000_000.0,
+            self.proof_source_activity_nanos as f64 / 1_000_000.0,
+            self.proof_output_sizing_nanos as f64 / 1_000_000.0,
         )
     }
 }

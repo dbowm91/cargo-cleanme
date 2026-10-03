@@ -1,10 +1,15 @@
 //! Authorized redirected cleanup and full simulation mode (M005B).
 //!
-//! Cleanup is workspace-scoped and Cargo-mediated. A cleanable unit is one
-//! resolved workspace plus its authorized private physical output group(s).
-//! Shared, uncertain, symlink, and unauthorized external output is never
-//! cleaned. `--dryrun` runs the full decision path but invokes no `cargo
-//! clean` command.
+//! Cleanup is workspace-scoped and Cargo-mediated. The destructive unit is one
+//! workspace CleanupUnit (C003): one resolved workspace, its complete resolved
+//! `OutputSet`, and every PhysicalOutputGroup that the single `cargo clean`
+//! invocation can affect. A unit is authorized only when *all* of those groups
+//! are `PrivateBounded`, authorized, inactive, non-symlink, marker-qualified,
+//! and stable under final full ownership-universe revalidation. Shared,
+//! uncertain, symlink, and unauthorized external output is never cleaned, and
+//! a private target group can never carry an unauthorized sibling build group
+//! into the same invocation. `--dryrun` runs the full decision path but invokes
+//! no `cargo clean` command.
 
 use crate::{
     config::ScanConfig,
@@ -17,7 +22,6 @@ use crate::{
     workspace::{self, CargoRunner},
 };
 use std::{
-    collections::HashMap,
     ffi::OsString,
     fs, io,
     path::{Path, PathBuf},
@@ -49,8 +53,12 @@ pub enum CleanOutcome {
 
 #[derive(Clone, Debug)]
 pub struct CleanResult {
+    /// Workspace identity: the CleanupUnit's workspace root (C003 §7.5).
     pub display_path: PathBuf,
     pub workspace_roots: Vec<PathBuf>,
+    /// Complete deduplicated physical covering-root union the single Cargo
+    /// invocation for this unit can affect.
+    pub output_roots: Vec<PathBuf>,
     pub ownership: OutputOwnershipClass,
     pub outcome: CleanOutcome,
     pub before_bytes: Option<u64>,
@@ -80,8 +88,8 @@ impl CleanReport {
         let mut after = 0u64;
         let mut delta = 0u64;
         // Deterministic size-descending with stable path tie-break; progress
-        // rows show at most five transient entries, final report lists every
-        // group.
+        // rows show at most five transient entries, the final report lists every
+        // workspace CleanupUnit (C003 §7.5).
         let mut ordered: Vec<&CleanResult> = self.results.iter().collect();
         ordered.sort_by(|a, b| {
             b.before_bytes
@@ -126,6 +134,20 @@ impl CleanReport {
                 escaped_path(&r.display_path),
                 r.ownership.label(),
             ));
+            // C003 §7.5: one row per workspace CleanupUnit; every physical
+            // output root the single Cargo invocation affects stays visible.
+            if r.output_roots.len() > 1 {
+                out.push_str(&format!(
+                    "  outputs {}",
+                    r.output_roots
+                        .iter()
+                        .map(|p| escaped_path(p))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            } else if let Some(root) = r.output_roots.first() {
+                out.push_str(&format!("  output {}", escaped_path(root)));
+            }
             if let Some(n) = r.before_bytes {
                 out.push_str(&format!("  before {}", crate::report::format_bytes(n)));
             }
@@ -265,10 +287,25 @@ pub fn is_authorized(
     clean_root: &Path,
     allowed_roots: &[PathBuf],
 ) -> Result<bool, String> {
+    let _ = workspaces;
+    covering_is_authorized(group.ownership, &group.covering, clean_root, allowed_roots)
+}
+
+/// Location authorization for one physical group's covering roots.
+///
+/// Same rules as [`is_authorized`], but expressed over the ownership class and
+/// covering roots so a workspace CleanupUnit can gate every affected group
+/// independently (C003 §7.2).
+pub fn covering_is_authorized(
+    ownership: OutputOwnershipClass,
+    covering: &[PathBuf],
+    clean_root: &Path,
+    allowed_roots: &[PathBuf],
+) -> Result<bool, String> {
     // C002-F1: ownership class is authoritative and checked first.
     // ExternalUnproven is inventory-only even inside clean ROOT or a
     // configured allowed root.
-    if group.ownership != OutputOwnershipClass::PrivateBounded {
+    if ownership != OutputOwnershipClass::PrivateBounded {
         return Ok(false);
     }
     // Validate allowed roots: absolute, not symlink.
@@ -311,21 +348,20 @@ pub fn is_authorized(
     let canonical_clean =
         fs::canonicalize(clean_root).map_err(|e| format!("cannot resolve cleanup root: {e}"))?;
     // Every covering root must be inside an authorized boundary.
-    for covering in &group.covering {
+    for covering_root in covering {
         // Covering roots are already canonical (from build_groups).
-        if covering == &canonical_clean || covering.starts_with(&canonical_clean) {
+        if covering_root == &canonical_clean || covering_root.starts_with(&canonical_clean) {
             continue;
         }
         if canonical_allowed
             .iter()
-            .any(|a| covering == a || covering.starts_with(a))
+            .any(|a| covering_root == a || covering_root.starts_with(a))
         {
             continue;
         }
         return Ok(false);
     }
     // Only PrivateBounded reaches here; path authorization passed.
-    let _ = workspaces;
     Ok(true)
 }
 
@@ -344,6 +380,75 @@ pub fn ownership_skip_detail(ownership: OutputOwnershipClass) -> String {
             "external output requires explicit cleanup authorization".into()
         }
     }
+}
+
+/// First blocking reason for a whole CleanupUnit, or `Ok(())` (C003 §7.2).
+///
+/// Core C003 invariant: a workspace is destructively cleanable only if *every*
+/// physical output group the Cargo invocation can affect is independently
+/// `PrivateBounded`, authorized, measured (real non-symlink directory, outside
+/// the recency window), and marker-qualified. A private target group can never
+/// carry an `ExternalUnproven`, `Shared`, `Uncertain`, inactive, or unauthorized
+/// sibling build group into the same `cargo clean` invocation.
+///
+/// Returns one actionable reason naming the failing output kind, path, and
+/// class. No Cargo process is spawned for any subset of a unit.
+pub fn unit_block_reason(
+    unit: &workspace::CleanupUnit,
+    clean_root: &Path,
+    allowed_output_roots: &[PathBuf],
+) -> Result<(), String> {
+    if let Some(root) = unit.unmapped.first() {
+        return Err(format!(
+            "{} output {} has unproven physical identity; cleanup deferred",
+            match root.kind {
+                OutputRootKind::Target => "target",
+                OutputRootKind::Build => "build",
+            },
+            root.logical_path.display()
+        ));
+    }
+    for group in &unit.groups {
+        // 1. Ownership class is authoritative; authorization never promotes.
+        if group.ownership != OutputOwnershipClass::PrivateBounded {
+            return Err(format!(
+                "{} output {} is {}; {}",
+                group.kind_label(),
+                group.display.display(),
+                group.ownership.label(),
+                ownership_skip_detail(group.ownership)
+            ));
+        }
+        // 2. Location authorization for this group only.
+        match covering_is_authorized(
+            group.ownership,
+            &group.covering,
+            clean_root,
+            allowed_output_roots,
+        ) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(format!(
+                    "{} output {} is private but outside the authorized cleanup boundary; \
+                     add a `cleanup.allowed_output_roots` entry or use a clean ROOT that contains it",
+                    group.kind_label(),
+                    group.display.display()
+                ));
+            }
+            Err(msg) => return Err(msg),
+        }
+        // 3. The group must be a measured, real, non-symlink, inactive,
+        // marker-qualified output directory (fail-fast analysis verdict).
+        if group.measured.is_none() {
+            let reason = group.skip.map_or("output is not eligible", |r| r.detail());
+            return Err(format!(
+                "{} output {} is not cleanable: {reason}",
+                group.kind_label(),
+                group.display.display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub fn clean(
@@ -422,9 +527,9 @@ pub fn clean_with(
     let clock_cutoff = scan_start
         .checked_sub(Duration::from_secs(recency_seconds))
         .ok_or_else(|| AppError::Config("recency window exceeds system time range".into()))?;
-    let physical = workspace::analyze_groups(
+    let outcomes = workspace::analyze_groups_detailed(
         &workspaces,
-        groups.clone(),
+        groups,
         scan_start,
         clock_cutoff,
         Duration::from_secs(recency_seconds),
@@ -432,104 +537,62 @@ pub fn clean_with(
         &mut diagnostics,
         observer,
     );
-    // Map display -> measured PhysicalOutputGroup for pre-clean sizes.
-    // analyze_groups returns PhysicalOutputGroup with display_path + bytes.
-    let mut eligible_by_display: HashMap<PathBuf, PhysicalOutputGroup> = HashMap::new();
-    for g in physical {
-        eligible_by_display.insert(g.display_path.clone(), g);
-    }
 
-    // Cleanup phase is determinate: candidate count known (C002 §7.5).
-    // Announce through the observer trait so any renderer/test observer
-    // observes determinate totals without knowing the concrete type.
-    observer.units_total(cleanup_phase, groups.len() as u64);
+    // C003 §7.1: one cleanup unit per resolved workspace covering the complete
+    // resolved OutputSet that a single `cargo clean` invocation can affect.
+    // Not one candidate per physical group: distinct target/build groups are
+    // one destructive unit.
+    let units = workspace::build_cleanup_units(&workspaces, &outcomes);
+
+    // Cleanup phase is determinate: the CleanupUnit candidate count is known
+    // (C002 §7.5, C003 §7.5). Announce through the observer trait so any
+    // renderer/test observer observes determinate totals without knowing the
+    // concrete type.
+    observer.units_total(cleanup_phase, units.len() as u64);
     let mut report = CleanReport {
         diagnostics: diagnostics.len(),
         mode,
         ..Default::default()
     };
 
-    // For each RawGroup, decide cleanability with full revalidation.
-    for raw in &groups {
-        // Only groups with measured inventory are candidates; missing/empty/
-        // active groups were already skipped in analysis. Look up measurement.
-        let Some(measured) = eligible_by_display.get(&raw.display) else {
-            // Not measured (empty/active/uncertain/missing) → determinate
-            // progress still advances, but no report row is emitted to avoid
-            // noisy skips for every pruned workspace.
+    for unit in &units {
+        let skipped = |report: &mut CleanReport, detail: String| {
+            report.results.push(CleanResult {
+                display_path: unit.root.clone(),
+                workspace_roots: vec![unit.root.clone()],
+                output_roots: unit.covering.clone(),
+                ownership: unit_blocking_class(unit),
+                outcome: CleanOutcome::Skipped,
+                before_bytes: Some(unit.bytes),
+                after_bytes: None,
+                observed_decrease: None,
+                detail,
+            });
+        };
+        // C003 §7.2: unit-wide destructive gate. Every physical group the
+        // invocation can affect must be private, authorized, and measured.
+        // No Cargo process is spawned for any subset of a unit.
+        if let Err(msg) = unit_block_reason(unit, root, allowed_output_roots) {
+            skipped(&mut report, msg);
             observer.unit_completed(cleanup_phase);
             continue;
-        };
-        // Authorization (C002 §7.1: only PrivateBounded may proceed).
-        let authorized = match is_authorized(raw, &workspaces, root, allowed_output_roots) {
-            Ok(true) => true,
-            Ok(false) => {
-                report.results.push(CleanResult {
-                    display_path: raw.display.clone(),
-                    workspace_roots: raw
-                        .owners
-                        .iter()
-                        .map(|o| workspaces[*o].root.clone())
-                        .collect(),
-                    ownership: raw.ownership,
-                    outcome: CleanOutcome::Skipped,
-                    before_bytes: Some(measured.bytes),
-                    after_bytes: None,
-                    observed_decrease: None,
-                    detail: ownership_skip_detail(raw.ownership),
-                });
-                observer.unit_completed(cleanup_phase);
-                continue;
-            }
-            Err(msg) => {
-                report.results.push(CleanResult {
-                    display_path: raw.display.clone(),
-                    workspace_roots: vec![],
-                    ownership: raw.ownership,
-                    outcome: CleanOutcome::Skipped,
-                    before_bytes: Some(measured.bytes),
-                    after_bytes: None,
-                    observed_decrease: None,
-                    detail: msg,
-                });
-                observer.unit_completed(cleanup_phase);
-                continue;
-            }
-        };
-        if !authorized {
-            continue;
         }
-        // C002 §7.2-7.3: single final cleanup proof shared by
-        // Preview/Simulate/Execute. Simulate runs every non-mutating gate
-        // Execute runs (ownership, authorization, fresh resolution,
-        // member/source activity, target/build identity, output activity,
-        // group/ownership stability, markers, frozen-env, final preflight)
-        // and only diverges by not spawning Cargo.
+        // C003 §7.3: single final CleanupUnit proof shared by
+        // Preview/Simulate/Execute, re-validated against the complete bounded
+        // ownership universe. Simulate runs every non-mutating gate Execute
+        // runs and only diverges by not spawning Cargo.
         let proof = match final_cleanup_proof(
-            raw,
+            unit,
             &workspaces,
             root,
             allowed_output_roots,
             runner,
             recency_seconds,
+            &mut counters,
         ) {
             Ok(p) => p,
             Err(msg) => {
-                let roots = raw
-                    .owners
-                    .iter()
-                    .map(|o| workspaces[*o].root.clone())
-                    .collect();
-                report.results.push(CleanResult {
-                    display_path: raw.display.clone(),
-                    workspace_roots: roots,
-                    ownership: raw.ownership,
-                    outcome: CleanOutcome::Skipped,
-                    before_bytes: Some(measured.bytes),
-                    after_bytes: None,
-                    observed_decrease: None,
-                    detail: msg,
-                });
+                skipped(&mut report, msg);
                 observer.unit_completed(cleanup_phase);
                 continue;
             }
@@ -539,16 +602,17 @@ pub fn clean_with(
             CleanMode::Simulate => {
                 // Full proof succeeded, but no `cargo clean` is invoked.
                 report.results.push(CleanResult {
-                    display_path: raw.display.clone(),
+                    display_path: unit.root.clone(),
                     workspace_roots: proof.workspace_roots.clone(),
-                    ownership: raw.ownership,
+                    output_roots: proof.covering.clone(),
+                    ownership: proof.ownership,
                     outcome: CleanOutcome::Simulated,
-                    before_bytes: Some(measured.bytes),
+                    before_bytes: Some(proof.pre_bytes),
                     after_bytes: None,
                     observed_decrease: None,
                     detail: "simulation: no `cargo clean` command was invoked".into(),
                 });
-                observer.reportable_group(&raw.display, measured.bytes);
+                observe_unit_groups(observer, unit);
                 observer.unit_completed(cleanup_phase);
             }
             CleanMode::Preview | CleanMode::Execute => {
@@ -558,53 +622,39 @@ pub fn clean_with(
                 let frozen = proof.frozen_env.clone();
                 let args = clean_args(&proof, mode);
                 let cwd = proof.workspace_root.clone();
-                let output = if frozen.is_empty() {
-                    match runner.run(&cwd, &args) {
-                        Err(e) => {
-                            report.failed += 1;
-                            report.results.push(CleanResult {
-                                display_path: raw.display.clone(),
-                                workspace_roots: proof.workspace_roots.clone(),
-                                ownership: raw.ownership,
-                                outcome: CleanOutcome::Failed,
-                                before_bytes: Some(measured.bytes),
-                                after_bytes: None,
-                                observed_decrease: None,
-                                detail: format!("could not start Cargo: {e}"),
-                            });
-                            observer.unit_completed(cleanup_phase);
-                            continue;
-                        }
-                        Ok(o) => o,
-                    }
+                let spawned = if frozen.is_empty() {
+                    runner.run(&cwd, &args)
                 } else {
-                    match runner.run_with_env(&cwd, &args, &frozen) {
-                        Err(e) => {
-                            report.failed += 1;
-                            report.results.push(CleanResult {
-                                display_path: raw.display.clone(),
-                                workspace_roots: proof.workspace_roots.clone(),
-                                ownership: raw.ownership,
-                                outcome: CleanOutcome::Failed,
-                                before_bytes: Some(measured.bytes),
-                                after_bytes: None,
-                                observed_decrease: None,
-                                detail: format!("could not start Cargo: {e}"),
-                            });
-                            observer.unit_completed(cleanup_phase);
-                            continue;
-                        }
-                        Ok(o) => o,
+                    runner.run_with_env(&cwd, &args, &frozen)
+                };
+                let output = match spawned {
+                    Ok(o) => o,
+                    Err(e) => {
+                        report.failed += 1;
+                        report.results.push(CleanResult {
+                            display_path: unit.root.clone(),
+                            workspace_roots: proof.workspace_roots.clone(),
+                            output_roots: proof.covering.clone(),
+                            ownership: proof.ownership,
+                            outcome: CleanOutcome::Failed,
+                            before_bytes: Some(proof.pre_bytes),
+                            after_bytes: None,
+                            observed_decrease: None,
+                            detail: format!("could not start Cargo: {e}"),
+                        });
+                        observer.unit_completed(cleanup_phase);
+                        continue;
                     }
                 };
                 if !output.success {
                     report.failed += 1;
                     report.results.push(CleanResult {
-                        display_path: raw.display.clone(),
+                        display_path: unit.root.clone(),
                         workspace_roots: proof.workspace_roots.clone(),
-                        ownership: raw.ownership,
+                        output_roots: proof.covering.clone(),
+                        ownership: proof.ownership,
                         outcome: CleanOutcome::Failed,
-                        before_bytes: Some(measured.bytes),
+                        before_bytes: Some(proof.pre_bytes),
                         after_bytes: None,
                         observed_decrease: None,
                         detail: format!("Cargo exited {:?}: {}", output.code, output_text(&output)),
@@ -614,37 +664,45 @@ pub fn clean_with(
                 }
                 if mode == CleanMode::Preview {
                     report.results.push(CleanResult {
-                        display_path: raw.display.clone(),
+                        display_path: unit.root.clone(),
                         workspace_roots: proof.workspace_roots.clone(),
-                        ownership: raw.ownership,
+                        output_roots: proof.covering.clone(),
+                        ownership: proof.ownership,
                         outcome: CleanOutcome::Previewed,
-                        before_bytes: Some(measured.bytes),
+                        before_bytes: Some(proof.pre_bytes),
                         after_bytes: None,
                         observed_decrease: None,
                         detail: output_text(&output),
                     });
                 } else {
-                    match measure_union(&raw.covering) {
+                    // C003 §7.4: one post-clean measurement of the complete
+                    // deduplicated covering-root union this invocation could
+                    // affect, compared against the same union before it ran.
+                    match measure_union(&proof.covering) {
                         Ok(after) => {
-                            let decrease = measured.bytes.saturating_sub(after);
+                            let decrease = proof.pre_bytes.saturating_sub(after);
                             report.results.push(CleanResult {
-                                display_path: raw.display.clone(),
+                                display_path: unit.root.clone(),
                                 workspace_roots: proof.workspace_roots.clone(),
-                                ownership: raw.ownership,
+                                output_roots: proof.covering.clone(),
+                                ownership: proof.ownership,
                                 outcome: CleanOutcome::Cleaned,
-                                before_bytes: Some(measured.bytes),
+                                before_bytes: Some(proof.pre_bytes),
                                 after_bytes: Some(after),
                                 observed_decrease: Some(decrease),
                                 detail: output_text(&output),
                             });
                         }
                         Err(e) => {
+                            // Measurement uncertainty after Cargo success is
+                            // diagnostic; it must not fabricate recovered bytes.
                             report.results.push(CleanResult {
-                                display_path: raw.display.clone(),
+                                display_path: unit.root.clone(),
                                 workspace_roots: proof.workspace_roots.clone(),
-                                ownership: raw.ownership,
+                                output_roots: proof.covering.clone(),
+                                ownership: proof.ownership,
                                 outcome: CleanOutcome::Cleaned,
-                                before_bytes: Some(measured.bytes),
+                                before_bytes: Some(proof.pre_bytes),
                                 after_bytes: None,
                                 observed_decrease: None,
                                 detail: format!(
@@ -655,7 +713,7 @@ pub fn clean_with(
                         }
                     }
                 }
-                observer.reportable_group(&raw.display, measured.bytes);
+                observe_unit_groups(observer, unit);
                 observer.unit_completed(cleanup_phase);
             }
         }
@@ -663,6 +721,28 @@ pub fn clean_with(
     // Include diagnostics from discovery/resolution in count (already set).
     report.counters = counters;
     Ok(report)
+}
+
+/// Ownership class reported for a skipped CleanupUnit (C003 §7.2).
+///
+/// The first non-private affected group decides how the skip is classified;
+/// otherwise the unit reports the strongest class it carries.
+fn unit_blocking_class(unit: &workspace::CleanupUnit) -> OutputOwnershipClass {
+    for group in &unit.groups {
+        if group.ownership != OutputOwnershipClass::PrivateBounded {
+            return group.ownership;
+        }
+    }
+    OutputOwnershipClass::PrivateBounded
+}
+
+/// Publish the unit's affected output rows to transient progress.
+fn observe_unit_groups(observer: &dyn ProgressObserver, unit: &workspace::CleanupUnit) {
+    for group in &unit.groups {
+        if let Some(m) = &group.measured {
+            observer.reportable_group(&group.display, m.bytes);
+        }
+    }
 }
 
 struct WorkspaceCleanupAdapter<'a> {
@@ -681,17 +761,23 @@ impl CargoRunner for WorkspaceCleanupAdapter<'_> {
     }
 }
 
-/// Validated pre-spawn proof consumed immediately to build the Cargo command.
+/// Validated pre-spawn CleanupUnit proof consumed immediately to build the
+/// Cargo command.
 ///
-/// C002 §7.3: the final proof binds the complete frozen output state —
-/// canonical workspace root + root manifest, canonical member set, canonical
-/// target, canonical build/capability, physical covering roots, ownership
-/// class, authorization decision, cache-marker validity, fresh source
-/// activity, fresh output activity, and frozen environment/arguments.
+/// C003 §7.3: the proof binds the complete frozen state of ONE workspace
+/// CleanupUnit — canonical workspace root + root manifest, canonical member
+/// set, canonical target, canonical build/capability, the complete
+/// deduplicated physical covering-root union the invocation can affect,
+/// pre-clean union bytes, ownership class, authorization decision, cache-marker
+/// validity, fresh source activity, fresh output activity, and frozen
+/// environment/arguments — all re-proven against the complete bounded
+/// ownership universe discovered under clean ROOT.
 ///
 /// Generated by [`final_cleanup_proof`] immediately before spawn and consumed
 /// with no intervening mutation window beyond the spawn itself. This
-/// minimizes (but does not eliminate) TOCTOU races and fails closed.
+/// minimizes (but does not eliminate) TOCTOU races and fails closed. No
+/// earlier RawGroup is consulted for mutation decisions after proof
+/// generation.
 #[derive(Clone, Debug)]
 pub struct ExecutionProof {
     pub workspace_roots: Vec<PathBuf>,
@@ -701,7 +787,10 @@ pub struct ExecutionProof {
     pub target: PathBuf,
     pub build: Option<PathBuf>,
     pub capability: CargoCapabilities,
+    /// Complete deduplicated union of every affected physical covering root.
     pub covering: Vec<PathBuf>,
+    /// Pre-clean bytes of that same deduplicated union.
+    pub pre_bytes: u64,
     pub ownership: OutputOwnershipClass,
     pub frozen_env: Vec<(OsString, OsString)>,
 }
@@ -709,127 +798,231 @@ pub struct ExecutionProof {
 // Backwards-compatible alias for existing callers/tests.
 type RevalidatedContext = ExecutionProof;
 
-/// Single final cleanup proof shared by Preview/Simulate/Execute (C002
-/// §7.2-7.3).
+fn canon(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Physical regions an output root can touch, as far as it can be proven.
 ///
-/// Runs every non-mutating pre-spawn gate Execute runs before the actual
-/// Cargo clean spawn:
-/// ownership class, path authorization, fresh Cargo workspace/output
-/// resolution, member/source activity, target/build physical identity, output
-/// activity, group/ownership stability, marker validation, frozen-environment
-/// capability validation, and final preflight covering-root checks.
+/// A symlink or unresolvable root has no `physical_path`, so the complete
+/// physical graph cannot see it. Resolving the logical path keeps the
+/// cross-workspace overlap check in C003 §7.3 sound for those roots instead of
+/// silently ignoring them; when even that fails, the logical path is used and
+/// compared lexically against canonical covering roots.
+fn provable_output_paths(root: &OutputRoot) -> Vec<PathBuf> {
+    if let Some(physical) = &root.physical_path {
+        return vec![physical.clone()];
+    }
+    if root.is_symlink
+        && let Ok(resolved) = fs::canonicalize(&root.logical_path)
+    {
+        return vec![resolved];
+    }
+    vec![root.logical_path.clone()]
+}
+
+fn sorted_same(left: &[PathBuf], right: &[PathBuf]) -> bool {
+    let mut a = left.to_vec();
+    let mut b = right.to_vec();
+    a.sort();
+    b.sort();
+    a == b
+}
+
+/// Single final CleanupUnit proof shared by Preview/Simulate/Execute
+/// (C003 §7.2-7.3).
+///
+/// Runs every non-mutating pre-spawn gate Execute runs before the actual Cargo
+/// clean spawn, over the complete bounded ownership universe:
+///
+/// 1. unit-wide ownership/authorization/measurement gate;
+/// 2. fresh re-resolution of every workspace discovered under clean ROOT;
+/// 3. rebuild of the complete fresh physical output graph;
+/// 4. candidate workspace identity and member-set stability;
+/// 5. target/build logical+physical identity stability;
+/// 6. remap of the complete candidate OutputSet onto fresh physical groups;
+/// 7. same expected physical covering union, every affected fresh group
+///    `PrivateBounded`;
+/// 8. no other discovered workspace (including symlink/uncertain roots) may
+///    overlap the candidate's affected output;
+/// 9. fresh source activity for the candidate workspace;
+/// 10. fresh output activity for every affected covering root;
+/// 11. covering-root existence/type/no-symlink and Cargo cache markers;
+/// 12. frozen Cargo environment/arguments from the fresh OutputSet.
 ///
 /// Returns `Ok(proof)` only when all gates succeed; `Err(reason)` is a clean
-/// skip reason. Never spawns Cargo.
+/// skip reason. Never spawns Cargo. Fails closed: any workspace that could
+/// affect the bounded ownership graph and cannot be re-resolved makes the
+/// candidate non-cleanable for that pass.
+#[allow(clippy::too_many_arguments)]
 pub fn final_cleanup_proof(
-    raw: &workspace::RawGroup,
-    workspaces: &[ResolvedWorkspace],
+    unit: &workspace::CleanupUnit,
+    universe: &[ResolvedWorkspace],
     clean_root: &Path,
     allowed_output_roots: &[PathBuf],
     runner: &dyn CleanupRunner,
     recency_seconds: u64,
+    counters: &mut ScanCounters,
 ) -> Result<ExecutionProof, String> {
-    // 1. Ownership class is authoritative (C002-F1).
-    if raw.ownership != OutputOwnershipClass::PrivateBounded {
-        return Err(ownership_skip_detail(raw.ownership));
-    }
-    // 2. Path authorization (location only; never manufactures ownership).
-    match is_authorized(raw, workspaces, clean_root, allowed_output_roots) {
-        Ok(true) => {}
-        Ok(false) => return Err(ownership_skip_detail(raw.ownership)),
-        Err(msg) => return Err(msg),
-    }
-    // 3. Fresh Cargo resolution for every owner + identity/member/output
-    // comparison. Uses canonicalized comparisons so `/tmp` vs
-    // `/private/tmp` (macOS symlink) does not falsely report a change.
+    // 1. Unit-wide gate (defensive: the caller gates before dispatch, and the
+    // final proof must be the single authority consumed by any spawn).
+    unit_block_reason(unit, clean_root, allowed_output_roots)?;
+    // 2. Fresh Cargo resolution for the complete bounded ownership universe.
+    // Uses canonicalized comparisons so `/tmp` vs `/private/tmp` (macOS
+    // symlink) does not falsely report a change.
     let adapter = WorkspaceCleanupAdapter { runner };
-    let mut fresh_workspaces: HashMap<WorkspaceId, ResolvedWorkspace> = HashMap::new();
-    let canon = |p: &PathBuf| fs::canonicalize(p).unwrap_or_else(|_| p.clone());
-    for idx in &raw.owners {
-        let ws = &workspaces[*idx];
-        let mut counters = ScanCounters::default();
-        let mut diags = Vec::new();
-        let noop = crate::progress::NoopObserver;
+    let noop = crate::progress::NoopObserver;
+    let mut fresh_universe: Vec<ResolvedWorkspace> = Vec::with_capacity(universe.len());
+    for ws in universe {
+        let mut proof_counters = ScanCounters::default();
+        let mut proof_diagnostics = Vec::new();
         let fresh = workspace::resolve_workspaces(
             std::slice::from_ref(&ws.root_manifest),
             &adapter,
-            &mut counters,
-            &mut diags,
+            &mut proof_counters,
+            &mut proof_diagnostics,
             &noop,
         );
+        counters.merge_proof(&proof_counters);
+        counters.proof_workspaces_refreshed += 1;
         let Some(fresh_ws) = fresh.into_iter().next() else {
-            return Err("workspace changed before cleanup; skipped: workspace vanished".into());
+            return Err(format!(
+                "ownership could not be re-proven: workspace {} did not re-resolve",
+                ws.root.display()
+            ));
         };
         if fresh_ws.id != ws.id || fresh_ws.root != ws.root {
-            return Err(
-                "workspace changed before cleanup; skipped: workspace identity changed".into(),
-            );
-        }
-        let mut old_members: Vec<PathBuf> =
-            ws.members.iter().map(|m| canon(&m.source_root)).collect();
-        let mut new_members: Vec<PathBuf> = fresh_ws
-            .members
-            .iter()
-            .map(|m| canon(&m.source_root))
-            .collect();
-        old_members.sort();
-        new_members.sort();
-        if old_members != new_members {
-            return Err("workspace changed before cleanup; skipped: member set changed".into());
-        }
-        let old_target_canon = ws
-            .output
-            .target
-            .physical_path
-            .clone()
-            .unwrap_or_else(|| canon(&ws.output.target.logical_path));
-        let new_target_canon = fresh_ws
-            .output
-            .target
-            .physical_path
-            .clone()
-            .unwrap_or_else(|| canon(&fresh_ws.output.target.logical_path));
-        let old_build_canon = ws
-            .output
-            .build
-            .physical_path
-            .clone()
-            .unwrap_or_else(|| canon(&ws.output.build.logical_path));
-        let new_build_canon = fresh_ws
-            .output
-            .build
-            .physical_path
-            .clone()
-            .unwrap_or_else(|| canon(&fresh_ws.output.build.logical_path));
-        if old_target_canon != new_target_canon {
             return Err(format!(
-                "workspace changed before cleanup; skipped: target changed (was {}, now {})",
-                old_target_canon.display(),
-                new_target_canon.display()
+                "ownership could not be re-proven: workspace {} changed identity",
+                ws.root.display()
             ));
         }
-        if old_build_canon != new_build_canon {
-            return Err(format!(
-                "workspace changed before cleanup; skipped: build-dir changed (was {}, now {})",
-                old_build_canon.display(),
-                new_build_canon.display()
-            ));
-        }
-        fresh_workspaces.insert(fresh_ws.id.clone(), fresh_ws);
+        fresh_universe.push(fresh_ws);
     }
-    // Single-owner private groups only reach here; multi-owner would have
-    // been Shared and rejected above.
-    let first_idx = *raw
-        .owners
-        .first()
-        .ok_or_else(|| "workspace changed before cleanup; skipped: no owner".to_owned())?;
-    let ws = &workspaces[first_idx];
-    let fresh_ws = fresh_workspaces.get(&ws.id).ok_or_else(|| {
-        "workspace changed before cleanup; skipped: workspace vanished".to_owned()
+    fresh_universe.sort_by(|a, b| a.root.cmp(&b.root));
+    // 3. Complete fresh physical output graph.
+    let fresh_groups = workspace::build_groups(&fresh_universe);
+    // 4/5. Candidate identity, member set, and target/build identity.
+    let fresh_ws = fresh_universe
+        .iter()
+        .find(|w| w.id == unit.id)
+        .ok_or_else(|| {
+            format!(
+                "ownership could not be re-proven: workspace {} vanished",
+                unit.root.display()
+            )
+        })?;
+    let candidate = universe.iter().find(|w| w.id == unit.id).ok_or_else(|| {
+        format!(
+            "ownership could not be re-proven: workspace {} is outside the cleanup universe",
+            unit.root.display()
+        )
     })?;
-    // 4. Covering-root physical proof: every covering root must exist, be a
-    // real directory, and not be a symlink (C002 §7.3).
-    for covering in &raw.covering {
+    let mut old_members: Vec<PathBuf> = candidate
+        .members
+        .iter()
+        .map(|m| canon(&m.source_root))
+        .collect();
+    let mut new_members: Vec<PathBuf> = fresh_ws
+        .members
+        .iter()
+        .map(|m| canon(&m.source_root))
+        .collect();
+    old_members.sort();
+    new_members.sort();
+    if old_members != new_members {
+        return Err("workspace changed before cleanup; skipped: member set changed".into());
+    }
+    let old_target_canon = candidate
+        .output
+        .target
+        .physical_path
+        .clone()
+        .unwrap_or_else(|| canon(&candidate.output.target.logical_path));
+    let new_target_canon = fresh_ws
+        .output
+        .target
+        .physical_path
+        .clone()
+        .unwrap_or_else(|| canon(&fresh_ws.output.target.logical_path));
+    let old_build_canon = candidate
+        .output
+        .build
+        .physical_path
+        .clone()
+        .unwrap_or_else(|| canon(&candidate.output.build.logical_path));
+    let new_build_canon = fresh_ws
+        .output
+        .build
+        .physical_path
+        .clone()
+        .unwrap_or_else(|| canon(&fresh_ws.output.build.logical_path));
+    if old_target_canon != new_target_canon {
+        return Err(format!(
+            "workspace changed before cleanup; skipped: target changed (was {}, now {})",
+            old_target_canon.display(),
+            new_target_canon.display()
+        ));
+    }
+    if old_build_canon != new_build_canon {
+        return Err(format!(
+            "workspace changed before cleanup; skipped: build-dir changed (was {}, now {})",
+            old_build_canon.display(),
+            new_build_canon.display()
+        ));
+    }
+    // 6/7. Remap the complete fresh candidate OutputSet onto the complete fresh
+    // physical graph and require the same expected shape and ownership.
+    let fresh_affected = workspace::map_workspace_groups(fresh_ws, &fresh_groups);
+    if fresh_affected.len() != unit.groups.len() {
+        return Err(
+            "workspace changed before cleanup; skipped: physical output group set changed".into(),
+        );
+    }
+    let mut fresh_covering: Vec<PathBuf> = Vec::new();
+    for gi in &fresh_affected {
+        let g = &fresh_groups[*gi];
+        if g.ownership != OutputOwnershipClass::PrivateBounded {
+            return Err(format!(
+                "ownership changed before cleanup; skipped: output {} is now {}; {}",
+                g.display.display(),
+                g.ownership.label(),
+                ownership_skip_detail(g.ownership)
+            ));
+        }
+        fresh_covering.extend(g.covering.iter().cloned());
+    }
+    fresh_covering = workspace::outermost(&fresh_covering);
+    if !sorted_same(&fresh_covering, &unit.covering) {
+        return Err(
+            "workspace changed before cleanup; skipped: physical output shape changed".into(),
+        );
+    }
+    // 8. No other discovered workspace may now overlap the candidate's affected
+    // output. The fresh graph catches proven overlaps (the group would be
+    // `Shared` in step 7); this pass also covers symlink/unresolvable roots the
+    // graph cannot represent, failing closed when they can reach the region.
+    for other in &fresh_universe {
+        if other.id == unit.id {
+            continue;
+        }
+        for root in [&other.output.target, &other.output.build] {
+            for other_path in provable_output_paths(root) {
+                if unit.covering.iter().any(|c| {
+                    other_path == *c || other_path.starts_with(c) || c.starts_with(&other_path)
+                }) {
+                    return Err(format!(
+                        "ownership changed before cleanup; skipped: another discovered workspace ({}) now overlaps cleaned output {}",
+                        other.root.display(),
+                        other_path.display()
+                    ));
+                }
+            }
+        }
+    }
+    // 9. Covering-root physical proof: every affected covering root must exist,
+    // be a real directory, and not be a symlink.
+    for covering in &unit.covering {
         match fs::symlink_metadata(covering) {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 return Err("preflight changed: covering root disappeared".into());
@@ -848,15 +1041,22 @@ pub fn final_cleanup_proof(
             Ok(_) => {}
         }
     }
-    // 5. Fresh source + output activity with fresh timestamps.
+    // 10. Fresh source + output activity with fresh timestamps, bounded by the
+    // complete fresh universe's output set (same exclusion rule as analysis).
     let start = SystemTime::now();
     let cutoff = start
         .checked_sub(Duration::from_secs(recency_seconds))
         .ok_or_else(|| "recency window exceeds system time range".to_owned())?;
-    let all_outputs: Vec<PathBuf> = [&fresh_ws.output.target, &fresh_ws.output.build]
-        .iter()
-        .filter_map(|r| r.physical_path.clone().or(Some(r.logical_path.clone())))
-        .collect();
+    let mut all_outputs: Vec<PathBuf> = Vec::new();
+    for other in &fresh_universe {
+        for root in [&other.output.target, &other.output.build] {
+            match &root.physical_path {
+                Some(p) => all_outputs.push(p.clone()),
+                None => all_outputs.push(root.logical_path.clone()),
+            }
+        }
+    }
+    let activity_start = std::time::Instant::now();
     for member_root in workspace::workspace_member_roots(fresh_ws) {
         match traverse::workspace_member_activity(&member_root, &all_outputs, start, cutoff) {
             Ok(traverse::SourceActivity::Recent(_)) => {
@@ -868,7 +1068,11 @@ pub fn final_cleanup_proof(
             Err(()) => return Err("revalidation source activity uncertain".into()),
         }
     }
-    for covering in &raw.covering {
+    counters.proof_source_activity_nanos = counters
+        .proof_source_activity_nanos
+        .saturating_add(activity_start.elapsed().as_nanos() as u64);
+    let sizing_start = std::time::Instant::now();
+    for covering in &unit.covering {
         let stats = traverse::measure_single_target(covering);
         if stats.uncertain {
             return Err("revalidation output measurement uncertain".into());
@@ -877,43 +1081,13 @@ pub fn final_cleanup_proof(
             return Err("workspace changed before cleanup; skipped: output became active".into());
         }
     }
-    // 6. Group/ownership stability: rebuild physical grouping from fresh
-    // state and reject any change in group shape/classification.
-    let fresh_groups = workspace::build_groups(std::slice::from_ref(fresh_ws));
-    let mut matched: Option<&workspace::RawGroup> = None;
-    for g in &fresh_groups {
-        // Match by covering overlap with the original group.
-        if g.covering.iter().any(|c| raw.covering.contains(c)) {
-            matched = Some(g);
-            break;
-        }
-    }
-    let Some(found) = matched else {
-        return Err("workspace changed before cleanup; skipped: physical group vanished".into());
-    };
-    if found.ownership != OutputOwnershipClass::PrivateBounded {
-        return Err(
-            "workspace changed before cleanup; skipped: physical group changed classification"
-                .into(),
-        );
-    }
-    // Require exact covering equality (outermost canonical roots) so
-    // target/build moves or nested-shape changes fail closed.
-    {
-        let mut a = raw.covering.clone();
-        let mut b = found.covering.clone();
-        a.sort();
-        b.sort();
-        if a != b {
-            return Err(
-                "workspace changed before cleanup; skipped: physical group shape changed".into(),
-            );
-        }
-    }
-    // 7. Marker validation is part of the same non-mutating proof used by
-    // Simulate (C002 §7.3).
-    require_cargo_markers(&raw.covering)?;
-    // 8. Frozen-environment capability validation.
+    counters.proof_output_sizing_nanos = counters
+        .proof_output_sizing_nanos
+        .saturating_add(sizing_start.elapsed().as_nanos() as u64);
+    // 11. Marker validation is part of the same non-mutating proof consumed by
+    // Simulate, and covers the complete affected union.
+    require_cargo_markers(&unit.covering)?;
+    // 12. Frozen-environment capability validation from the fresh OutputSet.
     let target = fresh_ws
         .output
         .target
@@ -933,11 +1107,7 @@ pub fn final_cleanup_proof(
         build
     };
     let provisional = ExecutionProof {
-        workspace_roots: raw
-            .owners
-            .iter()
-            .map(|o| workspaces[*o].root.clone())
-            .collect(),
+        workspace_roots: vec![unit.root.clone()],
         workspace_root: fresh_ws.root.clone(),
         root_manifest: fresh_ws.root_manifest.clone(),
         canonical_members: {
@@ -953,8 +1123,9 @@ pub fn final_cleanup_proof(
         target,
         build,
         capability: fresh_ws.capability,
-        covering: raw.covering.clone(),
-        ownership: raw.ownership,
+        covering: unit.covering.clone(),
+        pre_bytes: unit.bytes,
+        ownership: OutputOwnershipClass::PrivateBounded,
         frozen_env: Vec::new(),
     };
     let frozen = frozen_env(&provisional)?;
@@ -970,20 +1141,22 @@ pub fn final_cleanup_proof(
 /// can compare candidate dispositions with Simulate on identical state
 /// without invoking Cargo clean.
 pub fn execute_pre_spawn_decision(
-    raw: &workspace::RawGroup,
-    workspaces: &[ResolvedWorkspace],
+    unit: &workspace::CleanupUnit,
+    universe: &[ResolvedWorkspace],
     clean_root: &Path,
     allowed_output_roots: &[PathBuf],
     runner: &dyn CleanupRunner,
     recency_seconds: u64,
 ) -> Result<ExecutionProof, String> {
+    let mut counters = ScanCounters::default();
     final_cleanup_proof(
-        raw,
-        workspaces,
+        unit,
+        universe,
         clean_root,
         allowed_output_roots,
         runner,
         recency_seconds,
+        &mut counters,
     )
 }
 
@@ -1093,6 +1266,7 @@ fn measure_union(covering: &[PathBuf]) -> io::Result<u64> {
 mod tests {
     use super::*;
     use crate::progress::NoopObserver;
+    use std::ffi::OsStr;
     use std::sync::Mutex;
     use tempfile::TempDir;
 
@@ -1698,6 +1872,7 @@ mod tests {
                 env_build_dir_set: false,
             },
             covering: vec![PathBuf::from("/cache/target")],
+            pre_bytes: 0,
             ownership: OutputOwnershipClass::PrivateBounded,
             frozen_env: Vec::new(),
         };
@@ -1920,6 +2095,7 @@ mod tests {
             report.results.push(CleanResult {
                 display_path: PathBuf::from(format!("/tmp/g{i}")),
                 workspace_roots: vec![PathBuf::from("/ws")],
+                output_roots: vec![PathBuf::from(format!("/tmp/g{i}"))],
                 ownership: OutputOwnershipClass::PrivateBounded,
                 outcome: CleanOutcome::Cleaned,
                 before_bytes: Some(100),
@@ -2215,7 +2391,27 @@ mod tests {
         assert_eq!(workspaces.len(), 1);
         let groups = workspace::build_groups(&workspaces);
         assert_eq!(groups.len(), 1);
-        let proof = final_cleanup_proof(&groups[0], &workspaces, &root, &[], &exec_runner, 0);
+        let outcomes = workspace::analyze_groups_detailed(
+            &workspaces,
+            groups,
+            SystemTime::now(),
+            SystemTime::now() - Duration::from_secs(1),
+            Duration::from_secs(0),
+            &mut counters,
+            &mut diags,
+            &noop,
+        );
+        let units = workspace::build_cleanup_units(&workspaces, &outcomes);
+        assert_eq!(units.len(), 1);
+        let proof = final_cleanup_proof(
+            &units[0],
+            &workspaces,
+            &root,
+            &[],
+            &exec_runner,
+            0,
+            &mut counters,
+        );
         assert!(
             proof.is_ok(),
             "valid private must prove cleanable: {proof:?}"
@@ -2686,5 +2882,999 @@ mod tests {
         assert_eq!(physical.len(), 1);
         assert_eq!(observer.total_for(ScanPhase::Analysis), Some(1));
         assert_eq!(observer.completed_count(ScanPhase::Analysis), 1);
+    }
+
+    // --- C003 §9: workspace CleanupUnit matrix, one-invocation/one-result,
+    // cross-workspace ownership races, union accounting, and proof stats.
+
+    #[derive(Clone)]
+    struct StagedOutput {
+        target: PathBuf,
+        build: Option<PathBuf>,
+    }
+
+    struct FakeWs {
+        root: PathBuf,
+        members: Vec<PathBuf>,
+        target: PathBuf,
+        build: Option<PathBuf>,
+        /// From the Nth (1-based) metadata call onward, serve this instead.
+        stage: Option<(usize, StagedOutput)>,
+        /// From the Nth (1-based) metadata call onward, metadata fails.
+        fail_metadata_from: Option<usize>,
+    }
+
+    /// Multi-workspace Cargo fixture with per-workspace output staging,
+    /// metadata failure injection, and observable `cargo clean` effects.
+    struct StagedCargo {
+        ws: Vec<FakeWs>,
+        calls: Mutex<Vec<RecordedCall>>,
+        metadata_calls: Mutex<Vec<usize>>,
+        clean_removes: Mutex<Vec<PathBuf>>,
+        clean_hook: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    }
+
+    fn cargo_ok(json: serde_json::Value) -> ProcessOutput {
+        ProcessOutput {
+            success: true,
+            code: Some(0),
+            stdout: serde_json::to_vec(&json).unwrap(),
+            stderr: Vec::new(),
+        }
+    }
+
+    fn cargo_fail(stderr: &str) -> ProcessOutput {
+        ProcessOutput {
+            success: false,
+            code: Some(1),
+            stdout: Vec::new(),
+            stderr: stderr.as_bytes().to_vec(),
+        }
+    }
+
+    impl StagedCargo {
+        fn new() -> Self {
+            Self {
+                ws: Vec::new(),
+                calls: Mutex::new(Vec::new()),
+                metadata_calls: Mutex::new(Vec::new()),
+                clean_removes: Mutex::new(Vec::new()),
+                clean_hook: Mutex::new(None),
+            }
+        }
+
+        fn add(&mut self, root: &Path, target: PathBuf, build: Option<PathBuf>) -> &mut Self {
+            self.ws.push(FakeWs {
+                root: root.to_path_buf(),
+                members: vec![root.to_path_buf()],
+                target,
+                build,
+                stage: None,
+                fail_metadata_from: None,
+            });
+            self.metadata_calls.lock().unwrap().push(0);
+            self
+        }
+
+        fn stage(
+            &mut self,
+            index: usize,
+            from_call: usize,
+            target: PathBuf,
+            build: Option<PathBuf>,
+        ) {
+            self.ws[index].stage = Some((from_call, StagedOutput { target, build }));
+        }
+
+        fn fail_metadata_from(&mut self, index: usize, from_call: usize) {
+            self.ws[index].fail_metadata_from = Some(from_call);
+        }
+
+        fn on_clean(&mut self, hook: impl Fn() + Send + Sync + 'static) {
+            *self.clean_hook.lock().unwrap() = Some(Box::new(hook));
+        }
+
+        fn removes_on_clean(&mut self, paths: Vec<PathBuf>) {
+            *self.clean_removes.lock().unwrap() = paths;
+        }
+
+        fn calls(&self) -> Vec<RecordedCall> {
+            self.calls.lock().unwrap().clone()
+        }
+
+        fn clean_calls(&self) -> Vec<RecordedCall> {
+            self.calls()
+                .into_iter()
+                .filter(|(_, args, _)| args.first().is_some_and(|a| a == "clean"))
+                .collect()
+        }
+
+        fn dry_run_calls(&self) -> Vec<RecordedCall> {
+            self.clean_calls()
+                .into_iter()
+                .filter(|(_, args, _)| args.iter().any(|a| a == "--dry-run"))
+                .collect()
+        }
+
+        fn find_ws(&self, manifest: &OsStr) -> Option<usize> {
+            let path = Path::new(manifest);
+            let key = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            self.ws.iter().position(|w| {
+                w.members.iter().any(|m| {
+                    let member_manifest = m.join("Cargo.toml");
+                    fs::canonicalize(&member_manifest).unwrap_or(member_manifest) == key
+                })
+            })
+        }
+
+        fn metadata_for(&self, index: usize) -> usize {
+            self.metadata_calls.lock().unwrap()[index]
+        }
+    }
+
+    impl CargoRunner for StagedCargo {
+        fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((cwd.to_path_buf(), args.to_vec(), Vec::new()));
+            self.dispatch(args)
+        }
+    }
+
+    impl StagedCargo {
+        fn dispatch(&self, args: &[OsString]) -> io::Result<ProcessOutput> {
+            if args.first().is_some_and(|a| a == "locate-project") {
+                let manifest = args.last().unwrap();
+                return Ok(match self.find_ws(manifest) {
+                    Some(i) => cargo_ok(serde_json::json!({
+                        "root": self.ws[i].root.join("Cargo.toml")
+                    })),
+                    None => cargo_fail("locate-project failed"),
+                });
+            }
+            if args.first().is_some_and(|a| a == "metadata") {
+                let manifest = args.last().unwrap();
+                let Some(i) = self.find_ws(manifest) else {
+                    return Ok(cargo_fail("cargo metadata failed"));
+                };
+                let n = {
+                    let mut counts = self.metadata_calls.lock().unwrap();
+                    counts[i] += 1;
+                    counts[i]
+                };
+                if self.ws[i].fail_metadata_from.is_some_and(|from| n >= from) {
+                    return Ok(cargo_fail("cargo metadata failed"));
+                }
+                let staged = self.ws[i]
+                    .stage
+                    .as_ref()
+                    .filter(|(from, _)| n >= *from)
+                    .map(|(_, s)| s.clone());
+                let out = staged.unwrap_or(StagedOutput {
+                    target: self.ws[i].target.clone(),
+                    build: self.ws[i].build.clone(),
+                });
+                let members: Vec<String> = (0..self.ws[i].members.len())
+                    .map(|k| format!("m{k}"))
+                    .collect();
+                let packages: Vec<serde_json::Value> = self.ws[i]
+                    .members
+                    .iter()
+                    .enumerate()
+                    .map(|(k, m)| {
+                        serde_json::json!({
+                            "id": format!("m{k}"),
+                            "name": format!("m{k}"),
+                            "manifest_path": m.join("Cargo.toml"),
+                        })
+                    })
+                    .collect();
+                let mut json = serde_json::json!({
+                    "packages": packages,
+                    "workspace_members": members,
+                    "workspace_root": self.ws[i].root,
+                    "target_directory": out.target,
+                });
+                if let Some(b) = &out.build {
+                    json["build_directory"] = serde_json::json!(b);
+                }
+                return Ok(cargo_ok(json));
+            }
+            // `cargo clean` (Cargo preview dry-run or real cleanup).
+            if !args.iter().any(|a| a == "--dry-run") {
+                for path in self.clean_removes.lock().unwrap().iter() {
+                    let _ = fs::remove_file(path);
+                }
+                if let Some(hook) = self.clean_hook.lock().unwrap().as_ref() {
+                    hook();
+                }
+            }
+            Ok(ProcessOutput {
+                success: true,
+                code: Some(0),
+                stdout: b"mock cargo clean success".to_vec(),
+                stderr: Vec::new(),
+            })
+        }
+    }
+
+    impl CleanupRunner for StagedCargo {
+        fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput> {
+            CargoRunner::run(self, cwd, args)
+        }
+        fn run_with_env(
+            &self,
+            cwd: &Path,
+            args: &[OsString],
+            env: &[(OsString, OsString)],
+        ) -> io::Result<ProcessOutput> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((cwd.to_path_buf(), args.to_vec(), env.to_vec()));
+            self.dispatch(args)
+        }
+    }
+
+    /// Create a Cargo workspace on disk (manifest + quiet source).
+    fn ws_root(dir: &Path, name: &str) -> PathBuf {
+        let root = dir.join(name);
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            format!("[package]\nname='{name}'\nversion='0.1.0'\nedition='2021'\n"),
+        )
+        .unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        root
+    }
+
+    /// Create a Cargo cache directory with the marker Cargo itself writes.
+    fn cargo_output(path: &Path, bytes: usize) -> PathBuf {
+        fs::create_dir_all(path).unwrap();
+        fs::write(
+            path.join("CACHEDIR.TAG"),
+            b"Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .unwrap();
+        fs::write(path.join("artifact.bin"), vec![1u8; bytes]).unwrap();
+        path.to_path_buf()
+    }
+
+    fn canonical(path: &Path) -> PathBuf {
+        fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    }
+
+    fn row_for<'a>(report: &'a CleanReport, root: &Path) -> &'a CleanResult {
+        let want = canonical(root);
+        report
+            .results
+            .iter()
+            .find(|r| r.display_path == want)
+            .unwrap_or_else(|| {
+                panic!(
+                    "no cleanup result row for {}; rows: {:?}",
+                    want.display(),
+                    report
+                        .results
+                        .iter()
+                        .map(|r| (r.display_path.display().to_string(), r.outcome))
+                        .collect::<Vec<_>>()
+                )
+            })
+    }
+
+    /// Distinct private target + private build inside one workspace.
+    fn sibling_ws_fixture(tag: &str) -> (TempDir, PathBuf, PathBuf, PathBuf) {
+        let d = tempfile::tempdir().unwrap();
+        let root = ws_root(d.path(), "ws");
+        let target = cargo_output(&root.join("target"), 4096);
+        let build = cargo_output(&root.join("build"), 4096);
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        let _ = tag;
+        (d, root, target, build)
+    }
+
+    fn staged_sibling_runner(root: &Path, target: &Path, build: &Path) -> StagedCargo {
+        let mut runner = StagedCargo::new();
+        runner.add(root, target.to_path_buf(), Some(build.to_path_buf()));
+        runner
+    }
+
+    #[test]
+    fn distinct_private_target_and_build_is_one_cleanable_unit() {
+        // C003 §9: private target + private build, distinct siblings => one
+        // cleanable unit, one Cargo invocation, one result, in every mode.
+        for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+            let (_d, root, target, build) = sibling_ws_fixture("siblings");
+            let mut runner = staged_sibling_runner(&root, &target, &build);
+            runner.removes_on_clean(vec![
+                target.join("artifact.bin"),
+                build.join("artifact.bin"),
+            ]);
+            let noop = NoopObserver;
+            let report = clean_with(&root, 0, &[], mode, &runner, &noop)
+                .unwrap_or_else(|e| panic!("{mode:?} {e}"));
+            assert_eq!(report.results.len(), 1, "{mode:?}: one result per unit");
+            let row = row_for(&report, &root);
+            let expected = match mode {
+                CleanMode::Preview => CleanOutcome::Previewed,
+                CleanMode::Simulate => CleanOutcome::Simulated,
+                CleanMode::Execute => CleanOutcome::Cleaned,
+            };
+            assert_eq!(row.outcome, expected, "{mode:?}: {}", row.detail);
+            assert_eq!(row.output_roots.len(), 2, "{mode:?}: both roots");
+            assert_eq!(row.ownership, OutputOwnershipClass::PrivateBounded);
+            match mode {
+                CleanMode::Preview => {
+                    assert_eq!(runner.dry_run_calls().len(), 1, "{mode:?}");
+                    assert!(target.join("artifact.bin").exists());
+                    assert!(build.join("artifact.bin").exists());
+                }
+                CleanMode::Simulate => {
+                    assert!(
+                        runner.clean_calls().is_empty(),
+                        "{mode:?}: simulation invokes no cargo clean"
+                    );
+                    assert!(target.join("artifact.bin").exists());
+                }
+                CleanMode::Execute => {
+                    assert_eq!(runner.clean_calls().len(), 1, "{mode:?}");
+                    assert!(!target.join("artifact.bin").exists());
+                    assert!(!build.join("artifact.bin").exists());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn one_invocation_one_result_progress_total_and_no_sibling_row() {
+        // C003 §9 "One invocation / one result": distinct target/build must
+        // produce exactly one Cargo call, one result, and a cleanup progress
+        // total of one for the workspace (not two physical groups).
+        use crate::progress::{ScanPhase, TestObserver};
+        for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+            let (_d, root, target, build) = sibling_ws_fixture("one-invocation");
+            let mut runner = staged_sibling_runner(&root, &target, &build);
+            runner.removes_on_clean(vec![
+                target.join("artifact.bin"),
+                build.join("artifact.bin"),
+            ]);
+            let observer = TestObserver::new();
+            let phase = match mode {
+                CleanMode::Preview => ScanPhase::CleanupPreview,
+                CleanMode::Simulate => ScanPhase::CleanupSimulate,
+                CleanMode::Execute => ScanPhase::CleanupExecute,
+            };
+            let report = clean_with(&root, 0, &[], mode, &runner, &observer).unwrap();
+            assert_eq!(report.results.len(), 1, "{mode:?}");
+            assert_eq!(observer.total_for(phase), Some(1), "{mode:?}");
+            assert_eq!(observer.completed_count(phase), 1, "{mode:?}");
+            let clean_calls = runner.clean_calls().len();
+            assert_eq!(
+                clean_calls,
+                usize::from(mode != CleanMode::Simulate),
+                "{mode:?}"
+            );
+            let text = report.render();
+            assert!(
+                !text.contains("vanished") && !text.contains("Skipped"),
+                "{mode:?}: no second vanished/skipped sibling row: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn private_target_with_external_unproven_build_skips_entire_unit() {
+        // C003-F1: a private target group cannot carry an ExternalUnproven
+        // build directory into the same Cargo clean invocation, even when the
+        // build directory is inside clean ROOT and would pass location
+        // authorization.
+        for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+            let d = tempfile::tempdir().unwrap();
+            let root = ws_root(d.path(), "ws");
+            let target = cargo_output(&root.join("target"), 4096);
+            let build = cargo_output(&d.path().join("shared-build"), 4096);
+            backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+            let mut runner = StagedCargo::new();
+            runner.add(&root, target, Some(build));
+            let noop = NoopObserver;
+            let report = clean_with(d.path(), 0, &[], mode, &runner, &noop).unwrap();
+            assert_eq!(report.results.len(), 1, "{mode:?}");
+            let row = row_for(&report, &root);
+            assert_eq!(row.outcome, CleanOutcome::Skipped, "{mode:?}");
+            assert_eq!(
+                row.ownership,
+                OutputOwnershipClass::ExternalUnproven,
+                "{mode:?}"
+            );
+            assert!(
+                row.detail.contains("build output"),
+                "{mode:?}: {}",
+                row.detail
+            );
+            assert!(
+                row.detail.contains("external-unproven"),
+                "{mode:?}: {}",
+                row.detail
+            );
+            assert!(runner.clean_calls().is_empty(), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn private_target_with_shared_build_skips_entire_unit() {
+        // C003-F1: a private target group cannot carry a Shared build directory
+        // owned by another discovered workspace into the same invocation.
+        for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+            let d = tempfile::tempdir().unwrap();
+            let root_a = ws_root(d.path(), "a");
+            let root_b = ws_root(d.path(), "b");
+            let target_a = cargo_output(&root_a.join("target"), 4096);
+            let shared = cargo_output(&d.path().join("shared"), 4096);
+            backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, target_a, Some(shared.clone()));
+            runner.add(&root_b, shared, None);
+            let noop = NoopObserver;
+            let report = clean_with(d.path(), 0, &[], mode, &runner, &noop).unwrap();
+            let row = row_for(&report, &root_a);
+            assert_eq!(row.outcome, CleanOutcome::Skipped, "{mode:?}");
+            assert_eq!(row.ownership, OutputOwnershipClass::Shared, "{mode:?}");
+            assert!(
+                row.detail.contains("build output"),
+                "{mode:?}: {}",
+                row.detail
+            );
+            assert!(row.detail.contains("shared"), "{mode:?}: {}", row.detail);
+            assert!(runner.clean_calls().is_empty(), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn external_unproven_target_with_private_build_skips_entire_unit() {
+        // Mirror of the private-target case: the failing group need not be the
+        // build directory.
+        for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+            let d = tempfile::tempdir().unwrap();
+            let root = ws_root(d.path(), "ws");
+            let target = cargo_output(&d.path().join("external-target"), 4096);
+            let build = cargo_output(&root.join("build"), 4096);
+            backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+            let mut runner = StagedCargo::new();
+            runner.add(&root, target, Some(build));
+            let noop = NoopObserver;
+            let report = clean_with(d.path(), 0, &[], mode, &runner, &noop).unwrap();
+            let row = row_for(&report, &root);
+            assert_eq!(row.outcome, CleanOutcome::Skipped, "{mode:?}");
+            assert!(
+                row.detail.contains("target output"),
+                "{mode:?}: {}",
+                row.detail
+            );
+            assert!(runner.clean_calls().is_empty(), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn uncertain_build_identity_skips_entire_unit() {
+        // C003-F1: an output root whose physical identity cannot be proven makes
+        // the whole workspace unprovable; the unit is skipped, never partially
+        // cleaned.
+        for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+            let d = tempfile::tempdir().unwrap();
+            let root = ws_root(d.path(), "ws");
+            let target = cargo_output(&root.join("target"), 4096);
+            // A regular file where a build directory is configured: exists, not a
+            // symlink, but no provable physical directory identity.
+            let build = root.join("build");
+            fs::write(&build, b"not a directory").unwrap();
+            backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+            let mut runner = StagedCargo::new();
+            runner.add(&root, target, Some(build));
+            let noop = NoopObserver;
+            let report = clean_with(&root, 0, &[], mode, &runner, &noop).unwrap();
+            // An unprovable output identity leaves the workspace with no
+            // reportable output at all, so no CleanupUnit exists; nothing may be
+            // cleanable and no Cargo clean may run.
+            assert!(
+                report.results.is_empty()
+                    || report
+                        .results
+                        .iter()
+                        .all(|r| r.outcome == CleanOutcome::Skipped),
+                "{mode:?}: {report:?}"
+            );
+            for r in &report.results {
+                assert!(r.detail.contains("uncertain"), "{mode:?}: {}", r.detail);
+            }
+            assert!(runner.clean_calls().is_empty(), "{mode:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_build_identity_skips_entire_unit() {
+        use std::os::unix::fs::symlink;
+        let d = tempfile::tempdir().unwrap();
+        let root = ws_root(d.path(), "ws");
+        let target = cargo_output(&root.join("target"), 4096);
+        let real = cargo_output(&d.path().join("real-build"), 4096);
+        let link = root.join("build");
+        symlink(&real, &link).unwrap();
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        let mut runner = StagedCargo::new();
+        runner.add(&root, target, Some(link));
+        let noop = NoopObserver;
+        let report = clean_with(&root, 0, &[], CleanMode::Simulate, &runner, &noop).unwrap();
+        assert!(
+            report.results.is_empty()
+                || report
+                    .results
+                    .iter()
+                    .all(|r| r.outcome == CleanOutcome::Skipped),
+            "{report:?}"
+        );
+        assert!(runner.clean_calls().is_empty());
+    }
+
+    /// Synthetic mixed-class unit: private target group + uncertain build group.
+    fn synthetic_mixed_unit(
+        base: &Path,
+        target_class: OutputOwnershipClass,
+        build_class: OutputOwnershipClass,
+    ) -> workspace::CleanupUnit {
+        let a = base.join("ws/target");
+        let b = base.join("ws/build");
+        let measured = |p: &Path, class| workspace::AffectedGroup {
+            display: p.to_path_buf(),
+            covering: vec![p.to_path_buf()],
+            ownership: class,
+            kinds: Vec::new(),
+            measured: Some(PhysicalOutputGroup {
+                covering_roots: vec![p.to_path_buf()],
+                physical_paths: vec![p.to_path_buf()],
+                display_path: p.to_path_buf(),
+                owners: Vec::new(),
+                ownership: class,
+                bytes: 1024,
+                metric: SizeMetric::Allocated,
+                newest_mtime: None,
+                artifact_entries: 1,
+                uncertain: false,
+            }),
+            skip: None,
+        };
+        let mut target_group = measured(&a, target_class);
+        target_group.kinds = vec![OutputRootKind::Target];
+        let mut build_group = measured(&b, build_class);
+        build_group.kinds = vec![OutputRootKind::Build];
+        let ws = base.join("ws");
+        workspace::CleanupUnit {
+            workspace_idx: 0,
+            id: WorkspaceId(ws.clone()),
+            root: ws.clone(),
+            root_manifest: ws.join("Cargo.toml"),
+            output: OutputSet {
+                target: OutputRoot {
+                    kind: OutputRootKind::Target,
+                    logical_path: a.clone(),
+                    physical_path: Some(a.clone()),
+                    exists: true,
+                    is_symlink: false,
+                },
+                build: OutputRoot {
+                    kind: OutputRootKind::Build,
+                    logical_path: b.clone(),
+                    physical_path: Some(b.clone()),
+                    exists: true,
+                    is_symlink: false,
+                },
+            },
+            capability: CargoCapabilities {
+                build_dir: CargoBuildDirCapability::Distinct,
+                metadata_had_build_directory: true,
+                env_build_dir_set: false,
+            },
+            groups: vec![target_group, build_group],
+            unmapped: Vec::new(),
+            covering: vec![a, b],
+            bytes: 2048,
+        }
+    }
+
+    #[test]
+    fn gate_blocks_mixed_class_units_in_every_combination() {
+        // C003 §9 mixed matrix at the unit gate: PrivateBounded target plus
+        // ExternalUnproven / Shared / Uncertain build (and the mirrored target)
+        // all skip the entire unit; only all-private passes.
+        let d = tempfile::tempdir().unwrap();
+        for build_class in [
+            OutputOwnershipClass::ExternalUnproven,
+            OutputOwnershipClass::Shared,
+            OutputOwnershipClass::Uncertain,
+        ] {
+            let unit =
+                synthetic_mixed_unit(d.path(), OutputOwnershipClass::PrivateBounded, build_class);
+            let err = unit_block_reason(&unit, d.path(), &[]).unwrap_err();
+            assert!(err.contains("build output"), "{build_class:?}: {err}");
+            let unit =
+                synthetic_mixed_unit(d.path(), build_class, OutputOwnershipClass::PrivateBounded);
+            let err = unit_block_reason(&unit, d.path(), &[]).unwrap_err();
+            assert!(err.contains("target output"), "{build_class:?}: {err}");
+        }
+        let unit = synthetic_mixed_unit(
+            d.path(),
+            OutputOwnershipClass::PrivateBounded,
+            OutputOwnershipClass::PrivateBounded,
+        );
+        assert!(unit_block_reason(&unit, d.path(), &[]).is_ok());
+    }
+
+    #[test]
+    fn gate_blocks_unmeasured_and_unmapped_unit_members() {
+        // A sibling group that never became a measured candidate (empty, active,
+        // or uncertain activity) blocks the whole unit...
+        let d = tempfile::tempdir().unwrap();
+        let mut unit = synthetic_mixed_unit(
+            d.path(),
+            OutputOwnershipClass::PrivateBounded,
+            OutputOwnershipClass::PrivateBounded,
+        );
+        unit.groups[1].measured = None;
+        unit.groups[1].skip = Some(workspace::GroupSkipReason::ActiveOutput);
+        let err = unit_block_reason(&unit, d.path(), &[]).unwrap_err();
+        assert!(err.contains("build output"), "{err}");
+        assert!(err.contains("recent"), "{err}");
+        // ... and so does an existing output root with unprovable identity.
+        let mut unit = synthetic_mixed_unit(
+            d.path(),
+            OutputOwnershipClass::PrivateBounded,
+            OutputOwnershipClass::PrivateBounded,
+        );
+        unit.unmapped.push(unit.output.build.clone());
+        let err = unit_block_reason(&unit, d.path(), &[]).unwrap_err();
+        assert!(err.contains("unproven physical identity"), "{err}");
+    }
+
+    #[test]
+    fn equal_and_nested_target_build_are_one_unit_and_one_invocation() {
+        // C003 §9: target == build, build nested under target, and target nested
+        // under build each collapse to one deduplicated physical union and one
+        // Cargo invocation.
+        for shape in ["equal", "build_under_target", "target_under_build"] {
+            let d = tempfile::tempdir().unwrap();
+            let root = ws_root(d.path(), "ws");
+            let (target, build) = match shape {
+                "equal" => {
+                    let t = cargo_output(&root.join("target"), 4096);
+                    (t.clone(), t)
+                }
+                "build_under_target" => {
+                    let t = cargo_output(&root.join("target"), 8192);
+                    let b = cargo_output(&t.join("build"), 2048);
+                    (t, b)
+                }
+                _ => {
+                    let b = cargo_output(&root.join("build"), 8192);
+                    let t = cargo_output(&b.join("target"), 2048);
+                    (t, b)
+                }
+            };
+            backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+            let mut runner = StagedCargo::new();
+            runner.add(&root, target, Some(build));
+            let noop = NoopObserver;
+            let report = clean_with(&root, 0, &[], CleanMode::Execute, &runner, &noop).unwrap();
+            assert_eq!(report.results.len(), 1, "{shape}: one result");
+            let row = row_for(&report, &root);
+            assert_eq!(
+                row.outcome,
+                CleanOutcome::Cleaned,
+                "{shape}: {}",
+                row.detail
+            );
+            assert_eq!(row.output_roots.len(), 1, "{shape}: deduplicated union");
+            assert_eq!(runner.clean_calls().len(), 1, "{shape}: one invocation");
+        }
+    }
+
+    #[test]
+    fn cross_workspace_overlap_race_into_target_skips_candidate() {
+        // C003-F3: B is re-resolved into A's target region after the initial
+        // analysis; the complete fresh graph classifies the region shared and A
+        // is skipped before any Cargo clean.
+        for mode in [CleanMode::Simulate, CleanMode::Preview, CleanMode::Execute] {
+            let d = tempfile::tempdir().unwrap();
+            let root_a = ws_root(d.path(), "a");
+            let root_b = ws_root(d.path(), "b");
+            let target_a = cargo_output(&root_a.join("target"), 4096);
+            let target_b = cargo_output(&root_b.join("target"), 4096);
+            backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, target_a.clone(), None);
+            runner.add(&root_b, target_b, None);
+            // From the second metadata call (the final ownership-universe
+            // refresh) B points at A's target.
+            runner.stage(1, 2, target_a, None);
+            let noop = NoopObserver;
+            let report = clean_with(d.path(), 0, &[], mode, &runner, &noop).unwrap();
+            let row = row_for(&report, &root_a);
+            assert_eq!(
+                row.outcome,
+                CleanOutcome::Skipped,
+                "{mode:?}: {}",
+                row.detail
+            );
+            assert!(
+                row.detail.contains("shared") || row.detail.contains("overlaps"),
+                "{mode:?}: {}",
+                row.detail
+            );
+            assert!(runner.clean_calls().is_empty(), "{mode:?}: no clean at all");
+            assert!(
+                runner.metadata_for(1) >= 2,
+                "{mode:?}: B must actually be re-resolved by the fresh graph"
+            );
+        }
+    }
+
+    #[test]
+    fn cross_workspace_overlap_race_into_distinct_build_skips_candidate() {
+        // Same race against A's *distinct build* directory, proving the proof
+        // covers the complete OutputSet rather than the authorizing target group.
+        for mode in [CleanMode::Simulate, CleanMode::Preview, CleanMode::Execute] {
+            let d = tempfile::tempdir().unwrap();
+            let root_a = ws_root(d.path(), "a");
+            let root_b = ws_root(d.path(), "b");
+            let target_a = cargo_output(&root_a.join("target"), 4096);
+            let build_a = cargo_output(&root_a.join("build"), 4096);
+            let target_b = cargo_output(&root_b.join("target"), 4096);
+            backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, target_a, Some(build_a.clone()));
+            runner.add(&root_b, target_b, None);
+            runner.stage(1, 2, build_a, None);
+            let noop = NoopObserver;
+            let report = clean_with(d.path(), 0, &[], mode, &runner, &noop).unwrap();
+            let row = row_for(&report, &root_a);
+            assert_eq!(
+                row.outcome,
+                CleanOutcome::Skipped,
+                "{mode:?}: {}",
+                row.detail
+            );
+            assert!(
+                row.detail.contains("shared") || row.detail.contains("overlaps"),
+                "{mode:?}: {}",
+                row.detail
+            );
+            assert!(runner.clean_calls().is_empty(), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn cross_workspace_symlink_into_candidate_output_fails_closed() {
+        // C003 §9: B becomes a symlink pointing into A's output. The fresh
+        // physical graph cannot represent that overlap, so the explicit
+        // cross-workspace check must still fail closed.
+        use std::os::unix::fs::symlink;
+        let d = tempfile::tempdir().unwrap();
+        let root_a = ws_root(d.path(), "a");
+        let root_b = ws_root(d.path(), "b");
+        let target_a = cargo_output(&root_a.join("target"), 4096);
+        let target_b = cargo_output(&root_b.join("target"), 4096);
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        // B's staged target is a symlink to A's target directory.
+        let link_b = root_b.join("link-target");
+        symlink(&target_a, &link_b).unwrap();
+        let _ = target_b;
+        let mut runner = StagedCargo::new();
+        runner.add(&root_a, target_a, None);
+        runner.add(&root_b, target_b, None);
+        runner.stage(1, 2, link_b, None);
+        let noop = NoopObserver;
+        let report = clean_with(d.path(), 0, &[], CleanMode::Simulate, &runner, &noop).unwrap();
+        let row = row_for(&report, &root_a);
+        assert_eq!(row.outcome, CleanOutcome::Skipped, "{}", row.detail);
+        assert!(row.detail.contains("overlaps"), "{}", row.detail);
+        assert!(runner.clean_calls().is_empty());
+    }
+
+    #[test]
+    fn universe_workspace_that_cannot_reresolve_fails_closed() {
+        // C003 §10: failure to re-resolve any workspace that could affect the
+        // bounded ownership graph makes the candidate non-cleanable.
+        let d = tempfile::tempdir().unwrap();
+        let root_a = ws_root(d.path(), "a");
+        let root_b = ws_root(d.path(), "b");
+        let target_a = cargo_output(&root_a.join("target"), 4096);
+        let target_b = cargo_output(&root_b.join("target"), 4096);
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        let mut runner = StagedCargo::new();
+        runner.add(&root_a, target_a, None);
+        runner.add(&root_b, target_b, None);
+        // B resolves during the initial analysis and fails during the refresh.
+        runner.fail_metadata_from(1, 2);
+        let noop = NoopObserver;
+        let report = clean_with(d.path(), 0, &[], CleanMode::Simulate, &runner, &noop).unwrap();
+        let row = row_for(&report, &root_a);
+        assert_eq!(row.outcome, CleanOutcome::Skipped, "{}", row.detail);
+        assert!(
+            row.detail.contains("could not be re-proven"),
+            "{}",
+            row.detail
+        );
+        assert!(runner.clean_calls().is_empty());
+    }
+
+    #[test]
+    fn initial_shared_overlap_is_decided_conservatively_without_proof() {
+        // C003 §9: overlap present in the initial complete graph is not relied
+        // upon as fresh state; the unit is skipped from the initial graph alone
+        // and no ownership proof is consumed.
+        for mode in [CleanMode::Simulate, CleanMode::Preview, CleanMode::Execute] {
+            let d = tempfile::tempdir().unwrap();
+            let root_a = ws_root(d.path(), "a");
+            let root_b = ws_root(d.path(), "b");
+            let shared = cargo_output(&d.path().join("shared"), 4096);
+            backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, shared.clone(), None);
+            runner.add(&root_b, shared, None);
+            // Even if the fresh graph would no longer overlap, the initial
+            // complete graph already decided conservatively.
+            runner.stage(1, 2, root_b.join("target"), None);
+            let noop = NoopObserver;
+            let report = clean_with(d.path(), 0, &[], mode, &runner, &noop).unwrap();
+            let row = row_for(&report, &root_a);
+            assert_eq!(
+                row.outcome,
+                CleanOutcome::Skipped,
+                "{mode:?}: {}",
+                row.detail
+            );
+            assert!(row.detail.contains("shared"), "{mode:?}: {}", row.detail);
+            assert_eq!(
+                report.counters.proof_workspaces_refreshed, 0,
+                "{mode:?}: gate blocked before any ownership proof"
+            );
+            assert!(runner.clean_calls().is_empty(), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn candidate_target_or_build_change_still_skips() {
+        // C002 behavior preserved: the candidate workspace changing its own
+        // target/build between analysis and proof still fails closed.
+        let (_d, root, target, build) = sibling_ws_fixture("candidate-change");
+        let other = root.join("other-target");
+        let other_build = root.join("other-build");
+        cargo_output(&other, 1024);
+        cargo_output(&other_build, 1024);
+        backdate(&root, SystemTime::now() - Duration::from_secs(3600));
+        let mut runner = staged_sibling_runner(&root, &target, &build);
+        runner.stage(0, 2, other, None);
+        let noop = NoopObserver;
+        let report = clean_with(&root, 0, &[], CleanMode::Simulate, &runner, &noop).unwrap();
+        let row = row_for(&report, &root);
+        assert_eq!(row.outcome, CleanOutcome::Skipped, "{}", row.detail);
+        assert!(row.detail.contains("target changed"), "{}", row.detail);
+        assert!(runner.clean_calls().is_empty());
+    }
+
+    #[test]
+    fn union_accounting_counts_each_output_root_once() {
+        // C003 §9 accounting: pre-clean bytes equal the deduplicated union of
+        // every target/build group in the unit, post-clean measures the same
+        // union, and the observed decrease is the saturating difference.
+        let d = tempfile::tempdir().unwrap();
+        let root = ws_root(d.path(), "ws");
+        let target = cargo_output(&root.join("target"), 4096);
+        let build = cargo_output(&root.join("build"), 1 << 20);
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        let expected_before = traverse::measure_single_target(&target).bytes
+            + traverse::measure_single_target(&build).bytes;
+        let mut runner = staged_sibling_runner(&root, &target, &build);
+        runner.removes_on_clean(vec![
+            target.join("artifact.bin"),
+            build.join("artifact.bin"),
+        ]);
+        let noop = NoopObserver;
+        let report = clean_with(&root, 0, &[], CleanMode::Execute, &runner, &noop).unwrap();
+        let row = row_for(&report, &root);
+        assert_eq!(row.outcome, CleanOutcome::Cleaned, "{}", row.detail);
+        assert_eq!(
+            row.before_bytes,
+            Some(expected_before),
+            "pre-clean union counts both distinct roots once"
+        );
+        let after = row.after_bytes.expect("post-clean union measured");
+        assert!(after < expected_before);
+        assert_eq!(
+            row.observed_decrease,
+            Some(expected_before.saturating_sub(after))
+        );
+        // The build directory is only counted once even though the unit has two
+        // affected groups.
+        assert!(row.output_roots.contains(&canonical(&target)));
+        assert!(row.output_roots.contains(&canonical(&build)));
+    }
+
+    #[test]
+    fn post_clean_disappearing_sibling_is_measured_normally() {
+        // C003 §7.4: if one output root disappears and another remains, measure
+        // the surviving union normally.
+        let (_d, root, target, build) = sibling_ws_fixture("disappearing-sibling");
+        let build_root = build.clone();
+        let mut runner = staged_sibling_runner(&root, &target, &build);
+        runner.removes_on_clean(vec![target.join("artifact.bin")]);
+        runner.on_clean(move || {
+            let _ = fs::remove_dir_all(&build_root);
+        });
+        let noop = NoopObserver;
+        let report = clean_with(&root, 0, &[], CleanMode::Execute, &runner, &noop).unwrap();
+        let row = row_for(&report, &root);
+        assert_eq!(row.outcome, CleanOutcome::Cleaned, "{}", row.detail);
+        let before = row.before_bytes.unwrap();
+        let after = row.after_bytes.expect("surviving union measured");
+        assert!(after < before);
+        assert_eq!(row.observed_decrease, Some(before - after));
+    }
+
+    #[test]
+    fn post_clean_measurement_uncertainty_fabricates_no_decrease() {
+        // C003 §7.4: post-clean measurement uncertainty is diagnostic and must
+        // not fabricate recovered bytes.
+        let (_d, root, target, build) = sibling_ws_fixture("uncertain-measurement");
+        let build_root = build.clone();
+        let mut runner = staged_sibling_runner(&root, &target, &build);
+        runner.removes_on_clean(vec![target.join("artifact.bin")]);
+        runner.on_clean(move || {
+            let _ = fs::remove_dir_all(&build_root);
+            let _ = fs::write(&build_root, b"not a directory");
+        });
+        let noop = NoopObserver;
+        let report = clean_with(&root, 0, &[], CleanMode::Execute, &runner, &noop).unwrap();
+        let row = row_for(&report, &root);
+        assert_eq!(row.outcome, CleanOutcome::Cleaned, "{}", row.detail);
+        assert_eq!(row.after_bytes, None);
+        assert_eq!(row.observed_decrease, None, "no fabricated recovered bytes");
+        assert!(row.detail.contains("measurement failed"), "{}", row.detail);
+        assert!(report.diagnostics >= 1);
+    }
+
+    #[test]
+    fn stats_account_for_final_ownership_universe_proof_work() {
+        // C003-F4: cleanup --stats must include the final-proof Cargo
+        // re-resolution work, not only the initial scan counters.
+        let d = tempfile::tempdir().unwrap();
+        let root_a = ws_root(d.path(), "a");
+        let root_b = ws_root(d.path(), "b");
+        let target_a = cargo_output(&root_a.join("target"), 4096);
+        let target_b = cargo_output(&root_b.join("target"), 2048);
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        let mut runner = StagedCargo::new();
+        runner.add(&root_a, target_a, None);
+        runner.add(&root_b, target_b, None);
+        let noop = NoopObserver;
+        let report = clean_with(d.path(), 0, &[], CleanMode::Simulate, &runner, &noop).unwrap();
+        let counters = &report.counters;
+        assert_eq!(counters.cargo_metadata_calls, 2, "initial analysis");
+        // Two cleanable candidates, each re-resolving the whole two-workspace
+        // ownership universe: 2 + 2 bounded metadata calls.
+        assert_eq!(counters.proof_workspaces_refreshed, 4);
+        assert_eq!(counters.proof_cargo_metadata_calls, 4);
+        assert_eq!(counters.proof_cargo_locate_calls, 4);
+        assert!(counters.proof_cargo_metadata_nanos > 0);
+        assert!(counters.proof_source_activity_nanos > 0);
+        let line = counters.proof_stats_line();
+        assert!(line.contains("proof_metadata=4"), "{line}");
+        assert!(line.contains("proof_locate=4"), "{line}");
+        assert!(counters.proof_timings_line().contains("proof_metadata="));
+        // The initial counters are not polluted by proof work.
+        assert_eq!(counters.cargo_metadata_calls, 2);
+        assert!(counters.stats_line().contains("metadata=2"));
     }
 }
