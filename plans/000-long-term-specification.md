@@ -168,15 +168,18 @@ Directory mtimes MAY participate because create/remove/rename operations can upd
 
 ## 8. Configuration contract
 
-The product MUST work without a configuration file. When present, the canonical user configuration is named config.toml under the platform-appropriate cargo-cleanme configuration directory. The repository SHOULD ship an example/default template, and the CLI SHOULD provide a way to print the config path and initialize that template.
+The canonical user configuration is named config.toml under the platform-appropriate cargo-cleanme configuration directory. On first operational use, a missing config MUST be created atomically from the checked-in canonical template before loading. Existing malformed configuration is an actionable error and MUST NOT be replaced automatically. A path-inspection command such as `config path` remains side-effect free.
 
-Initial schema:
+The CLI MUST provide a `config edit` command that ensures the effective config exists, opens it in the user's editor, waits for editor completion, and validates the resulting TOML. Editor resolution follows `VISUAL`, then `EDITOR`, then bounded executable fallbacks; editor specifications with arguments are parsed without invoking a shell.
+
+Current schema direction:
 
 ~~~toml
 [scan]
 recency_seconds = 300
+learned_root_retention_days = 30
 
-# Optional exclusive scope.
+# Optional exclusive scope retained for compatibility.
 # root = "/path/to/projects"
 
 ignore = [
@@ -188,48 +191,63 @@ unignore = [
 ]
 ~~~
 
-Initial validation rules:
+Validation rules:
 
 - recency_seconds MUST be a non-negative integer;
+- learned_root_retention_days MUST be a bounded non-negative integer with a documented default of 30;
 - root, ignore entries, and unignore entries MUST be absolute after supported home/environment expansion;
 - ignore entries are glob-style search exclusions;
-- unignore entries are explicit directory paths in V0.1, not arbitrary inverse globs;
+- unignore entries are explicit directory paths, not arbitrary inverse globs;
 - malformed configuration is an actionable error, not silently ignored configuration.
+
+Machine-learned project/root inventory is NOT stored in config.toml. It is versioned machine-local application state under the platform state/data-local directory and may be rebuilt by Full discovery.
 
 ## 9. Scope and filter precedence
 
-Effective scope precedence is:
+Discovery intent is resolved in this order:
 
 ~~~text
 explicit CLI scan root
     >
-configured scan.root
+explicit --full request
     >
-platform system roots
+configured scan.root (legacy exclusive scope)
+    >
+Routine adaptive roots
 ~~~
 
-If either explicit CLI root or configured scan.root is effective, ignore and unignore search filters are not applied. The explicit scope itself is the search sandbox.
+A CLI root and `--full` are mutually exclusive.
 
-Without an explicit scope, ignore filters apply to global discovery. An explicit unignore path takes precedence over an ignore pattern. The walker MUST retain enough ancestry to reach an unignored descendant even when its ancestor matches an ignore rule.
+If an explicit CLI root or configured scan.root is effective, ignore/unignore search filters are bypassed and the explicit scope itself is the search sandbox.
+
+Routine and Full discovery may apply configured discovery filters. An explicit unignore path takes precedence over an ignore pattern. The walker MUST retain enough ancestry to reach an unignored descendant even when its ancestor matches an ignore rule.
 
 Internal safety pruning such as no symlink traversal, VCS metadata exclusion, and target-tree pruning is not a user filter and remains active in every scope.
 
-## 10. System scan semantics
+## 10. Routine and Full scan semantics
 
-A no-argument scan is intended to discover user-accessible projects across the host rather than only the current directory.
+A no-argument scan is a **Routine** scan over a bounded adaptive root set. It is shallow in scope but recursively complete beneath each selected root.
 
-Platform root enumeration MUST be explicit and tested:
+Routine roots consist of conservative existing platform/user seed directories plus active learned developer roots from machine-local discovery state. Broad roots such as the filesystem root, a drive root, the user's home directory itself, /Users, or /home MUST NOT become routine roots merely because they contain a Rust project.
 
-- Unix-like systems may begin from the filesystem root, but global discovery MUST apply measured platform safety/performance exclusions for OS-managed trees that cannot represent ordinary user project locations.
-- A platform policy MAY split a writable exception such as macOS /usr/local into a separate global root when its protected parent is pruned.
-- Tool-managed Rust trees such as Cargo registry/git caches and rustup-installed toolchains MAY be pruned during global discovery when their location is established from authoritative environment/platform rules.
-- Performance-only global prunes MUST NOT silently narrow an explicit user-provided scan root.
+`scan --full` is the explicit **Full** reconciliation operation. Full discovery retains the exhaustive platform reachability established by M006A-M006D:
+
+- Unix-like systems may begin from the filesystem root, with tested safety/performance exclusions for OS-managed trees that cannot represent ordinary user project locations.
+- A platform policy MAY split a writable exception such as macOS /usr/local into a separate Full root when its protected parent is pruned.
+- Tool-managed Rust trees such as Cargo registry/git caches and rustup-installed toolchains MAY be pruned during Full discovery when their location is established from authoritative environment/platform rules.
+- Performance-only Full prunes MUST NOT silently narrow an explicit user-provided scan root.
 - Windows enumerates suitable local filesystem volumes.
 - permission-denied and disappearing entries are recorded and skipped unless they prevent trustworthy analysis of a discovered candidate.
 
-Broad writable domains are not eligible for pruning merely because they are expensive.
+A successfully completed Full scan records the exact Cargo workspaces it resolves and derives learned Routine roots for future scans. Learned roots record the last time a Rust project was positively observed beneath them. The default learned-root retention is 30 days and is configurable.
 
-Network filesystems and removable volumes MAY be policy-controlled later. V0.1 MUST document exactly what the platform adapter traverses.
+Only a successfully completed Full reconciliation may expire learned roots based on absence/age. Routine or Explicit scans may advance positive last-seen timestamps but MUST NOT remove roots from negative evidence. A failed/cancelled/partial Full scan MUST NOT publish a pruned state generation. Uncertain Full coverage retains affected learned roots.
+
+Learned-state retention NEVER narrows Full or Explicit discovery. A location expired from Routine scope can be rediscovered by a later Full scan.
+
+Broad writable domains are not eligible for permanent Full pruning merely because they are expensive.
+
+Network filesystems and removable volumes MAY be policy-controlled later. The platform adapter MUST document exactly what Full discovery traverses.
 
 ## 11. Symlink and filesystem-boundary policy
 
@@ -291,7 +309,9 @@ The design SHOULD:
 
 Performance qualification MUST include representative synthetic deep/wide trees and at least one real developer tree. Absolute timing gates are secondary to regression comparisons because storage hardware varies substantially.
 
-Global-scan performance work SHOULD attribute traversal/prune/Cargo-resolution costs before adding exclusions, SHOULD avoid constructing one worker pool per global root, and MUST preserve deterministic discovery semantics.
+Routine-scan performance SHOULD scale with the selected developer root set rather than whole-host filesystem breadth. Full-scan performance work SHOULD attribute traversal/prune/Cargo-resolution costs before adding exclusions, SHOULD avoid constructing one worker pool per Full root, and MUST preserve deterministic discovery semantics.
+
+Machine-learned discovery state is a search optimization only. It MUST NOT be used as Cargo workspace/output ownership proof or cleanup authorization.
 
 Workspace member roots and resolved output exclusions SHOULD use compatible physical path identity so output trees are not redundantly traversed as source activity on platforms with path aliases/symlinked ancestors.
 
