@@ -1,6 +1,8 @@
 # M006C — Global Traversal Throughput Without Scope Narrowing
 
-Status: ready
+Status: conditionally closed
+
+Closure: `plans/closure/artifact-discovery-cleanup/006c-status.md`. The bounded traversal improvements and parity evidence landed, but the full no-argument reference scan still exceeds 120 seconds; corrective work is tracked by ready M006D.
 
 Repository baseline: `755eb66` (M006A/M006B implementation and cross-platform test correction); current trigger measurements are recorded below and in `plans/closure/artifact-discovery-cleanup/006a-status.md`.
 
