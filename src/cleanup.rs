@@ -802,10 +802,18 @@ pub fn final_cleanup_proof(
             .clone()
             .unwrap_or_else(|| canon(&fresh_ws.output.build.logical_path));
         if old_target_canon != new_target_canon {
-            return Err("workspace changed before cleanup; skipped: target changed".into());
+            return Err(format!(
+                "workspace changed before cleanup; skipped: target changed (was {}, now {})",
+                old_target_canon.display(),
+                new_target_canon.display()
+            ));
         }
         if old_build_canon != new_build_canon {
-            return Err("workspace changed before cleanup; skipped: build-dir changed".into());
+            return Err(format!(
+                "workspace changed before cleanup; skipped: build-dir changed (was {}, now {})",
+                old_build_canon.display(),
+                new_build_canon.display()
+            ));
         }
         fresh_workspaces.insert(fresh_ws.id.clone(), fresh_ws);
     }
