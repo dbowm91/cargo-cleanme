@@ -28,5 +28,7 @@ The production traversal visited 4,670,216 entries and found 1,803 manifests. Ca
 ## Limitations and downstream disposition
 
 - M006E is conditionally closed until a reference Full reconciliation can distinguish recoverable partial coverage, preserve roots intersecting uncertainty, and publish a trustworthy generation.
-- M007 remains blocked by this hard dependency and by the one-root scope of the current C003/C004 fresh ownership proof.
+- Corrective C005 is the ready handoff for that work: `plans/implementation/artifact-discovery-cleanup/c005-uncertainty-aware-state-reconciliation-and-config-edit-hardening.md`.
+- C005 also owns containment-collapsed persisted roots, visible fail-soft state diagnostics, safer state temp publication, explicit retention=0 semantics, and cross-platform `config edit` fake-editor qualification.
+- M007 remains blocked by this hard dependency and by the one-root scope of the current C003/C004 fresh ownership proof; corrective C006 owns the combined-root proof.
 - No learned state is used as cleanup ownership or authorization proof.
