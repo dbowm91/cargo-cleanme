@@ -114,7 +114,7 @@ M004 cleanup execution [closed]
 C001 public-contract/MSRV/traversal reconciliation [closed]
                    |
                    v
-M005A workspace/output resolution + fail-fast progress [ready]
+M005A workspace/output resolution + fail-fast progress [closed]
                    |
                    v
 M005B authorized redirected cleanup + --dryrun [historically closed]
