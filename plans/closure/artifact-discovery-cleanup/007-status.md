@@ -33,6 +33,7 @@ Date: 2026-10-03
 
 ## Required unblocking work
 
-- Close M006E with successful uncertainty-aware state reconciliation evidence.
-- Define and implement a fresh proof that covers every selected root and every output owner across the combined root set, while preserving per-workspace CleanupUnit freshness and fail-closed handling.
-- Add cross-root redirected-output, race, overlap, and zero-Cargo-clean regression fixtures, then repeat hosted Linux/macOS/Windows and Rust 1.89 qualification.
+- Implement and close C005 (`plans/implementation/artifact-discovery-cleanup/c005-uncertainty-aware-state-reconciliation-and-config-edit-hardening.md`) so M006E can publish useful state while retaining uncertainty conservatively.
+- Implement C006 (`plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md`) so every selected root participates in one complete C004 coverage universe and one fresh C003-style physical ownership graph before each CleanupUnit disposition.
+- Make Preview, Simulate, and Execute consume the same combined ownership result; independent per-root simulation is not sufficient M007 closure evidence.
+- Add cross-root redirected-output, race, overlap, unresolved-participant, deduplicated-accounting, and zero-Cargo-clean regression fixtures, then repeat hosted Linux/macOS/Windows and Rust 1.89 qualification.
