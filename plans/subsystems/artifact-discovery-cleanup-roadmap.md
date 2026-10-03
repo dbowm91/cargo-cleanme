@@ -376,7 +376,7 @@ Outcome: cleanup resolution now retains authoritative manifest coverage and unre
 
 Status: active.
 
-M006 is split into ordered implementation tracks. M006A's policy, traversal, and path-normalization work is conditionally closed because the reference macOS scan exceeded 120 seconds. M006B is closed without weakening M006A's discovery contract. M006C landed bounded traversal improvements and parity coverage, but the reference scan still exceeded 120 seconds; it is conditionally closed with corrective work tracked by M006D. M006D investigates full-scope completion cost while preserving writable project-bearing domains.
+M006 is split into ordered implementation tracks. M006A's policy, traversal, and path-normalization work is conditionally closed because the reference macOS scan exceeded 120 seconds. M006B is closed without weakening M006A's discovery contract. M006C landed bounded traversal improvements and parity coverage, but the reference scan still exceeded 120 seconds; it is conditionally closed with corrective work tracked by M006D. M006D identified traversal as the remaining cost and preserved writable project-bearing domains, but its native no-argument scan also exceeded 120 seconds. Proposed M006E seeks an explicit scope-versus-latency decision before changing product behavior.
 
 ### M006A — Global scan pruning, traversal policy, and path normalization
 
@@ -419,13 +419,19 @@ M006B changes performance only; C003/C004 destructive semantics remain authorita
 
 Status: conditionally closed. Closure: `plans/closure/artifact-discovery-cleanup/006c-status.md`. Plan: `plans/implementation/artifact-discovery-cleanup/006c-global-traversal-throughput-without-scope-narrowing.md`.
 
-M006C preserved global scope, bounded the normal worker cap, added opt-in worker/engine profiling, and reduced per-entry attribution/path-name overhead. Synthetic wide/deep fixtures preserve the same manifest set and counter totals across worker caps, metadata modes, and event orders. The exact reference-host no-argument scan still exceeded 120 seconds, so M006D owns the remaining qualification.
+M006C preserved global scope, bounded the normal worker cap, added opt-in worker/engine profiling, and reduced per-entry attribution/path-name overhead. Synthetic wide/deep fixtures preserve the same manifest set and counter totals across worker caps, metadata modes, and event orders. The exact reference-host no-argument scan still exceeded 120 seconds; M006D investigated the remaining traversal cost.
 
 ### M006D — Global scan completion qualification
 
-Status: ready. Plan: `plans/implementation/artifact-discovery-cleanup/006d-global-scan-completion-qualification.md`.
+Status: conditionally closed. Closure: `plans/closure/artifact-discovery-cleanup/006d-status.md`.
 
-M006D is unblocked by M006C's repeated exact timeout and near-complete entry profiles. It must identify the completion tail and meet the same 120-second bound without narrowing global reachability or weakening no-follow, manifest, filter, ordering, counter, or cleanup-proof semantics.
+M006D identified traversal as the remaining measured cost and preserved global reachability, no-follow, manifest, filter, ordering, counter, and cleanup-proof semantics, but the exact native scan still exceeds 120 seconds. Proposed M006E seeks the explicit scope-versus-latency policy decision required before further product changes.
+
+### M006E — Global scan scope and latency policy
+
+Status: proposed. Plan: `plans/implementation/artifact-discovery-cleanup/006e-global-scan-scope-and-latency-policy.md`.
+
+M006E records the required product decision between retaining full-machine discovery with a revised representative latency bound, narrowing the default scope, or adding explicit scope controls. No option is selected until that decision is supplied.
 
 ## 11. Cross-cutting reliability concerns
 
