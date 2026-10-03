@@ -33,7 +33,7 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | C007 discovery-state recovery and planning cleanup | M006E/M006F/M007/C005/C006 are closed. C007 is the only active handoff and addresses self-healing recoverable-invalid state plus post-M007 planning/repository hygiene. M006A/C/D remain historical conditional evidence, not blockers. |
+| Artifact discovery and cleanup | closing | plans/subsystems/artifact-discovery-cleanup-roadmap.md | C007 closure evidence | Phase 7/M006 and Phase 8/M007 are closed. M006A/C/D retain historical conditional evidence and are not blockers. C007 implementation is landed; hosted CI and formal closure evidence remain. |
 
 ## Implementation handoffs
 
@@ -59,13 +59,13 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 | Artifact discovery and cleanup | M007 learned/full cleanup orchestration | **closed** | plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-orchestration.md | Corrective closure: plans/closure/artifact-discovery-cleanup/c006-status.md. Combined selected-root proof, known/full orchestration, mode parity, zero-clean simulation, and platform/MSRV gates pass. Historical blocked record is unchanged. |
 | Artifact discovery and cleanup | C005 uncertainty-aware state reconciliation + config/edit hardening | **closed** | plans/implementation/artifact-discovery-cleanup/c005-uncertainty-aware-state-reconciliation-and-config-edit-hardening.md | Closure: plans/closure/artifact-discovery-cleanup/c005-status.md. Localized Full uncertainty reconciles conservatively; isolated real Full published schema 2; hosted platform/MSRV gates pass. |
 | Artifact discovery and cleanup | C006 combined-root cleanup ownership universe | **closed** | plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md | Closure: plans/closure/artifact-discovery-cleanup/c006-status.md. Combined discovery/coverage/ownership proof and final per-candidate refresh pass hosted platform/MSRV gates. |
-| Artifact discovery and cleanup | C007 discovery-state recovery + post-M007 planning cleanup | **ready** | plans/implementation/artifact-discovery-cleanup/c007-discovery-state-recovery-and-post-m007-planning-cleanup.md | Self-heal schema-0/corrupt state only after trustworthy Full reconciliation, protect newer unsupported schemas, and reconcile closed milestone/branch/documentation status. |
+| Artifact discovery and cleanup | C007 discovery-state recovery + post-M007 planning cleanup | **closing** | plans/implementation/artifact-discovery-cleanup/c007-discovery-state-recovery-and-post-m007-planning-cleanup.md | Local verification passed; hosted Linux/macOS/Windows and Rust 1.89 CI evidence is pending. |
 
-## Immediate handoff
+## Current closure
 
-C007 is the only active implementation handoff.
+C007 implementation is landed and closure evidence is pending.
 
-Expected order:
+Milestone sequence:
 
 ~~~text
 M001-M005 + C001-C004 -> closed
@@ -74,15 +74,10 @@ M006B/M006E/M006F -> closed
 C005 -> closed
 C006 -> closed
 M007 -> closed by C006
-C007 discovery-state recovery + post-M007 planning cleanup -> ready
+C007 discovery-state recovery + post-M007 planning cleanup -> closing
 ~~~
 
-C007 owns two residual items:
-
-- allow a trustworthy successful Full scan to replace recoverable-invalid local discovery state (schema 0/corrupt supported state) while never overwriting a newer unsupported schema or unreadable/I/O-failed state;
-- reconcile active planning after M007 closure and retire merged/superseded branches according to repository hygiene checks.
-
-No later feature implementation handoff is currently registered. Selective cleanup/policy and distribution remain future roadmap topics requiring separate research before implementation planning.
+After C007 closure, no implementation handoff will be active. Selective cleanup/policy and distribution remain future roadmap topics requiring separate research before implementation planning.
 
 ### Current destructive safety boundary
 

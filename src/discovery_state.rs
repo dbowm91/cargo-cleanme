@@ -9,6 +9,56 @@ use std::{
 
 pub const CURRENT_SCHEMA: u32 = 2;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StateProblem {
+    Invalid { path: PathBuf, detail: String },
+    Unavailable { path: PathBuf, detail: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StateLoad {
+    Missing,
+    Loaded(DiscoveryState),
+    RecoverableInvalid(StateProblem),
+    UnsupportedNewer {
+        path: PathBuf,
+        schema: u64,
+        current: u32,
+    },
+    Unavailable(StateProblem),
+}
+
+impl StateLoad {
+    pub fn diagnostic(&self) -> Option<String> {
+        match self {
+            Self::RecoverableInvalid(StateProblem::Invalid { path, detail }) => Some(format!(
+                "ignoring unusable discovery state {}: {detail}",
+                path.display()
+            )),
+            Self::UnsupportedNewer { path, schema, .. } => Some(format!(
+                "discovery state {} uses unsupported schema {schema}; update cargo-cleanme",
+                path.display()
+            )),
+            Self::Unavailable(StateProblem::Unavailable { path, detail }) => Some(format!(
+                "cannot read discovery state {}: {detail}",
+                path.display()
+            )),
+            _ => None,
+        }
+    }
+}
+
+/// Select the only prior states that Full reconciliation may safely publish
+/// over. `None` means the state is newer than this binary or unavailable.
+pub fn full_reconciliation_prior(load: &StateLoad) -> Option<(DiscoveryState, bool)> {
+    match load {
+        StateLoad::Loaded(state) => Some((state.clone(), false)),
+        StateLoad::Missing => Some((DiscoveryState::default(), false)),
+        StateLoad::RecoverableInvalid(_) => Some((DiscoveryState::default(), true)),
+        StateLoad::UnsupportedNewer { .. } | StateLoad::Unavailable(_) => None,
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DiscoveryState {
@@ -200,42 +250,57 @@ pub fn state_path() -> Option<PathBuf> {
     )
 }
 
-/// Loading distinguishes an absent state file from corrupt, unsupported, and unavailable state.
-pub fn load_default() -> Result<Option<DiscoveryState>, String> {
+/// Loading distinguishes absence, supported state, recoverable invalid data,
+/// newer schemas, and I/O failures so callers never infer overwrite safety from text.
+pub fn load_default() -> StateLoad {
     let Some(path) = state_path() else {
-        return Ok(None);
+        return StateLoad::Missing;
     };
     load_at(&path)
 }
-pub fn load_at(path: &Path) -> Result<Option<DiscoveryState>, String> {
+pub fn load_at(path: &Path) -> StateLoad {
     let data = match fs::read(path) {
         Ok(data) => data,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return StateLoad::Missing,
         Err(e) => {
-            return Err(format!(
-                "cannot read discovery state {}: {e}",
-                path.display()
-            ));
+            return StateLoad::Unavailable(StateProblem::Unavailable {
+                path: path.to_path_buf(),
+                detail: e.to_string(),
+            });
         }
     };
-    let mut state: DiscoveryState = serde_json::from_slice(&data)
-        .map_err(|e| format!("ignoring corrupt discovery state {}: {e}", path.display()))?;
-    if state.schema_version > CURRENT_SCHEMA {
-        return Err(format!(
-            "discovery state {} uses unsupported schema {}; update cargo-cleanme",
-            path.display(),
-            state.schema_version
-        ));
+    // Check the version before decoding the current representation. A newer
+    // writer may have added fields or changed record structure that this
+    // binary must leave untouched.
+    let version = match serde_json::from_slice::<serde_json::Value>(&data) {
+        Ok(serde_json::Value::Object(object)) => object
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64),
+        _ => None,
+    };
+    if let Some(schema) = version.filter(|schema| *schema > u64::from(CURRENT_SCHEMA)) {
+        return StateLoad::UnsupportedNewer {
+            path: path.to_path_buf(),
+            schema,
+            current: CURRENT_SCHEMA,
+        };
     }
+    let invalid = |detail: String| {
+        StateLoad::RecoverableInvalid(StateProblem::Invalid {
+            path: path.to_path_buf(),
+            detail,
+        })
+    };
+    let mut state: DiscoveryState = match serde_json::from_slice(&data) {
+        Ok(state) => state,
+        Err(error) => return invalid(error.to_string()),
+    };
     if state.schema_version == 0 {
-        return Err(format!(
-            "ignoring discovery state {} with invalid schema 0",
-            path.display()
-        ));
+        return invalid("invalid schema 0".into());
     }
     // v1 records deserialize with defaults as authoritative resolved projects.
     state.schema_version = CURRENT_SCHEMA;
-    Ok(Some(state))
+    StateLoad::Loaded(state)
 }
 
 pub fn publish(state: &DiscoveryState) -> Result<(), String> {
@@ -316,11 +381,127 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("state.json");
         fs::write(&p, r#"{"schema_version":1,"last_full_at":12,"projects":[{"workspace":"/work/a"}],"learned_roots":[]}"#).unwrap();
-        let loaded = load_at(&p).unwrap().unwrap();
+        let StateLoad::Loaded(loaded) = load_at(&p) else {
+            panic!("expected loaded state")
+        };
         assert_eq!(loaded.schema_version, CURRENT_SCHEMA);
         assert_eq!(loaded.projects[0].resolution, ResolutionStatus::Resolved);
         fs::write(&p, r#"{"schema_version":99}"#).unwrap();
-        assert!(load_at(&p).unwrap_err().contains("unsupported schema"));
+        assert!(matches!(
+            load_at(&p),
+            StateLoad::UnsupportedNewer { schema: 99, .. }
+        ));
+    }
+
+    #[test]
+    fn state_load_classifies_absent_invalid_newer_and_unavailable_paths() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("state.json");
+        assert_eq!(load_at(&p), StateLoad::Missing);
+
+        fs::write(&p, br#"{"schema_version":0}"#).unwrap();
+        assert!(matches!(load_at(&p), StateLoad::RecoverableInvalid(_)));
+        fs::write(&p, b"not json").unwrap();
+        assert!(matches!(load_at(&p), StateLoad::RecoverableInvalid(_)));
+        fs::write(&p, br#"{"schema_version":18446744073709551615}"#).unwrap();
+        assert!(matches!(
+            load_at(&p),
+            StateLoad::UnsupportedNewer {
+                schema: u64::MAX,
+                ..
+            }
+        ));
+
+        let directory = d.path().join("unreadable.json");
+        fs::create_dir(&directory).unwrap();
+        assert!(matches!(load_at(&directory), StateLoad::Unavailable(_)));
+    }
+
+    #[test]
+    fn supported_schema_with_invalid_structure_is_recoverable() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("state.json");
+        fs::write(
+            &p,
+            br#"{"schema_version":2,"projects":[{"not_workspace":"/work"}]}"#,
+        )
+        .unwrap();
+        assert!(matches!(load_at(&p), StateLoad::RecoverableInvalid(_)));
+    }
+
+    #[test]
+    fn full_reconciliation_recovers_invalid_only_after_complete_scan() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("state.json");
+        for invalid in [b"{\"schema_version\":0}".as_slice(), b"corrupt"] {
+            fs::write(&p, invalid).unwrap();
+            let load = load_at(&p);
+            let (prior, replacing_invalid) = full_reconciliation_prior(&load).unwrap();
+            assert!(replacing_invalid);
+            assert_eq!(
+                reconcile_full(&prior, &[], &[], false, 10, 30, None),
+                Reconciliation::NoPublication("Full traversal was incomplete")
+            );
+            assert_eq!(fs::read(&p).unwrap(), invalid);
+
+            let Reconciliation::Publish(next) =
+                reconcile_full(&prior, &[], &[], true, 10, 30, None)
+            else {
+                panic!("complete Full reconciliation should produce a generation")
+            };
+            publish_at(&p, &next).unwrap();
+            let StateLoad::Loaded(recovered) = load_at(&p) else {
+                panic!("recovered state should use the current schema")
+            };
+            assert_eq!(recovered.schema_version, CURRENT_SCHEMA);
+        }
+    }
+
+    #[test]
+    fn full_reconciliation_never_selects_newer_or_unavailable_state_for_publication() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("state.json");
+        let bytes = br#"{"schema_version":99,"future":"preserve me"}"#;
+        fs::write(&p, bytes).unwrap();
+        assert!(full_reconciliation_prior(&load_at(&p)).is_none());
+        assert_eq!(fs::read(&p).unwrap(), bytes);
+
+        let directory = d.path().join("directory.json");
+        fs::create_dir(&directory).unwrap();
+        assert!(full_reconciliation_prior(&load_at(&directory)).is_none());
+    }
+
+    #[test]
+    fn full_reconciliation_creates_missing_and_migrates_v1_state() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("state.json");
+        for initial in [
+            None,
+            Some(
+                br#"{"schema_version":1,"last_full_at":4,"projects":[],"learned_roots":[]}"#
+                    .as_slice(),
+            ),
+        ] {
+            if let Some(bytes) = initial {
+                fs::write(&p, bytes).unwrap();
+            } else {
+                let _ = fs::remove_file(&p);
+            }
+            let (prior, replacing_invalid) =
+                full_reconciliation_prior(&load_at(&p)).expect("safe Full prior");
+            assert!(!replacing_invalid);
+            let Reconciliation::Publish(next) =
+                reconcile_full(&prior, &[], &[], true, 10, 30, None)
+            else {
+                panic!("complete Full reconciliation should publish")
+            };
+            publish_at(&p, &next).unwrap();
+            let StateLoad::Loaded(reconciled) = load_at(&p) else {
+                panic!("published state should be readable")
+            };
+            assert_eq!(reconciled.schema_version, CURRENT_SCHEMA);
+            assert_eq!(reconciled.last_full_at, Some(10));
+        }
     }
     #[test]
     fn unique_temp_attempts_replace_existing_state() {
@@ -336,7 +517,10 @@ mod tests {
             .join(format!(".state.json.{}.0.tmp", std::process::id()));
         fs::write(&collision, b"busy").unwrap();
         publish_at(&p, &state).unwrap();
-        assert_eq!(load_at(&p).unwrap().unwrap().last_full_at, Some(12));
+        let StateLoad::Loaded(loaded) = load_at(&p) else {
+            panic!("expected loaded state")
+        };
+        assert_eq!(loaded.last_full_at, Some(12));
         assert_eq!(fs::read(&collision).unwrap(), b"busy");
     }
 

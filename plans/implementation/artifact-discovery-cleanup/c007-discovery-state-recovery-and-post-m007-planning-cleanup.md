@@ -1,6 +1,6 @@
 # Corrective C007 — Discovery-State Recovery and Post-M007 Planning Cleanup
 
-Status: ready
+Status: closing
 
 Repository baseline: `cf7c1a39fa01d19dd23874b884056556d4384a16`
 

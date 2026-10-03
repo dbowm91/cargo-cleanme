@@ -86,7 +86,7 @@ fn routine_roots(retention_days: u16) -> Vec<PathBuf> {
         .filter(|p| p.is_dir())
         .collect();
     match crate::discovery_state::load_default() {
-        Ok(Some(state)) => {
+        crate::discovery_state::StateLoad::Loaded(state) => {
             let now = crate::discovery_state::now_seconds();
             roots.extend(
                 state
@@ -101,8 +101,11 @@ fn routine_roots(retention_days: u16) -> Vec<PathBuf> {
                     .map(|r| r.path),
             );
         }
-        Ok(None) => {}
-        Err(error) => eprintln!("cargo-cleanme: {error}; using seed/configured Routine roots"),
+        load => {
+            if let Some(error) = load.diagnostic() {
+                eprintln!("cargo-cleanme: {error}; using seed/configured Routine roots");
+            }
+        }
     }
     canonical_dedup_roots(roots)
 }

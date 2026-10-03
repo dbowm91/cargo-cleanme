@@ -182,7 +182,7 @@ Shared, uncertain, and externally unproven physical output remains inventory-onl
 
 Roadmap milestone: M006.
 
-Status: closed for current objectives; C007 is a bounded post-closure recovery/documentation corrective.
+Status: closed for current objectives. M006A/C/D retain their historical conditional closure records; they are not active blockers.
 
 Objective:
 
@@ -220,7 +220,7 @@ The historical 120-second full-machine no-argument target is superseded by ADR 0
 
 Roadmap milestone: M007.
 
-Status: closed by corrective C006; C005 closed M006E and C006 generalized the cleanup proof across all selected roots.
+Status: closed by corrective C006; C005 closed M006E and C006 generalized the cleanup proof across all selected roots. Post-M007 corrective C007 is in closure pending hosted qualification.
 
 Objective:
 
@@ -243,9 +243,11 @@ Plans:
 - `plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md`
 - post-closure corrective: `plans/implementation/artifact-discovery-cleanup/c007-discovery-state-recovery-and-post-m007-planning-cleanup.md`
 
+Phase 8 has no remaining implementation work. Selective-cleanup/policy work in Phase 9 is future research and planning, not an active handoff.
+
 ## Phase 9 — Selective cleanup and policy
 
-Status: deferred.
+Status: future planning; no active implementation handoff.
 
 Potential capabilities:
 
@@ -305,10 +307,10 @@ C006 combined-root cleanup proof [closed]
 M007 learned/full cleanup orchestration [closed]
       |
       v
-C007 state recovery/planning cleanup [ready]
+C007 state recovery/planning cleanup [closing]
       |
       v
-future selective cleanup / distribution planning
+future selective-cleanup / policy research and planning
 ~~~
 
 Destructive work MUST NOT be pulled forward merely to make the tool feel complete.

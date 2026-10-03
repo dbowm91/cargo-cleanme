@@ -85,8 +85,11 @@ fn run() -> Result<i32, AppError> {
                 if code != 0 {
                     return Ok(code);
                 }
-                let state =
-                    cargo_cleanme::discovery_state::load_default().map_err(AppError::Config)?;
+                let state = cargo_cleanme::discovery_state::load_default();
+                let state = match state {
+                    cargo_cleanme::discovery_state::StateLoad::Loaded(state) => Some(state),
+                    _ => None,
+                };
                 let generation = state.as_ref().and_then(|s| s.last_full_at);
                 (
                     state
@@ -106,10 +109,10 @@ fn run() -> Result<i32, AppError> {
                     cargo_cleanme::domain::ScanScope::Routine(roots) => roots,
                     _ => Vec::new(),
                 };
-                let generation = cargo_cleanme::discovery_state::load_default()
-                    .ok()
-                    .flatten()
-                    .and_then(|s| s.last_full_at);
+                let generation = match cargo_cleanme::discovery_state::load_default() {
+                    cargo_cleanme::discovery_state::StateLoad::Loaded(state) => state.last_full_at,
+                    _ => None,
+                };
                 (roots, generation)
             } else {
                 return Err(AppError::Config(
@@ -249,84 +252,88 @@ fn run_scan(
     );
     let _resolution_elapsed = resolution_start.elapsed();
 
+    use cargo_cleanme::discovery_state::StateLoad;
     let loaded_state = cargo_cleanme::discovery_state::load_default();
     let mut state_reconciled = !full;
-    if full || loaded_state.as_ref().is_ok_and(Option::is_some) {
-        let prior = match &loaded_state {
-            Ok(Some(state)) => Some(state.clone()),
-            Ok(None) => Some(cargo_cleanme::discovery_state::DiscoveryState::default()),
-            Err(error) => {
-                eprintln!("cargo-cleanme: {error}; discovery state was not changed");
-                None
-            }
-        };
-        if let Some(prior) = prior {
+    if full {
+        let selected = cargo_cleanme::discovery_state::full_reconciliation_prior(&loaded_state);
+        if let Some((prior, replacing_invalid)) = selected {
             let now = cargo_cleanme::discovery_state::now_seconds();
-            if full {
-                let mut resolved_by_manifest = std::collections::HashMap::new();
-                for ws in &workspaces {
-                    for member in &ws.members {
-                        resolved_by_manifest.insert(
-                            std::fs::canonicalize(&member.manifest_path)
-                                .unwrap_or_else(|_| member.manifest_path.clone()),
-                            ws.root.clone(),
-                        );
-                    }
+            let mut resolved_by_manifest = std::collections::HashMap::new();
+            for ws in &workspaces {
+                for member in &ws.members {
+                    resolved_by_manifest.insert(
+                        std::fs::canonicalize(&member.manifest_path)
+                            .unwrap_or_else(|_| member.manifest_path.clone()),
+                        ws.root.clone(),
+                    );
                 }
-                let observations: Vec<_> = manifests
-                    .iter()
-                    .map(|manifest| {
-                        let key =
-                            std::fs::canonicalize(manifest).unwrap_or_else(|_| manifest.clone());
-                        cargo_cleanme::discovery_state::ProjectObservation {
-                            manifest: key.clone(),
-                            workspace: resolved_by_manifest.get(&key).cloned(),
-                        }
-                    })
-                    .collect();
-                let complete = !diagnostics.iter().any(|d| {
-                    d.category == domain::DiagnosticCategory::PlatformRoot
-                        && d.severity == domain::DiagnosticSeverity::Error
-                });
-                match cargo_cleanme::discovery_state::reconcile_full(
-                    &prior,
-                    &observations,
-                    &uncertainty,
-                    complete,
-                    now,
-                    c.scan.learned_root_retention_days,
-                    directories::BaseDirs::new()
-                        .map(|b| b.home_dir().to_path_buf())
-                        .as_deref(),
-                ) {
-                    cargo_cleanme::discovery_state::Reconciliation::Publish(next) => {
-                        match cargo_cleanme::discovery_state::publish(&next) {
-                            Ok(()) => state_reconciled = true,
-                            Err(error) => {
-                                eprintln!("cargo-cleanme: discovery state was not saved: {error}")
+            }
+            let observations: Vec<_> = manifests
+                .iter()
+                .map(|manifest| {
+                    let key = std::fs::canonicalize(manifest).unwrap_or_else(|_| manifest.clone());
+                    cargo_cleanme::discovery_state::ProjectObservation {
+                        manifest: key.clone(),
+                        workspace: resolved_by_manifest.get(&key).cloned(),
+                    }
+                })
+                .collect();
+            let complete = !diagnostics.iter().any(|d| {
+                d.category == domain::DiagnosticCategory::PlatformRoot
+                    && d.severity == domain::DiagnosticSeverity::Error
+            });
+            match cargo_cleanme::discovery_state::reconcile_full(
+                &prior,
+                &observations,
+                &uncertainty,
+                complete,
+                now,
+                c.scan.learned_root_retention_days,
+                directories::BaseDirs::new()
+                    .map(|b| b.home_dir().to_path_buf())
+                    .as_deref(),
+            ) {
+                cargo_cleanme::discovery_state::Reconciliation::Publish(next) => {
+                    match cargo_cleanme::discovery_state::publish(&next) {
+                        Ok(()) => {
+                            state_reconciled = true;
+                            if replacing_invalid {
+                                eprintln!(
+                                    "cargo-cleanme: replaced unusable discovery state after successful Full reconciliation"
+                                );
                             }
                         }
-                    }
-                    cargo_cleanme::discovery_state::Reconciliation::NoPublication(reason) => {
-                        eprintln!("cargo-cleanme: discovery state was not reconciled: {reason}")
-                    }
-                }
-            } else {
-                let observed: Vec<_> = workspaces.iter().map(|w| w.root.clone()).collect();
-                let mut next = prior;
-                for project in &observed {
-                    for root in &mut next.learned_roots {
-                        if project.starts_with(&root.path) {
-                            root.last_project_seen_at = root.last_project_seen_at.max(now);
+                        Err(error) => {
+                            eprintln!("cargo-cleanme: discovery state was not saved: {error}")
                         }
                     }
                 }
-                if !observed.is_empty()
-                    && let Err(error) = cargo_cleanme::discovery_state::publish(&next)
-                {
-                    eprintln!("cargo-cleanme: discovery state was not saved: {error}");
+                cargo_cleanme::discovery_state::Reconciliation::NoPublication(reason) => {
+                    eprintln!("cargo-cleanme: discovery state was not reconciled: {reason}")
                 }
             }
+        } else {
+            let message = loaded_state
+                .diagnostic()
+                .unwrap_or_else(|| "discovery state cannot be safely read".into());
+            eprintln!("cargo-cleanme: {message}; Full state reconciliation was skipped");
+        }
+    } else if let StateLoad::Loaded(prior) = loaded_state {
+        let now = cargo_cleanme::discovery_state::now_seconds();
+        let observed: Vec<_> = workspaces.iter().map(|w| w.root.clone()).collect();
+        let mut next = prior;
+        for project in &observed {
+            for root in &mut next.learned_roots {
+                if project.starts_with(&root.path) {
+                    root.last_project_seen_at = root.last_project_seen_at.max(now);
+                }
+            }
+        }
+        if !observed.is_empty()
+            && let Err(error) = cargo_cleanme::discovery_state::publish(&next)
+        {
+            eprintln!("cargo-cleanme: discovery state was not saved: {error}");
         }
     }
 
