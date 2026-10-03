@@ -114,6 +114,14 @@ pub fn load_or_create(path: &Path) -> Result<Config, AppError> {
     }
     load(path)
 }
+
+/// Ensure a config editor target exists without requiring its current contents to parse.
+pub fn ensure_exists(path: &Path) -> Result<(), AppError> {
+    if !path.exists() {
+        create_initial(path)?;
+    }
+    Ok(())
+}
 fn require_absolute(p: &Path, field: &str) -> Result<(), AppError> {
     if !p.is_absolute() {
         Err(AppError::Config(format!(

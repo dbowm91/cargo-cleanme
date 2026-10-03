@@ -236,6 +236,7 @@ pub fn discover_manifests_with_attribution(
     };
     let roots = match (&policy.scope, &global_policy) {
         (ScanScope::Explicit(p), _) => vec![p.clone()],
+        (ScanScope::ExplicitRoots(roots), _) => roots.clone(),
         (ScanScope::Global(_), Some(p)) => p.roots.clone(),
         (ScanScope::Global(v), None) => v.clone(),
         (ScanScope::Routine(v), _) => v.clone(),
@@ -305,7 +306,10 @@ pub fn discover_manifests_with_attribution(
             order,
         );
     }
-    let explicit = matches!(policy.scope, ScanScope::Explicit(_));
+    let explicit = matches!(
+        policy.scope,
+        ScanScope::Explicit(_) | ScanScope::ExplicitRoots(_)
+    );
     for root in roots {
         if !root.exists() {
             diagnostics.push(diag(
@@ -313,6 +317,9 @@ pub fn discover_manifests_with_attribution(
                 &root,
                 "scan root is unavailable",
             ));
+            if let Some(last) = diagnostics.last_mut() {
+                last.severity = DiagnosticSeverity::Error;
+            }
             continue;
         }
         discover_manifests_root(
@@ -382,6 +389,9 @@ fn discover_global_roots(
                 root,
                 "scan root is unavailable",
             ));
+            if let Some(last) = diagnostics.last_mut() {
+                last.severity = DiagnosticSeverity::Error;
+            }
             continue;
         }
         canonical_roots.push((
@@ -469,7 +479,7 @@ fn discover_global_roots(
                     } else {
                         DiagnosticCategory::Metadata
                     },
-                    path: None,
+                    path: roots.get(root_idx).map(|(_, root)| root.clone()),
                     message: "filesystem traversal entry could not be read".into(),
                 });
                 continue;
@@ -649,6 +659,7 @@ pub fn scan(policy: &EffectiveScanPolicy) -> Result<ScanReport, AppError> {
     // direct-target filter. No Cargo subprocesses are invoked here.
     let roots = match &policy.scope {
         ScanScope::Explicit(p) => vec![p.clone()],
+        ScanScope::ExplicitRoots(v) => v.clone(),
         ScanScope::Global(v) | ScanScope::Routine(v) => v.clone(),
     };
     let (ignore, unignore) = match &policy.discovery_filters {
@@ -746,7 +757,7 @@ fn discover_manifests_root(
                 diagnostics.push(ScanDiagnostic {
                     severity: DiagnosticSeverity::Warning,
                     category,
-                    path: None,
+                    path: Some(root.to_path_buf()),
                     message: "filesystem traversal entry could not be read".into(),
                 });
                 continue;

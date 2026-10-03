@@ -85,3 +85,67 @@ fn cargo_external_config_edit_help_matches_direct() {
     assert!(external.status.success());
     assert_eq!(direct_stdout, String::from_utf8_lossy(&external.stdout));
 }
+
+#[test]
+fn config_edit_uses_fake_editor_process_and_keeps_invalid_edits() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config path with spaces.toml");
+    let editor = dir.path().join(if cfg!(windows) {
+        "fake editor.cmd"
+    } else {
+        "fake editor.sh"
+    });
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::write(&editor, "#!/bin/sh\nfor last do :; done\ncase \"$CLEANME_EDITOR_MODE\" in invalid) printf 'invalid = [' > \"$last\";; valid) printf '[scan]\\nrecency_seconds = 42\\n' > \"$last\";; fail) exit 17;; esac\nexit 0\n").unwrap();
+        let mut mode = fs::metadata(&editor).unwrap().permissions();
+        mode.set_mode(0o755);
+        fs::set_permissions(&editor, mode).unwrap();
+    }
+    #[cfg(windows)]
+    fs::write(&editor, "@echo off\r\nif \"%CLEANME_EDITOR_MODE%\"==\"invalid\" echo invalid = [> \"%~1\"\r\nif \"%CLEANME_EDITOR_MODE%\"==\"valid\" (echo [scan]^&echo recency_seconds = 42^) > \"%~1\"\r\nif \"%CLEANME_EDITOR_MODE%\"==\"fail\" exit /b 17\r\nexit /b 0\r\n").unwrap();
+    let visual = if cfg!(windows) {
+        format!("cmd.exe /c \"{}\"", editor.display())
+    } else {
+        format!("\"{}\" --wait", editor.display())
+    };
+    let run = |mode: &str| {
+        Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+            .args(["--config", config.to_str().unwrap(), "config", "edit"])
+            .env("VISUAL", &visual)
+            .env("EDITOR", "editor-that-must-not-win")
+            .env("CLEANME_EDITOR_MODE", mode)
+            .output()
+            .unwrap()
+    };
+    let failed = run("fail");
+    assert_eq!(failed.status.code(), Some(17));
+    let invalid = run("invalid");
+    assert!(!invalid.status.success());
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("is invalid"));
+    assert_eq!(fs::read_to_string(&config).unwrap(), "invalid = [");
+    let valid = run("valid");
+    assert!(
+        valid.status.success(),
+        "{}",
+        String::from_utf8_lossy(&valid.stderr)
+    );
+    assert!(String::from_utf8_lossy(&valid.stdout).contains("edited"));
+    assert_eq!(
+        cargo_cleanme::config::load(&config)
+            .unwrap()
+            .scan
+            .recency_seconds,
+        42
+    );
+    let noop = run("noop");
+    assert!(noop.status.success());
+    assert_eq!(
+        cargo_cleanme::config::load(&config)
+            .unwrap()
+            .scan
+            .recency_seconds,
+        42
+    );
+}

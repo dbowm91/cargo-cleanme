@@ -12,6 +12,7 @@
 [scan]
 recency_seconds = 300
 # Retain learned developer roots for this many days after the last project observation.
+# 0 disables expiration; accepted values are 0 through 3650.
 learned_root_retention_days = 30
 
 # Optional exclusive scope. A CLI scan root takes precedence.

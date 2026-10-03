@@ -1,6 +1,6 @@
 # Corrective C006 — Combined-Root Cleanup Ownership Universe and Simulation Parity
 
-Status: ready after C005
+Status: closing after C005 implementation
 
 Repository baseline: C005 planning head
 

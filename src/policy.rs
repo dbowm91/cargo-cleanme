@@ -85,19 +85,24 @@ fn routine_roots(retention_days: u16) -> Vec<PathBuf> {
         .into_iter()
         .filter(|p| p.is_dir())
         .collect();
-    if let Some(state) = crate::discovery_state::load_default().ok().flatten() {
-        let now = crate::discovery_state::now_seconds();
-        roots.extend(
-            state
-                .learned_roots
-                .into_iter()
-                .filter(|r| {
-                    now < r.last_project_seen_at
-                        || now.saturating_sub(r.last_project_seen_at)
-                            <= u64::from(retention_days) * 86400
-                })
-                .map(|r| r.path),
-        );
+    match crate::discovery_state::load_default() {
+        Ok(Some(state)) => {
+            let now = crate::discovery_state::now_seconds();
+            roots.extend(
+                state
+                    .learned_roots
+                    .into_iter()
+                    .filter(|r| {
+                        retention_days == 0
+                            || now < r.last_project_seen_at
+                            || now.saturating_sub(r.last_project_seen_at)
+                                <= u64::from(retention_days) * 86400
+                    })
+                    .map(|r| r.path),
+            );
+        }
+        Ok(None) => {}
+        Err(error) => eprintln!("cargo-cleanme: {error}; using seed/configured Routine roots"),
     }
     canonical_dedup_roots(roots)
 }

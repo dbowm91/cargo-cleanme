@@ -1,6 +1,6 @@
 # Corrective C005 — Uncertainty-Aware Discovery-State Reconciliation and Config/Edit Hardening
 
-Status: ready
+Status: closing
 
 Repository baseline: `cc37838b5a99298ae56e3d797b1ef2e4d345c4b3`
 

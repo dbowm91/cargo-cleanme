@@ -11,6 +11,8 @@ pub struct ScanRequest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ScanScope {
     Explicit(PathBuf),
+    /// Multiple explicit roots forming one discovery boundary (cleanup only).
+    ExplicitRoots(Vec<PathBuf>),
     Global(Vec<PathBuf>),
     Routine(Vec<PathBuf>),
 }

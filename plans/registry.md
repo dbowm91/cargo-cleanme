@@ -57,12 +57,12 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 | Artifact discovery and cleanup | M006E old scope/latency decision | **superseded** | plans/implementation/artifact-discovery-cleanup/006e-global-scan-scope-and-latency-policy.md | Replaced by ADR 002 and the adaptive-discovery M006E plan. |
 | Artifact discovery and cleanup | M006F exhaustive traversal hot-path qualification | **closed** | plans/implementation/artifact-discovery-cleanup/006f-exhaustive-traversal-hot-path-qualification.md | Closure: plans/closure/artifact-discovery-cleanup/006f-status.md. Hosted Linux/macOS/Windows and Rust 1.89 CI passed in run 37139155641. |
 | Artifact discovery and cleanup | M007 learned/full cleanup orchestration | **blocked** | plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-orchestration.md | Hard dependency M006E is conditional; per-root C003/C004 proofs cannot qualify cross-root redirected-output ownership. Multi-root Execute fails closed. Corrective C006 owns the combined-root proof. |
-| Artifact discovery and cleanup | C005 uncertainty-aware state reconciliation + config/edit hardening | **ready** | plans/implementation/artifact-discovery-cleanup/c005-uncertainty-aware-state-reconciliation-and-config-edit-hardening.md | Closes M006E's all-or-nothing state publication, state diagnostic/collapse gaps, and remaining cross-platform config-edit qualification. |
-| Artifact discovery and cleanup | C006 combined-root cleanup ownership universe | **ready after C005** | plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md | Generalizes C003/C004 proof across every selected known/full root and restores Preview/Simulate/Execute parity. M007 closure depends on it. |
+| Artifact discovery and cleanup | C005 uncertainty-aware state reconciliation + config/edit hardening | **closing** | plans/implementation/artifact-discovery-cleanup/c005-uncertainty-aware-state-reconciliation-and-config-edit-hardening.md | Implementation, local verification, and isolated real Full publication are complete; hosted platform qualification is pending. |
+| Artifact discovery and cleanup | C006 combined-root cleanup ownership universe | **closing after C005 implementation** | plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md | Combined discovery, coverage, ownership, authorization, and per-candidate final proof are implemented; hosted platform qualification is pending. |
 
 ## Immediate handoff
 
-M006A, M006C, and M006D remain conditionally closed as historical exhaustive-scan evidence; M006B and M006F are closed. ADR 002 resolved the product decision. M006E is conditionally closed and now has ready corrective C005. M007 remains blocked and has corrective C006 staged behind C005.
+M006A, M006C, and M006D remain conditionally closed as historical exhaustive-scan evidence; M006B and M006F are closed. ADR 002 resolved the product decision. C005 and C006 implementation is complete and both plans are closing. M007 remains blocked until hosted qualification and formal corrective closure.
 
 Expected order:
 
@@ -75,13 +75,13 @@ M006D global scan completion qualification -> conditionally closed (historical e
 ADR 002 adaptive Routine/Full discovery -> accepted
 M006E adaptive Routine/Full discovery + state/config edit -> conditionally closed
 M006F exhaustive traversal hot-path qualification -> closed
-C005 uncertainty-aware state reconciliation + config/edit hardening -> ready
+C005 uncertainty-aware state reconciliation + config/edit hardening -> closing
 M006E -> close after C005 evidence
-C006 combined-root cleanup ownership universe -> ready after C005
+C006 combined-root cleanup ownership universe -> closing after C005 implementation
 M007 learned/full cleanup orchestration -> close after C006 evidence
 ~~~
 
-C005 is the immediate implementation handoff. It replaces the global `diagnostics.is_empty()` publication gate with path-scoped uncertainty, preserves positive manifest evidence across Cargo resolution failures, persists containment-collapsed learned roots, hardens state diagnostics/publication, and completes cross-platform `config edit` qualification.
+C005 replaces the global `diagnostics.is_empty()` publication gate with uncertainty-aware reconciliation, retains positive manifest evidence through Cargo resolution failures, collapses learned roots, hardens state diagnostics/publication, and adds fake-editor subprocess qualification. A local reference Full scan completed with 742 localized diagnostics and, under an isolated HOME, published 1,804 project observations and six learned roots. The existing invalid schema-0 state in the user's normal state directory was left untouched.
 
 C006 follows C005. It builds one selected-root ownership universe for `clean --known` and `clean --full`, applies C004 completeness across all selected roots, refreshes that combined universe before each CleanupUnit disposition, and makes Preview/Simulate/Execute share one safety result.
 
