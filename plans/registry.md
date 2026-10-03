@@ -33,7 +33,7 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M006E adaptive Routine/Full discovery | M006A/C/D retain historical conditional closure evidence; M006B is closed. ADR 002 resolves the scope decision. M006E is ready; M006F follows for exhaustive hot-path qualification; M007 is proposed after M006E. M005 remains closed/green. |
+| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M006E state-publication qualification | M006A/C/D retain historical conditional closure evidence; M006B is closed. M006E and M006F are conditionally closed; M007 is blocked by M006E state publication and multi-root proof scope. M005 remains closed/green. |
 
 ## Implementation handoffs
 
@@ -53,14 +53,14 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 | Artifact discovery and cleanup | M006B cleanup proof resolution efficiency | **closed** | plans/implementation/artifact-discovery-cleanup/006b-cleanup-proof-resolution-efficiency.md | Closure: plans/closure/artifact-discovery-cleanup/006b-status.md. Preserves C003/C004 freshness and fail-closed semantics; proof/process reductions are measured. |
 | Artifact discovery and cleanup | M006C global traversal throughput without scope narrowing | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/006c-global-traversal-throughput-without-scope-narrowing.md | Closure: plans/closure/artifact-discovery-cleanup/006c-status.md. Bounded traversal and parity work landed; exact no-argument scan remains over 120 seconds. |
 | Artifact discovery and cleanup | M006D global scan completion qualification | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/006d-global-scan-completion-qualification.md | Closure: plans/closure/artifact-discovery-cleanup/006d-status.md. Optimizations preserve scope and safety, but the exact native scan remains over 120 seconds. |
-| Artifact discovery and cleanup | M006E adaptive Routine/Full discovery + state/config UX | **ready** | plans/implementation/artifact-discovery-cleanup/006e-adaptive-routine-full-discovery-state.md | ADR 002 accepted. Implements bounded Routine roots, explicit Full reconciliation, learned project/root state, 30-day configurable retention, automatic config bootstrap, and config edit. |
-| Artifact discovery and cleanup | M006E old scope/latency decision | **superseded** | plans/implementation/artifact-discovery-cleanup/006e-global-scan-scope-and-latency-policy.md | Replaced by ADR 002 and the ready adaptive-discovery M006E plan. |
-| Artifact discovery and cleanup | M006F exhaustive traversal hot-path qualification | **ready after M006E** | plans/implementation/artifact-discovery-cleanup/006f-exhaustive-traversal-hot-path-qualification.md | Measure bare dua-core ceiling, remove optional attribution from normal hot path, qualify traversal order/workers, record completed Full baseline. |
-| Artifact discovery and cleanup | M007 learned/full cleanup orchestration | **proposed** | plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-orchestration.md | Hard dependency: M006E closure. Learned state may select bounded roots but never provides cleanup ownership/authorization proof. |
+| Artifact discovery and cleanup | M006E adaptive Routine/Full discovery + state/config UX | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/006e-adaptive-routine-full-discovery-state.md | Closure: plans/closure/artifact-discovery-cleanup/006e-status.md. Full traversal completes; uncertainty in manifest/workspace resolution prevents publishing a reconciled generation. |
+| Artifact discovery and cleanup | M006E old scope/latency decision | **superseded** | plans/implementation/artifact-discovery-cleanup/006e-global-scan-scope-and-latency-policy.md | Replaced by ADR 002 and the adaptive-discovery M006E plan. |
+| Artifact discovery and cleanup | M006F exhaustive traversal hot-path qualification | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/006f-exhaustive-traversal-hot-path-qualification.md | Closure: plans/closure/artifact-discovery-cleanup/006f-status.md. Local qualification passes; hosted Linux/macOS/Windows CI remains. |
+| Artifact discovery and cleanup | M007 learned/full cleanup orchestration | **blocked** | plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-orchestration.md | Hard dependency M006E is conditional; per-root C003/C004 proofs cannot qualify cross-root redirected-output ownership. Multi-root Execute fails closed. |
 
 ## Immediate handoff
 
-M006A, M006C, and M006D remain conditionally closed as historical exhaustive-scan evidence; M006B is closed. ADR 002 has resolved the product decision. The immediate handoff is ready M006E.
+M006A, M006C, and M006D remain conditionally closed as historical exhaustive-scan evidence; M006B is closed. ADR 002 resolved the product decision. M006E is conditionally closed pending complete reconciliation/state-publication evidence. M006F is conditionally closed pending hosted platform CI. M007 remains blocked pending M006E and a cross-root proof boundary.
 
 Expected order:
 
@@ -71,9 +71,9 @@ M006B cleanup-proof resolution efficiency -> closed
 M006C traversal throughput without scope narrowing -> conditionally closed (historical evidence)
 M006D global scan completion qualification -> conditionally closed (historical evidence)
 ADR 002 adaptive Routine/Full discovery -> accepted
-M006E adaptive Routine/Full discovery + state/config edit -> ready
-M006F exhaustive traversal hot-path qualification -> ready after M006E
-M007 learned/full cleanup orchestration -> proposed after M006E
+M006E adaptive Routine/Full discovery + state/config edit -> conditionally closed
+M006F exhaustive traversal hot-path qualification -> conditionally closed
+M007 learned/full cleanup orchestration -> blocked
 ~~~
 
 M006E owns the next implementation handoff: bounded Routine roots, explicit `scan --full`, exact project inventory, learned-root derivation, successful-Full-only retention pruning, 30-day configurable retention, atomic machine-local state, automatic config creation, removal of `config init`, and `config edit` with VISUAL/EDITOR/fallback resolution.

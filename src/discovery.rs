@@ -215,8 +215,17 @@ pub fn discover_manifests(
     policy: &EffectiveScanPolicy,
     observer: &dyn ProgressObserver,
 ) -> Result<ManifestDiscovery, AppError> {
-    let global = matches!(policy.scope, ScanScope::Global(_));
-    let configured_global_policy = global.then(crate::policy::global_discovery_policy);
+    discover_manifests_with_attribution(policy, observer, false)
+}
+
+pub fn discover_manifests_with_attribution(
+    policy: &EffectiveScanPolicy,
+    observer: &dyn ProgressObserver,
+    attribution: bool,
+) -> Result<ManifestDiscovery, AppError> {
+    let global = matches!(policy.scope, ScanScope::Global(_) | ScanScope::Routine(_));
+    let configured_global_policy =
+        matches!(policy.scope, ScanScope::Global(_)).then(crate::policy::global_discovery_policy);
     let global_policy = match (&policy.scope, configured_global_policy) {
         (ScanScope::Global(roots), Some(candidate))
             if canonical_roots(roots) == canonical_roots(&candidate.roots) =>
@@ -229,6 +238,7 @@ pub fn discover_manifests(
         (ScanScope::Explicit(p), _) => vec![p.clone()],
         (ScanScope::Global(_), Some(p)) => p.roots.clone(),
         (ScanScope::Global(v), None) => v.clone(),
+        (ScanScope::Routine(v), _) => v.clone(),
     };
     let (ignore, unignore) = match &policy.discovery_filters {
         DiscoveryFilters::Active { ignore, unignore } => (ignore.as_slice(), unignore.as_slice()),
@@ -248,6 +258,16 @@ pub fn discover_manifests(
     let mut visited = 0u64;
     let mut pruned = 0u64;
     if global {
+        if roots.is_empty() && matches!(policy.scope, ScanScope::Routine(_)) {
+            diagnostics.push(ScanDiagnostic {
+                severity: DiagnosticSeverity::Info,
+                category: DiagnosticCategory::PlatformRoot,
+                path: None,
+                message:
+                    "no Routine roots are available; run `scan --full` or scan an explicit root"
+                        .into(),
+            });
+        }
         let profile_subtrees = env::var_os("CARGO_CLEANME_PROFILE_SUBTREES").is_some();
         let discovery_workers = discovery_profile_workers(
             profile_subtrees,
@@ -280,6 +300,7 @@ pub fn discover_manifests(
             observer,
             discovery_workers,
             profile_subtrees,
+            profile_subtrees || attribution,
             skip_metadata,
             order,
         );
@@ -349,6 +370,7 @@ fn discover_global_roots(
     observer: &dyn ProgressObserver,
     discovery_workers: usize,
     profile_subtrees: bool,
+    collect_attribution: bool,
     skip_metadata: bool,
     order: dua_core::Order,
 ) -> Result<ManifestDiscovery, AppError> {
@@ -427,8 +449,9 @@ fn discover_global_roots(
     let mut ignore_count = 0;
     let mut batch_visited = 0;
     let mut batch_pruned = 0;
-    let mut top_level_root_counts = HashMap::new();
-    let mut top_level_counts: HashMap<usize, HashMap<OsString, u64>> = HashMap::new();
+    let mut top_level_root_counts = collect_attribution.then(HashMap::new);
+    let mut top_level_counts: Option<HashMap<usize, HashMap<OsString, u64>>> =
+        collect_attribution.then(HashMap::new);
     let mut finished_roots = 0u64;
     let mut manifest_candidates = 0u64;
     let mut manifest_validated = 0u64;
@@ -457,11 +480,19 @@ fn discover_global_roots(
             }
         };
         *visited = visited.saturating_add(1);
-        if let Some((_, root)) = roots.get(root_idx) {
+        if collect_attribution && let Some((_, root)) = roots.get(root_idx) {
             if entry.depth == 0 {
-                *top_level_root_counts.entry(root_idx).or_insert(0) += 1;
+                *top_level_root_counts
+                    .as_mut()
+                    .unwrap()
+                    .entry(root_idx)
+                    .or_insert(0) += 1;
             } else if let Some(component) = top_level_component(&entry, root) {
-                let subtrees = top_level_counts.entry(root_idx).or_default();
+                let subtrees = top_level_counts
+                    .as_mut()
+                    .unwrap()
+                    .entry(root_idx)
+                    .or_default();
                 if let Some(count) = subtrees.get_mut(component) {
                     *count += 1;
                 } else {
@@ -524,8 +555,11 @@ fn discover_global_roots(
             batch_pruned = 0;
         }
         if profile_subtrees && last_profile.elapsed() >= std::time::Duration::from_secs(5) {
-            let top_level_entries =
-                top_level_entry_map(&roots, &top_level_root_counts, &top_level_counts);
+            let top_level_entries = top_level_entry_map(
+                &roots,
+                top_level_root_counts.as_ref().unwrap(),
+                top_level_counts.as_ref().unwrap(),
+            );
             let profile = top_level_entries
                 .iter()
                 .map(|(path, count)| format!("{:?}={count}", path))
@@ -583,9 +617,17 @@ fn discover_global_roots(
         pruned_no_cargo: *pruned,
         ..Default::default()
     };
-    let attribution_started = profile_subtrees.then(std::time::Instant::now);
-    let top_level_entries = top_level_entry_map(&roots, &top_level_root_counts, &top_level_counts);
-    if let Some(started) = attribution_started {
+    let attribution_started = collect_attribution.then(std::time::Instant::now);
+    let top_level_entries = if collect_attribution {
+        top_level_entry_map(
+            &roots,
+            top_level_root_counts.as_ref().unwrap(),
+            top_level_counts.as_ref().unwrap(),
+        )
+    } else {
+        std::collections::BTreeMap::new()
+    };
+    if profile_subtrees && let Some(started) = attribution_started {
         eprintln!(
             "scan phase: attribution_finalized seconds={:.3} paths={}",
             started.elapsed().as_secs_f64(),
@@ -607,7 +649,7 @@ pub fn scan(policy: &EffectiveScanPolicy) -> Result<ScanReport, AppError> {
     // direct-target filter. No Cargo subprocesses are invoked here.
     let roots = match &policy.scope {
         ScanScope::Explicit(p) => vec![p.clone()],
-        ScanScope::Global(v) => v.clone(),
+        ScanScope::Global(v) | ScanScope::Routine(v) => v.clone(),
     };
     let (ignore, unignore) = match &policy.discovery_filters {
         DiscoveryFilters::Active { ignore, unignore } => (ignore.as_slice(), unignore.as_slice()),
@@ -886,6 +928,7 @@ mod tests {
             &NoopObserver,
             traverse::worker_threads(),
             false,
+            false,
             cfg!(target_os = "linux"),
             dua_core::Order::ParentFirst,
         )
@@ -937,6 +980,7 @@ mod tests {
             &mut 0,
             &NoopObserver,
             traverse::worker_threads(),
+            false,
             false,
             cfg!(target_os = "linux"),
             dua_core::Order::ParentFirst,
@@ -1034,6 +1078,7 @@ mod tests {
                         &NoopObserver,
                         workers,
                         false,
+                        true,
                         skip_metadata,
                         order,
                     )
@@ -1079,6 +1124,25 @@ mod tests {
             r.visited_entries, 4,
             "target descendants must be pruned during discovery"
         );
+    }
+
+    #[test]
+    fn global_attribution_is_unallocated_when_not_requested() {
+        let d = tempdir().unwrap();
+        let project = d.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("Cargo.toml"), "").unwrap();
+        let policy = EffectiveScanPolicy {
+            recency: std::time::Duration::from_secs(300),
+            scope: ScanScope::Global(vec![d.path().to_path_buf()]),
+            discovery_filters: DiscoveryFilters::Bypassed,
+        };
+        let ordinary = discover_manifests_with_attribution(&policy, &NoopObserver, false).unwrap();
+        let qualified = discover_manifests_with_attribution(&policy, &NoopObserver, true).unwrap();
+        assert!(ordinary.top_level_entries.is_empty());
+        assert_eq!(ordinary.manifests, qualified.manifests);
+        assert_eq!(ordinary.counters, qualified.counters);
+        assert!(!qualified.top_level_entries.is_empty());
     }
     #[test]
     fn manifest_discovery_finds_project_without_target() {

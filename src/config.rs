@@ -32,6 +32,8 @@ pub struct ScanConfig {
     pub ignore: Vec<String>,
     #[serde(default)]
     pub unignore: Vec<PathBuf>,
+    #[serde(default = "default_retention")]
+    pub learned_root_retention_days: u16,
 }
 impl Default for ScanConfig {
     fn default() -> Self {
@@ -40,11 +42,15 @@ impl Default for ScanConfig {
             root: None,
             ignore: vec![],
             unignore: vec![],
+            learned_root_retention_days: 30,
         }
     }
 }
 fn default_recency() -> u64 {
     300
+}
+fn default_retention() -> u16 {
+    30
 }
 #[derive(Clone, Debug)]
 pub struct ConfigPathResolver {
@@ -78,6 +84,11 @@ pub fn load(path: &Path) -> Result<Config, AppError> {
     if c.scan.recency_seconds > u64::MAX / 1_000_000_000 {
         return Err(AppError::Config("scan.recency_seconds is too large".into()));
     }
+    if c.scan.learned_root_retention_days > 3650 {
+        return Err(AppError::Config(
+            "scan.learned_root_retention_days must be between 0 and 3650".into(),
+        ));
+    }
     if let Some(p) = &c.scan.root {
         require_absolute(p, "scan.root")?;
     }
@@ -96,6 +107,13 @@ pub fn load(path: &Path) -> Result<Config, AppError> {
     }
     Ok(c)
 }
+
+pub fn load_or_create(path: &Path) -> Result<Config, AppError> {
+    if !path.exists() {
+        create_initial(path)?;
+    }
+    load(path)
+}
 fn require_absolute(p: &Path, field: &str) -> Result<(), AppError> {
     if !p.is_absolute() {
         Err(AppError::Config(format!(
@@ -106,47 +124,17 @@ fn require_absolute(p: &Path, field: &str) -> Result<(), AppError> {
         Ok(())
     }
 }
-pub fn init(path: &Path, force: bool) -> Result<(), AppError> {
+fn create_initial(path: &Path) -> Result<(), AppError> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
         fs::create_dir_all(parent)?;
     }
-    if !force {
-        let mut f = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::AlreadyExists {
-                    AppError::Config(format!(
-                        "refusing to overwrite existing config {}; rerun with --force to replace it",
-                        path.display()
-                    ))
-                } else {
-                    AppError::Io(e)
-                }
-            })?;
-        f.write_all(CONFIG_TEMPLATE.as_bytes())?;
-        f.sync_all()?;
-        return Ok(());
-    }
-    init_force(path)
-}
-
-/// Atomically replace (or create) the resolved config path.
-///
-/// Writes the template to a temporary sibling file, syncs it, then renames it
-/// over the destination. The existing file is never truncated before the
-/// replacement content is fully written; a failed write leaves the previous
-/// file intact and removes the temporary sibling on a best-effort basis.
-fn init_force(path: &Path) -> Result<(), AppError> {
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    // The parent was created by `init`; a missing parent here is a race.
     if !parent.exists() {
         return Err(AppError::Config(format!(
             "config directory is unavailable: {}",
@@ -174,21 +162,17 @@ fn init_force(path: &Path) -> Result<(), AppError> {
             f.write_all(CONFIG_TEMPLATE.as_bytes())?;
             f.sync_all()?;
             drop(f);
-            fs::rename(&temp, path)?;
+            // Creating the final link is atomic and never overwrites a
+            // concurrent winner. Both names are siblings on the same volume.
+            fs::hard_link(&temp, path)?;
+            fs::remove_file(&temp)?;
             Ok(())
         })();
         if let Err(e) = write_result {
             let _ = fs::remove_file(&temp);
-            // A rename over a directory (or other non-file destination) must
-            // not destroy the previous filesystem entry.
-            if e.kind() == std::io::ErrorKind::AlreadyExists
-                || e.kind() == std::io::ErrorKind::PermissionDenied
-                || e.kind() == std::io::ErrorKind::InvalidInput
-            {
-                // Fall through to a descriptive config error below when the
-                // destination cannot be replaced; preserve the OS detail.
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                return Ok(());
             }
-            // If the destination is a directory, report it explicitly.
             if path.exists() && !path.is_file() {
                 return Err(AppError::Config(format!(
                     "refusing to replace non-file config {}: {e}",
@@ -257,21 +241,23 @@ mod tests {
             .expect("repository config.toml must exist");
         assert_eq!(
             CONFIG_TEMPLATE, on_disk,
-            "config init source must equal the checked-in template"
+            "bootstrap source must equal the checked-in template"
         );
     }
     #[test]
-    fn init_refuses_overwrite() {
+    fn operational_bootstrap_refuses_overwrite() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("config.toml");
-        init(&p, false).unwrap();
-        assert!(init(&p, false).is_err());
+        let initial = load_or_create(&p).unwrap();
+        assert_eq!(initial.scan.recency_seconds, 300);
+        fs::write(&p, "[scan]\nrecency_seconds = 61\n").unwrap();
+        assert_eq!(load_or_create(&p).unwrap().scan.recency_seconds, 61);
     }
     #[test]
-    fn init_bytes_equal_checked_in_template() {
+    fn bootstrap_bytes_equal_checked_in_template() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("config.toml");
-        init(&p, false).unwrap();
+        load_or_create(&p).unwrap();
         let written = fs::read_to_string(&p).unwrap();
         assert_eq!(written, CONFIG_TEMPLATE);
         // The written file must load and match defaults.
@@ -279,56 +265,31 @@ mod tests {
         assert_eq!(loaded.scan.recency_seconds, 300);
     }
     #[test]
-    fn init_force_replaces_existing_config() {
-        let d = tempfile::tempdir().unwrap();
-        let p = d.path().join("config.toml");
-        init(&p, false).unwrap();
-        fs::write(&p, "[scan]\nrecency_seconds = 60\n").unwrap();
-        assert_eq!(load(&p).unwrap().scan.recency_seconds, 60);
-        assert!(init(&p, false).is_err());
-        init(&p, true).unwrap();
-        let rewritten = fs::read_to_string(&p).unwrap();
-        assert_eq!(rewritten, CONFIG_TEMPLATE);
-        assert_eq!(load(&p).unwrap().scan.recency_seconds, 300);
-    }
-    #[test]
-    fn malformed_config_requires_force_for_replacement() {
+    fn malformed_config_is_not_replaced_automatically() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("config.toml");
         fs::write(&p, "[scan]\nrecency_seconds = nope\n").unwrap();
         assert!(load(&p).is_err());
-        assert!(init(&p, false).is_err());
-        init(&p, true).unwrap();
-        assert_eq!(load(&p).unwrap().scan.recency_seconds, 300);
-    }
-    #[test]
-    fn failed_force_leaves_previous_file_intact() {
-        let d = tempfile::tempdir().unwrap();
-        // A directory at the destination cannot be replaced by the file
-        // rename; the call must fail without removing the directory.
-        let dir = d.path().join("config.toml");
-        fs::create_dir(&dir).unwrap();
-        assert!(init(&dir, true).is_err());
-        assert!(dir.is_dir());
-        // No stray temporary sibling may be left behind.
-        let leftovers: Vec<_> = fs::read_dir(d.path())
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with("config.toml.tmp.")
-            })
-            .collect();
-        assert!(leftovers.is_empty());
-
-        // A normal file survives a refused non-force init byte-for-byte.
-        let p = d.path().join("other.toml");
-        fs::write(&p, "[scan]\nrecency_seconds = 61\n").unwrap();
-        assert!(init(&p, false).is_err());
+        assert!(load_or_create(&p).is_err());
         assert_eq!(
             fs::read_to_string(&p).unwrap(),
-            "[scan]\nrecency_seconds = 61\n"
+            "[scan]\nrecency_seconds = nope\n"
         );
+    }
+    #[test]
+    fn concurrent_first_use_creates_one_complete_template() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("nested/config.toml");
+        let path = p.clone();
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || load_or_create(&path).unwrap())
+            })
+            .collect();
+        for worker in workers {
+            assert_eq!(worker.join().unwrap().scan.recency_seconds, 300);
+        }
+        assert_eq!(fs::read(&p).unwrap(), CONFIG_TEMPLATE.as_bytes());
     }
 }

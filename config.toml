@@ -1,8 +1,8 @@
 # cargo-cleanme configuration template.
 #
-# This checked-in file is the single source of truth for `config init`.
+# This checked-in file is the single source of truth for first-use config creation.
 # `src/config.rs` embeds this exact file, so editing this template changes
-# what `config init` writes. Runtime configuration is resolved from the
+# what first-use config creation writes. Runtime configuration is resolved from the
 # platform application config directory (or `--config PATH`); this
 # repository file is a distribution template and is never loaded implicitly
 # from the current working directory.
@@ -11,6 +11,8 @@
 
 [scan]
 recency_seconds = 300
+# Retain learned developer roots for this many days after the last project observation.
+learned_root_retention_days = 30
 
 # Optional exclusive scope. A CLI scan root takes precedence.
 # root = "/path/to/projects"

@@ -3,6 +3,7 @@ pub mod cleanup;
 pub mod cli;
 pub mod config;
 pub mod discovery;
+pub mod discovery_state;
 pub mod domain;
 pub mod error;
 pub mod policy;

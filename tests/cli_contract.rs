@@ -66,22 +66,22 @@ fn cargo_external_subcommand_help_matches_direct_help() {
 }
 
 #[test]
-fn cargo_external_config_init_help_matches_direct() {
+fn cargo_external_config_edit_help_matches_direct() {
     let (_dir_guard, _staged) = staged_cargo_cleanme();
     let direct = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
-        .args(["config", "init", "--help"])
+        .args(["config", "edit", "--help"])
         .output()
-        .expect("run direct config init --help");
+        .expect("run direct config edit --help");
     assert!(direct.status.success());
     let direct_stdout = String::from_utf8_lossy(&direct.stdout).into_owned();
-    assert!(direct_stdout.contains("--force"));
+    assert!(direct_stdout.contains("edit"));
 
     let external = Command::new("cargo")
-        .args(["cleanme", "config", "init", "--help"])
+        .args(["cleanme", "config", "edit", "--help"])
         .env("PATH", path_with(_dir_guard.path()))
         .env("CARGO_HOME", _dir_guard.path().join("cargo-home"))
         .output()
-        .expect("run cargo cleanme config init --help");
+        .expect("run cargo cleanme config edit --help");
     assert!(external.status.success());
     assert_eq!(direct_stdout, String::from_utf8_lossy(&external.stdout));
 }

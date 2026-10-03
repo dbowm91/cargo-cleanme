@@ -25,6 +25,8 @@ pub struct Cli {
 pub enum Command {
     Scan {
         root: Option<PathBuf>,
+        #[arg(long, conflicts_with = "root")]
+        full: bool,
     },
     Config {
         #[command(subcommand)]
@@ -32,8 +34,14 @@ pub enum Command {
     },
     /// Preview or execute cleanup of revalidated Cargo build artifacts.
     Clean {
-        /// Required sandbox root. Cleanup never scans the whole machine.
-        root: PathBuf,
+        /// Optional bounded sandbox root. Omit with --known or --full.
+        root: Option<PathBuf>,
+        /// Clean bounded roots selected by the current Routine policy.
+        #[arg(long, conflicts_with_all = ["root", "full"])]
+        known: bool,
+        /// Complete Full reconciliation before cleaning its learned roots.
+        #[arg(long, conflicts_with_all = ["root", "known"])]
+        full: bool,
         /// Cargo preview: invoke Cargo's own dry-run (the default mode).
         /// Distinct from `--dryrun` (cargo-cleanme simulation).
         #[arg(long, conflicts_with = "yes", conflicts_with = "dryrun")]
@@ -50,18 +58,14 @@ pub enum Command {
 #[derive(Debug, Subcommand)]
 pub enum ConfigCommand {
     Path,
-    Init {
-        /// Replace the existing config file instead of refusing to overwrite.
-        #[arg(long)]
-        force: bool,
-    },
     Show,
+    Edit,
 }
 impl Cli {
     pub fn scan_root(&self) -> Option<PathBuf> {
         match &self.command {
             None => None,
-            Some(Command::Scan { root }) => root.clone(),
+            Some(Command::Scan { root, .. }) => root.clone(),
             _ => None,
         }
     }
@@ -170,12 +174,13 @@ mod tests {
     #[test]
     fn config_command_parses() {
         assert!(Cli::try_parse_from(["cargo-cleanme", "config", "path"]).is_ok());
-        assert!(Cli::try_parse_from(["cargo-cleanme", "config", "init"]).is_ok());
-        assert!(Cli::try_parse_from(["cargo-cleanme", "config", "init", "--force"]).is_ok());
+        assert!(Cli::try_parse_from(["cargo-cleanme", "config", "edit"]).is_ok());
+        assert!(Cli::try_parse_from(["cargo-cleanme", "config", "init"]).is_err());
     }
     #[test]
     fn clean_requires_root_and_accepts_explicit_execution() {
-        assert!(Cli::try_parse_from(["cargo-cleanme", "clean"]).is_err());
+        assert!(Cli::try_parse_from(["cargo-cleanme", "clean"]).is_ok());
+        assert!(Cli::try_parse_from(["cargo-cleanme", "clean", "--known"]).is_ok());
         assert!(Cli::try_parse_from(["cargo-cleanme", "clean", "/tmp", "--yes"]).is_ok());
         assert!(
             Cli::try_parse_from(["cargo-cleanme", "clean", "/tmp", "--yes", "--dry-run"]).is_err()
@@ -208,6 +213,27 @@ mod tests {
             let normalized: Vec<OsString> = args.iter().map(OsString::from).collect::<Vec<_>>();
             let parsed = Cli::try_parse_from(normalize_cargo_argv(normalized)).unwrap();
             assert!(matches!(parsed.command, Some(Command::Clean { .. })));
+        }
+    }
+
+    #[test]
+    fn orchestration_roots_are_mutually_exclusive_and_external_forms_match() {
+        assert!(Cli::try_parse_from(["cargo-cleanme", "clean", "--known"]).is_ok());
+        assert!(Cli::try_parse_from(["cargo-cleanme", "clean", "--full", "--dryrun"]).is_ok());
+        assert!(Cli::try_parse_from(["cargo-cleanme", "clean", "/x", "--dry-run"]).is_ok());
+        assert!(Cli::try_parse_from(["cargo-cleanme", "clean", "/x", "--known"]).is_err());
+        assert!(Cli::try_parse_from(["cargo-cleanme", "clean", "--known", "--full"]).is_err());
+        for mode in ["--known", "--full"] {
+            let direct = Cli::try_parse_from(["cargo-cleanme", "clean", mode, "--dryrun"]).unwrap();
+            let external = Cli::try_parse_normalized_from(argv(&[
+                "cargo-cleanme",
+                "cleanme",
+                "clean",
+                mode,
+                "--dryrun",
+            ]))
+            .unwrap();
+            assert_eq!(format!("{direct:?}"), format!("{external:?}"));
         }
     }
 
@@ -310,30 +336,9 @@ mod tests {
     }
 
     #[test]
-    fn normalized_config_init_force_parses() {
-        let c =
-            Cli::try_parse_normalized_from(argv(&["cargo-cleanme", "cleanme", "config", "init"]))
-                .unwrap();
-        assert!(matches!(
-            c.command,
-            Some(Command::Config {
-                command: ConfigCommand::Init { force: false }
-            })
-        ));
-        let c = Cli::try_parse_normalized_from(argv(&[
-            "cargo-cleanme",
-            "cleanme",
-            "config",
-            "init",
-            "--force",
-        ]))
-        .unwrap();
-        assert!(matches!(
-            c.command,
-            Some(Command::Config {
-                command: ConfigCommand::Init { force: true }
-            })
-        ));
+    fn config_init_is_removed_and_edit_parses() {
+        assert!(Cli::try_parse_from(["cargo-cleanme", "config", "init"]).is_err());
+        assert!(Cli::try_parse_from(["cargo-cleanme", "config", "edit"]).is_ok());
     }
 
     #[test]

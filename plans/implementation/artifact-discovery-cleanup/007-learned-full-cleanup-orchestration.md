@@ -1,6 +1,8 @@
 # M007 — Learned/Full Cleanup Orchestration
 
-Status: proposed
+Status: blocked
+
+Blockers: M006E remains conditionally closed because the reference Full run did not publish a reconciled generation. The existing C003/C004 proof is also scoped to one clean ROOT; separate per-root proofs cannot establish cross-root redirected-output ownership. Multi-root Execute therefore fails closed pending a reviewed proof boundary.
 
 Repository baseline: post-M006E adaptive discovery implementation
 

@@ -134,11 +134,11 @@ M006A global scan/pruning/path normalization [conditionally closed]
 M006B cleanup-proof resolution efficiency [closed]
 M006C global traversal throughput without scope narrowing [conditionally closed]
 M006D global scan completion qualification [conditionally closed]
-M006E adaptive Routine/Full discovery state [ready]
-M006F exhaustive traversal hot-path qualification [ready after M006E]
+M006E adaptive Routine/Full discovery state [conditionally closed]
+M006F exhaustive traversal hot-path qualification [closed]
       |
       v
-M007 learned/full cleanup orchestration [proposed]
+M007 learned/full cleanup orchestration [blocked]
 ~~~
 
 ## 6. Milestone M001 — Foundation, CLI, config, and domain contracts
@@ -382,7 +382,7 @@ Outcome: cleanup resolution now retains authoritative manifest coverage and unre
 
 Status: active.
 
-M006 is split into ordered implementation tracks. M006A, M006C, and M006D are conditionally closed after preserving exhaustive reachability while documenting the reference-host traversal bottleneck; M006B is closed. ADR 002 resolves the former scope-versus-latency question by separating bounded adaptive Routine discovery from explicit exhaustive Full reconciliation. M006E is ready to implement that product split, machine-local learned discovery state, configurable 30-day retention, automatic config bootstrap, and `config edit`. M006F follows with a final exhaustive-walker hot-path qualification.
+M006 is split into ordered implementation tracks. M006A, M006C, and M006D are conditionally closed after preserving exhaustive reachability while documenting the reference-host traversal bottleneck; M006B is closed. ADR 002 resolves the former scope-versus-latency question by separating bounded adaptive Routine discovery from explicit exhaustive Full reconciliation. M006E implemented that product split, machine-local learned discovery state, configurable 30-day retention, automatic config bootstrap, and `config edit`. The reference Full traversal completed but yielded 741 filesystem diagnostics and 283 Cargo resolution failures; no reconciled state generation was published. M006E remains conditional pending reliable uncertainty-scoped successful publication. M006F completed its local exhaustive-walker hot-path qualification and awaits hosted platform CI.
 
 ### M006A — Global scan pruning, traversal policy, and path normalization
 
@@ -435,7 +435,7 @@ M006D identified traversal as the remaining measured cost and preserved exhausti
 
 ### M006E — Adaptive Routine discovery and Full reconciliation state
 
-Status: ready. Plan: `plans/implementation/artifact-discovery-cleanup/006e-adaptive-routine-full-discovery-state.md`.
+Status: conditionally closed. Plan: `plans/implementation/artifact-discovery-cleanup/006e-adaptive-routine-full-discovery-state.md`. Closure: `plans/closure/artifact-discovery-cleanup/006e-status.md`.
 
 Architecture: `plans/adr/002-adaptive-routine-full-discovery-state.md`.
 
@@ -445,15 +445,15 @@ The old scope-decision proposal at `006e-global-scan-scope-and-latency-policy.md
 
 ### M006F — Exhaustive traversal hot-path qualification
 
-Status: ready after M006E. Plan: `plans/implementation/artifact-discovery-cleanup/006f-exhaustive-traversal-hot-path-qualification.md`.
+Status: conditionally closed. Plan: `plans/implementation/artifact-discovery-cleanup/006f-exhaustive-traversal-hot-path-qualification.md`. Closure: `plans/closure/artifact-discovery-cleanup/006f-status.md`.
 
 M006F measures the bare dua-core ceiling versus cargo-cleanme callback overhead, removes first-level subtree attribution from the normal unprofiled hot path, qualifies completion-order versus parent-first delivery, and records a completed Full baseline without narrowing exhaustive scope.
 
 ### M007 — Learned/full cleanup orchestration
 
-Status: proposed. Plan: `plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-orchestration.md`.
+Status: blocked. Plan: `plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-orchestration.md`. Closure note: `plans/closure/artifact-discovery-cleanup/007-status.md`.
 
-M007 is hard-dependent on M006E closure. It may let known/adaptive or Full discovery select bounded cleanup scopes, but every selected scope must still pass the existing C004 completeness and C003 fresh ownership proof. Learned state never authorizes mutation.
+M007 is hard-dependent on M006E closure. The C003/C004 proof API accepts one bounded ROOT, so independent per-root proofs cannot establish cross-root ownership for redirected output. Multi-root Execute fails closed until a fresh complete proof can cover every selected root together. Learned state never authorizes mutation.
 
 ## 11. Cross-cutting reliability concerns
 

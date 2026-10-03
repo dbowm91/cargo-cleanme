@@ -26,7 +26,8 @@ cargo cleanme ...
 ## Usage
 
 ```sh
-cargo-cleanme                  # scan platform-defined global roots
+cargo-cleanme                  # fast Routine scan over seed + learned roots
+cargo-cleanme scan --full     # exhaustive reconciliation of platform roots
 cargo-cleanme scan ./projects  # scan one explicit scope
 cargo-cleanme scan ./projects --no-progress # scan without transient UI
 cargo-cleanme scan ./projects --no-progress --stats # benchmark/debug: no UI, counters+timings on stderr
@@ -35,9 +36,10 @@ cargo-cleanme clean ./projects --dry-run # explicit Cargo preview
 cargo-cleanme clean ./projects --dryrun # simulation: full path, no `cargo clean`
 cargo-cleanme clean ./projects --yes # execute cleanup for verified workspaces
 cargo-cleanme config path
-cargo-cleanme config init
-cargo-cleanme config init --force # replace the existing config file
 cargo-cleanme config show
+cargo-cleanme config edit
+cargo-cleanme clean --known --dryrun # simulate bounded cleanup of Routine roots
+cargo-cleanme clean --full --dryrun  # reconcile Full inventory, then simulate bounded scopes
 ```
 
 Global flags: `--no-progress` disables transient UI; `--stats` prints detailed semantic counters and phase/process timings to stderr (never stdout) for `scan` and `clean` (preview/simulate/execute). Default runs emit no debug counter line; stdout reports are byte-equivalent with and without `--stats`.
@@ -50,9 +52,9 @@ Global flags: `--no-progress` disables transient UI; `--stats` prints detailed s
 
 If the distinction proves error-prone, the CLI contract will be reconciled rather than silently aliased.
 
-Pass `--config PATH` to read a specific TOML config. Explicit CLI roots take precedence over `scan.root`; either explicit scope bypasses user ignore/unignore search filters. Filters apply during global discovery only. On Unix, global discovery starts at `/`; Linux prunes `/proc`, `/sys`, `/dev`, and `/run`. macOS prunes `/System`, `/dev`, `/bin`, `/sbin`, and protected `/usr` content, while adding `/usr/local` as a separate root when present. Windows enumerates fixed and removable local drive letters. Global scans also prune the effective rustup toolchain home (`$RUSTUP_HOME` or `~/.rustup`) and Cargo registry/git trees under the effective Cargo home (`$CARGO_HOME` or `~/.cargo`); these managed trees never trigger Cargo resolution. These global-only policy exclusions do not narrow an explicit scan root. Global roots share one bounded traversal pool. Linux and macOS request entry types without collecting full metadata for every file; Windows uses its platform-default traversal mode. Traversal does not follow symlinks. `--stats` includes visited entries, discovered manifests, Cargo calls, categorized platform, Cargo-home, rustup, target/VCS, and user-ignore prunes, plus bounded first-level subtree attribution. For a long global walk that does not finish, `CARGO_CLEANME_PROFILE_SUBTREES=1` emits five-second snapshots of visited entries by top-level subtree on stderr. During qualification, `CARGO_CLEANME_PROFILE_THREADS=N` (1–32), `CARGO_CLEANME_PROFILE_SKIP_METADATA=0|1`, and `CARGO_CLEANME_PROFILE_ORDER=completion` select bounded traversal variants only while subtree profiling is enabled. Normal global discovery uses at most eight workers, limited by host parallelism, with parent-first order. Filesystem access failures are summarized on stderr.
+Pass `--config PATH` to read a specific TOML config. Explicit CLI roots take precedence over `scan.root`; either explicit scope bypasses user ignore/unignore search filters. Routine scans visit existing seed roots under Projects/projects, Developer, dev, Code/code, src, repos/Repos, GitHub/github, and workspace/workspaces, plus active learned roots. Routine scans remain recursive under those selected roots. A never-learned unusual location may remain undiscovered until `scan --full` or an Explicit scan visits it. Full discovery preserves the existing exhaustive platform roots and prunes. Full reconciliation learns workspace neighborhoods in machine-local JSON state and retains roots for 30 days by default (`scan.learned_root_retention_days`).
 
-The repository ships a canonical `config.toml` template. `config init` writes exactly that file to the resolved platform config path and refuses to overwrite an existing file unless `--force` is given; `--force` writes a temporary sibling and renames it so a failed write leaves the previous config intact. The repository template is a distribution artifact and is never loaded implicitly from the working directory. The template includes a commented `[cleanup]` section:
+The repository ships a canonical `config.toml` template. Operational commands create it on first use without overwriting an existing file. `config path` only prints the resolved path. `config edit` opens that file in VISUAL, EDITOR, or an available terminal editor, then validates the result. The repository template is a distribution artifact and is never loaded implicitly from the working directory. The template includes a commented `[cleanup]` section:
 
 ```toml
 [cleanup]

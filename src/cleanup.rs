@@ -494,10 +494,12 @@ pub fn clean_with(
         root: None,
         ignore: Vec::new(),
         unignore: Vec::new(),
+        ..Default::default()
     };
     let resolved = policy::resolve(
         ScanRequest {
             cli_root: Some(root.to_path_buf()),
+            full: false,
         },
         &cfg,
     )?;

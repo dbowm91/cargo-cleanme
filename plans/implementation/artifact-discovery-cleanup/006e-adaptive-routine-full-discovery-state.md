@@ -1,6 +1,8 @@
 # M006E — Adaptive Routine Discovery and Full Reconciliation State
 
-Status: ready
+Status: conditionally closed
+
+Closure: `plans/closure/artifact-discovery-cleanup/006e-status.md`. The Routine/Full/Explicit split and state/config surfaces landed. Full traversal completed on the reference host, but a complete error-free reconciliation did not publish a state generation; qualification remains open for reliable uncertainty-scoped reconciliation and state publication.
 
 Repository baseline: `52018219860d3a5412929a848a142236de78ca58`
 
