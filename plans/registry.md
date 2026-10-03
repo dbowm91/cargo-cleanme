@@ -14,7 +14,7 @@ Accepted architecture decisions:
 - plans/adr/001-workspace-output-ownership-and-cleanup-authorization.md
 
 Planning framework baseline: 97dee9fa64868534cedf3a9310e7160335a91be2
-Current repository planning baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
+M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 
 ## Status vocabulary
 
