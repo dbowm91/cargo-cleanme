@@ -1,6 +1,8 @@
 # M006D — Global Scan Completion Qualification
 
-Status: ready
+Status: conditionally closed
+
+Closure: `plans/closure/artifact-discovery-cleanup/006d-status.md`. Full-scope traversal optimizations and parity checks landed, but the exact 120-second scan acceptance remains unmet; resolving the scope/latency policy is proposed as M006E.
 
 Repository baseline: `bbfff4b` (M006C bounded traversal improvements and parity tests).
 

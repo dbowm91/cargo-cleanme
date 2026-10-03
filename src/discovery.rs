@@ -143,37 +143,57 @@ fn discovery_profile_order(profiling: bool, requested: Option<&str>) -> dua_core
     }
 }
 
-fn top_level_component(entry: &dua_core::Entry, root: &Path) -> OsString {
+fn top_level_component<'a>(entry: &'a dua_core::Entry, root: &Path) -> Option<&'a OsStr> {
     if entry.depth == 0 {
-        return OsString::new();
+        return None;
     }
     if entry.depth == 1 {
-        return entry.file_name.clone();
+        return Some(&entry.file_name);
     }
     entry
         .parent_path
         .strip_prefix(root)
         .ok()
         .and_then(|relative| relative.components().next())
-        .map(|component| component.as_os_str().to_owned())
-        .unwrap_or_else(|| entry.file_name.clone())
+        .map(|component| component.as_os_str())
+}
+
+fn entry_is_within(entry: &dua_core::Entry, root: &Path, prefix: &Path) -> bool {
+    if entry.depth == 0 {
+        return root.starts_with(prefix);
+    }
+    let parent = entry.parent_path.as_ref();
+    parent.starts_with(prefix)
+        || (prefix.parent() == Some(parent)
+            && prefix
+                .file_name()
+                .is_some_and(|component| component == entry.file_name))
+}
+
+fn entry_is_within_any(entry: &dua_core::Entry, root: &Path, prefixes: &[PathBuf]) -> bool {
+    prefixes
+        .iter()
+        .any(|prefix| entry_is_within(entry, root, prefix))
 }
 
 fn top_level_entry_map(
     roots: &[(usize, PathBuf)],
-    counts: HashMap<(usize, OsString), u64>,
+    root_counts: &HashMap<usize, u64>,
+    counts: &HashMap<usize, HashMap<OsString, u64>>,
 ) -> std::collections::BTreeMap<PathBuf, u64> {
     let mut result = std::collections::BTreeMap::new();
-    for ((root_idx, component), count) in counts {
+    for (&root_idx, &count) in root_counts {
+        if let Some((_, root)) = roots.get(root_idx) {
+            *result.entry(root.clone()).or_insert(0) += count;
+        }
+    }
+    for (&root_idx, components) in counts {
         let Some((_, root)) = roots.get(root_idx) else {
             continue;
         };
-        let path = if component.is_empty() {
-            root.clone()
-        } else {
-            root.join(component)
-        };
-        *result.entry(path).or_insert(0) += count;
+        for (component, &count) in components {
+            *result.entry(root.join(component)).or_insert(0) += count;
+        }
     }
     result
 }
@@ -239,7 +259,7 @@ pub fn discover_manifests(
             env::var("CARGO_CLEANME_PROFILE_SKIP_METADATA")
                 .ok()
                 .as_deref(),
-            cfg!(target_os = "linux"),
+            cfg!(any(target_os = "linux", target_os = "macos")),
         );
         let order = discovery_profile_order(
             profile_subtrees,
@@ -378,24 +398,25 @@ fn discover_global_roots(
             dua_core::Options::default()
         },
         move |root_idx, entry| {
-            let path = entry.path();
             if !entry.file_type.is_dir() || entry.file_type.is_symlink() {
                 return false;
             }
-            let Some((_, root)) = roots_for_walk.iter().find(|(i, _)| *i == root_idx) else {
+            let Some((_, root)) = roots_for_walk.get(root_idx) else {
                 return false;
             };
-            if path != *root && path.file_name().is_some_and(|n| n == "target" || vcs(n)) {
+            if entry.depth > 0 && (entry.file_name == "target" || vcs(&entry.file_name)) {
                 return false;
             }
-            if descend_system_prunes
-                .iter()
-                .any(|p| path == *p || path.starts_with(p))
-                || is_cargo_home_pruned(&path, &descend_cargo_prunes)
-                || is_cargo_home_pruned(&path, &descend_rustup_prunes)
+            if entry_is_within_any(entry, root, &descend_system_prunes)
+                || entry_is_within_any(entry, root, &descend_cargo_prunes)
+                || entry_is_within_any(entry, root, &descend_rustup_prunes)
             {
                 return false;
             }
+            if descend_filters.globs.is_empty() {
+                return true;
+            }
+            let path = entry.path();
             !descend_filters.ignored(&path) || descend_filters.exception_below(&path)
         },
     );
@@ -406,8 +427,14 @@ fn discover_global_roots(
     let mut ignore_count = 0;
     let mut batch_visited = 0;
     let mut batch_pruned = 0;
-    let mut top_level_counts = HashMap::new();
+    let mut top_level_root_counts = HashMap::new();
+    let mut top_level_counts: HashMap<usize, HashMap<OsString, u64>> = HashMap::new();
+    let mut finished_roots = 0u64;
+    let mut manifest_candidates = 0u64;
+    let mut manifest_validated = 0u64;
+    let mut manifest_validation_time = std::time::Duration::ZERO;
     let mut last_profile = std::time::Instant::now();
+    let traversal_started = std::time::Instant::now();
     for (root_idx, event) in walk {
         let entry = match event {
             dua_core::RootEvent::Entry(Ok(e)) => e,
@@ -424,12 +451,23 @@ fn discover_global_roots(
                 });
                 continue;
             }
-            dua_core::RootEvent::Finished => continue,
+            dua_core::RootEvent::Finished => {
+                finished_roots += 1;
+                continue;
+            }
         };
         *visited = visited.saturating_add(1);
         if let Some((_, root)) = roots.get(root_idx) {
-            let component = top_level_component(&entry, root);
-            *top_level_counts.entry((root_idx, component)).or_insert(0) += 1;
+            if entry.depth == 0 {
+                *top_level_root_counts.entry(root_idx).or_insert(0) += 1;
+            } else if let Some(component) = top_level_component(&entry, root) {
+                let subtrees = top_level_counts.entry(root_idx).or_default();
+                if let Some(count) = subtrees.get_mut(component) {
+                    *count += 1;
+                } else {
+                    subtrees.insert(component.to_owned(), 1);
+                }
+            }
         }
         batch_visited += 1;
         if batch_visited >= 512 {
@@ -440,60 +478,68 @@ fn discover_global_roots(
             let Some((_, root)) = roots.get(root_idx) else {
                 continue;
             };
-            let path = entry.path();
-            if path != *root {
-                let system = system_prunes
-                    .iter()
-                    .any(|p| path == *p || path.starts_with(p));
-                let cargo = is_cargo_home_pruned(&path, &cargo_prunes);
-                let rustup = is_cargo_home_pruned(&path, &rustup_prunes);
-                let target = path.file_name().is_some_and(|n| n == "target" || vcs(n));
-                let ignored = filters.ignored(&path) && !filters.exception_below(&path);
-                if system {
-                    system_count += 1;
-                } else if cargo {
-                    cargo_count += 1;
-                } else if rustup {
-                    rustup_count += 1;
-                } else if target {
-                    target_count += 1;
-                } else if ignored {
-                    ignore_count += 1;
-                }
-                if system || cargo || rustup || target || ignored {
-                    *pruned += 1;
-                    batch_pruned += 1;
-                }
+            let system = entry.depth > 0 && entry_is_within_any(&entry, root, &system_prunes);
+            let cargo = entry.depth > 0 && entry_is_within_any(&entry, root, &cargo_prunes);
+            let rustup = entry.depth > 0 && entry_is_within_any(&entry, root, &rustup_prunes);
+            let target = entry.depth > 0 && (entry.file_name == "target" || vcs(&entry.file_name));
+            let ignored = if entry.depth > 0 && !filters.globs.is_empty() {
+                let path = entry.path();
+                filters.ignored(&path) && !filters.exception_below(&path)
+            } else {
+                false
+            };
+            if system {
+                system_count += 1;
+            } else if cargo {
+                cargo_count += 1;
+            } else if rustup {
+                rustup_count += 1;
+            } else if target {
+                target_count += 1;
+            } else if ignored {
+                ignore_count += 1;
+            }
+            if system || cargo || rustup || target || ignored {
+                *pruned += 1;
+                batch_pruned += 1;
             }
         }
-        if entry.file_type.is_file()
-            && entry.file_name == "Cargo.toml"
-            && fs::symlink_metadata(entry.path())
-                .is_ok_and(|m| m.is_file() && !m.file_type().is_symlink())
-        {
+        if entry.file_type.is_file() && entry.file_name == "Cargo.toml" {
+            manifest_candidates += 1;
             let path = entry.path();
-            manifests.push(path.clone());
-            observer.manifests_found(1);
+            let validation_started = profile_subtrees.then(std::time::Instant::now);
+            let valid = fs::symlink_metadata(&path)
+                .is_ok_and(|m| m.is_file() && !m.file_type().is_symlink());
+            if let Some(started) = validation_started {
+                manifest_validation_time += started.elapsed();
+            }
+            if valid {
+                manifest_validated += 1;
+                manifests.push(path);
+                observer.manifests_found(1);
+            }
         }
         if batch_pruned >= 64 {
             observer.dirs_pruned(batch_pruned);
             batch_pruned = 0;
         }
         if profile_subtrees && last_profile.elapsed() >= std::time::Duration::from_secs(5) {
-            let top_level_entries = top_level_entry_map(&roots, top_level_counts.clone());
+            let top_level_entries =
+                top_level_entry_map(&roots, &top_level_root_counts, &top_level_counts);
             let profile = top_level_entries
                 .iter()
                 .map(|(path, count)| format!("{:?}={count}", path))
                 .collect::<Vec<_>>()
                 .join(" ");
             eprintln!(
-                "scan subtree profile: workers={discovery_workers} skip_metadata={skip_metadata} order={} visited={} {profile}",
+                "scan subtree profile: workers={discovery_workers} skip_metadata={skip_metadata} order={} visited={} roots_finished={finished_roots} manifest_candidates={manifest_candidates} manifests_validated={manifest_validated} manifest_validation_seconds={:.3} {profile}",
                 if matches!(order, dua_core::Order::Completion) {
                     "completion"
                 } else {
                     "parent-first"
                 },
-                *visited
+                *visited,
+                manifest_validation_time.as_secs_f64()
             );
             last_profile = std::time::Instant::now();
         }
@@ -504,8 +550,27 @@ fn discover_global_roots(
     if batch_pruned > 0 {
         observer.dirs_pruned(batch_pruned);
     }
+    if profile_subtrees {
+        eprintln!(
+            "scan phase: traversal_complete elapsed={:.3}s visited={} manifest_candidates={manifest_candidates} manifests_validated={manifest_validated} manifest_validation_seconds={:.3} diagnostics={}",
+            traversal_started.elapsed().as_secs_f64(),
+            *visited,
+            manifest_validation_time.as_secs_f64(),
+            diagnostics.len()
+        );
+    }
+    let sort_started = profile_subtrees.then(std::time::Instant::now);
     manifests.sort();
+    let sort_elapsed = sort_started.map_or(std::time::Duration::ZERO, |started| started.elapsed());
+    let before_dedup = manifests.len();
     manifests.dedup();
+    if profile_subtrees {
+        eprintln!(
+            "scan phase: manifest_sort_complete seconds={:.3} manifests_before_dedup={before_dedup} manifests_after_dedup={}",
+            sort_elapsed.as_secs_f64(),
+            manifests.len()
+        );
+    }
     let counters = ScanCounters {
         directories_visited: *visited,
         directories_pruned: *pruned,
@@ -518,7 +583,15 @@ fn discover_global_roots(
         pruned_no_cargo: *pruned,
         ..Default::default()
     };
-    let top_level_entries = top_level_entry_map(&roots, top_level_counts);
+    let attribution_started = profile_subtrees.then(std::time::Instant::now);
+    let top_level_entries = top_level_entry_map(&roots, &top_level_root_counts, &top_level_counts);
+    if let Some(started) = attribution_started {
+        eprintln!(
+            "scan phase: attribution_finalized seconds={:.3} paths={}",
+            started.elapsed().as_secs_f64(),
+            top_level_entries.len()
+        );
+    }
     Ok(ManifestDiscovery {
         manifests: manifests.clone(),
         visited_entries: *visited,

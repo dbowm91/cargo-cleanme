@@ -32,7 +32,7 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M006 performance hardening | M006A and M006C are conditionally closed with named scan qualification misses; M006B is closed; ready M006D owns full-scope completion qualification. M005 remains closed/green. |
+| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M006 performance hardening | M006A, M006C, and M006D are conditionally closed with named scan qualification misses; M006B is closed. Proposed M006E needs an explicit scope-versus-latency policy decision. M005 remains closed/green. |
 
 ## Implementation handoffs
 
@@ -48,14 +48,15 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 | Artifact discovery and cleanup | C002 M005 ownership safety, simulation parity, progress, global qualification | **closed** | plans/implementation/artifact-discovery-cleanup/c002-m005-safety-progress-performance-reconciliation.md | Historical closure: plans/closure/artifact-discovery-cleanup/c002-status.md; post-closure cleanup-unit defects tracked by C003. |
 | Artifact discovery and cleanup | C003 workspace cleanup-unit atomicity + full ownership-graph revalidation | **closed** | plans/implementation/artifact-discovery-cleanup/c003-workspace-cleanup-unit-atomicity.md | Historical closure: plans/closure/artifact-discovery-cleanup/c003-status.md; post-closure unresolved-participant defect tracked by C004. |
 | Artifact discovery and cleanup | C004 complete ownership-universe resolution coverage | **closed** | plans/implementation/artifact-discovery-cleanup/c004-complete-ownership-resolution-coverage.md | Closure: plans/closure/artifact-discovery-cleanup/c004-status.md. M005 destructive release qualification is restored. |
-| Artifact discovery and cleanup | M006A global scan pruning, traversal policy, path normalization | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/006a-global-scan-pruning-and-path-normalization.md | Closure: plans/closure/artifact-discovery-cleanup/006a-status.md. Policy/path work landed; its scan miss was investigated under M006C and remains tracked by ready M006D. |
+| Artifact discovery and cleanup | M006A global scan pruning, traversal policy, path normalization | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/006a-global-scan-pruning-and-path-normalization.md | Closure: plans/closure/artifact-discovery-cleanup/006a-status.md. Policy/path work landed; its scan miss is included in the M006D evidence and awaits the scope/latency policy decision proposed by M006E. |
 | Artifact discovery and cleanup | M006B cleanup proof resolution efficiency | **closed** | plans/implementation/artifact-discovery-cleanup/006b-cleanup-proof-resolution-efficiency.md | Closure: plans/closure/artifact-discovery-cleanup/006b-status.md. Preserves C003/C004 freshness and fail-closed semantics; proof/process reductions are measured. |
 | Artifact discovery and cleanup | M006C global traversal throughput without scope narrowing | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/006c-global-traversal-throughput-without-scope-narrowing.md | Closure: plans/closure/artifact-discovery-cleanup/006c-status.md. Bounded traversal and parity work landed; exact no-argument scan remains over 120 seconds. |
-| Artifact discovery and cleanup | M006D global scan completion qualification | **ready** | plans/implementation/artifact-discovery-cleanup/006d-global-scan-completion-qualification.md | Unblocked by M006C's exact timeout and near-complete traversal profiles; preserve full global reachability and safety invariants. |
+| Artifact discovery and cleanup | M006D global scan completion qualification | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/006d-global-scan-completion-qualification.md | Closure: plans/closure/artifact-discovery-cleanup/006d-status.md. Optimizations preserve scope and safety, but the exact native scan remains over 120 seconds. |
+| Artifact discovery and cleanup | M006E global scan scope and latency policy | **proposed** | plans/implementation/artifact-discovery-cleanup/006e-global-scan-scope-and-latency-policy.md | Awaiting explicit product decision; current full-scope behavior and cleanup safety remain unchanged. |
 
 ## Immediate handoff
 
-M006A and M006C have been implemented and conditionally closed with measured qualification misses; M006B is closed after that disposition and passed hosted Linux/macOS/Windows and Rust 1.89 CI. M006D is ready with an exact current-host timeout, near-complete profile, and explicit scope/safety constraints.
+M006A, M006C, and M006D have been implemented and conditionally closed with measured qualification misses; M006B is closed after that disposition and passed hosted Linux/macOS/Windows and Rust 1.89 CI. M006E is proposed to resolve the scope-versus-latency policy decision.
 
 Expected order:
 
@@ -64,7 +65,8 @@ M001-M005 + C001-C004 -> closed
 M006A global discovery/pruning/path normalization -> conditionally closed (macOS scan >120 s)
 M006B cleanup-proof resolution efficiency -> closed
 M006C traversal throughput without scope narrowing -> conditionally closed (macOS scan >120 s)
-M006D global scan completion qualification -> ready
+M006D global scan completion qualification -> conditionally closed (exact native scan remains over 120 s)
+M006E global scan scope and latency policy -> proposed (awaiting explicit decision)
 M006 performance hardening -> remains active until global scan throughput is qualified
 ~~~
 
