@@ -802,23 +802,51 @@ fn canon(path: &Path) -> PathBuf {
     fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+/// Resolve a path as far as the filesystem allows.
+///
+/// Canonicalizes the deepest existing ancestor and re-appends the remaining
+/// components, so a path that does not exist yet is still compared in its
+/// physical location instead of lexically. This keeps the cross-workspace
+/// overlap check sound when a path component (for example macOS `/var`, or a
+/// symlinked ancestor of a configured output directory) is not canonical.
+fn resolve_as_far_as_possible(path: &Path) -> PathBuf {
+    if let Ok(canonical) = fs::canonicalize(path) {
+        return canonical;
+    }
+    let mut current = path;
+    let mut tail: Vec<OsString> = Vec::new();
+    while let Some(name) = current.file_name() {
+        tail.push(name.to_os_string());
+        let Some(parent) = current.parent() else {
+            break;
+        };
+        if let Ok(canonical) = fs::canonicalize(parent) {
+            let mut resolved = canonical;
+            for part in tail.iter().rev() {
+                resolved.push(part);
+            }
+            return resolved;
+        }
+        if parent.as_os_str().is_empty() {
+            break;
+        }
+        current = parent;
+    }
+    path.to_path_buf()
+}
+
 /// Physical regions an output root can touch, as far as it can be proven.
 ///
 /// A symlink or unresolvable root has no `physical_path`, so the complete
 /// physical graph cannot see it. Resolving the logical path keeps the
 /// cross-workspace overlap check in C003 §7.3 sound for those roots instead of
-/// silently ignoring them; when even that fails, the logical path is used and
+/// silently ignoring them; when nothing can be resolved, the logical path is
 /// compared lexically against canonical covering roots.
 fn provable_output_paths(root: &OutputRoot) -> Vec<PathBuf> {
     if let Some(physical) = &root.physical_path {
         return vec![physical.clone()];
     }
-    if root.is_symlink
-        && let Ok(resolved) = fs::canonicalize(&root.logical_path)
-    {
-        return vec![resolved];
-    }
-    vec![root.logical_path.clone()]
+    vec![resolve_as_far_as_possible(&root.logical_path)]
 }
 
 fn sorted_same(left: &[PathBuf], right: &[PathBuf]) -> bool {
@@ -3718,6 +3746,34 @@ mod tests {
             assert!(row.detail.contains("overlaps"), "{mode:?}: {}", row.detail);
             assert!(runner.clean_calls().is_empty(), "{mode:?}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cross_workspace_symlinked_ancestor_into_candidate_output_fails_closed() {
+        // A configured output path whose *ancestor* is a symlink into the
+        // candidate's output and whose final component does not exist: neither
+        // the physical graph nor a lexical comparison can see the overlap, so
+        // the proof must resolve the deepest existing ancestor and fail closed.
+        use std::os::unix::fs::symlink;
+        let d = tempfile::tempdir().unwrap();
+        let root_a = ws_root(d.path(), "a");
+        let root_b = ws_root(d.path(), "b");
+        let target_a = cargo_output(&root_a.join("target"), 4096);
+        let target_b = cargo_output(&root_b.join("target"), 4096);
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        let alias = d.path().join("alias");
+        symlink(&target_a, &alias).unwrap();
+        let mut runner = StagedCargo::new();
+        runner.add(&root_a, target_a, None);
+        runner.add(&root_b, target_b, None);
+        runner.stage(1, 2, alias.join("not-created-yet"), None);
+        let noop = NoopObserver;
+        let report = clean_with(d.path(), 0, &[], CleanMode::Simulate, &runner, &noop).unwrap();
+        let row = row_for(&report, &root_a);
+        assert_eq!(row.outcome, CleanOutcome::Skipped, "{}", row.detail);
+        assert!(row.detail.contains("overlaps"), "{}", row.detail);
+        assert!(runner.clean_calls().is_empty());
     }
 
     #[test]
