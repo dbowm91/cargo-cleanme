@@ -138,7 +138,16 @@ M006E adaptive Routine/Full discovery state [conditionally closed]
 M006F exhaustive traversal hot-path qualification [closed]
       |
       v
-M007 learned/full cleanup orchestration [blocked]
+C005 uncertainty-aware state reconciliation + config/edit hardening [ready]
+      |
+      v
+M006E closure
+      |
+      v
+C006 combined-root cleanup ownership universe [ready after C005]
+      |
+      v
+M007 learned/full cleanup orchestration [blocked pending C005/C006]
 ~~~
 
 ## 6. Milestone M001 — Foundation, CLI, config, and domain contracts
@@ -449,11 +458,27 @@ Status: closed. Plan: `plans/implementation/artifact-discovery-cleanup/006f-exha
 
 M006F measures the bare dua-core ceiling versus cargo-cleanme callback overhead, removes first-level subtree attribution from the normal unprofiled hot path, qualifies completion-order versus parent-first delivery, and records a completed Full baseline without narrowing exhaustive scope.
 
+### C005 — Uncertainty-aware discovery-state reconciliation and config/edit hardening
+
+Status: ready. Plan: `plans/implementation/artifact-discovery-cleanup/c005-uncertainty-aware-state-reconciliation-and-config-edit-hardening.md`.
+
+C005 corrects M006E's all-or-nothing Full publication gate. A completed Full scan may publish positive Cargo-manifest/workspace evidence even when unrelated localized diagnostics exist. Learned-root expiration becomes path-scoped: only roots with trustworthy negative coverage may age out; roots intersecting traversal uncertainty are retained. C005 also persists containment-collapsed learned roots, surfaces corrupt/newer state diagnostics fail-soft, hardens state publication temp naming, defines retention=0 as expiration disabled, and completes cross-platform `config edit` editor-resolution/fake-editor qualification.
+
+C005 does not change cleanup proof or authorization. State remains a search optimization only.
+
 ### M007 — Learned/full cleanup orchestration
 
 Status: blocked. Plan: `plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-orchestration.md`. Closure note: `plans/closure/artifact-discovery-cleanup/007-status.md`.
 
-M007 is hard-dependent on M006E closure. The C003/C004 proof API accepts one bounded ROOT, so independent per-root proofs cannot establish cross-root ownership for redirected output. Multi-root Execute fails closed until a fresh complete proof can cover every selected root together. Learned state never authorizes mutation.
+M007 is hard-dependent on M006E/C005 closure. The C003/C004 proof API accepts one bounded ROOT, so independent per-root proofs cannot establish cross-root ownership for redirected output. Multi-root Execute currently fails closed, and independent Preview/Simulate may be optimistic relative to a combined ownership universe. Learned state never authorizes mutation.
+
+### C006 — Combined-root cleanup ownership universe and simulation parity
+
+Status: ready after C005. Plan: `plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md`.
+
+C006 generalizes the existing C003/C004 safety model from one explicit cleanup root to the full selected root set used by `clean --known` and `clean --full`. Every selected root contributes to one manifest-coverage universe and one physical output graph; unresolved ownership anywhere in that combined scope blocks Preview/Simulate/Execute. Before each CleanupUnit disposition, the complete selected-root universe is refreshed so cross-root redirected/shared output and races are detected. `clean ROOT` should delegate to the same engine with a one-root vector where practical.
+
+C006 removes the blanket multi-root Execute block only after this proof is qualified.
 
 ## 11. Cross-cutting reliability concerns
 
