@@ -212,3 +212,18 @@ ADR 001 already establishes the workspace as the logical ownership unit and requ
 - One Cargo invocation produces one cleanup result and one deduplicated pre/post union measurement.
 
 This clarifies the original decision; it does not authorize new external/shared cleanup behavior.
+
+
+## C004 clarification — complete discovered-manifest coverage
+
+Clarification date: 2026-10-03.
+
+The bounded cleanup ownership universe is complete only when every Cargo.toml discovered under clean ROOT is accounted for by authoritative Cargo workspace resolution.
+
+A discovered manifest is accounted for when it either resolves directly or is listed as a member/root by a successfully resolved workspace's Cargo metadata. A failed direct attempt may therefore be cleared by later authoritative metadata coverage in the same pass.
+
+Any discovered manifest that remains uncovered is an unresolved ownership participant. Because cargo-cleanme delegates Cargo configuration semantics to Cargo, it cannot prove that participant does not share or overlap another workspace's output.
+
+Therefore Preview, Simulate, and Execute fail closed for the entire cleanup scope while unresolved ownership participants remain. No cargo clean command, including cargo clean --dry-run, may run in that state.
+
+Read-only scan remains partial-result tolerant; this completeness requirement is specific to destructive ownership qualification.

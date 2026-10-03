@@ -270,3 +270,26 @@ The complete set of Cargo workspaces discovered within the explicit clean ROOT f
 Immediately before destructive execution, cargo-cleanme may re-resolve this bounded set and rebuild the physical output graph to prove that the candidate CleanupUnit has not become shared with another discovered workspace.
 
 This bounded universe does not prove that an external cache has no owners outside clean ROOT; such output remains ExternalUnproven under ADR 001.
+
+
+## 35. Ownership participant
+
+A Cargo manifest discovered under an explicit clean ROOT that may represent or belong to a workspace capable of owning Cargo output.
+
+For destructive qualification, every ownership participant must be accounted for by authoritative Cargo workspace resolution.
+
+## 36. Resolution coverage
+
+The mapping from discovered cleanup-scope manifests to successfully resolved Cargo workspaces.
+
+A discovered manifest is covered when it resolves directly or when successful Cargo metadata for a resolved workspace lists it as that workspace's root/member manifest.
+
+Coverage is authoritative only from Cargo resolution; path ancestry and hand-parsed manifest guesses do not establish it.
+
+## 37. Unresolved ownership participant
+
+A discovered cleanup-scope Cargo manifest that is not covered by any successfully resolved workspace after the complete resolution pass.
+
+Its output relationship is unknown. Because cargo-cleanme cannot prove it does not share another workspace's target/build output, any unresolved ownership participant makes the destructive ownership universe incomplete and blocks Preview, Simulate, and Execute for the entire clean scope.
+
+This strict rule does not apply to ordinary read-only scan partial results.

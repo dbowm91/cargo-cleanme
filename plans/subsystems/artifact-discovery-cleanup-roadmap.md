@@ -2,7 +2,7 @@
 
 Status: active
 
-Repository audit baseline: 5af882122b4781e8a927d34a3792cbfd3c0d12cb
+Repository audit baseline: 819f71cd50bebb3b68ae54ef22e6951f08edcbbe
 
 Canonical references:
 
@@ -123,7 +123,10 @@ M005B authorized redirected cleanup + --dryrun [historically closed]
 C002 M005 safety/progress/performance reconciliation [historically closed]
                    |
                    v
-C003 cleanup-unit atomicity/full ownership graph [closed]
+C003 cleanup-unit atomicity/full ownership graph [historically closed]
+                   |
+                   v
+C004 complete ownership-universe resolution coverage [ready]
 ~~~
 
 ## 6. Milestone M001 — Foundation, CLI, config, and domain contracts
@@ -231,7 +234,7 @@ C001 is a hard implementation-baseline dependency for M005. M005 design research
 
 ## 10. Milestone M005 — Workspace-aware redirected/shared output
 
-Status: closed. ADR 001 accepted. M005A, M005B, C002, and C003 closures are all recorded; C003 closed the workspace cleanup-unit atomicity and full ownership-graph revalidation defects and M005 is again release-qualified for destructive use.
+Status: corrective required. ADR 001 accepted. M005A/M005B/C002/C003 historical closures remain recorded; C004 is ready and reopens destructive release qualification.
 
 Accepted decision:
 
@@ -341,6 +344,25 @@ Outcome:
 C003 keeps generic global-scan performance as a separate future optimization line. M005 destructive release qualification was reopened until C003 closed and is unblocked again by its closure.
 
 Deferred (recorded in the C003 closure, not a blocked plan): the ownership-universe refresh performs one bounded re-resolution per cleanable candidate (N candidates over N discovered workspaces ⇒ N² Cargo resolutions, recorded with `--stats`); and on macOS a symlinked path component of the clean root leaves member source roots non-canonical, so the source-activity walk does not prune output directories (eligibility-neutral, wasted traversal, candidate follow-up corrective).
+
+## 10C. Corrective C004 — Complete ownership-universe resolution coverage
+
+Status: ready.
+
+Plan:
+
+- plans/implementation/artifact-discovery-cleanup/c004-complete-ownership-resolution-coverage.md
+
+Purpose:
+
+- retain resolution coverage for every Cargo.toml discovered under explicit clean ROOT;
+- treat a manifest as covered only through direct successful Cargo resolution or authoritative member/root metadata from a successfully resolved workspace;
+- preserve unresolved manifests as ownership participants instead of dropping them after diagnostics;
+- block Preview, Simulate, and Execute scope-wide while any unresolved ownership participant remains;
+- keep ordinary read-only scan partial-result tolerant;
+- preserve C003 CleanupUnit atomicity and full final ownership-graph revalidation once initial coverage is complete.
+
+C004 does not optimize the C003 N² final-proof cost, macOS source-root canonicalization, or generic no-argument scan performance. M005 destructive release qualification is reopened until C004 closes.
 
 ## 11. Cross-cutting reliability concerns
 

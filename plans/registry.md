@@ -14,7 +14,7 @@ Accepted architecture decisions:
 - plans/adr/001-workspace-output-ownership-and-cleanup-authorization.md
 
 Planning framework baseline: 97dee9fa64868534cedf3a9310e7160335a91be2
-Current repository planning baseline: 81d8f3dcb2dc7f2a783a7cd50afc802fb762d3d7
+Current repository planning baseline: 819f71cd50bebb3b68ae54ef22e6951f08edcbbe
 
 ## Status vocabulary
 
@@ -32,7 +32,7 @@ Current repository planning baseline: 81d8f3dcb2dc7f2a783a7cd50afc802fb762d3d7
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M005 complete (C003 closed) | No blocked or ready plan. C003 closed the workspace cleanup-unit atomicity and full ownership-graph revalidation defects; M005 is release-qualified again. |
+| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | C004 ready | Post-C003 audit found incomplete destructive ownership coverage when discovered Cargo manifests fail initial workspace resolution. |
 
 ## Implementation handoffs
 
@@ -46,13 +46,14 @@ Current repository planning baseline: 81d8f3dcb2dc7f2a783a7cd50afc802fb762d3d7
 | Artifact discovery and cleanup | M005A workspace output resolution, fail-fast scan, inline progress | **closed** | plans/implementation/artifact-discovery-cleanup/005a-workspace-output-resolution-fail-fast-progress.md | Closure: plans/closure/artifact-discovery-cleanup/005a-status.md. |
 | Artifact discovery and cleanup | M005B authorized redirected cleanup + full simulation | **closed** | plans/implementation/artifact-discovery-cleanup/005b-authorized-redirected-cleanup-and-dryrun.md | Historical closure: plans/closure/artifact-discovery-cleanup/005b-status.md; post-closure defects tracked by C002. |
 | Artifact discovery and cleanup | C002 M005 ownership safety, simulation parity, progress, global qualification | **closed** | plans/implementation/artifact-discovery-cleanup/c002-m005-safety-progress-performance-reconciliation.md | Historical closure: plans/closure/artifact-discovery-cleanup/c002-status.md; post-closure cleanup-unit defects tracked by C003. |
-| Artifact discovery and cleanup | C003 workspace cleanup-unit atomicity + full ownership-graph revalidation | **closed** | plans/implementation/artifact-discovery-cleanup/c003-workspace-cleanup-unit-atomicity.md | Closure: plans/closure/artifact-discovery-cleanup/c003-status.md. M005A/M005B/C002 historical closures unchanged. |
+| Artifact discovery and cleanup | C003 workspace cleanup-unit atomicity + full ownership-graph revalidation | **closed** | plans/implementation/artifact-discovery-cleanup/c003-workspace-cleanup-unit-atomicity.md | Historical closure: plans/closure/artifact-discovery-cleanup/c003-status.md; post-closure unresolved-participant defect tracked by C004. |
+| Artifact discovery and cleanup | C004 complete ownership-universe resolution coverage | **ready** | plans/implementation/artifact-discovery-cleanup/c004-complete-ownership-resolution-coverage.md | Start here. Destructive M005 release qualification is reopened until C004 closes. |
 
 ## Immediate handoff
 
-No ready, active, or blocked implementation plan remains in this subsystem. C003 is closed and M005 destructive release qualification is unblocked.
+Implement C004.
 
-Completed order:
+Expected order:
 
 ~~~text
 M001-M004 -> closed
@@ -61,30 +62,24 @@ ADR 001 -> accepted
 M005A -> closed
 M005B -> historically closed
 C002 -> historically closed
-C003 workspace cleanup-unit atomicity / full ownership graph -> closed
-M005 destructive release qualification -> unblocked by C003 closure
+C003 -> historically closed
+C004 complete discovered-manifest ownership coverage -> ready
+C004 -> closure
+M005 destructive release qualification -> only after C004 closure
 ~~~
 
-Post-C003 state: one Cargo clean invocation is authorized as one workspace CleanupUnit covering the complete resolved target/build OutputSet; every affected physical group must be `PrivateBounded` and authorized, or the whole unit is skipped; the final proof re-resolves the complete bounded ownership universe under clean ROOT and detects another discovered workspace moving into the affected output; Preview/Simulate/Execute emit one result and one deduplicated union measurement per unit; `cleanup --stats` reports the final-proof Cargo work.
+Post-C003 audit finding: the final ownership graph contains every successfully resolved workspace, but a discovered Cargo manifest that never resolves can disappear from the ownership universe. C004 retains manifest-resolution coverage and blocks all cleanup modes while any discovered ownership participant remains unresolved.
 
-M005 safety boundary (after C003):
+Separate deferred lines: C003's measured O(N²) cleanup-proof refresh cost, macOS member-source-root canonicalization/pruning inefficiency, and generic no-argument scan performance.
 
-- Cargo resolves workspace/output configuration.
-- The destructive unit is one workspace CleanupUnit: one resolved workspace, its complete `OutputSet`, and every PhysicalOutputGroup that one `cargo clean` can affect.
-- Every affected group must be `PrivateBounded`, authorized, inactive, non-symlink, and marker-qualified; shared, uncertain, and external-unproven physical output is inventory-only under any authorization configuration, and a private target group can never carry an unauthorized sibling build group into the same invocation.
-- `cleanup.allowed_output_roots` is location authorization only and never manufactures ownership proof.
-- Final revalidation rebuilds the complete fresh physical graph from every workspace discovered under `clean ROOT` and fails closed when that ownership cannot be re-proven.
-- Progress UI is transient stderr state (one coordinated `MultiProgress`, determinate via observer contract, totals counting CleanupUnits) and is cleared before deterministic final stdout.
-- `--dryrun` runs the full decision path with all non-mutating gates but invokes no Cargo clean command.
-- Detailed counters/timings are opt-in via `--stats` (`--no-progress --stats` canonical), and cleanup `--stats` now includes final-proof work.
+### M005 safety boundary after C004 planning
 
-Deferred follow-ups (recorded in `plans/closure/artifact-discovery-cleanup/c003-status.md`, not blocking plans): the bounded ownership-universe refresh costs one re-resolution per cleanable candidate (N² Cargo resolutions for N cleanable workspaces, recorded with `--stats`), and on macOS a symlinked clean-root path component leaves member source roots non-canonical so the source-activity walk does not prune output directories (eligibility-neutral, wasted traversal, candidate corrective). The generic no-argument scan performance/pruning issue remains separate and was never part of C003.
+- Cargo resolves workspace/output configuration; cargo-cleanme does not infer unresolved output paths.
+- Every Cargo manifest discovered under clean ROOT must be authoritatively covered by a resolved workspace before any Cargo clean command may run.
+- Unresolved ownership participants block Preview, Simulate, and Execute for the entire clean scope.
+- The destructive unit remains one workspace CleanupUnit over its complete OutputSet.
+- Every affected physical group must be PrivateBounded, authorized, inactive, non-symlink, marker-qualified, and stable under C003 final graph revalidation.
+- cleanup.allowed_output_roots never manufactures ownership proof.
+- --dryrun remains zero-clean and shares the same completeness and final-proof gates as Execute.
+- --stats remains the qualification/debug surface.
 
-M005 safety boundary (restored by C002, tightened by C003):
-
-- Cargo resolves workspace/output configuration.
-- Only `PrivateBounded` may reach Cargo cleanup; shared, uncertain, and external-unproven physical output is inventory-only under any authorization configuration.
-- `cleanup.allowed_output_roots` is location authorization only for already-private groups and never manufactures ownership proof.
-- Progress UI is transient stderr state (one coordinated `MultiProgress`, determinate via observer contract) and is cleared before deterministic final stdout.
-- `--dryrun` runs the full decision path with all non-mutating gates but invokes no Cargo clean command.
-- Detailed counters/timings are opt-in via `--stats` (`--no-progress --stats` canonical).

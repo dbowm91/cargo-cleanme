@@ -314,7 +314,8 @@ Before cleaning a candidate it MUST:
 8. preserve physical target/build output identity so overlapping roots are measured once;
 9. refuse shared, uncertain, or unauthorized external output;
 10. authorize destructive cleanup at the workspace invocation boundary: every physical output group that one Cargo clean invocation can affect through the resolved OutputSet MUST pass ownership, authorization, activity, and path-safety checks before any mutation;
-11. produce one cleanup result and one deduplicated pre/post union measurement per Cargo workspace cleanup invocation.
+11. produce one cleanup result and one deduplicated pre/post union measurement per Cargo workspace cleanup invocation;
+12. establish complete cleanup-scope ownership coverage: every Cargo manifest discovered under the explicit clean root MUST either be authoritatively covered by a successfully resolved Cargo workspace or remain an unresolved ownership participant, and any unresolved participant MUST block all Cargo cleanup commands for that scope.
 
 A later `--dryrun` simulation mode MAY exercise discovery, resolution, filtering, sizing, authorization, revalidation, progress, and final reporting while prohibiting every `cargo clean` subprocess. Such simulation output is estimated/would-clean space, not recovered bytes.
 
