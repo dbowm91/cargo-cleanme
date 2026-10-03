@@ -39,7 +39,7 @@ The product MUST:
 8. make explicit scope take precedence over ignore/re-include search filters;
 9. avoid following symbolic links while traversing;
 10. report deterministic project paths and artifact sizes;
-11. remain fast enough for routine machine-wide use;
+11. remain fast enough for routine developer use while retaining explicit exhaustive Full reconciliation;
 12. treat filesystem permission and transient IO errors as bounded diagnostics rather than whole-scan failures where safe;
 13. keep cleanup execution separate from read-only eligibility analysis.
 
