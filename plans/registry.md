@@ -14,7 +14,7 @@ Accepted architecture decisions:
 - plans/adr/001-workspace-output-ownership-and-cleanup-authorization.md
 
 Planning framework baseline: 97dee9fa64868534cedf3a9310e7160335a91be2
-Current repository planning baseline: 819f71cd50bebb3b68ae54ef22e6951f08edcbbe
+Current repository planning baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 
 ## Status vocabulary
 
@@ -32,7 +32,7 @@ Current repository planning baseline: 819f71cd50bebb3b68ae54ef22e6951f08edcbbe
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M005 release qualification restored | C004 closed; deferred performance/canonicalization items remain unclaimed follow-up candidates. |
+| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M006 performance hardening | M006A and M006B are ready and may proceed in parallel; M005 destructive qualification remains closed/green. |
 
 ## Implementation handoffs
 
@@ -48,36 +48,37 @@ Current repository planning baseline: 819f71cd50bebb3b68ae54ef22e6951f08edcbbe
 | Artifact discovery and cleanup | C002 M005 ownership safety, simulation parity, progress, global qualification | **closed** | plans/implementation/artifact-discovery-cleanup/c002-m005-safety-progress-performance-reconciliation.md | Historical closure: plans/closure/artifact-discovery-cleanup/c002-status.md; post-closure cleanup-unit defects tracked by C003. |
 | Artifact discovery and cleanup | C003 workspace cleanup-unit atomicity + full ownership-graph revalidation | **closed** | plans/implementation/artifact-discovery-cleanup/c003-workspace-cleanup-unit-atomicity.md | Historical closure: plans/closure/artifact-discovery-cleanup/c003-status.md; post-closure unresolved-participant defect tracked by C004. |
 | Artifact discovery and cleanup | C004 complete ownership-universe resolution coverage | **closed** | plans/implementation/artifact-discovery-cleanup/c004-complete-ownership-resolution-coverage.md | Closure: plans/closure/artifact-discovery-cleanup/c004-status.md. M005 destructive release qualification is restored. |
+| Artifact discovery and cleanup | M006A global scan pruning, traversal policy, path normalization | **ready** | plans/implementation/artifact-discovery-cleanup/006a-global-scan-pruning-and-path-normalization.md | Performance/read-only track. May proceed in parallel with M006B. |
+| Artifact discovery and cleanup | M006B cleanup proof resolution efficiency | **ready** | plans/implementation/artifact-discovery-cleanup/006b-cleanup-proof-resolution-efficiency.md | Destructive-proof performance track; MUST preserve C003/C004 freshness and fail-closed semantics. |
 
 ## Immediate handoff
 
-Implement C004.
+M006A and M006B are ready and may proceed in parallel.
 
 Expected order:
 
 ~~~text
-M001-M004 -> closed
-C001 -> closed
-ADR 001 -> accepted
-M005A -> closed
-M005B -> historically closed
-C002 -> historically closed
-C003 -> historically closed
-C004 complete discovered-manifest ownership coverage -> closed
-M005 destructive release qualification -> restored after C004 closure
+M001-M005 + C001-C004 -> closed
+M006A global discovery/pruning/path normalization -> ready
+M006B cleanup-proof resolution efficiency -> ready
+M006A/M006B -> closure evidence
+M006 performance hardening -> closed when both tracks close
 ~~~
 
-Post-C003 audit finding: the final ownership graph contained every successfully resolved workspace, but a discovered Cargo manifest that never resolves could disappear from the ownership universe. C004 now retains manifest-resolution coverage and blocks all cleanup modes while any discovered ownership participant remains unresolved. The M005 destructive-release blocker is closed.
+M006A owns the >120 s no-argument scan, global-only OS/tool-managed pruning, one-pool multi-root discovery, and the macOS member-source-root/output-exclusion identity mismatch.
 
-Separate deferred lines: C003's measured O(N²) cleanup-proof refresh cost, macOS member-source-root canonicalization/pruning inefficiency, and generic no-argument scan performance.
+M006B owns cleanup proof subprocess cost. It removes redundant final-proof locate-project calls first and may add bounded parallel metadata refresh only after measurement. It MUST NOT reuse one stale ownership-universe snapshot across destructive candidates.
 
-### M005 safety boundary after C004 planning
+M005 destructive release qualification remains restored and is not blocked by M006; M006 is performance hardening, not a safety prerequisite.
+
+### Current destructive safety boundary
 
 - Cargo resolves workspace/output configuration; cargo-cleanme does not infer unresolved output paths.
-- Every Cargo manifest discovered under clean ROOT must be authoritatively covered by a resolved workspace before any Cargo clean command may run.
+- Every Cargo manifest discovered under clean ROOT must be authoritatively covered before any Cargo clean command may run.
 - Unresolved ownership participants block Preview, Simulate, and Execute for the entire clean scope.
-- The destructive unit remains one workspace CleanupUnit over its complete OutputSet.
-- Every affected physical group must be PrivateBounded, authorized, inactive, non-symlink, marker-qualified, and stable under C003 final graph revalidation.
+- The destructive unit is one workspace CleanupUnit over its complete OutputSet.
+- Every affected physical group must be PrivateBounded, authorized, inactive, non-symlink, marker-qualified, and stable under fresh complete ownership-graph revalidation.
 - cleanup.allowed_output_roots never manufactures ownership proof.
-- --dryrun remains zero-clean and shares the same completeness and final-proof gates as Execute.
-- --stats remains the qualification/debug surface.
+- --dryrun remains zero-clean and shares the same completeness/final-proof gates as Execute.
+- --stats is the qualification/debug surface.
+

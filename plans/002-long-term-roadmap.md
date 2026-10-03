@@ -99,7 +99,7 @@ Exit condition:
 
 ## Phase 4 — V0.1 release and field qualification
 
-Status: deferred until M001-M003 close.
+Status: closed sufficiently to unblock destructive development; M003/C001 and subsequent hosted/real-tree qualification provide the historical field evidence.
 
 Objective:
 
@@ -120,7 +120,9 @@ Exit condition:
 
 ## Phase 5 — Revalidated Cargo cleanup execution
 
-Status: deferred; no implementation plan until read-only qualification closes.
+Roadmap milestone: M004.
+
+Status: closed.
 
 Objective:
 
@@ -138,15 +140,15 @@ Required direction:
 - define interruption/cancellation behavior;
 - preserve an audit-friendly per-candidate result.
 
-Hard dependency:
+Historical dependency:
 
-Phase 4 closure.
+Phase 4/read-only qualification; satisfied before M004 closure.
 
 ## Phase 6 — Redirected/shared Cargo output awareness
 
 Roadmap milestone: M005.
 
-Status: ready for staged implementation under ADR 001.
+Status: closed. M005A/M005B landed; C002-C004 preserve the historical corrections that restored ownership, cleanup-unit, and complete-resolution safety.
 
 Objective:
 
@@ -156,10 +158,11 @@ Accepted decision:
 
 - plans/adr/001-workspace-output-ownership-and-cleanup-authorization.md
 
-Implementation sequence:
+Implementation sequence (closed):
 
 1. M005A — workspace/output resolution, physical-output grouping, fail-fast scan pipeline, and inline progress/status.
 2. M005B — authorized private redirected cleanup plus explicit `--dryrun` full simulation mode.
+3. C002-C004 — post-M005 ownership/simulation/progress, CleanupUnit atomicity/full graph revalidation, and complete discovered-manifest ownership coverage.
 
 Required cases:
 
@@ -175,7 +178,36 @@ Required cases:
 
 Shared, uncertain, and externally unproven physical output remains inventory-only in M005.
 
-## Phase 7 — Selective cleanup and policy
+## Phase 7 — Performance hardening and routine machine-wide qualification
+
+Roadmap milestone: M006.
+
+Status: ready.
+
+Objective:
+
+Make the read-only global scan routine on representative developer machines and reduce cleanup-proof Cargo subprocess cost without weakening M005/C002-C004 semantics.
+
+Implementation sequence:
+
+1. M006A — global scan pruning, platform traversal policy, one-pool multi-root discovery, and workspace member/output path normalization.
+2. M006B — cleanup proof resolution efficiency: direct Cargo metadata refresh from known root manifests, followed by evidence-gated bounded refresh concurrency if needed.
+
+M006A and M006B may proceed in parallel.
+
+Hard constraints:
+
+- global performance pruning is evidence-based and must not silently remove writable user project domains;
+- explicit-root behavior remains authoritative;
+- cleanup proof still refreshes the complete bounded ownership universe immediately before each candidate disposition;
+- no cross-candidate stale ownership snapshot is introduced.
+
+Exit condition:
+
+- M006A closes with a successful no-argument reference-host scan inside the prior 120-second timeout and cross-platform path/activity qualification;
+- M006B closes with zero redundant proof locate-project calls, material real-tree improvement, and the full C003/C004 regression matrix green.
+
+## Phase 8 — Selective cleanup and policy
 
 Status: deferred.
 
@@ -187,7 +219,7 @@ Potential capabilities:
 - include/exclude project policy;
 - non-interactive automation only after stable machine-readable contracts exist.
 
-## Phase 8 — Distribution and operational polish
+## Phase 9 — Distribution and operational polish
 
 Status: deferred.
 
@@ -219,10 +251,16 @@ M003 activity + size + report
 read-only V0.1 field qualification
       |
       v
-M004+ destructive cleanup
+M004 destructive cleanup
       |
       v
-redirected/shared-output support
+M005 redirected/shared-output support
+      |
+      v
+M006 performance hardening
+      |
+      v
+selective cleanup / distribution
 ~~~
 
 Destructive work MUST NOT be pulled forward merely to make the tool feel complete.

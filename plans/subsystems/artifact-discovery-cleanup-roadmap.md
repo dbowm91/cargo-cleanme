@@ -2,7 +2,7 @@
 
 Status: active
 
-Repository audit baseline: 819f71cd50bebb3b68ae54ef22e6951f08edcbbe
+Repository audit baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 
 Canonical references:
 
@@ -36,7 +36,7 @@ It does not own Cargo global cache GC, arbitrary build-system caches, a general 
 
 ## 3. Current-state evidence
 
-At the current audit baseline, M001-M004 and corrective C001 are closed on main. The repository contains a Rust 1.89 / edition-2024 package with normalized Cargo-external CLI handling, canonical config initialization, bounded dua-core traversal through `src/traverse.rs`, deterministic activity/size reporting, dedicated Rust 1.89 plus Linux/macOS/Windows CI, and a narrowly scoped Cargo-mediated cleanup path for conventional private output. M005 research has now selected ADR 001: the Cargo workspace becomes the logical owner, Cargo itself resolves workspace/target/build configuration, physical output is grouped/deduplicated before sizing, shared/unproven external output remains inventory-only, and external private cleanup requires an explicit authorization boundary. M005 is staged as M005A (resolution/fail-fast/progress) followed by M005B (authorized redirected cleanup/`--dryrun`).
+At the current audit baseline, M001-M005 and corrective C001-C004 are closed on main. The repository is Rust 1.89 / edition 2024, uses manifest-first discovery plus Cargo-authoritative workspace/output resolution, groups physical target/build output, reports deterministic allocated bytes, provides coordinated inline progress, and performs Cargo-mediated workspace CleanupUnit execution only after complete manifest ownership coverage and fresh full-graph revalidation. M005 destructive qualification is restored. The active work is M006 performance hardening: routine no-argument global discovery and lower-cost cleanup proof resolution without weakening those safety contracts.
 
 Relevant current ecosystem evidence:
 
@@ -58,40 +58,41 @@ Primary references:
 ## 4. Target architecture
 
 ~~~text
-CLI
- |
- v
-ConfigLoader ---------> EffectiveScanPolicy
-                          |
-                          v
-                     ScopeResolver
-                          |
-                          v
-                    DiscoveryEngine
-                 (dua-core adapter)
-                          |
-                          v
-                  DiscoveredProject
-                          |
-              +-----------+-----------+
-              |                       |
-              v                       v
-       SourceActivityGate      TargetAnalyzer
-       early recent exit       size + target mtime
-              |                       |
-              +-----------+-----------+
-                          |
-                          v
-                  EligibilityPolicy
-                          |
-                          v
-                     ScanReport
-                          |
-                          v
-                      Renderer
+CLI / Config
+    |
+    v
+EffectiveScanPolicy
+    |
+    v
+Manifest Discovery --------> platform/global prune policy
+    |                        (dua-core bounded traversal)
+    v
+Cargo Workspace Resolver
+    |
+    v
+ResolvedWorkspace + OutputSet
+    |
+    v
+Physical Output Grouping
+    |
+    +-----------------------------+
+    |                             |
+    v                             v
+Read-only Analysis            Cleanup Scope
+source activity               complete manifest coverage
+output activity/size          CleanupUnit construction
+    |                             |
+    v                             v
+ScanReport                    final fresh ownership proof
+                                  |
+                                  v
+                              Cargo clean
+                                  |
+                                  v
+                          pre/post union report
 ~~~
 
-The eventual cleanup service is a later consumer of freshly revalidated candidates; it is not part of this initial architecture slice.
+M006 optimizes the discovery and final-proof edges of this architecture without changing the ownership/safety boundary.
 
 ## 5. Dependency graph
 
@@ -127,6 +128,10 @@ C003 cleanup-unit atomicity/full ownership graph [historically closed]
                    |
                   v
 C004 complete ownership-universe resolution coverage [closed]
+                   |
+                   v
+M006A global scan/pruning/path normalization [ready]
+M006B cleanup-proof resolution efficiency [ready, parallel]
 ~~~
 
 ## 6. Milestone M001 — Foundation, CLI, config, and domain contracts
@@ -347,7 +352,7 @@ Deferred (recorded in the C003 closure, not a blocked plan): the ownership-unive
 
 ## 10C. Corrective C004 — Complete ownership-universe resolution coverage
 
-Status: closing; hosted qualification evidence is being gathered. Closure: `plans/closure/artifact-discovery-cleanup/c004-status.md`.
+Status: closed. Closure: `plans/closure/artifact-discovery-cleanup/c004-status.md`.
 
 Plan:
 
@@ -365,6 +370,45 @@ Purpose:
 C004 does not optimize the C003 N² final-proof cost, macOS source-root canonicalization, or generic no-argument scan performance. M005 destructive release qualification is restored after C004 closure.
 
 Outcome: cleanup resolution now retains authoritative manifest coverage and unresolved participants; any remaining unresolved participant blocks the complete cleanup scope before output sizing or per-unit proof. Read-only scan retains partial-result behavior. M005 destructive release qualification is restored after C004 closure. The C003 N² refresh cost, macOS source-root canonicalization, and generic scan performance remain deferred follow-up candidates, not blocked implementation plans.
+
+## 10D. Milestone M006 — Performance hardening
+
+Status: ready.
+
+M006 is split into two independent implementation tracks that may proceed in parallel.
+
+### M006A — Global scan pruning, traversal policy, and path normalization
+
+Plan:
+
+- plans/implementation/artifact-discovery-cleanup/006a-global-scan-pruning-and-path-normalization.md
+
+Purpose:
+
+- finish the previously timed-out no-argument macOS scan;
+- replace ad-hoc platform pruning with a testable global discovery policy;
+- prune only measured OS/tool-managed trees while preserving writable project-bearing domains;
+- prune rustup-managed toolchain trees before Cargo manifest handling;
+- share one bounded traversal across multiple global roots;
+- normalize workspace member source roots to the physical identity used by target/build exclusions.
+
+Closure requires the representative macOS no-argument scan to complete within the prior 120-second timeout.
+
+### M006B — Cleanup proof resolution efficiency
+
+Plan:
+
+- plans/implementation/artifact-discovery-cleanup/006b-cleanup-proof-resolution-efficiency.md
+
+Purpose:
+
+- remove redundant locate-project subprocesses from C003/C004 final ownership-universe refresh;
+- refresh known root manifests directly through Cargo metadata and re-check workspace_root/member/output identity;
+- add bounded parallel metadata refresh inside one candidate proof only if measurement justifies it;
+- preserve fresh complete ownership proof immediately before every Preview/Simulate/Execute disposition;
+- explicitly reject cross-candidate stale snapshot reuse in this milestone.
+
+M006B changes performance only; C003/C004 destructive semantics remain authoritative.
 
 ## 11. Cross-cutting reliability concerns
 

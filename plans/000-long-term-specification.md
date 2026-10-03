@@ -220,9 +220,14 @@ A no-argument scan is intended to discover user-accessible projects across the h
 
 Platform root enumeration MUST be explicit and tested:
 
-- Unix-like systems begin from the filesystem root and apply platform safety exclusions for pseudo-filesystems that cannot contain durable project data or are unsafe to traverse.
+- Unix-like systems may begin from the filesystem root, but global discovery MUST apply measured platform safety/performance exclusions for OS-managed trees that cannot represent ordinary user project locations.
+- A platform policy MAY split a writable exception such as macOS /usr/local into a separate global root when its protected parent is pruned.
+- Tool-managed Rust trees such as Cargo registry/git caches and rustup-installed toolchains MAY be pruned during global discovery when their location is established from authoritative environment/platform rules.
+- Performance-only global prunes MUST NOT silently narrow an explicit user-provided scan root.
 - Windows enumerates suitable local filesystem volumes.
 - permission-denied and disappearing entries are recorded and skipped unless they prevent trustworthy analysis of a discovered candidate.
+
+Broad writable domains are not eligible for pruning merely because they are expensive.
 
 Network filesystems and removable volumes MAY be policy-controlled later. V0.1 MUST document exactly what the platform adapter traverses.
 
@@ -285,6 +290,12 @@ The design SHOULD:
 - avoid retaining a complete filesystem tree in memory.
 
 Performance qualification MUST include representative synthetic deep/wide trees and at least one real developer tree. Absolute timing gates are secondary to regression comparisons because storage hardware varies substantially.
+
+Global-scan performance work SHOULD attribute traversal/prune/Cargo-resolution costs before adding exclusions, SHOULD avoid constructing one worker pool per global root, and MUST preserve deterministic discovery semantics.
+
+Workspace member roots and resolved output exclusions SHOULD use compatible physical path identity so output trees are not redundantly traversed as source activity on platforms with path aliases/symlinked ancestors.
+
+Cleanup-proof performance work MAY remove redundant Cargo subprocesses or use bounded parallel read-only refresh within one proof, but MUST NOT reuse stale workspace/output state across destructive candidates unless an independently reviewed invalidation model preserves C003/C004 freshness guarantees.
 
 ## 15A. Workspace/output-aware extension
 

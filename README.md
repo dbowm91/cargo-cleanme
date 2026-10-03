@@ -71,4 +71,4 @@ Attended terminals show immediate inline progress on stderr: one coordinated `Mu
 
 The repository starts planning-first. Canonical product direction, roadmap, bounded implementation plans, and active status are maintained under `plans/` using the same long-term/interim/closure separation used by CodeGG.
 
-Cleanup is opt-in, Cargo-managed, and bounded by the M004 ownership checks described in its plan.
+Cleanup is opt-in and Cargo-managed. Its current destructive boundary is defined by M004 plus ADR 001 and the C002-C004 ownership/revalidation corrections; M006 performance work must not weaken those checks.
