@@ -32,7 +32,7 @@ Current repository planning baseline: 819f71cd50bebb3b68ae54ef22e6951f08edcbbe
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | C004 closing | Local checks pass; hosted Linux/macOS/Windows and MSRV results pending. |
+| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M005 release qualification restored | C004 closed; deferred performance/canonicalization items remain unclaimed follow-up candidates. |
 
 ## Implementation handoffs
 
@@ -47,7 +47,7 @@ Current repository planning baseline: 819f71cd50bebb3b68ae54ef22e6951f08edcbbe
 | Artifact discovery and cleanup | M005B authorized redirected cleanup + full simulation | **closed** | plans/implementation/artifact-discovery-cleanup/005b-authorized-redirected-cleanup-and-dryrun.md | Historical closure: plans/closure/artifact-discovery-cleanup/005b-status.md; post-closure defects tracked by C002. |
 | Artifact discovery and cleanup | C002 M005 ownership safety, simulation parity, progress, global qualification | **closed** | plans/implementation/artifact-discovery-cleanup/c002-m005-safety-progress-performance-reconciliation.md | Historical closure: plans/closure/artifact-discovery-cleanup/c002-status.md; post-closure cleanup-unit defects tracked by C003. |
 | Artifact discovery and cleanup | C003 workspace cleanup-unit atomicity + full ownership-graph revalidation | **closed** | plans/implementation/artifact-discovery-cleanup/c003-workspace-cleanup-unit-atomicity.md | Historical closure: plans/closure/artifact-discovery-cleanup/c003-status.md; post-closure unresolved-participant defect tracked by C004. |
-| Artifact discovery and cleanup | C004 complete ownership-universe resolution coverage | **closing** | plans/implementation/artifact-discovery-cleanup/c004-complete-ownership-resolution-coverage.md | Local checks pass; awaiting hosted Linux/macOS/Windows and Rust 1.89 CI before final disposition. |
+| Artifact discovery and cleanup | C004 complete ownership-universe resolution coverage | **closed** | plans/implementation/artifact-discovery-cleanup/c004-complete-ownership-resolution-coverage.md | Closure: plans/closure/artifact-discovery-cleanup/c004-status.md. M005 destructive release qualification is restored. |
 
 ## Immediate handoff
 
@@ -63,11 +63,11 @@ M005A -> closed
 M005B -> historically closed
 C002 -> historically closed
 C003 -> historically closed
-C004 complete discovered-manifest ownership coverage -> hosted qualification
-M005 destructive release qualification -> pending C004 closure
+C004 complete discovered-manifest ownership coverage -> closed
+M005 destructive release qualification -> restored after C004 closure
 ~~~
 
-Post-C003 audit finding: the final ownership graph contained every successfully resolved workspace, but a discovered Cargo manifest that never resolves could disappear from the ownership universe. C004 now retains manifest-resolution coverage and blocks all cleanup modes while any discovered ownership participant remains unresolved. The M005 destructive-release blocker clears when C004 hosted qualification closes.
+Post-C003 audit finding: the final ownership graph contained every successfully resolved workspace, but a discovered Cargo manifest that never resolves could disappear from the ownership universe. C004 now retains manifest-resolution coverage and blocks all cleanup modes while any discovered ownership participant remains unresolved. The M005 destructive-release blocker is closed.
 
 Separate deferred lines: C003's measured O(N²) cleanup-proof refresh cost, macOS member-source-root canonicalization/pruning inefficiency, and generic no-argument scan performance.
 

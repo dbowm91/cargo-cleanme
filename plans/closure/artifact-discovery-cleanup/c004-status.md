@@ -2,11 +2,11 @@
 
 Plan: `plans/implementation/artifact-discovery-cleanup/c004-complete-ownership-resolution-coverage.md`
 
-Disposition: **conditionally closed pending hosted CI**
+Disposition: **closed**
 
 Repository baseline: `819f71cd50bebb3b68ae54ef22e6951f08edcbbe`
 
-Implementation commit: pending push.
+Implementation commit: `40f3c27` (`Implement C004 ownership resolution coverage`), pushed to `main`.
 
 ## Requirement-to-evidence mapping
 
@@ -44,12 +44,12 @@ All comparisons use the canonical/absolute manifest key shared with the existing
 - `rustup run 1.89 cargo test --locked --all-targets` — passed, including 150 unit tests, 2 CLI contract tests, and 1 end-to-end test.
 - `git diff --check` — passed.
 
-The repository CI workflow also requires stable Linux/macOS/Windows and Rust 1.89 CI. Those hosted results are pending the implementation push; final disposition will be updated from the workflow run.
+- Hosted CI run [37098862000](https://github.com/dbowm91/cargo-cleanme/actions/runs/37098862000) — passed all jobs: stable Linux, macOS, Windows, and Rust 1.89.
 
 ## Unresolved findings and dependency disposition
 
 - No C004 finding remains open in local source/tests.
-- Hosted platform/MSRV qualification remains an operational closure dependency while CI runs.
+- No hosted platform/MSRV qualification remains outstanding.
 - C003's measured O(N²) final-proof refresh cost, macOS source-root canonicalization inefficiency, and generic no-argument scan performance remain deferred candidate work, not blocked plans.
-- M005 destructive release qualification remains reopened until hosted C004 qualification closes. On closure it can return to the roadmap's release-qualified state. No other ready/active/blocked implementation plan depends on C004.
-- Disposition: **conditionally closed pending hosted CI**.
+- M005 destructive release qualification is restored by C004 closure. No other ready/active/blocked implementation plan depends on C004. Deferred performance/canonicalization items are unclaimed follow-up candidates, not blocked plans.
+- Disposition: **closed**.

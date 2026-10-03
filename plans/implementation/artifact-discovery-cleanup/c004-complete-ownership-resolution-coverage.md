@@ -1,6 +1,8 @@
 # Corrective C004 — Complete Ownership-Universe Resolution Coverage
 
-Status: closing
+Status: closed
+
+Closure: plans/closure/artifact-discovery-cleanup/c004-status.md
 
 Repository baseline: 819f71cd50bebb3b68ae54ef22e6951f08edcbbe
 
