@@ -34,7 +34,7 @@ Deliverables:
 - cargo-cleanme binary usable as cargo cleanme;
 - default no-argument read-only scan command surface;
 - typed configuration and path validation;
-- platform config location and config init/path commands;
+- platform config location, automatic first-use config bootstrap, config path/show/edit commands;
 - domain records for scan scope, discovered project, activity result, artifact analysis, diagnostic, and report;
 - library/CLI separation suitable for deterministic tests;
 - Rust 1.89+ / Rust 2024 toolchain contract;
