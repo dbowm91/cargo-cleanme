@@ -669,13 +669,17 @@ mod tests {
     #[test]
     fn rustup_home_uses_absolute_override_or_platform_home_only() {
         let home = PathBuf::from("/home/tester");
+        let override_home = std::env::current_dir().unwrap().join("tool").join("rustup");
         assert_eq!(
             effective_rustup_home_from(None, Some(home.clone())),
             Some(home.join(".rustup"))
         );
         assert_eq!(
-            effective_rustup_home_from(Some("/tool/rustup".into()), Some(home.clone())),
-            Some(PathBuf::from("/tool/rustup"))
+            effective_rustup_home_from(
+                Some(override_home.as_os_str().to_owned()),
+                Some(home.clone())
+            ),
+            Some(override_home)
         );
         assert_eq!(
             effective_rustup_home_from(Some("relative/rustup".into()), Some(home)),
