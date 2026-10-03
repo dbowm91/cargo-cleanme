@@ -3490,26 +3490,29 @@ mod tests {
         // ExternalUnproven / Shared / Uncertain build (and the mirrored target)
         // all skip the entire unit; only all-private passes.
         let d = tempfile::tempdir().unwrap();
+        // Covering roots are canonical by contract, so authorize against a
+        // canonical cleanup root (macOS `/var` is a symlink).
+        let base = fs::canonicalize(d.path()).unwrap();
         for build_class in [
             OutputOwnershipClass::ExternalUnproven,
             OutputOwnershipClass::Shared,
             OutputOwnershipClass::Uncertain,
         ] {
             let unit =
-                synthetic_mixed_unit(d.path(), OutputOwnershipClass::PrivateBounded, build_class);
-            let err = unit_block_reason(&unit, d.path(), &[]).unwrap_err();
+                synthetic_mixed_unit(&base, OutputOwnershipClass::PrivateBounded, build_class);
+            let err = unit_block_reason(&unit, &base, &[]).unwrap_err();
             assert!(err.contains("build output"), "{build_class:?}: {err}");
             let unit =
-                synthetic_mixed_unit(d.path(), build_class, OutputOwnershipClass::PrivateBounded);
-            let err = unit_block_reason(&unit, d.path(), &[]).unwrap_err();
+                synthetic_mixed_unit(&base, build_class, OutputOwnershipClass::PrivateBounded);
+            let err = unit_block_reason(&unit, &base, &[]).unwrap_err();
             assert!(err.contains("target output"), "{build_class:?}: {err}");
         }
         let unit = synthetic_mixed_unit(
-            d.path(),
+            &base,
             OutputOwnershipClass::PrivateBounded,
             OutputOwnershipClass::PrivateBounded,
         );
-        assert!(unit_block_reason(&unit, d.path(), &[]).is_ok());
+        assert!(unit_block_reason(&unit, &base, &[]).is_ok());
     }
 
     #[test]
@@ -3517,24 +3520,25 @@ mod tests {
         // A sibling group that never became a measured candidate (empty, active,
         // or uncertain activity) blocks the whole unit...
         let d = tempfile::tempdir().unwrap();
+        let base = fs::canonicalize(d.path()).unwrap();
         let mut unit = synthetic_mixed_unit(
-            d.path(),
+            &base,
             OutputOwnershipClass::PrivateBounded,
             OutputOwnershipClass::PrivateBounded,
         );
         unit.groups[1].measured = None;
         unit.groups[1].skip = Some(workspace::GroupSkipReason::ActiveOutput);
-        let err = unit_block_reason(&unit, d.path(), &[]).unwrap_err();
+        let err = unit_block_reason(&unit, &base, &[]).unwrap_err();
         assert!(err.contains("build output"), "{err}");
         assert!(err.contains("recent"), "{err}");
         // ... and so does an existing output root with unprovable identity.
         let mut unit = synthetic_mixed_unit(
-            d.path(),
+            &base,
             OutputOwnershipClass::PrivateBounded,
             OutputOwnershipClass::PrivateBounded,
         );
         unit.unmapped.push(unit.output.build.clone());
-        let err = unit_block_reason(&unit, d.path(), &[]).unwrap_err();
+        let err = unit_block_reason(&unit, &base, &[]).unwrap_err();
         assert!(err.contains("unproven physical identity"), "{err}");
     }
 

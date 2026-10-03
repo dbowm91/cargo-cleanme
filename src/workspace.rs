@@ -2700,25 +2700,19 @@ mod tests {
 
     #[test]
     fn unit_with_unmeasured_sibling_is_not_fully_measured() {
-        // Private target measured + active (unmeasured) build group: the unit
-        // exists but must not be cleanable.
+        // Private target measured + sibling build directory that never became a
+        // candidate: the unit exists but is not cleanable as a whole.
         let d = tempfile::tempdir().unwrap();
         let ws_root = d.path().join("ws");
         std::fs::create_dir_all(&ws_root).unwrap();
         std::fs::write(ws_root.join("Cargo.toml"), "").unwrap();
         std::fs::write(ws_root.join("lib.rs"), "old").unwrap();
         let target = output_dir(&ws_root.join("target"), 4096);
-        let build = output_dir(&ws_root.join("build"), 4096);
+        // Existing but never populated build directory.
+        let build = ws_root.join("build");
+        std::fs::create_dir_all(&build).unwrap();
         let old = SystemTime::now() - Duration::from_secs(3600);
         backdate_tree(&ws_root, old);
-        // Make only the build output recent.
-        let future = SystemTime::now() + Duration::from_secs(3600);
-        if let Ok(f) = std::fs::OpenOptions::new()
-            .write(true)
-            .open(build.join("artifact.bin"))
-        {
-            let _ = f.set_modified(future);
-        }
         let ws = make_workspace(
             &ws_root,
             Some(std::fs::canonicalize(&target).unwrap()),
@@ -2733,7 +2727,7 @@ mod tests {
             .iter()
             .find(|g| g.measured.is_none())
             .expect("one unmeasured sibling");
-        assert_eq!(unmeasured.skip, Some(GroupSkipReason::ActiveOutput));
+        assert_eq!(unmeasured.skip, Some(GroupSkipReason::EmptyOutput));
         assert_eq!(unmeasured.kinds, vec![OutputRootKind::Build]);
     }
 
