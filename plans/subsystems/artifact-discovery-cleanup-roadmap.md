@@ -480,6 +480,16 @@ C006 generalizes the existing C003/C004 safety model from one explicit cleanup r
 
 C006 removes the blanket multi-root Execute block only after this proof is qualified.
 
+### C007 — Discovery-state recovery and post-M007 planning cleanup
+
+Status: ready. Plan: `plans/implementation/artifact-discovery-cleanup/c007-discovery-state-recovery-and-post-m007-planning-cleanup.md`.
+
+C007 is a bounded operational/documentation corrective after M007 closure. It allows a completed trustworthy Full scan to replace recoverable-invalid local discovery state such as schema 0 or corrupt supported data, while preserving newer unsupported schemas and unreadable/I/O-failed state exactly. Routine fallback remains fail-soft.
+
+The same corrective reconciles active planning so closed M007 is no longer presented as the current milestone, audits stale canonical wording, and records safe retirement criteria for merged/superseded branches. It does not change discovery scope, retention, cleanup proof, authorization, or feature roadmap semantics.
+
+After C007 closes, this subsystem has no active implementation milestone; future selective-cleanup/policy work requires separate research and planning.
+
 ## 11. Cross-cutting reliability concerns
 
 ### Races
