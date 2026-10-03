@@ -220,7 +220,7 @@ The historical 120-second full-machine no-argument target is superseded by ADR 0
 
 Roadmap milestone: M007.
 
-Status: closed by corrective C006; C005 closed M006E and C006 generalized the cleanup proof across all selected roots. Post-M007 corrective C007 is in closure pending hosted qualification.
+Status: closed by corrective C006; C005 closed M006E and C006 generalized the cleanup proof across all selected roots. Post-M007 corrective C007 is closed.
 
 Objective:
 
@@ -307,7 +307,7 @@ C006 combined-root cleanup proof [closed]
 M007 learned/full cleanup orchestration [closed]
       |
       v
-C007 state recovery/planning cleanup [closing]
+C007 state recovery/planning cleanup [closed]
       |
       v
 future selective-cleanup / policy research and planning

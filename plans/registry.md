@@ -33,7 +33,7 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | closing | plans/subsystems/artifact-discovery-cleanup-roadmap.md | C007 closure evidence | Phase 7/M006 and Phase 8/M007 are closed. M006A/C/D retain historical conditional evidence and are not blockers. C007 implementation is landed; hosted CI and formal closure evidence remain. |
+| Artifact discovery and cleanup | planning | plans/subsystems/artifact-discovery-cleanup-roadmap.md | none / roadmap planning | Phase 7/M006 and Phase 8/M007 are closed. M006A/C/D retain historical conditional evidence and are not blockers. No implementation handoff is active; future selective-cleanup/policy work needs separate research and planning. |
 
 ## Implementation handoffs
 
@@ -59,11 +59,11 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 | Artifact discovery and cleanup | M007 learned/full cleanup orchestration | **closed** | plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-orchestration.md | Corrective closure: plans/closure/artifact-discovery-cleanup/c006-status.md. Combined selected-root proof, known/full orchestration, mode parity, zero-clean simulation, and platform/MSRV gates pass. Historical blocked record is unchanged. |
 | Artifact discovery and cleanup | C005 uncertainty-aware state reconciliation + config/edit hardening | **closed** | plans/implementation/artifact-discovery-cleanup/c005-uncertainty-aware-state-reconciliation-and-config-edit-hardening.md | Closure: plans/closure/artifact-discovery-cleanup/c005-status.md. Localized Full uncertainty reconciles conservatively; isolated real Full published schema 2; hosted platform/MSRV gates pass. |
 | Artifact discovery and cleanup | C006 combined-root cleanup ownership universe | **closed** | plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md | Closure: plans/closure/artifact-discovery-cleanup/c006-status.md. Combined discovery/coverage/ownership proof and final per-candidate refresh pass hosted platform/MSRV gates. |
-| Artifact discovery and cleanup | C007 discovery-state recovery + post-M007 planning cleanup | **closing** | plans/implementation/artifact-discovery-cleanup/c007-discovery-state-recovery-and-post-m007-planning-cleanup.md | Local verification passed; hosted Linux/macOS/Windows and Rust 1.89 CI evidence is pending. |
+| Artifact discovery and cleanup | C007 discovery-state recovery + post-M007 planning cleanup | **closed** | plans/implementation/artifact-discovery-cleanup/c007-discovery-state-recovery-and-post-m007-planning-cleanup.md | Closure: plans/closure/artifact-discovery-cleanup/c007-status.md. Hosted platform/MSRV run 37152008602 passed. |
 
 ## Current closure
 
-C007 implementation is landed and closure evidence is pending.
+C007 is closed. No implementation handoff is active.
 
 Milestone sequence:
 
@@ -74,10 +74,10 @@ M006B/M006E/M006F -> closed
 C005 -> closed
 C006 -> closed
 M007 -> closed by C006
-C007 discovery-state recovery + post-M007 planning cleanup -> closing
+C007 discovery-state recovery + post-M007 planning cleanup -> closed
 ~~~
 
-After C007 closure, no implementation handoff will be active. Selective cleanup/policy and distribution remain future roadmap topics requiring separate research before implementation planning.
+No later feature implementation handoff is currently registered. Selective cleanup/policy and distribution remain future roadmap topics requiring separate research before implementation planning.
 
 ### Current destructive safety boundary
 
