@@ -166,6 +166,7 @@ Nothing was mutated and the reason is actionable.
 - `cargo +1.89 test --locked --all-targets` — pass (148 lib + 3 integration).
 - `git diff --check` — pass.
 - Hosted CI run `37097113296` on `81d8f3d`: `checks (ubuntu-latest)`, `checks (macos-latest)`, `checks (windows-latest)`, `msrv` (Rust 1.89) — all SUCCESS.
+- Closure head `453eabe` is green as well (run `37097318498`, same four jobs).
 - Three earlier C003 runs failed and were qualified, each on new C003 code only; M005A/M005B/C002 closures were never touched:
   1. `37096327696` (`dfb325e`) — three new macOS tests failed because `/var/folders/...` temp roots are symlinks while covering roots are canonical by contract. Fixed in `caa4a6d` by authorizing the synthetic gate fixtures against a canonical root and by making the unmeasured-sibling fixture independent of output-pruning behavior. No production change.
   2. `37096527542` (`caa4a6d`) — Windows failed to compile: `cross_workspace_symlink_into_candidate_output_fails_closed` used `std::os::unix` without a `#[cfg(unix)]` gate. Fixed in `fdb13ba` with the gate plus a portable counterpart (`cross_workspace_unresolvable_root_into_candidate_output_fails_closed`).
