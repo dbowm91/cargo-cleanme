@@ -33,7 +33,7 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M007 learned/full cleanup orchestration | C005 and C006 are closed with hosted Windows/macOS/Linux/Rust 1.89 qualification; M006E and M007 acceptance requirements are satisfied. M006A/C/D retain historical conditional closure evidence; M006B/F and M005 remain closed/green. |
+| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | C007 discovery-state recovery and planning cleanup | M006E/M006F/M007/C005/C006 are closed. C007 is the only active handoff and addresses self-healing recoverable-invalid state plus post-M007 planning/repository hygiene. M006A/C/D remain historical conditional evidence, not blockers. |
 
 ## Implementation handoffs
 
@@ -59,46 +59,38 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 | Artifact discovery and cleanup | M007 learned/full cleanup orchestration | **closed** | plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-orchestration.md | Corrective closure: plans/closure/artifact-discovery-cleanup/c006-status.md. Combined selected-root proof, known/full orchestration, mode parity, zero-clean simulation, and platform/MSRV gates pass. Historical blocked record is unchanged. |
 | Artifact discovery and cleanup | C005 uncertainty-aware state reconciliation + config/edit hardening | **closed** | plans/implementation/artifact-discovery-cleanup/c005-uncertainty-aware-state-reconciliation-and-config-edit-hardening.md | Closure: plans/closure/artifact-discovery-cleanup/c005-status.md. Localized Full uncertainty reconciles conservatively; isolated real Full published schema 2; hosted platform/MSRV gates pass. |
 | Artifact discovery and cleanup | C006 combined-root cleanup ownership universe | **closed** | plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md | Closure: plans/closure/artifact-discovery-cleanup/c006-status.md. Combined discovery/coverage/ownership proof and final per-candidate refresh pass hosted platform/MSRV gates. |
+| Artifact discovery and cleanup | C007 discovery-state recovery + post-M007 planning cleanup | **ready** | plans/implementation/artifact-discovery-cleanup/c007-discovery-state-recovery-and-post-m007-planning-cleanup.md | Self-heal schema-0/corrupt state only after trustworthy Full reconciliation, protect newer unsupported schemas, and reconcile closed milestone/branch/documentation status. |
 
 ## Immediate handoff
 
-M006A, M006C, and M006D remain conditionally closed as historical exhaustive-scan evidence; M006B and M006F are closed. ADR 002 resolved the product decision. C005 formally closes M006E's remaining state/config requirements. C006 formally closes M007's combined-root proof and orchestration requirements. The historical M006E and M007 closure records remain unchanged; these corrective records carry the updated evidence.
+C007 is the only active implementation handoff.
 
 Expected order:
 
 ~~~text
 M001-M005 + C001-C004 -> closed
-M006A global discovery/pruning/path normalization -> conditionally closed (historical evidence)
-M006B cleanup-proof resolution efficiency -> closed
-M006C traversal throughput without scope narrowing -> conditionally closed (historical evidence)
-M006D global scan completion qualification -> conditionally closed (historical evidence)
-ADR 002 adaptive Routine/Full discovery -> accepted
-M006E adaptive Routine/Full discovery + state/config edit -> closed by C005
-M006F exhaustive traversal hot-path qualification -> closed
-C005 uncertainty-aware state reconciliation + config/edit hardening -> closed
-C006 combined-root cleanup ownership universe -> closed after C005
-M007 learned/full cleanup orchestration -> closed by C006
+M006A/C/D historical conditional evidence -> retained
+M006B/M006E/M006F -> closed
+C005 -> closed
+C006 -> closed
+M007 -> closed by C006
+C007 discovery-state recovery + post-M007 planning cleanup -> ready
 ~~~
 
-No later implementation handoff is currently registered for selective cleanup or distribution; those roadmap topics remain future planning work and have no blocked status to clear.
+C007 owns two residual items:
 
-C005 replaces the global `diagnostics.is_empty()` publication gate with uncertainty-aware reconciliation, retains positive manifest evidence through Cargo resolution failures, collapses learned roots, hardens state diagnostics/publication, and adds fake-editor subprocess qualification. A local reference Full scan completed with 742 localized diagnostics and, under an isolated HOME, published 1,804 project observations and six learned roots. The existing invalid schema-0 state in the user's normal state directory was left untouched.
+- allow a trustworthy successful Full scan to replace recoverable-invalid local discovery state (schema 0/corrupt supported state) while never overwriting a newer unsupported schema or unreadable/I/O-failed state;
+- reconcile active planning after M007 closure and retire merged/superseded branches according to repository hygiene checks.
 
-C006 follows C005. It builds one selected-root ownership universe for `clean --known` and `clean --full`, applies C004 completeness across all selected roots, refreshes that combined universe before each CleanupUnit disposition, and makes Preview/Simulate/Execute share one safety result.
-
-M006F is closed and does not own further scope narrowing.
-
-M006B continues to own cleanup proof subprocess cost and MUST NOT reuse one stale ownership-universe snapshot across destructive candidates.
-
-M005 destructive release qualification remains restored and is not blocked by M006/M007 planning.
+No later feature implementation handoff is currently registered. Selective cleanup/policy and distribution remain future roadmap topics requiring separate research before implementation planning.
 
 ### Current destructive safety boundary
 
 - Cargo resolves workspace/output configuration; cargo-cleanme does not infer unresolved output paths.
-- Every Cargo manifest discovered under clean ROOT must be authoritatively covered before any Cargo clean command may run.
-- Unresolved ownership participants block Preview, Simulate, and Execute for the entire clean scope.
+- Every Cargo manifest discovered under the selected cleanup root set must be authoritatively covered before any Cargo clean command may run.
+- Unresolved ownership participants block Preview, Simulate, and Execute for the complete selected-root scope.
 - The destructive unit is one workspace CleanupUnit over its complete OutputSet.
-- Every affected physical group must be PrivateBounded, authorized, inactive, non-symlink, marker-qualified, and stable under fresh complete ownership-graph revalidation.
+- Every affected physical group must be PrivateBounded, authorized, inactive, non-symlink, marker-qualified, and stable under fresh complete combined ownership-graph revalidation.
 - cleanup.allowed_output_roots never manufactures ownership proof.
 - --dryrun remains zero-clean and shares the same completeness/final-proof gates as Execute.
 - --stats is the qualification/debug surface.
