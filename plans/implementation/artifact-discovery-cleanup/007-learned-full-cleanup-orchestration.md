@@ -2,7 +2,7 @@
 
 Status: blocked
 
-Blockers: M006E remains conditionally closed because the reference Full run did not publish a reconciled generation. The existing C003/C004 proof is also scoped to one clean ROOT; separate per-root proofs cannot establish cross-root redirected-output ownership. Multi-root Execute therefore fails closed pending a reviewed proof boundary.
+Blockers: Corrective C005 must close M006E state publication. Corrective C006 (`plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md`) must generalize C003/C004 proof across the complete selected known/full root set. Until then, multi-root Execute remains fail-closed and independent Preview/Simulate results are not sufficient closure evidence.
 
 Repository baseline: post-M006E adaptive discovery implementation
 
