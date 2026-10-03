@@ -92,7 +92,7 @@ ScanReport                    final fresh ownership proof
                           pre/post union report
 ~~~
 
-M006 optimizes the discovery and final-proof edges of this architecture without changing the ownership/safety boundary.
+M006 optimizes the discovery and final-proof edges of this architecture without changing the ownership/safety boundary. ADR 002 further separates fast adaptive Routine discovery from exhaustive Full reconciliation while keeping learned state outside destructive proof.
 
 ## 5. Dependency graph
 
@@ -132,7 +132,13 @@ C004 complete ownership-universe resolution coverage [closed]
                    v
 M006A global scan/pruning/path normalization [conditionally closed]
 M006B cleanup-proof resolution efficiency [closed]
-M006C global traversal throughput without scope narrowing [ready]
+M006C global traversal throughput without scope narrowing [conditionally closed]
+M006D global scan completion qualification [conditionally closed]
+M006E adaptive Routine/Full discovery state [ready]
+M006F exhaustive traversal hot-path qualification [ready after M006E]
+      |
+      v
+M007 learned/full cleanup orchestration [proposed]
 ~~~
 
 ## 6. Milestone M001 — Foundation, CLI, config, and domain contracts
@@ -376,7 +382,7 @@ Outcome: cleanup resolution now retains authoritative manifest coverage and unre
 
 Status: active.
 
-M006 is split into ordered implementation tracks. M006A's policy, traversal, and path-normalization work is conditionally closed because the reference macOS scan exceeded 120 seconds. M006B is closed without weakening M006A's discovery contract. M006C landed bounded traversal improvements and parity coverage, but the reference scan still exceeded 120 seconds; it is conditionally closed with corrective work tracked by M006D. M006D identified traversal as the remaining cost and preserved writable project-bearing domains, but its native no-argument scan also exceeded 120 seconds. Proposed M006E seeks an explicit scope-versus-latency decision before changing product behavior.
+M006 is split into ordered implementation tracks. M006A, M006C, and M006D are conditionally closed after preserving exhaustive reachability while documenting the reference-host traversal bottleneck; M006B is closed. ADR 002 resolves the former scope-versus-latency question by separating bounded adaptive Routine discovery from explicit exhaustive Full reconciliation. M006E is ready to implement that product split, machine-local learned discovery state, configurable 30-day retention, automatic config bootstrap, and `config edit`. M006F follows with a final exhaustive-walker hot-path qualification.
 
 ### M006A — Global scan pruning, traversal policy, and path normalization
 
@@ -425,13 +431,29 @@ M006C preserved global scope, bounded the normal worker cap, added opt-in worker
 
 Status: conditionally closed. Closure: `plans/closure/artifact-discovery-cleanup/006d-status.md`.
 
-M006D identified traversal as the remaining measured cost and preserved global reachability, no-follow, manifest, filter, ordering, counter, and cleanup-proof semantics, but the exact native scan still exceeds 120 seconds. Proposed M006E seeks the explicit scope-versus-latency policy decision required before further product changes.
+M006D identified traversal as the remaining measured cost and preserved exhaustive reachability, no-follow, manifest, filter, ordering, counter, and cleanup-proof semantics. Its exact native scan still exceeded 120 seconds. That evidence motivated ADR 002; it is not discarded.
 
-### M006E — Global scan scope and latency policy
+### M006E — Adaptive Routine discovery and Full reconciliation state
 
-Status: proposed. Plan: `plans/implementation/artifact-discovery-cleanup/006e-global-scan-scope-and-latency-policy.md`.
+Status: ready. Plan: `plans/implementation/artifact-discovery-cleanup/006e-adaptive-routine-full-discovery-state.md`.
 
-M006E records the required product decision between retaining full-machine discovery with a revised representative latency bound, narrowing the default scope, or adding explicit scope controls. No option is selected until that decision is supplied.
+Architecture: `plans/adr/002-adaptive-routine-full-discovery-state.md`.
+
+M006E changes the no-argument/default mode to a bounded Routine scan over conservative seeds plus active learned developer roots, adds explicit `scan --full` exhaustive reconciliation, records exact Cargo workspaces and learned roots in versioned machine-local state, and expires learned roots only after successful Full reconciliation using a configurable 30-day default retention. It also replaces explicit config initialization with first-use bootstrap and adds `config edit` using VISUAL/EDITOR/fallback editor resolution with no shell execution.
+
+The old scope-decision proposal at `006e-global-scan-scope-and-latency-policy.md` is superseded.
+
+### M006F — Exhaustive traversal hot-path qualification
+
+Status: ready after M006E. Plan: `plans/implementation/artifact-discovery-cleanup/006f-exhaustive-traversal-hot-path-qualification.md`.
+
+M006F measures the bare dua-core ceiling versus cargo-cleanme callback overhead, removes first-level subtree attribution from the normal unprofiled hot path, qualifies completion-order versus parent-first delivery, and records a completed Full baseline without narrowing exhaustive scope.
+
+### M007 — Learned/full cleanup orchestration
+
+Status: proposed. Plan: `plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-orchestration.md`.
+
+M007 is hard-dependent on M006E closure. It may let known/adaptive or Full discovery select bounded cleanup scopes, but every selected scope must still pass the existing C004 completeness and C003 fresh ownership proof. Learned state never authorizes mutation.
 
 ## 11. Cross-cutting reliability concerns
 
