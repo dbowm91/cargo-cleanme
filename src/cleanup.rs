@@ -512,37 +512,17 @@ pub fn clean_with(
     let mut diagnostics: Vec<ScanDiagnostic> = discovered.diagnostics;
     let manifests = discovered.manifests;
 
-    // Workspace resolution (cached, sequential).
-    let adapter = WorkspaceCleanupAdapter { runner };
-    let workspaces = workspace::resolve_workspaces(
+    // Workspace resolution, physical grouping, fail-fast analysis, and
+    // CleanupUnit construction share one clock.
+    let (workspaces, units) = resolve_cleanup_scope(
         &manifests,
-        &adapter,
-        &mut counters,
-        &mut diagnostics,
-        observer,
-    );
-    let groups = workspace::build_groups(&workspaces);
-
-    // Fail-fast analysis (cheap gates before deep sizing).
-    let clock_cutoff = scan_start
-        .checked_sub(Duration::from_secs(recency_seconds))
-        .ok_or_else(|| AppError::Config("recency window exceeds system time range".into()))?;
-    let outcomes = workspace::analyze_groups_detailed(
-        &workspaces,
-        groups,
         scan_start,
-        clock_cutoff,
         Duration::from_secs(recency_seconds),
+        runner,
         &mut counters,
         &mut diagnostics,
         observer,
-    );
-
-    // C003 §7.1: one cleanup unit per resolved workspace covering the complete
-    // resolved OutputSet that a single `cargo clean` invocation can affect.
-    // Not one candidate per physical group: distinct target/build groups are
-    // one destructive unit.
-    let units = workspace::build_cleanup_units(&workspaces, &outcomes);
+    )?;
 
     // Cleanup phase is determinate: the CleanupUnit candidate count is known
     // (C002 §7.5, C003 §7.5). Announce through the observer trait so any
@@ -743,6 +723,46 @@ fn observe_unit_groups(observer: &dyn ProgressObserver, unit: &workspace::Cleanu
             observer.reportable_group(&group.display, m.bytes);
         }
     }
+}
+
+/// Resolve the cleanup candidate set for one scope: the bounded ownership
+/// universe (every resolved workspace) plus one CleanupUnit per workspace that
+/// has reportable affected output (C003 §7.1).
+///
+/// C003: the destructive candidate is the workspace unit, not the physical
+/// group; distinct target/build groups belong to one unit because one
+/// `cargo clean` invocation can affect both.
+#[allow(clippy::too_many_arguments)]
+fn resolve_cleanup_scope(
+    manifests: &[PathBuf],
+    scan_start: SystemTime,
+    recency: Duration,
+    runner: &dyn CleanupRunner,
+    counters: &mut ScanCounters,
+    diagnostics: &mut Vec<ScanDiagnostic>,
+    observer: &dyn ProgressObserver,
+) -> Result<(Vec<ResolvedWorkspace>, Vec<workspace::CleanupUnit>), AppError> {
+    // Workspace resolution (cached, sequential).
+    let adapter = WorkspaceCleanupAdapter { runner };
+    let workspaces =
+        workspace::resolve_workspaces(manifests, &adapter, counters, diagnostics, observer);
+    let groups = workspace::build_groups(&workspaces);
+    // Fail-fast analysis (cheap gates before deep sizing).
+    let clock_cutoff = scan_start
+        .checked_sub(recency)
+        .ok_or_else(|| AppError::Config("recency window exceeds system time range".into()))?;
+    let outcomes = workspace::analyze_groups_detailed(
+        &workspaces,
+        groups,
+        scan_start,
+        clock_cutoff,
+        recency,
+        counters,
+        diagnostics,
+        observer,
+    );
+    let units = workspace::build_cleanup_units(&workspaces, &outcomes);
+    Ok((workspaces, units))
 }
 
 struct WorkspaceCleanupAdapter<'a> {
@@ -2402,35 +2422,27 @@ mod tests {
         let sim = clean_with(&root, 0, &[], CleanMode::Simulate, &sim_runner, &noop).unwrap();
         assert_eq!(sim.results[0].outcome, CleanOutcome::Simulated);
         assert!(sim_runner.clean_calls().is_empty());
-        // Execute dry decision via proof (no spawn) is also cleanable.
+        // Execute dry decision via proof (no spawn) is also cleanable, through
+        // the same scope pipeline `clean_with` uses.
         let exec_runner = FakeCleanupRunner::new(&root, &target, 1);
-        let adapter = WorkspaceCleanupAdapter {
-            runner: &exec_runner as &dyn CleanupRunner,
-        };
         let mut counters = ScanCounters::default();
         let mut diags = Vec::new();
-        let workspaces = workspace::resolve_workspaces(
+        let (workspaces, units) = resolve_cleanup_scope(
             &[root.join("Cargo.toml")],
-            &adapter,
-            &mut counters,
-            &mut diags,
-            &noop,
-        );
-        assert_eq!(workspaces.len(), 1);
-        let groups = workspace::build_groups(&workspaces);
-        assert_eq!(groups.len(), 1);
-        let outcomes = workspace::analyze_groups_detailed(
-            &workspaces,
-            groups,
             SystemTime::now(),
-            SystemTime::now() - Duration::from_secs(1),
             Duration::from_secs(0),
+            &exec_runner,
             &mut counters,
             &mut diags,
             &noop,
+        )
+        .unwrap();
+        assert_eq!(workspaces.len(), 1);
+        assert_eq!(
+            units.len(),
+            1,
+            "valid private workspace is one cleanup unit"
         );
-        let units = workspace::build_cleanup_units(&workspaces, &outcomes);
-        assert_eq!(units.len(), 1);
         let proof = final_cleanup_proof(
             &units[0],
             &workspaces,
