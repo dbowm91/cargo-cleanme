@@ -20,7 +20,7 @@ M006D removed avoidable path materialization from global prune and filter checks
 | Exact unprofiled no-argument native release qualification within 120 seconds | `target/native-arm64/aarch64-apple-darwin/release/cargo-cleanme --no-progress --stats`, under `/usr/bin/time -l gtimeout 120`, returned at 120.03 seconds with no final `--stats` output. The wrapper reported 6.24 seconds user CPU and 61.88 seconds system CPU. The measured invocation did not produce a trustworthy scanner-only peak-memory figure, so none is claimed. | **Miss** |
 | Keep user-specific paths out of retained profiling output | Temporary local second-level and home-subtree profiling used to locate the traversal tail was removed before commit. Retained opt-in profiling reports only the existing bounded first-level subtree totals and aggregate completion/manifest counters. | Pass |
 | Rust, lint, format, and regression checks | `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all-targets --all-features` (165 tests), `rustup run 1.89.0 cargo check --locked --all-targets`, `rustup run 1.89.0 cargo test --locked --all-targets` (165 tests), and `git diff --check`. | Pass locally |
-| Hosted Linux/macOS/Windows CI | CI is configured on push for all three platforms plus Rust 1.89. The run triggered by this branch push is recorded in the commit/push follow-up. | Pending hosted CI |
+| Hosted Linux/macOS/Windows CI and Rust 1.89 | CI run [37109498135](https://github.com/dbowm91/cargo-cleanme/actions/runs/37109498135) passed Linux, macOS, Windows, and Rust 1.89 jobs on closure commit `eb7ef42`. | Pass |
 
 ## Matched measurement context
 
