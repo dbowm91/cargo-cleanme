@@ -148,6 +148,22 @@ pub struct ResolvedWorkspace {
     pub capability: CargoCapabilities,
 }
 
+/// Why a discovered manifest did not receive authoritative Cargo coverage.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnresolvedOwnershipParticipant {
+    pub manifest: PathBuf,
+    pub stage: &'static str,
+    pub reason: String,
+}
+
+/// Workspace resolution plus explicit coverage of the discovered manifest set.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ResolutionCoverage {
+    pub workspaces: Vec<ResolvedWorkspace>,
+    pub unresolved: Vec<UnresolvedOwnershipParticipant>,
+    pub discovered_manifest_count: usize,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OutputOwnershipClass {
     PrivateBounded,
@@ -209,6 +225,9 @@ pub struct ScanCounters {
     pub cargo_locate_calls: u64,
     pub cargo_metadata_calls: u64,
     pub cargo_failures: u64,
+    /// Discovered cleanup-scope manifests not authoritatively covered by
+    /// Cargo workspace metadata. Kept separate from subprocess failures.
+    pub unresolved_ownership: u64,
     pub empty_no_output_skipped: u64,
     pub active_skipped: u64,
     pub groups_measured: u64,
@@ -238,7 +257,7 @@ impl ScanCounters {
     /// One-line semantic counters for `--stats` stderr output.
     pub fn stats_line(&self) -> String {
         format!(
-            "visited={} pruned={} manifests={} workspaces={} locate={} metadata={} failures={} empty_skipped={} active_skipped={} groups_measured={} bytes={} reportable={} deduped_hits={} uncertain_skipped={}",
+            "visited={} pruned={} manifests={} workspaces={} locate={} metadata={} failures={} unresolved_ownership={} empty_skipped={} active_skipped={} groups_measured={} bytes={} reportable={} deduped_hits={} uncertain_skipped={}",
             self.directories_visited,
             self.directories_pruned,
             self.manifests_found,
@@ -246,6 +265,7 @@ impl ScanCounters {
             self.cargo_locate_calls,
             self.cargo_metadata_calls,
             self.cargo_failures,
+            self.unresolved_ownership,
             self.empty_no_output_skipped + self.missing_output_skipped,
             self.active_skipped,
             self.groups_measured,

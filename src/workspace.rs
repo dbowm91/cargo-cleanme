@@ -421,11 +421,26 @@ pub fn resolve_workspaces(
     diagnostics: &mut Vec<ScanDiagnostic>,
     observer: &dyn ProgressObserver,
 ) -> Vec<ResolvedWorkspace> {
+    resolve_workspaces_with_coverage(manifests, runner, counters, diagnostics, observer).workspaces
+}
+
+/// Resolve discovered manifests while retaining proof of which manifests were
+/// authoritatively represented by successful Cargo workspace metadata.
+/// Read-only scan callers can continue using [`resolve_workspaces`], whose
+/// partial-result behavior is intentionally unchanged.
+pub fn resolve_workspaces_with_coverage(
+    manifests: &[PathBuf],
+    runner: &dyn CargoRunner,
+    counters: &mut ScanCounters,
+    diagnostics: &mut Vec<ScanDiagnostic>,
+    observer: &dyn ProgressObserver,
+) -> ResolutionCoverage {
     let mut cache: HashMap<PathBuf, ResolvedWorkspace> = HashMap::new();
     let mut ordered_keys: Vec<PathBuf> = Vec::new();
     let mut locate_cache: HashMap<PathBuf, PathBuf> = HashMap::new();
     // Authoritative member -> root mapping seeded from Cargo metadata.
     let mut member_to_root: HashMap<PathBuf, PathBuf> = HashMap::new();
+    let mut authoritative_coverage: HashSet<PathBuf> = HashSet::new();
     for manifest in manifests {
         // C002 fast path: if this manifest was listed as a member (or root)
         // by an earlier successful metadata response, reuse that workspace
@@ -435,6 +450,7 @@ pub fn resolve_workspaces(
             && cache.contains_key(root_key)
         {
             counters.deduped_workspace_hits += 1;
+            authoritative_coverage.insert(manifest_key);
             continue;
         }
         let locate_args: Vec<std::ffi::OsString> =
@@ -498,12 +514,14 @@ pub fn resolve_workspaces(
             counters.deduped_workspace_hits += 1;
             // Seed this manifest as a known member for future lookups.
             member_to_root.insert(manifest_key, canonical_key);
+            authoritative_coverage.insert(canonical_manifest_key(manifest));
             continue;
         }
         if cache.contains_key(&canonical_key) {
             counters.deduped_workspace_hits += 1;
             locate_cache.insert(canonical_key.clone(), root_manifest);
             member_to_root.insert(manifest_key, canonical_key);
+            authoritative_coverage.insert(canonical_manifest_key(manifest));
             continue;
         }
         // Metadata once per workspace.
@@ -524,10 +542,12 @@ pub fn resolve_workspaces(
             member_to_root.insert(manifest_key, canonical_key.clone());
             for member in &ws.members {
                 let key = canonical_manifest_key(&member.manifest_path);
+                authoritative_coverage.insert(key.clone());
                 member_to_root.entry(key).or_insert(canonical_key.clone());
             }
             // Also register the canonical root manifest path itself.
             let root_key = canonical_manifest_key(&ws.root_manifest);
+            authoritative_coverage.insert(root_key.clone());
             member_to_root
                 .entry(root_key)
                 .or_insert(canonical_key.clone());
@@ -535,10 +555,48 @@ pub fn resolve_workspaces(
             locate_cache.insert(canonical_key, root_manifest);
         }
     }
-    ordered_keys
+    let workspaces: Vec<_> = ordered_keys
         .into_iter()
         .filter_map(|k| cache.remove(&k))
-        .collect()
+        .collect();
+    let mut unresolved: Vec<_> = manifests
+        .iter()
+        .filter_map(|manifest| {
+            let key = canonical_manifest_key(manifest);
+            if authoritative_coverage.contains(&key) {
+                return None;
+            }
+            let message = diagnostics
+                .iter()
+                .rev()
+                .find(|d| d.path.as_ref() == Some(manifest))
+                .map(|d| d.message.clone())
+                .unwrap_or_else(|| {
+                    "no successful Cargo workspace metadata covered this manifest".into()
+                });
+            let stage = if message.contains("locate-project") {
+                "locate"
+            } else if message.contains("metadata") {
+                "metadata"
+            } else {
+                "identity"
+            };
+            Some(UnresolvedOwnershipParticipant {
+                manifest: manifest.clone(),
+                stage,
+                reason: message,
+            })
+        })
+        .collect();
+    unresolved.sort_by(|a, b| a.manifest.cmp(&b.manifest));
+    unresolved.dedup_by(|a, b| {
+        canonical_manifest_key(&a.manifest) == canonical_manifest_key(&b.manifest)
+    });
+    ResolutionCoverage {
+        workspaces,
+        unresolved,
+        discovered_manifest_count: manifests.len(),
+    }
 }
 
 fn resolve_one_workspace_cached(
@@ -1593,6 +1651,140 @@ mod tests {
             "member cache must eliminate redundant locates"
         );
         assert_eq!(counters.deduped_workspace_hits, 1);
+    }
+
+    #[test]
+    fn failed_member_first_is_cleared_by_later_authoritative_workspace_metadata() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("ws/Cargo.toml");
+        let member = d.path().join("ws/member0/Cargo.toml");
+        std::fs::create_dir_all(member.parent().unwrap()).unwrap();
+        std::fs::write(&root, "").unwrap();
+        std::fs::write(&member, "").unwrap();
+        let target = d.path().join("ws/target");
+        std::fs::create_dir_all(&target).unwrap();
+        struct MemberFirstFails {
+            root: PathBuf,
+            member: PathBuf,
+            target: PathBuf,
+        }
+        impl CargoRunner for MemberFirstFails {
+            fn run(&self, _cwd: &Path, args: &[std::ffi::OsString]) -> io::Result<ProcessOutput> {
+                if args.first().is_some_and(|a| a == "locate-project") {
+                    let manifest = PathBuf::from(args.last().unwrap());
+                    if manifest == self.member {
+                        return Ok(ProcessOutput {
+                            success: false,
+                            code: Some(1),
+                            stdout: vec![],
+                            stderr: b"transient locate failure".to_vec(),
+                        });
+                    }
+                    let json = serde_json::json!({"root": self.root});
+                    return Ok(ProcessOutput {
+                        success: true,
+                        code: Some(0),
+                        stdout: serde_json::to_vec(&json).unwrap(),
+                        stderr: vec![],
+                    });
+                }
+                let json = serde_json::json!({
+                    "packages": [{"id":"root", "name":"root", "manifest_path":self.root}, {"id":"member", "name":"member", "manifest_path":self.member}],
+                    "workspace_members": ["root", "member"],
+                    "workspace_root": self.root.parent().unwrap(),
+                    "target_directory": self.target,
+                });
+                Ok(ProcessOutput {
+                    success: true,
+                    code: Some(0),
+                    stdout: serde_json::to_vec(&json).unwrap(),
+                    stderr: vec![],
+                })
+            }
+        }
+        let runner = MemberFirstFails {
+            root: root.clone(),
+            member: member.clone(),
+            target,
+        };
+        let manifests = vec![member, root];
+        let mut counters = ScanCounters::default();
+        let mut diagnostics = vec![];
+        let coverage = resolve_workspaces_with_coverage(
+            &manifests,
+            &runner,
+            &mut counters,
+            &mut diagnostics,
+            &NoopObserver,
+        );
+        assert_eq!(coverage.discovered_manifest_count, 2);
+        assert_eq!(coverage.workspaces.len(), 1);
+        assert!(coverage.unresolved.is_empty());
+        assert_eq!(
+            counters.cargo_failures, 1,
+            "the diagnostic remains observable although metadata later covers the manifest"
+        );
+    }
+
+    #[test]
+    fn unresolved_discovered_manifest_remains_in_coverage_result() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("broken/Cargo.toml");
+        std::fs::create_dir_all(root.parent().unwrap()).unwrap();
+        std::fs::write(&root, "").unwrap();
+        let runner = FakeCargo {
+            locate_root: root.clone(),
+            target: d.path().join("target"),
+            build: None,
+            members: 1,
+            fail_locate: true,
+            fail_metadata: false,
+            malformed: false,
+        };
+        let mut counters = ScanCounters::default();
+        let mut diagnostics = vec![];
+        let coverage = resolve_workspaces_with_coverage(
+            std::slice::from_ref(&root),
+            &runner,
+            &mut counters,
+            &mut diagnostics,
+            &NoopObserver,
+        );
+        assert!(coverage.workspaces.is_empty());
+        assert_eq!(coverage.unresolved.len(), 1);
+        assert_eq!(coverage.unresolved[0].manifest, root);
+        assert_eq!(coverage.unresolved[0].stage, "locate");
+    }
+
+    #[test]
+    fn metadata_failure_or_malformed_metadata_remains_unresolved() {
+        for (fail_metadata, malformed) in [(true, false), (false, true)] {
+            let d = tempfile::tempdir().unwrap();
+            let root = d.path().join("broken/Cargo.toml");
+            std::fs::create_dir_all(root.parent().unwrap()).unwrap();
+            std::fs::write(&root, "").unwrap();
+            let runner = FakeCargo {
+                locate_root: root.clone(),
+                target: d.path().join("target"),
+                build: None,
+                members: 1,
+                fail_locate: false,
+                fail_metadata,
+                malformed,
+            };
+            let mut counters = ScanCounters::default();
+            let mut diagnostics = vec![];
+            let coverage = resolve_workspaces_with_coverage(
+                std::slice::from_ref(&root),
+                &runner,
+                &mut counters,
+                &mut diagnostics,
+                &NoopObserver,
+            );
+            assert!(coverage.workspaces.is_empty());
+            assert_eq!(coverage.unresolved.len(), 1);
+            assert_eq!(coverage.unresolved[0].stage, "metadata");
+        }
     }
 
     #[test]

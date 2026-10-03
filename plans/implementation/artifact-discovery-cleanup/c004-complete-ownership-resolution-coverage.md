@@ -1,6 +1,6 @@
 # Corrective C004 — Complete Ownership-Universe Resolution Coverage
 
-Status: ready
+Status: closing
 
 Repository baseline: 819f71cd50bebb3b68ae54ef22e6951f08edcbbe
 

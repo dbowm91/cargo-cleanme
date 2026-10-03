@@ -74,11 +74,18 @@ pub struct CleanReport {
     pub failed: usize,
     pub mode: CleanMode,
     pub counters: ScanCounters,
+    /// Whole-scope safety block raised before sizing or per-unit proof.
+    pub scope_blocked: Option<String>,
+    /// Structured participants retained for diagnostics and audit consumers.
+    pub unresolved_ownership: Vec<UnresolvedOwnershipParticipant>,
 }
 
 impl CleanReport {
     pub fn render(&self) -> String {
         let mut out = String::new();
+        if let Some(reason) = &self.scope_blocked {
+            return format!("{reason}\n");
+        }
         let mut previewed = 0usize;
         let mut simulated = 0usize;
         let mut cleaned = 0usize;
@@ -514,7 +521,7 @@ pub fn clean_with(
 
     // Workspace resolution, physical grouping, fail-fast analysis, and
     // CleanupUnit construction share one clock.
-    let (workspaces, units) = resolve_cleanup_scope(
+    let scope = resolve_cleanup_scope(
         &manifests,
         scan_start,
         Duration::from_secs(recency_seconds),
@@ -523,17 +530,34 @@ pub fn clean_with(
         &mut diagnostics,
         observer,
     )?;
+    let workspaces = scope.workspaces;
+    let units = scope.units;
+    let unresolved_ownership = scope.unresolved;
 
-    // Cleanup phase is determinate: the CleanupUnit candidate count is known
-    // (C002 §7.5, C003 §7.5). Announce through the observer trait so any
-    // renderer/test observer observes determinate totals without knowing the
-    // concrete type.
-    observer.units_total(cleanup_phase, units.len() as u64);
     let mut report = CleanReport {
         diagnostics: diagnostics.len(),
         mode,
         ..Default::default()
     };
+
+    if !unresolved_ownership.is_empty() {
+        let unresolved = unresolved_ownership.len();
+        report.scope_blocked = Some(format!(
+            "cleanup ownership could not be proven: {unresolved} discovered Cargo {} did not resolve; no cleanup commands were run",
+            if unresolved == 1 {
+                "manifest"
+            } else {
+                "manifests"
+            }
+        ));
+        report.unresolved_ownership = unresolved_ownership;
+        report.counters = counters;
+        return Ok(report);
+    }
+
+    // Cleanup phase is determinate only after complete ownership coverage is
+    // established (C004). Announce the CleanupUnit total through the observer.
+    observer.units_total(cleanup_phase, units.len() as u64);
 
     for unit in &units {
         let skipped = |report: &mut CleanReport, detail: String| {
@@ -732,7 +756,12 @@ fn observe_unit_groups(observer: &dyn ProgressObserver, unit: &workspace::Cleanu
 /// C003: the destructive candidate is the workspace unit, not the physical
 /// group; distinct target/build groups belong to one unit because one
 /// `cargo clean` invocation can affect both.
-#[allow(clippy::too_many_arguments)]
+struct CleanupScope {
+    workspaces: Vec<ResolvedWorkspace>,
+    units: Vec<workspace::CleanupUnit>,
+    unresolved: Vec<UnresolvedOwnershipParticipant>,
+}
+
 fn resolve_cleanup_scope(
     manifests: &[PathBuf],
     scan_start: SystemTime,
@@ -741,11 +770,26 @@ fn resolve_cleanup_scope(
     counters: &mut ScanCounters,
     diagnostics: &mut Vec<ScanDiagnostic>,
     observer: &dyn ProgressObserver,
-) -> Result<(Vec<ResolvedWorkspace>, Vec<workspace::CleanupUnit>), AppError> {
+) -> Result<CleanupScope, AppError> {
     // Workspace resolution (cached, sequential).
     let adapter = WorkspaceCleanupAdapter { runner };
-    let workspaces =
-        workspace::resolve_workspaces(manifests, &adapter, counters, diagnostics, observer);
+    let coverage = workspace::resolve_workspaces_with_coverage(
+        manifests,
+        &adapter,
+        counters,
+        diagnostics,
+        observer,
+    );
+    let unresolved = coverage.unresolved;
+    counters.unresolved_ownership = unresolved.len() as u64;
+    let workspaces = coverage.workspaces;
+    if !unresolved.is_empty() {
+        return Ok(CleanupScope {
+            workspaces,
+            units: Vec::new(),
+            unresolved,
+        });
+    }
     let groups = workspace::build_groups(&workspaces);
     // Fail-fast analysis (cheap gates before deep sizing).
     let clock_cutoff = scan_start
@@ -762,7 +806,11 @@ fn resolve_cleanup_scope(
         observer,
     );
     let units = workspace::build_cleanup_units(&workspaces, &outcomes);
-    Ok((workspaces, units))
+    Ok(CleanupScope {
+        workspaces,
+        units,
+        unresolved,
+    })
 }
 
 struct WorkspaceCleanupAdapter<'a> {
@@ -1327,6 +1375,7 @@ mod tests {
         build: Option<PathBuf>,
         members: usize,
         remove_on_execute: bool,
+        unresolved_manifest: Option<PathBuf>,
     }
 
     impl FakeCleanupRunner {
@@ -1338,6 +1387,7 @@ mod tests {
                 build: None,
                 members,
                 remove_on_execute: false,
+                unresolved_manifest: None,
             }
         }
         fn calls(&self) -> Vec<RecordedCall> {
@@ -1358,6 +1408,18 @@ mod tests {
                 .unwrap()
                 .push((cwd.to_path_buf(), args.to_vec(), Vec::new()));
             if args.first().is_some_and(|a| a == "locate-project") {
+                if self
+                    .unresolved_manifest
+                    .as_ref()
+                    .is_some_and(|p| args.last().is_some_and(|arg| Path::new(arg) == p))
+                {
+                    return Ok(ProcessOutput {
+                        success: false,
+                        code: Some(1),
+                        stdout: Vec::new(),
+                        stderr: b"unresolved participant".to_vec(),
+                    });
+                }
                 let root_manifest = self.workspace_root.join("Cargo.toml");
                 let json = serde_json::json!({"root": root_manifest});
                 return Ok(ProcessOutput {
@@ -1561,6 +1623,62 @@ mod tests {
                 .contains("no `cargo clean` command was invoked")
         );
         assert!(!report.render().contains("recovered"));
+    }
+
+    #[test]
+    fn unresolved_discovered_manifest_blocks_every_cleanup_mode_before_clean() {
+        for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+            let (_d, root, target) = valid_fixture(1);
+            let unresolved = root.join("unresolved/Cargo.toml");
+            std::fs::create_dir_all(unresolved.parent().unwrap()).unwrap();
+            std::fs::write(
+                &unresolved,
+                "[package]\nname='unresolved'\nversion='0.1.0'\n",
+            )
+            .unwrap();
+            let mut runner = FakeCleanupRunner::new(&root, &target, 1);
+            runner.unresolved_manifest = Some(unresolved);
+            let report = clean_with(&root, 0, &[], mode, &runner, &NoopObserver).unwrap();
+            assert_eq!(report.counters.unresolved_ownership, 1, "{mode:?}");
+            assert_eq!(report.unresolved_ownership.len(), 1, "{mode:?}");
+            assert_eq!(
+                report.unresolved_ownership[0].manifest,
+                root.join("unresolved/Cargo.toml")
+            );
+            assert!(
+                report
+                    .counters
+                    .stats_line()
+                    .contains("unresolved_ownership=1")
+            );
+            assert!(
+                report.results.is_empty(),
+                "blocked scope must report no cleanable bytes: {mode:?}"
+            );
+            assert_eq!(
+                report.scope_blocked.as_deref(),
+                Some(
+                    "cleanup ownership could not be proven: 1 discovered Cargo manifest did not resolve; no cleanup commands were run"
+                ),
+                "{mode:?}"
+            );
+            assert_eq!(
+                report.diagnostics, 1,
+                "participant diagnostic retained: {mode:?}"
+            );
+            assert!(
+                runner.clean_calls().is_empty(),
+                "{mode:?}: zero clean and dry-run invocations"
+            );
+            assert_eq!(
+                report
+                    .render()
+                    .matches("cleanup ownership could not be proven")
+                    .count(),
+                1
+            );
+            assert!(report.render().contains("no cleanup commands were run"));
+        }
     }
 
     #[test]
@@ -2030,7 +2148,7 @@ mod tests {
     }
 
     #[test]
-    fn cargo_failure_isolated_per_workspace() {
+    fn unresolved_cargo_manifest_blocks_entire_cleanup_scope() {
         struct PerPathFailRunner {
             good_root: PathBuf,
             good_target: PathBuf,
@@ -2116,7 +2234,7 @@ mod tests {
         // Simulate two manifests: one good, one bad. Use discovery directly
         // with both manifests via clean_with on parent ROOT containing both.
         // clean_with discovers manifests under ROOT; bad manifest will fail
-        // locate but good should still proceed (isolation).
+        // locate, so C004 must block the whole cleanup scope.
         let runner = PerPathFailRunner {
             good_root: good.clone(),
             good_target: target.clone(),
@@ -2124,12 +2242,12 @@ mod tests {
         let noop = NoopObserver;
         // ROOT is tempdir (contains good + bad). Good target inside ROOT.
         let report = clean_with(d.path(), 0, &[], CleanMode::Simulate, &runner, &noop).unwrap();
-        // Good workspace still simulated despite bad sibling failing.
+        assert_eq!(report.counters.unresolved_ownership, 1);
+        assert!(report.results.is_empty());
         assert!(
             report
-                .results
-                .iter()
-                .any(|r| r.outcome == CleanOutcome::Simulated)
+                .render()
+                .contains("cleanup ownership could not be proven")
         );
     }
 
@@ -2427,7 +2545,7 @@ mod tests {
         let exec_runner = FakeCleanupRunner::new(&root, &target, 1);
         let mut counters = ScanCounters::default();
         let mut diags = Vec::new();
-        let (workspaces, units) = resolve_cleanup_scope(
+        let scope = resolve_cleanup_scope(
             &[root.join("Cargo.toml")],
             SystemTime::now(),
             Duration::from_secs(0),
@@ -2437,7 +2555,11 @@ mod tests {
             &noop,
         )
         .unwrap();
+        let workspaces = scope.workspaces;
+        let units = scope.units;
+        let unresolved = scope.unresolved;
         assert_eq!(workspaces.len(), 1);
+        assert!(unresolved.is_empty());
         assert_eq!(
             units.len(),
             1,

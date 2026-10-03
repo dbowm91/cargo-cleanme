@@ -125,8 +125,8 @@ C002 M005 safety/progress/performance reconciliation [historically closed]
                    v
 C003 cleanup-unit atomicity/full ownership graph [historically closed]
                    |
-                   v
-C004 complete ownership-universe resolution coverage [ready]
+                  v
+C004 complete ownership-universe resolution coverage [closing]
 ~~~
 
 ## 6. Milestone M001 — Foundation, CLI, config, and domain contracts
@@ -234,7 +234,7 @@ C001 is a hard implementation-baseline dependency for M005. M005 design research
 
 ## 10. Milestone M005 — Workspace-aware redirected/shared output
 
-Status: corrective required. ADR 001 accepted. M005A/M005B/C002/C003 historical closures remain recorded; C004 is ready and reopens destructive release qualification.
+Status: corrective required pending C004 hosted qualification. ADR 001 accepted. M005A/M005B/C002/C003 historical closures remain recorded; C004 is closing the remaining ownership-coverage corrective.
 
 Accepted decision:
 
@@ -347,7 +347,7 @@ Deferred (recorded in the C003 closure, not a blocked plan): the ownership-unive
 
 ## 10C. Corrective C004 — Complete ownership-universe resolution coverage
 
-Status: ready.
+Status: closing; hosted qualification evidence is being gathered. Closure: `plans/closure/artifact-discovery-cleanup/c004-status.md`.
 
 Plan:
 
@@ -362,7 +362,9 @@ Purpose:
 - keep ordinary read-only scan partial-result tolerant;
 - preserve C003 CleanupUnit atomicity and full final ownership-graph revalidation once initial coverage is complete.
 
-C004 does not optimize the C003 N² final-proof cost, macOS source-root canonicalization, or generic no-argument scan performance. M005 destructive release qualification is reopened until C004 closes.
+C004 does not optimize the C003 N² final-proof cost, macOS source-root canonicalization, or generic no-argument scan performance. M005 destructive release qualification remains reopened until C004 closes.
+
+Outcome: cleanup resolution now retains authoritative manifest coverage and unresolved participants; any remaining unresolved participant blocks the complete cleanup scope before output sizing or per-unit proof. Read-only scan retains partial-result behavior. M005 destructive release qualification is restored after C004 closure. The C003 N² refresh cost, macOS source-root canonicalization, and generic scan performance remain deferred follow-up candidates, not blocked implementation plans.
 
 ## 11. Cross-cutting reliability concerns
 
