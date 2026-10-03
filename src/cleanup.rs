@@ -3658,6 +3658,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn cross_workspace_symlink_into_candidate_output_fails_closed() {
         // C003 §9: B becomes a symlink pointing into A's output. The fresh
@@ -3684,6 +3685,39 @@ mod tests {
         assert_eq!(row.outcome, CleanOutcome::Skipped, "{}", row.detail);
         assert!(row.detail.contains("overlaps"), "{}", row.detail);
         assert!(runner.clean_calls().is_empty());
+    }
+
+    #[test]
+    fn cross_workspace_unresolvable_root_into_candidate_output_fails_closed() {
+        // Portable counterpart of the symlink race: B is re-resolved with a
+        // configured output path that does not exist yet inside A's output
+        // region. The fresh physical graph cannot represent it (no physical
+        // identity), so the explicit cross-workspace reachability check must
+        // still fail closed.
+        for mode in [CleanMode::Simulate, CleanMode::Preview, CleanMode::Execute] {
+            let d = tempfile::tempdir().unwrap();
+            let root_a = ws_root(d.path(), "a");
+            let root_b = ws_root(d.path(), "b");
+            let target_a = cargo_output(&root_a.join("target"), 4096);
+            let target_b = cargo_output(&root_b.join("target"), 4096);
+            backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, target_a.clone(), None);
+            runner.add(&root_b, target_b, None);
+            // Nested inside A's target directory, but not created.
+            runner.stage(1, 2, target_a.join("not-created-yet"), None);
+            let noop = NoopObserver;
+            let report = clean_with(d.path(), 0, &[], mode, &runner, &noop).unwrap();
+            let row = row_for(&report, &root_a);
+            assert_eq!(
+                row.outcome,
+                CleanOutcome::Skipped,
+                "{mode:?}: {}",
+                row.detail
+            );
+            assert!(row.detail.contains("overlaps"), "{mode:?}: {}", row.detail);
+            assert!(runner.clean_calls().is_empty(), "{mode:?}");
+        }
     }
 
     #[test]

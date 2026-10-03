@@ -123,7 +123,7 @@ M005B authorized redirected cleanup + --dryrun [historically closed]
 C002 M005 safety/progress/performance reconciliation [historically closed]
                    |
                    v
-C003 cleanup-unit atomicity/full ownership graph [ready]
+C003 cleanup-unit atomicity/full ownership graph [closed]
 ~~~
 
 ## 6. Milestone M001 — Foundation, CLI, config, and domain contracts
@@ -231,7 +231,7 @@ C001 is a hard implementation-baseline dependency for M005. M005 design research
 
 ## 10. Milestone M005 — Workspace-aware redirected/shared output
 
-Status: corrective required. ADR 001 accepted. M005A/M005B/C002 historical closures remain recorded; C003 is ready and reopens destructive release qualification.
+Status: closed. ADR 001 accepted. M005A, M005B, C002, and C003 closures are all recorded; C003 closed the workspace cleanup-unit atomicity and full ownership-graph revalidation defects and M005 is again release-qualified for destructive use.
 
 Accepted decision:
 
@@ -311,11 +311,15 @@ C002 does not rewrite the M005A/M005B closure history. Its historical closure re
 
 ## 10B. Corrective C003 — Workspace cleanup-unit atomicity and full ownership-graph revalidation
 
-Status: ready.
+Status: closed.
 
 Plan:
 
 - plans/implementation/artifact-discovery-cleanup/c003-workspace-cleanup-unit-atomicity.md
+
+Closure:
+
+- plans/closure/artifact-discovery-cleanup/c003-status.md
 
 Purpose:
 
@@ -326,7 +330,17 @@ Purpose:
 - measure and report one deduplicated pre/post output union per Cargo invocation;
 - accumulate final-proof Cargo work into cleanup --stats.
 
-C003 keeps generic global-scan performance as a separate future optimization line. M005 destructive release qualification is reopened until C003 closes.
+Outcome:
+
+- one Cargo clean invocation is authorized as one workspace CleanupUnit covering the complete resolved target/build OutputSet, and every affected physical group must be `PrivateBounded` and authorized;
+- a private target group can no longer carry an `ExternalUnproven`, `Shared`, `Uncertain`, or unauthorized sibling build group into the same invocation (whole unit is skipped with an actionable reason);
+- Preview/Simulate/Execute each emit one result per unit, cleanup progress totals count CleanupUnits, and one post-clean measurement covers the complete deduplicated output union;
+- the final proof re-resolves every workspace discovered under clean ROOT, rebuilds the complete fresh physical graph, and rejects the candidate when any other discovered workspace (including symlink or unresolvable output roots) can reach the affected output, failing closed when a universe workspace cannot be re-resolved;
+- `cleanup --stats` reports final-proof Cargo work separately from the initial scan counters.
+
+C003 keeps generic global-scan performance as a separate future optimization line. M005 destructive release qualification was reopened until C003 closed and is unblocked again by its closure.
+
+Deferred (recorded in the C003 closure, not a blocked plan): the ownership-universe refresh performs one bounded re-resolution per cleanable candidate (N candidates over N discovered workspaces ⇒ N² Cargo resolutions, recorded with `--stats`); and on macOS a symlinked path component of the clean root leaves member source roots non-canonical, so the source-activity walk does not prune output directories (eligibility-neutral, wasted traversal, candidate follow-up corrective).
 
 ## 11. Cross-cutting reliability concerns
 

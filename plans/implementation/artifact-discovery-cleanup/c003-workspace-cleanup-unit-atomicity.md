@@ -1,6 +1,8 @@
 # Corrective C003 — Workspace Cleanup-Unit Atomicity and Full Ownership-Graph Revalidation
 
-Status: ready
+Status: closed
+
+Closure: `plans/closure/artifact-discovery-cleanup/c003-status.md`
 
 Repository baseline: 5af882122b4781e8a927d34a3792cbfd3c0d12cb
 
