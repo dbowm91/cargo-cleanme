@@ -4,13 +4,18 @@ Plan: `plans/implementation/artifact-discovery-cleanup/c002-m005-safety-progress
 
 Disposition: **closed**
 
-Implementation commit: `35705a2` on `main`
+Implementation commits: `35705a2` through `de99119` on `main`
 (`35705a2` implements C002 work packages A–F: ownership safety repair,
 unified final `ExecutionProof` with simulation parity, coordinated
 `MultiProgress` renderer with semantic determinate totals, authoritative
 member-cache resolver optimization, `--stats` instrumentation, README/config
-reconciliation, and full regression coverage. No separate fixup commit was
-required; hosted CI is green on the implementation commit.)
+reconciliation, and full regression coverage;
+`16b2b25` adds preview detail to the real-temp assertion for Ubuntu diagnosis;
+`58856b2` includes old/new paths in target/build change skip details;
+`de99119` fixes C002 test isolation by removing the global
+`CARGO_BUILD_BUILD_DIR` race that flaked Ubuntu real-temp Preview as
+`build-dir changed (was /tmp/c002-unknown-build, …)` when parallel tests
+leaked env into real-Cargo metadata. Hosted CI is green on the fixup head.)
 
 Corrects (history preserved, not rewritten):
 
@@ -146,7 +151,7 @@ stderr diagnostics: 19 filesystem diagnostics; rerun with a bounded root if need
 
 ## Full hosted CI/MSRV evidence
 
-Local (implementation commit `35705a2`, macOS arm64, Rust 1.89 active):
+Local (fixup head `de99119`, macOS arm64, Rust 1.89 active):
 
 - `cargo fmt --check` — PASS
 - `cargo clippy --all-targets --all-features -- -D warnings` — PASS
@@ -156,9 +161,11 @@ Local (implementation commit `35705a2`, macOS arm64, Rust 1.89 active):
 - `cargo +1.89 test --locked --all-targets` — PASS (118 + 2 + 1)
 - `git diff --check` — PASS
 
-Hosted (push of `35705a2`, `.github/workflows/ci.yml`: stable Linux/macOS/Windows + 1.89 MSRV):
+Hosted (`.github/workflows/ci.yml`: stable Linux/macOS/Windows + 1.89 MSRV):
 
-- Run 37093199244 — SUCCESS (all four jobs green; see `gh run view 37093199244`).
+- Run 37093199244 (push of `35705a2`) — SUCCESS (all four jobs green).
+- Runs 37093463811, 37093891680, 37094080658 (closure + diagnosis commits `73d70d4`, `16b2b25`, `58856b2`) — FAILURE on Ubuntu `real_temp_project_preview_and_execute_with_redirected_target` as `Skipped` (`build-dir changed (was /tmp/c002-unknown-build, …)`) due to the global-env race described above (parallel test leaked `CARGO_BUILD_BUILD_DIR` into real-Cargo metadata on newer stable Cargo).
+- Run 37094258573 (push of fixup `de99119`, no global env in tests) — SUCCESS (all four jobs green; see `gh run view 37094258573`). Main is green on the fixup head.
 
 Static review (also in implementation):
 
@@ -167,18 +174,19 @@ Static review (also in implementation):
 - `Simulate` cannot reach `cargo clean` (Simulate branch has no `runner.run`; zero-clean tests).
 - All `cargo clean` spawns consume final validated proof (`clean_args(&proof)`, `proof.workspace_root`, `proof.frozen_env` immediately after `Ok(proof)`).
 
-## Documentation/planning updates (in closure commit)
+## Documentation/planning updates (in closure + fixup commits)
 
 - `README.md` (in implementation commit `35705a2`): ownership/authorization semantics (only `PrivateBounded` cleanable, allowed roots do not establish exclusivity, currently redundant), normal-vs-`--stats` output, coordinated `MultiProgress` + observer determinate contract, simulation parity + final proof binding, member-cache 1+1, `--no-progress --stats` canonical, usage examples.
 - `config.toml` (in `35705a2`): `[cleanup]` comments include `ExternalUnproven`, non-promotion, redundancy note; schema unchanged.
-- `plans/implementation/.../c002-....md`: `ready` → `closed` + closure link (in closure commit).
+- `src/cleanup.rs` skip details (in `58856b2`): target/build change messages include old/new paths for actionable diagnostics.
+- `plans/implementation/.../c002-....md`: `ready` → `closed` + closure link (in closure commit `73d70d4`).
 - `plans/subsystems/artifact-discovery-cleanup-roadmap.md`: C002 `ready` → `closed`; M005 `corrective required` → `closed` (M005A historically closed + M005B historically closed + C002 closed; M005 again release-qualified for destructive use).
-- `plans/registry.md`: C002 `ready` → `closed`; subsystem current milestone `C002 ready` → `M005 complete (C002 closed)`; immediate handoff `Implement C002` → `C002 closed; M005 release qualification unblocked`.
+- `plans/registry.md`: C002 `ready` → `closed`; subsystem current milestone `C002 ready` → `M005 complete (C002 closed)`; immediate handoff `Implement C002` → `C002 closed; M005 release qualification unblocked`; baseline `35705a2` → `de99119` (fixup head).
 - M005A/M005B closure records untouched (C002 is the historical correction).
 
 ## Unresolved findings and final disposition
 
-- No open correctness or safety defects remain within C002 scope. The five pre-C002 M005B tests that encoded promotion (`private_redirected_*`, `external_outside_root_allowed_via_configured_root` expecting `Simulated` with allowed root, `real_temp_project_*` with outside-workspace redirect, `cargo_failure_isolated_*` without marker) were corrected to assert ADR 001 compliance; all now pass.
+- No open correctness or safety defects remain within C002 scope. The five pre-C002 M005B tests that encoded promotion (`private_redirected_*`, `external_outside_root_allowed_via_configured_root` expecting `Simulated` with allowed root, `real_temp_project_*` with outside-workspace redirect, `cargo_failure_isolated_*` without marker) were corrected to assert ADR 001 compliance; all now pass. The post-closure Ubuntu isolation race (global `CARGO_BUILD_BUILD_DIR` leaked across parallel tests) was fixed in `de99119` by removing global env manipulation from tests; `frozen_env` Unknown/Distinct coverage remains via unit test without global state.
 - Performance: full `/` no-argument scan exceeds 120 s on this representative macOS host (conditional reason above); synthetic/global-like + representative tree qualify the requirement. No further Cargo concurrency introduced (optional per plan; evidence shows remaining cost is necessary per-workspace resolution, not redundant amplification).
 - `allowed_output_roots` preserved for compatibility but documented as currently redundant; a future ADR/milestone would be required to define explicit external-cache exclusivity — not reinterpreted here (per §6 out-of-scope).
 - Disposition: **closed**. M005 (M005A + M005B historical + C002) is complete and again release-qualified. No other implementation plans are blocked on C002; future selective `cargo clean -p`, shared-cache GC, or daemon work would need new milestones.
