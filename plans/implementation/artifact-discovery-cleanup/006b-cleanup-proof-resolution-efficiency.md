@@ -1,6 +1,8 @@
 # M006B — Cleanup Proof Resolution Efficiency
 
-Status: ready
+Status: closed
+
+Closure: `plans/closure/artifact-discovery-cleanup/006b-status.md`.
 
 Repository baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 

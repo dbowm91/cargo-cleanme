@@ -212,7 +212,7 @@ fn escaped_path(path: &Path) -> String {
 // actual `cargo clean` invocation.
 pub use workspace::{ProcessOutput, SystemCargoRunner};
 
-pub trait CleanupRunner {
+pub trait CleanupRunner: Sync {
     fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput>;
     fn run_with_env(
         &self,
@@ -925,6 +925,164 @@ fn sorted_same(left: &[PathBuf], right: &[PathBuf]) -> bool {
     a == b
 }
 
+const PROOF_REFRESH_CONCURRENCY_CAP: usize = 4;
+
+struct ProofRefreshMeter<'a> {
+    runner: &'a dyn CleanupRunner,
+    active: &'a std::sync::atomic::AtomicUsize,
+    peak: &'a std::sync::atomic::AtomicUsize,
+}
+
+impl CleanupRunner for ProofRefreshMeter<'_> {
+    fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput> {
+        let metadata = args.first().is_some_and(|arg| arg == "metadata");
+        if metadata {
+            let active = self
+                .active
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            self.peak
+                .fetch_max(active, std::sync::atomic::Ordering::SeqCst);
+        }
+        let result = self.runner.run(cwd, args);
+        if metadata {
+            self.active
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        result
+    }
+
+    fn run_with_env(
+        &self,
+        cwd: &Path,
+        args: &[OsString],
+        env: &[(OsString, OsString)],
+    ) -> io::Result<ProcessOutput> {
+        self.runner.run_with_env(cwd, args, env)
+    }
+}
+
+fn refresh_one_proof_workspace(
+    workspace: &ResolvedWorkspace,
+    runner: &dyn CleanupRunner,
+) -> (ScanCounters, Option<ResolvedWorkspace>) {
+    let adapter = WorkspaceCleanupAdapter { runner };
+    let mut proof_counters = ScanCounters::default();
+    let mut proof_diagnostics = Vec::new();
+    let fresh = workspace::refresh_workspace_from_root_manifest(
+        &workspace.root_manifest,
+        &adapter,
+        &mut proof_counters,
+        &mut proof_diagnostics,
+        &crate::progress::NoopObserver,
+    );
+    (proof_counters, fresh)
+}
+
+/// Refresh each ownership-universe workspace directly through Cargo metadata.
+/// Refreshes are independent and read-only, so a small fixed pool can reduce
+/// wall time without reusing state across candidates. Results are joined and
+/// checked in input order; each batch completes before the next starts.
+fn refresh_proof_universe(
+    universe: &[ResolvedWorkspace],
+    runner: &dyn CleanupRunner,
+    counters: &mut ScanCounters,
+) -> Result<Vec<ResolvedWorkspace>, String> {
+    refresh_proof_universe_with_limit(
+        universe,
+        runner,
+        counters,
+        std::thread::available_parallelism()
+            .map_or(1, usize::from)
+            .clamp(1, PROOF_REFRESH_CONCURRENCY_CAP),
+    )
+}
+
+fn refresh_proof_universe_with_limit(
+    universe: &[ResolvedWorkspace],
+    runner: &dyn CleanupRunner,
+    counters: &mut ScanCounters,
+    worker_limit: usize,
+) -> Result<Vec<ResolvedWorkspace>, String> {
+    let concurrency = worker_limit.clamp(1, PROOF_REFRESH_CONCURRENCY_CAP);
+    let mut refreshed_universe = Vec::with_capacity(universe.len());
+    let mut peak_concurrency = 0usize;
+
+    for batch in universe.chunks(concurrency) {
+        let active = std::sync::atomic::AtomicUsize::new(0);
+        let peak = std::sync::atomic::AtomicUsize::new(0);
+        let outcomes = if batch.len() == 1 {
+            let meter = ProofRefreshMeter {
+                runner,
+                active: &active,
+                peak: &peak,
+            };
+            vec![refresh_one_proof_workspace(&batch[0], &meter)]
+        } else {
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = batch
+                    .iter()
+                    .map(|ws| {
+                        let meter = ProofRefreshMeter {
+                            runner,
+                            active: &active,
+                            peak: &peak,
+                        };
+                        scope.spawn(move || refresh_one_proof_workspace(ws, &meter))
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|handle| {
+                        handle
+                            .join()
+                            .unwrap_or_else(|_| (ScanCounters::default(), None))
+                    })
+                    .collect::<Vec<_>>()
+            })
+        };
+        peak_concurrency = peak_concurrency.max(peak.load(std::sync::atomic::Ordering::SeqCst));
+
+        let mut failure = None;
+        for (workspace, (proof_counters, fresh)) in batch.iter().zip(outcomes) {
+            counters.merge_proof(&proof_counters);
+            counters.proof_workspaces_refreshed += 1;
+            match fresh {
+                Some(fresh) if fresh.id == workspace.id && fresh.root == workspace.root => {
+                    refreshed_universe.push(fresh);
+                }
+                Some(_) => {
+                    failure.get_or_insert_with(|| {
+                        format!(
+                            "ownership could not be re-proven: workspace {} changed identity",
+                            workspace.root.display()
+                        )
+                    });
+                }
+                None => {
+                    failure.get_or_insert_with(|| {
+                        format!(
+                            "ownership could not be re-proven: workspace {} did not re-resolve",
+                            workspace.root.display()
+                        )
+                    });
+                }
+            }
+        }
+        if let Some(reason) = failure {
+            counters.proof_metadata_peak_concurrency = counters
+                .proof_metadata_peak_concurrency
+                .max(peak_concurrency as u64);
+            return Err(reason);
+        }
+    }
+    counters.proof_metadata_peak_concurrency = counters
+        .proof_metadata_peak_concurrency
+        .max(peak_concurrency as u64);
+    refreshed_universe.sort_by(|a, b| a.root.cmp(&b.root));
+    Ok(refreshed_universe)
+}
+
 /// Single final CleanupUnit proof shared by Preview/Simulate/Execute
 /// (C003 §7.2-7.3).
 ///
@@ -966,36 +1124,7 @@ pub fn final_cleanup_proof(
     // 2. Fresh Cargo resolution for the complete bounded ownership universe.
     // Uses canonicalized comparisons so `/tmp` vs `/private/tmp` (macOS
     // symlink) does not falsely report a change.
-    let adapter = WorkspaceCleanupAdapter { runner };
-    let noop = crate::progress::NoopObserver;
-    let mut fresh_universe: Vec<ResolvedWorkspace> = Vec::with_capacity(universe.len());
-    for ws in universe {
-        let mut proof_counters = ScanCounters::default();
-        let mut proof_diagnostics = Vec::new();
-        let fresh = workspace::resolve_workspaces(
-            std::slice::from_ref(&ws.root_manifest),
-            &adapter,
-            &mut proof_counters,
-            &mut proof_diagnostics,
-            &noop,
-        );
-        counters.merge_proof(&proof_counters);
-        counters.proof_workspaces_refreshed += 1;
-        let Some(fresh_ws) = fresh.into_iter().next() else {
-            return Err(format!(
-                "ownership could not be re-proven: workspace {} did not re-resolve",
-                ws.root.display()
-            ));
-        };
-        if fresh_ws.id != ws.id || fresh_ws.root != ws.root {
-            return Err(format!(
-                "ownership could not be re-proven: workspace {} changed identity",
-                ws.root.display()
-            ));
-        }
-        fresh_universe.push(fresh_ws);
-    }
-    fresh_universe.sort_by(|a, b| a.root.cmp(&b.root));
+    let fresh_universe = refresh_proof_universe(universe, runner, counters)?;
     // 3. Complete fresh physical output graph.
     let fresh_groups = workspace::build_groups(&fresh_universe);
     // 4/5. Candidate identity, member set, and target/build identity.
@@ -2758,6 +2887,65 @@ mod tests {
     }
 
     #[test]
+    fn direct_metadata_refresh_detects_workspace_root_and_member_changes() {
+        for mutation_kind in ["root", "member", "malformed"] {
+            for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+                let (_d, root, target) = valid_fixture(1);
+                let mutation = if mutation_kind == "root" {
+                    MetadataMutation::WorkspaceRoot(
+                        root.parent().unwrap().join("changed-workspace"),
+                    )
+                } else if mutation_kind == "member" {
+                    let member_manifest = root.join("new-member/Cargo.toml");
+                    MetadataMutation::AddMember(member_manifest)
+                } else {
+                    MetadataMutation::Malformed
+                };
+                let mut inner = StagedCargo::new();
+                inner.add(&root, target, None);
+                let runner = MetadataMutationRunner {
+                    inner,
+                    metadata_calls: std::sync::atomic::AtomicUsize::new(0),
+                    mutation,
+                };
+                let report = clean_with(&root, 0, &[], mode, &runner, &NoopObserver).unwrap();
+                assert_eq!(report.results.len(), 1, "{mutation_kind} {mode:?}");
+                assert_eq!(
+                    report.results[0].outcome,
+                    CleanOutcome::Skipped,
+                    "{mutation_kind} {mode:?}: {}",
+                    report.results[0].detail
+                );
+                if mutation_kind == "root" {
+                    assert!(
+                        report.results[0].detail.contains("changed identity"),
+                        "{}",
+                        report.results[0].detail
+                    );
+                } else if mutation_kind == "member" {
+                    assert!(
+                        report.results[0].detail.contains("member set changed"),
+                        "{}",
+                        report.results[0].detail
+                    );
+                } else {
+                    assert!(
+                        report.results[0].detail.contains("did not re-resolve"),
+                        "{}",
+                        report.results[0].detail
+                    );
+                }
+                assert_eq!(report.counters.proof_cargo_locate_calls, 0);
+                assert_eq!(report.counters.proof_cargo_metadata_calls, 1);
+                assert!(
+                    runner.inner.clean_calls().is_empty(),
+                    "{mutation_kind} {mode:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn simulation_parity_changed_build_dir_and_unsupported_capability_both_skip() {
         // Changed build-dir via staged metadata (second call returns distinct build).
         {
@@ -3276,6 +3464,120 @@ mod tests {
                 .unwrap()
                 .push((cwd.to_path_buf(), args.to_vec(), env.to_vec()));
             self.dispatch(args)
+        }
+    }
+
+    struct ParallelProbeRunner {
+        inner: StagedCargo,
+        active: std::sync::atomic::AtomicUsize,
+        peak: std::sync::atomic::AtomicUsize,
+    }
+
+    impl CargoRunner for ParallelProbeRunner {
+        fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput> {
+            let metadata = args.first().is_some_and(|arg| arg == "metadata");
+            if metadata {
+                let active = self
+                    .active
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    + 1;
+                self.peak
+                    .fetch_max(active, std::sync::atomic::Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(4));
+            }
+            let output = CargoRunner::run(&self.inner, cwd, args);
+            if metadata {
+                self.active
+                    .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            output
+        }
+    }
+
+    impl CleanupRunner for ParallelProbeRunner {
+        fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput> {
+            CargoRunner::run(self, cwd, args)
+        }
+
+        fn run_with_env(
+            &self,
+            cwd: &Path,
+            args: &[OsString],
+            env: &[(OsString, OsString)],
+        ) -> io::Result<ProcessOutput> {
+            self.inner.run_with_env(cwd, args, env)
+        }
+    }
+
+    enum MetadataMutation {
+        WorkspaceRoot(PathBuf),
+        AddMember(PathBuf),
+        Malformed,
+    }
+
+    struct MetadataMutationRunner {
+        inner: StagedCargo,
+        metadata_calls: std::sync::atomic::AtomicUsize,
+        mutation: MetadataMutation,
+    }
+
+    impl CargoRunner for MetadataMutationRunner {
+        fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput> {
+            let mut output = CargoRunner::run(&self.inner, cwd, args)?;
+            if args.first().is_some_and(|arg| arg == "metadata")
+                && self
+                    .metadata_calls
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    >= 1
+                && output.success
+            {
+                match &self.mutation {
+                    MetadataMutation::WorkspaceRoot(root) => {
+                        let mut json: serde_json::Value = serde_json::from_slice(&output.stdout)
+                            .expect("staged metadata is valid JSON");
+                        json["workspace_root"] = serde_json::json!(root);
+                        output.stdout = serde_json::to_vec(&json).unwrap();
+                    }
+                    MetadataMutation::AddMember(manifest) => {
+                        fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+                        fs::write(manifest, "").unwrap();
+                        let mut json: serde_json::Value = serde_json::from_slice(&output.stdout)
+                            .expect("staged metadata is valid JSON");
+                        json["packages"]
+                            .as_array_mut()
+                            .unwrap()
+                            .push(serde_json::json!({
+                                "id": "raced-member",
+                                "name": "raced-member",
+                                "manifest_path": manifest,
+                            }));
+                        json["workspace_members"]
+                            .as_array_mut()
+                            .unwrap()
+                            .push(serde_json::json!("raced-member"));
+                        output.stdout = serde_json::to_vec(&json).unwrap();
+                    }
+                    MetadataMutation::Malformed => {
+                        output.stdout = b"not json".to_vec();
+                    }
+                }
+            }
+            Ok(output)
+        }
+    }
+
+    impl CleanupRunner for MetadataMutationRunner {
+        fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput> {
+            CargoRunner::run(self, cwd, args)
+        }
+
+        fn run_with_env(
+            &self,
+            cwd: &Path,
+            args: &[OsString],
+            env: &[(OsString, OsString)],
+        ) -> io::Result<ProcessOutput> {
+            self.inner.run_with_env(cwd, args, env)
         }
     }
 
@@ -3934,6 +4236,7 @@ mod tests {
             "{}",
             row.detail
         );
+        assert_eq!(report.counters.proof_cargo_locate_calls, 0);
         assert!(runner.clean_calls().is_empty());
     }
 
@@ -4094,15 +4397,164 @@ mod tests {
         // ownership universe: 2 + 2 bounded metadata calls.
         assert_eq!(counters.proof_workspaces_refreshed, 4);
         assert_eq!(counters.proof_cargo_metadata_calls, 4);
-        assert_eq!(counters.proof_cargo_locate_calls, 4);
+        assert_eq!(counters.proof_cargo_locate_calls, 0);
         assert!(counters.proof_cargo_metadata_nanos > 0);
         assert!(counters.proof_source_activity_nanos > 0);
         let line = counters.proof_stats_line();
         assert!(line.contains("proof_metadata=4"), "{line}");
-        assert!(line.contains("proof_locate=4"), "{line}");
+        assert!(line.contains("proof_locate=0"), "{line}");
         assert!(counters.proof_timings_line().contains("proof_metadata="));
+        assert!(counters.proof_metadata_peak_concurrency >= 1);
         // The initial counters are not polluted by proof work.
         assert_eq!(counters.cargo_metadata_calls, 2);
         assert!(counters.stats_line().contains("metadata=2"));
+    }
+
+    #[test]
+    fn proof_refresh_parallelism_is_bounded_and_results_stay_deterministic() {
+        let d = tempfile::tempdir().unwrap();
+        let mut runner = StagedCargo::new();
+        let mut roots = Vec::new();
+        for index in 0..8 {
+            let root = ws_root(d.path(), &format!("parallel-{index}"));
+            let target = cargo_output(&root.join("target"), 1024 + index * 128);
+            runner.add(&root, target, None);
+            roots.push(root);
+        }
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        let runner = ParallelProbeRunner {
+            inner: runner,
+            active: std::sync::atomic::AtomicUsize::new(0),
+            peak: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let report = clean_with(
+            d.path(),
+            0,
+            &[],
+            CleanMode::Simulate,
+            &runner,
+            &NoopObserver,
+        )
+        .unwrap();
+        let peak = runner.peak.load(std::sync::atomic::Ordering::SeqCst);
+        let available = std::thread::available_parallelism().map_or(1, usize::from);
+        assert!(peak >= available.clamp(1, 4).min(2), "peak={peak}");
+        assert!(peak <= PROOF_REFRESH_CONCURRENCY_CAP, "peak={peak}");
+        assert_eq!(
+            report.counters.proof_metadata_peak_concurrency as usize,
+            peak
+        );
+        assert_eq!(report.counters.proof_workspaces_refreshed, 64);
+        assert_eq!(report.counters.proof_cargo_metadata_calls, 64);
+        assert_eq!(report.counters.proof_cargo_locate_calls, 0);
+        assert_eq!(report.results.len(), 8);
+        assert!(report.results.windows(2).all(|pair| {
+            pair[0].before_bytes >= pair[1].before_bytes
+                || pair[0].before_bytes == pair[1].before_bytes
+        }));
+        let roots_in_report: Vec<_> = report
+            .results
+            .iter()
+            .map(|row| row.display_path.clone())
+            .collect();
+        let mut expected: Vec<_> = roots
+            .into_iter()
+            .map(|root| {
+                (
+                    traverse::measure_single_target(&root.join("target")).bytes,
+                    canonical(&root),
+                )
+            })
+            .collect();
+        expected.sort_by(|(a_bytes, a_root), (b_bytes, b_root)| {
+            b_bytes.cmp(a_bytes).then_with(|| a_root.cmp(b_root))
+        });
+        assert_eq!(
+            roots_in_report,
+            expected
+                .into_iter()
+                .map(|(_, root)| root)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn sequential_and_parallel_refreshes_produce_the_same_workspace_graph_and_disposition() {
+        let d = tempfile::tempdir().unwrap();
+        let root_a = ws_root(d.path(), "parity-a");
+        let root_b = ws_root(d.path(), "parity-b");
+        let target_a = cargo_output(&root_a.join("target"), 4096);
+        let target_b = cargo_output(&root_b.join("target"), 2048);
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        let mut runner = StagedCargo::new();
+        runner.add(&root_a, target_a, None);
+        runner.add(&root_b, target_b, None);
+        let manifests = [root_a.join("Cargo.toml"), root_b.join("Cargo.toml")];
+        let mut initial_counters = ScanCounters::default();
+        let mut initial_diagnostics = Vec::new();
+        let initial = workspace::resolve_workspaces(
+            &manifests,
+            &runner,
+            &mut initial_counters,
+            &mut initial_diagnostics,
+            &NoopObserver,
+        );
+        let mut sequential_counters = ScanCounters::default();
+        let sequential =
+            refresh_proof_universe_with_limit(&initial, &runner, &mut sequential_counters, 1)
+                .unwrap();
+        let mut parallel_counters = ScanCounters::default();
+        let parallel =
+            refresh_proof_universe_with_limit(&initial, &runner, &mut parallel_counters, 4)
+                .unwrap();
+        assert_eq!(sequential, parallel);
+        assert_eq!(
+            sequential_counters.proof_cargo_metadata_calls,
+            parallel_counters.proof_cargo_metadata_calls
+        );
+        let sequential_groups = workspace::build_groups(&sequential);
+        let parallel_groups = workspace::build_groups(&parallel);
+        let signature = |groups: &[workspace::RawGroup]| {
+            groups
+                .iter()
+                .map(|group| {
+                    (
+                        group.physicals.clone(),
+                        group.covering.clone(),
+                        group.display.clone(),
+                        group.owners.clone(),
+                        group.ownership,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(signature(&sequential_groups), signature(&parallel_groups));
+        let clock_start = SystemTime::now() + Duration::from_secs(1);
+        let cutoff = clock_start.checked_sub(Duration::from_secs(300)).unwrap();
+        let mut seq_counters = ScanCounters::default();
+        let mut seq_diagnostics = Vec::new();
+        let sequential_disposition = workspace::analyze_groups(
+            &sequential,
+            sequential_groups,
+            clock_start,
+            cutoff,
+            Duration::from_secs(300),
+            &mut seq_counters,
+            &mut seq_diagnostics,
+            &NoopObserver,
+        );
+        let mut par_counters = ScanCounters::default();
+        let mut par_diagnostics = Vec::new();
+        let parallel_disposition = workspace::analyze_groups(
+            &parallel,
+            parallel_groups,
+            clock_start,
+            cutoff,
+            Duration::from_secs(300),
+            &mut par_counters,
+            &mut par_diagnostics,
+            &NoopObserver,
+        );
+        assert_eq!(sequential_disposition, parallel_disposition);
     }
 }
