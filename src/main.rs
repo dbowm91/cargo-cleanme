@@ -78,17 +78,22 @@ fn run() -> Result<i32, AppError> {
             };
             // Accept a relative CLI root for ergonomics, but keep the
             // cleanup safety boundary absolute.
-            let roots = if let Some(root) = root {
-                vec![cli::absolutize_root(&root)]
+            let (roots, state_generation) = if let Some(root) = root {
+                (vec![cli::absolutize_root(&root)], None)
             } else if full {
                 let code = run_scan(None, true, &path, no_progress, stats)?;
                 if code != 0 {
                     return Ok(code);
                 }
-                cargo_cleanme::discovery_state::load_default()
-                    .map_err(AppError::Config)?
-                    .map(|s| s.learned_roots.into_iter().map(|r| r.path).collect())
-                    .unwrap_or_default()
+                let state =
+                    cargo_cleanme::discovery_state::load_default().map_err(AppError::Config)?;
+                let generation = state.as_ref().and_then(|s| s.last_full_at);
+                (
+                    state
+                        .map(|s| s.learned_roots.into_iter().map(|r| r.path).collect())
+                        .unwrap_or_default(),
+                    generation,
+                )
             } else if known {
                 let policy = cargo_cleanme::policy::resolve(
                     cargo_cleanme::domain::ScanRequest {
@@ -97,10 +102,15 @@ fn run() -> Result<i32, AppError> {
                     },
                     &config.scan,
                 )?;
-                match policy.scope {
+                let roots = match policy.scope {
                     cargo_cleanme::domain::ScanScope::Routine(roots) => roots,
                     _ => Vec::new(),
-                }
+                };
+                let generation = cargo_cleanme::discovery_state::load_default()
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.last_full_at);
+                (roots, generation)
             } else {
                 return Err(AppError::Config(
                     "clean requires ROOT, --known, or --full".into(),
@@ -123,6 +133,9 @@ fn run() -> Result<i32, AppError> {
                 &renderer,
             )?;
             renderer.finish_and_clear();
+            if let Some(generation) = state_generation {
+                println!("state generation last_full_at={generation} (Unix seconds)");
+            }
             println!(
                 "combined roots {}\n{}",
                 roots

@@ -91,7 +91,7 @@ fn config_edit_uses_fake_editor_process_and_keeps_invalid_edits() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config path with spaces.toml");
     let editor = dir.path().join(if cfg!(windows) {
-        "fake editor.cmd"
+        "fake editor.ps1"
     } else {
         "fake editor.sh"
     });
@@ -104,9 +104,24 @@ fn config_edit_uses_fake_editor_process_and_keeps_invalid_edits() {
         fs::set_permissions(&editor, mode).unwrap();
     }
     #[cfg(windows)]
-    fs::write(&editor, "@echo off\r\nif \"%CLEANME_EDITOR_MODE%\"==\"invalid\" echo invalid = [> \"%~1\"\r\nif \"%CLEANME_EDITOR_MODE%\"==\"valid\" (echo [scan]^&echo recency_seconds = 42^) > \"%~1\"\r\nif \"%CLEANME_EDITOR_MODE%\"==\"fail\" exit /b 17\r\nexit /b 0\r\n").unwrap();
+    fs::write(
+        &editor,
+        r#"param([string]$ConfigPath)
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+switch ($env:CLEANME_EDITOR_MODE) {
+  'invalid' { [System.IO.File]::WriteAllText($ConfigPath, 'invalid = [', $utf8) }
+  'valid' { [System.IO.File]::WriteAllText($ConfigPath, "[scan]`nrecency_seconds = 42`n", $utf8) }
+  'fail' { exit 17 }
+}
+exit 0
+"#,
+    )
+    .unwrap();
     let visual = if cfg!(windows) {
-        format!("cmd.exe /c \"{}\"", editor.display())
+        format!(
+            "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{}\"",
+            editor.display()
+        )
     } else {
         format!("\"{}\" --wait", editor.display())
     };
