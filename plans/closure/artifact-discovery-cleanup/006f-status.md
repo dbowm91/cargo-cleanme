@@ -4,7 +4,7 @@ Plan: `plans/implementation/artifact-discovery-cleanup/006f-exhaustive-traversal
 
 Disposition: **conditionally closed**
 
-Implementation commit: recorded in the enclosing M006F/M007 implementation commit.
+Implementation commit: `99b2bff` (`Implement adaptive discovery and qualify traversal hot path`).
 
 Date: 2026-10-03
 

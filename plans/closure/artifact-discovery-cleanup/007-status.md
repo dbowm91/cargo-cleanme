@@ -4,7 +4,7 @@ Plan: `plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-
 
 Disposition: **blocked**
 
-Implementation commit: partial scaffolding is in the enclosing implementation commit; no M007 completion commit is claimed.
+Implementation commit: partial scaffolding is in `99b2bff` (`Implement adaptive discovery and qualify traversal hot path`); no M007 completion commit is claimed.
 
 Date: 2026-10-03
 
