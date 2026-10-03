@@ -182,7 +182,7 @@ Shared, uncertain, and externally unproven physical output remains inventory-onl
 
 Roadmap milestone: M006.
 
-Status: ready.
+Status: active.
 
 Objective:
 
@@ -192,6 +192,8 @@ Implementation sequence:
 
 1. M006A — global scan pruning, platform traversal policy, one-pool multi-root discovery, and workspace member/output path normalization.
 2. M006B — cleanup proof resolution efficiency: direct Cargo metadata refresh from known root manifests, followed by evidence-gated bounded refresh concurrency if needed.
+3. M006C — bounded global traversal throughput without narrowing writable project-bearing roots (conditionally closed; reference scan still exceeds 120 seconds).
+4. M006D — global scan completion qualification, profiling traversal and report-finalization costs while preserving the full discovery and safety contract.
 
 M006A and M006B may proceed in parallel.
 
@@ -204,8 +206,9 @@ Hard constraints:
 
 Exit condition:
 
-- M006A closes with a successful no-argument reference-host scan inside the prior 120-second timeout and cross-platform path/activity qualification;
+- M006A's global policy and path/activity work is qualified across platforms; M006D owns the still-open 120-second no-argument reference-host scan bound;
 - M006B closes with zero redundant proof locate-project calls, material real-tree improvement, and the full C003/C004 regression matrix green.
+- M006C's and M006D's traversal changes preserve the full manifest set and global reachability; M006D closes only when the exact no-argument reference-host scan completes inside 120 seconds.
 
 ## Phase 8 — Selective cleanup and policy
 
