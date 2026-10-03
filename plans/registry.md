@@ -14,7 +14,7 @@ Accepted architecture decisions:
 - plans/adr/001-workspace-output-ownership-and-cleanup-authorization.md
 
 Planning framework baseline: 97dee9fa64868534cedf3a9310e7160335a91be2
-Current repository planning baseline: de99119
+Current repository planning baseline: 5af882122b4781e8a927d34a3792cbfd3c0d12cb
 
 ## Status vocabulary
 
@@ -32,7 +32,7 @@ Current repository planning baseline: de99119
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M005 complete (C002 closed) | C002 closed; M005 again release-qualified. No blocked milestones. |
+| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | C003 ready | Post-C002 audit found workspace cleanup-unit atomicity and full ownership-graph revalidation defects. |
 
 ## Implementation handoffs
 
@@ -45,11 +45,12 @@ Current repository planning baseline: de99119
 | Artifact discovery and cleanup | C001 public-contract/MSRV/traversal reconciliation | **closed** | plans/implementation/artifact-discovery-cleanup/c001-public-contract-msrv-traversal-reconciliation.md | Closure: plans/closure/artifact-discovery-cleanup/c001-status.md. |
 | Artifact discovery and cleanup | M005A workspace output resolution, fail-fast scan, inline progress | **closed** | plans/implementation/artifact-discovery-cleanup/005a-workspace-output-resolution-fail-fast-progress.md | Closure: plans/closure/artifact-discovery-cleanup/005a-status.md. |
 | Artifact discovery and cleanup | M005B authorized redirected cleanup + full simulation | **closed** | plans/implementation/artifact-discovery-cleanup/005b-authorized-redirected-cleanup-and-dryrun.md | Historical closure: plans/closure/artifact-discovery-cleanup/005b-status.md; post-closure defects tracked by C002. |
-| Artifact discovery and cleanup | C002 M005 ownership safety, simulation parity, progress, global qualification | **closed** | plans/implementation/artifact-discovery-cleanup/c002-m005-safety-progress-performance-reconciliation.md | Closure: plans/closure/artifact-discovery-cleanup/c002-status.md. M005 again release-qualified. |
+| Artifact discovery and cleanup | C002 M005 ownership safety, simulation parity, progress, global qualification | **closed** | plans/implementation/artifact-discovery-cleanup/c002-m005-safety-progress-performance-reconciliation.md | Historical closure: plans/closure/artifact-discovery-cleanup/c002-status.md; post-closure cleanup-unit defects tracked by C003. |
+| Artifact discovery and cleanup | C003 workspace cleanup-unit atomicity + full ownership-graph revalidation | **ready** | plans/implementation/artifact-discovery-cleanup/c003-workspace-cleanup-unit-atomicity.md | Start here. Destructive M005 release qualification is reopened until C003 closes. |
 
 ## Immediate handoff
 
-C002 closed; M005 release qualification unblocked.
+Implement C003.
 
 Expected order:
 
@@ -59,11 +60,15 @@ C001 -> closed
 ADR 001 -> accepted
 M005A -> closed
 M005B -> historically closed
-C002 ownership/simulation/preflight/progress/performance correction -> closed
-M005 complete (M005A + M005B historical + C002) -> release-qualified
+C002 -> historically closed
+C003 workspace cleanup-unit atomicity / full ownership graph -> ready
+C003 -> closure
+M005 destructive release qualification -> only after C003 closure
 ~~~
 
-Post-M005 audit findings (now corrected by C002 with history preserved): ExternalUnproven authorization violating ADR 001, incomplete Simulate/pre-spawn gate parity, incomplete final build/output preflight, unqualified multi-line progress/cleanup determinate state, redundant per-member locate calls, and unqualified generic-scan performance.
+Post-C002 audit finding: cargo-cleanme authorizes and reports one PhysicalOutputGroup at a time, while one Cargo clean invocation can affect the workspace's complete target/build OutputSet. C003 restores workspace-level destructive atomicity and fresh bounded ownership-graph proof.
+
+The generic no-argument scan performance/pruning issue remains separate and is not part of C003.
 
 M005 safety boundary (restored by C002):
 

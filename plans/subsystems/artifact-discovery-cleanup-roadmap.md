@@ -2,7 +2,7 @@
 
 Status: active
 
-Repository audit baseline: de99119
+Repository audit baseline: 5af882122b4781e8a927d34a3792cbfd3c0d12cb
 
 Canonical references:
 
@@ -120,7 +120,10 @@ M005A workspace/output resolution + fail-fast progress [closed]
 M005B authorized redirected cleanup + --dryrun [historically closed]
                    |
                    v
-C002 M005 safety/progress/performance reconciliation [closed]
+C002 M005 safety/progress/performance reconciliation [historically closed]
+                   |
+                   v
+C003 cleanup-unit atomicity/full ownership graph [ready]
 ~~~
 
 ## 6. Milestone M001 — Foundation, CLI, config, and domain contracts
@@ -228,7 +231,7 @@ C001 is a hard implementation-baseline dependency for M005. M005 design research
 
 ## 10. Milestone M005 — Workspace-aware redirected/shared output
 
-Status: closed. ADR 001 accepted. M005A/M005B historical closures remain recorded; corrective C002 is closed, so M005 is again release-qualified for destructive use.
+Status: corrective required. ADR 001 accepted. M005A/M005B/C002 historical closures remain recorded; C003 is ready and reopens destructive release qualification.
 
 Accepted decision:
 
@@ -304,7 +307,26 @@ Outcome:
 - detailed scan counters moved behind `--stats`;
 - generic scan qualified via synthetic/global-like fixture plus representative real tree (full `/` impractical on this host; conditional reason recorded).
 
-C002 does not rewrite the M005A/M005B closure history. M005 is again release-qualified for destructive use now that C002 is closed.
+C002 does not rewrite the M005A/M005B closure history. Its historical closure remains preserved.
+
+## 10B. Corrective C003 — Workspace cleanup-unit atomicity and full ownership-graph revalidation
+
+Status: ready.
+
+Plan:
+
+- plans/implementation/artifact-discovery-cleanup/c003-workspace-cleanup-unit-atomicity.md
+
+Purpose:
+
+- align the destructive authorization/reporting unit with one workspace-level Cargo clean invocation and the complete resolved target/build OutputSet;
+- require every physical output group affected by that invocation to be PrivateBounded and authorized before any mutation;
+- prevent a private target group from carrying an ExternalUnproven, Shared, Uncertain, or unauthorized sibling build directory into Cargo clean;
+- re-resolve the complete bounded workspace ownership universe under clean ROOT immediately before mutation so another discovered workspace moving into overlap is detected;
+- measure and report one deduplicated pre/post output union per Cargo invocation;
+- accumulate final-proof Cargo work into cleanup --stats.
+
+C003 keeps generic global-scan performance as a separate future optimization line. M005 destructive release qualification is reopened until C003 closes.
 
 ## 11. Cross-cutting reliability concerns
 

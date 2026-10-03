@@ -249,3 +249,24 @@ A non-mutating cleanup mode that may invoke `cargo clean --dry-run --verbose` fo
 A cargo-cleanme debugging/performance mode that executes cargo-cleanme's own discovery, Cargo resolution/metadata, filtering, sizing, authorization, revalidation, progress, and final reporting but invokes no Cargo `clean` command.
 
 Simulation reports would-clean/estimated bytes, never recovered bytes.
+
+
+## 33. Cleanup unit
+
+The destructive-operation unit corresponding to exactly one Cargo workspace cleanup invocation.
+
+A cleanup unit contains one resolved workspace, its complete OutputSet, and every PhysicalOutputGroup the Cargo invocation can affect.
+
+PhysicalOutputGroup remains the unit for physical deduplication and ownership classification. CleanupUnit is the unit for destructive authorization, progress, Cargo invocation, and cleanup reporting.
+
+A cleanup unit is eligible only when every affected physical group independently satisfies the destructive ownership and authorization boundary. No partial target-only/build-only cleanup is implied.
+
+One cleanup unit produces at most one Cargo clean invocation and one cleanup result.
+
+## 34. Cleanup ownership universe
+
+The complete set of Cargo workspaces discovered within the explicit clean ROOT for one cleanup invocation.
+
+Immediately before destructive execution, cargo-cleanme may re-resolve this bounded set and rebuild the physical output graph to prove that the candidate CleanupUnit has not become shared with another discovered workspace.
+
+This bounded universe does not prove that an external cache has no owners outside clean ROOT; such output remains ExternalUnproven under ADR 001.

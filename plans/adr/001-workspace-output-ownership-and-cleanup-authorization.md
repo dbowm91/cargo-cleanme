@@ -196,3 +196,19 @@ Rejected because it would bypass Cargo locking/cleanup semantics and weaken M004
 ### Full-screen ratatui/crossterm UI for progress
 
 Rejected for this milestone. The requirement is transient status, not an interactive application. A lightweight inline renderer has lower dependency, terminal-state, and performance risk.
+
+
+## C003 clarification — cleanup atomicity across the complete OutputSet
+
+Clarification date: 2026-10-02.
+
+ADR 001 already establishes the workspace as the logical ownership unit and requires cleanup to re-resolve the workspace and OutputSet. C003 makes the destructive consequence explicit:
+
+- PhysicalOutputGroup remains the unit for physical deduplication, activity, and ownership classification.
+- One Cargo clean invocation is authorized as a workspace-level CleanupUnit covering the complete resolved OutputSet that the invocation can affect.
+- Every physical group touched by that OutputSet must independently satisfy the destructive ownership and authorization boundary before Cargo clean may run.
+- A PrivateBounded target group cannot authorize a sibling build group that is ExternalUnproven, Shared, Uncertain, or unauthorized.
+- Final revalidation must rebuild ownership against the complete bounded workspace set discovered under clean ROOT, not only the current workspace, so another discovered workspace moving into overlap is detected.
+- One Cargo invocation produces one cleanup result and one deduplicated pre/post union measurement.
+
+This clarifies the original decision; it does not authorize new external/shared cleanup behavior.

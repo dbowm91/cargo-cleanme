@@ -312,7 +312,9 @@ Before cleaning a candidate it MUST:
 6. measure disk state after cleanup;
 7. report attempted, cleaned, skipped, failed, and actually recovered bytes separately;
 8. preserve physical target/build output identity so overlapping roots are measured once;
-9. refuse shared, uncertain, or unauthorized external output.
+9. refuse shared, uncertain, or unauthorized external output;
+10. authorize destructive cleanup at the workspace invocation boundary: every physical output group that one Cargo clean invocation can affect through the resolved OutputSet MUST pass ownership, authorization, activity, and path-safety checks before any mutation;
+11. produce one cleanup result and one deduplicated pre/post union measurement per Cargo workspace cleanup invocation.
 
 A later `--dryrun` simulation mode MAY exercise discovery, resolution, filtering, sizing, authorization, revalidation, progress, and final reporting while prohibiting every `cargo clean` subprocess. Such simulation output is estimated/would-clean space, not recovered bytes.
 
