@@ -4662,6 +4662,46 @@ mod tests {
     }
 
     #[test]
+    fn combined_private_roots_keep_preview_simulate_execute_parity() {
+        let d = tempfile::tempdir().unwrap();
+        let root_a = ws_root(d.path(), "parity-a");
+        let root_b = ws_root(d.path(), "parity-b");
+        let target_a = cargo_output(&root_a.join("target"), 4096);
+        let target_b = cargo_output(&root_b.join("target"), 2048);
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        let roots = [root_a.clone(), root_b.clone()];
+        for (mode, expected) in [
+            (CleanMode::Preview, CleanOutcome::Previewed),
+            (CleanMode::Simulate, CleanOutcome::Simulated),
+            (CleanMode::Execute, CleanOutcome::Cleaned),
+        ] {
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, target_a.clone(), None);
+            runner.add(&root_b, target_b.clone(), None);
+            let report = clean_with_roots(&roots, 0, &[], mode, &runner, &NoopObserver).unwrap();
+            assert_eq!(report.results.len(), 2, "{mode:?}");
+            assert!(
+                report.results.iter().all(|r| r.outcome == expected),
+                "{mode:?}: {:?}",
+                report.results
+            );
+            let calls = runner.clean_calls();
+            assert_eq!(
+                calls.len(),
+                if mode == CleanMode::Simulate { 0 } else { 2 },
+                "{mode:?}"
+            );
+            if mode == CleanMode::Preview {
+                assert!(
+                    calls
+                        .iter()
+                        .all(|(_, args, _)| args.iter().any(|a| a == "--dry-run"))
+                );
+            }
+        }
+    }
+
+    #[test]
     fn combined_roots_classify_cross_root_output_as_shared_in_every_mode() {
         let d = tempfile::tempdir().unwrap();
         let root_a = ws_root(d.path(), "shared-a");
