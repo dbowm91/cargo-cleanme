@@ -33,7 +33,7 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M006E state-publication qualification | M006A/C/D retain historical conditional closure evidence; M006B and M006F are closed. M006E is conditional; M007 is blocked by M006E state publication and multi-root proof scope. M005 remains closed/green. |
+| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | C005 M006E reconciliation corrective | M006A/C/D retain historical conditional closure evidence; M006B and M006F are closed. C005 is ready to close M006E state/config gaps. C006 is ready after C005 to close M007's combined-root proof gap. M005 remains closed/green. |
 
 ## Implementation handoffs
 
@@ -56,11 +56,13 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 | Artifact discovery and cleanup | M006E adaptive Routine/Full discovery + state/config UX | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/006e-adaptive-routine-full-discovery-state.md | Closure: plans/closure/artifact-discovery-cleanup/006e-status.md. Full traversal completes; uncertainty in manifest/workspace resolution prevents publishing a reconciled generation. |
 | Artifact discovery and cleanup | M006E old scope/latency decision | **superseded** | plans/implementation/artifact-discovery-cleanup/006e-global-scan-scope-and-latency-policy.md | Replaced by ADR 002 and the adaptive-discovery M006E plan. |
 | Artifact discovery and cleanup | M006F exhaustive traversal hot-path qualification | **closed** | plans/implementation/artifact-discovery-cleanup/006f-exhaustive-traversal-hot-path-qualification.md | Closure: plans/closure/artifact-discovery-cleanup/006f-status.md. Hosted Linux/macOS/Windows and Rust 1.89 CI passed in run 37139155641. |
-| Artifact discovery and cleanup | M007 learned/full cleanup orchestration | **blocked** | plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-orchestration.md | Hard dependency M006E is conditional; per-root C003/C004 proofs cannot qualify cross-root redirected-output ownership. Multi-root Execute fails closed. |
+| Artifact discovery and cleanup | M007 learned/full cleanup orchestration | **blocked** | plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-orchestration.md | Hard dependency M006E is conditional; per-root C003/C004 proofs cannot qualify cross-root redirected-output ownership. Multi-root Execute fails closed. Corrective C006 owns the combined-root proof. |
+| Artifact discovery and cleanup | C005 uncertainty-aware state reconciliation + config/edit hardening | **ready** | plans/implementation/artifact-discovery-cleanup/c005-uncertainty-aware-state-reconciliation-and-config-edit-hardening.md | Closes M006E's all-or-nothing state publication, state diagnostic/collapse gaps, and remaining cross-platform config-edit qualification. |
+| Artifact discovery and cleanup | C006 combined-root cleanup ownership universe | **ready after C005** | plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md | Generalizes C003/C004 proof across every selected known/full root and restores Preview/Simulate/Execute parity. M007 closure depends on it. |
 
 ## Immediate handoff
 
-M006A, M006C, and M006D remain conditionally closed as historical exhaustive-scan evidence; M006B and M006F are closed. ADR 002 resolved the product decision. M006E is conditionally closed pending complete reconciliation/state-publication evidence. M007 remains blocked pending M006E and a cross-root proof boundary.
+M006A, M006C, and M006D remain conditionally closed as historical exhaustive-scan evidence; M006B and M006F are closed. ADR 002 resolved the product decision. M006E is conditionally closed and now has ready corrective C005. M007 remains blocked and has corrective C006 staged behind C005.
 
 Expected order:
 
@@ -73,14 +75,17 @@ M006D global scan completion qualification -> conditionally closed (historical e
 ADR 002 adaptive Routine/Full discovery -> accepted
 M006E adaptive Routine/Full discovery + state/config edit -> conditionally closed
 M006F exhaustive traversal hot-path qualification -> closed
-M007 learned/full cleanup orchestration -> blocked
+C005 uncertainty-aware state reconciliation + config/edit hardening -> ready
+M006E -> close after C005 evidence
+C006 combined-root cleanup ownership universe -> ready after C005
+M007 learned/full cleanup orchestration -> close after C006 evidence
 ~~~
 
-M006E owns the next implementation handoff: bounded Routine roots, explicit `scan --full`, exact project inventory, learned-root derivation, successful-Full-only retention pruning, 30-day configurable retention, atomic machine-local state, automatic config creation, removal of `config init`, and `config edit` with VISUAL/EDITOR/fallback resolution.
+C005 is the immediate implementation handoff. It replaces the global `diagnostics.is_empty()` publication gate with path-scoped uncertainty, preserves positive manifest evidence across Cargo resolution failures, persists containment-collapsed learned roots, hardens state diagnostics/publication, and completes cross-platform `config edit` qualification.
 
-M006F owns the remaining implementation-side exhaustive traversal qualification. It does not own scope narrowing.
+C006 follows C005. It builds one selected-root ownership universe for `clean --known` and `clean --full`, applies C004 completeness across all selected roots, refreshes that combined universe before each CleanupUnit disposition, and makes Preview/Simulate/Execute share one safety result.
 
-M007 is intentionally separate because using learned/full discovery to select cleanup scopes must preserve the existing C003/C004 bounded fresh-proof model.
+M006F is closed and does not own further scope narrowing.
 
 M006B continues to own cleanup proof subprocess cost and MUST NOT reuse one stale ownership-universe snapshot across destructive candidates.
 
