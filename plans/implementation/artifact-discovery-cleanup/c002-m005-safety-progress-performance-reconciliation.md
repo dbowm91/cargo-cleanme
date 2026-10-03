@@ -1,6 +1,8 @@
 # Corrective C002 — M005 Ownership Safety, Simulation Parity, Progress, and Global-Scan Qualification
 
-Status: ready
+Status: closed
+
+Closure: `plans/closure/artifact-discovery-cleanup/c002-status.md`
 
 Repository baseline: 8177d82cb4d6abf313665e169ca2bf1bbbc6e0a7
 

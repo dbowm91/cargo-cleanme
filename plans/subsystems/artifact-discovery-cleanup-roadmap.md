@@ -2,7 +2,7 @@
 
 Status: active
 
-Repository audit baseline: 8177d82cb4d6abf313665e169ca2bf1bbbc6e0a7
+Repository audit baseline: 35705a2
 
 Canonical references:
 
@@ -120,7 +120,7 @@ M005A workspace/output resolution + fail-fast progress [closed]
 M005B authorized redirected cleanup + --dryrun [historically closed]
                    |
                    v
-C002 M005 safety/progress/performance reconciliation [ready]
+C002 M005 safety/progress/performance reconciliation [closed]
 ~~~
 
 ## 6. Milestone M001 — Foundation, CLI, config, and domain contracts
@@ -228,7 +228,7 @@ C001 is a hard implementation-baseline dependency for M005. M005 design research
 
 ## 10. Milestone M005 — Workspace-aware redirected/shared output
 
-Status: corrective required. ADR 001 accepted. M005A/M005B historical closures remain recorded; post-closure C002 is ready and blocks M005 release qualification.
+Status: closed. ADR 001 accepted. M005A/M005B historical closures remain recorded; corrective C002 is closed, so M005 is again release-qualified for destructive use.
 
 Accepted decision:
 
@@ -284,23 +284,27 @@ M005 does not parse Cargo-private build-cache layout and does not add selective 
 
 ## 10A. Corrective C002 — M005 safety, progress, and global qualification
 
-Status: ready.
+Status: closed.
 
 Plan:
 
 - plans/implementation/artifact-discovery-cleanup/c002-m005-safety-progress-performance-reconciliation.md
 
-Purpose:
+Closure:
 
-- restore ADR 001 so ExternalUnproven output is inventory-only and authorization never substitutes for ownership proof;
-- make --dryrun consume the same non-mutating pre-spawn gates as Execute;
-- revalidate target, build, physical group, authorization, marker, source activity, and output activity immediately before destructive spawn;
-- coordinate the inline multi-line progress renderer and expose determinate cleanup totals through the observer contract;
-- seed workspace-member resolution from Cargo metadata so multi-member workspaces do not run one locate subprocess per manifest;
-- move detailed scan counters behind an explicit stats/debug flag;
-- qualify the generic no-argument scan on a representative developer host and optimize further only from measured evidence.
+- plans/closure/artifact-discovery-cleanup/c002-status.md
 
-C002 does not rewrite the M005A/M005B closure history. M005 should not be treated as release-qualified for destructive use until C002 closes.
+Outcome:
+
+- restored ADR 001 so ExternalUnproven output is inventory-only and authorization never substitutes for ownership proof;
+- `--dryrun` now consumes the same non-mutating pre-spawn gates as Execute through a single final `ExecutionProof`;
+- target, build, physical group, authorization, marker, source activity, and output activity are revalidated immediately before destructive spawn;
+- inline multi-line progress is coordinated via one `MultiProgress` with determinate totals through the observer contract;
+- workspace-member resolution is seeded from Cargo metadata (N-member → 1 locate + 1 metadata);
+- detailed scan counters moved behind `--stats`;
+- generic scan qualified via synthetic/global-like fixture plus representative real tree (full `/` impractical on this host; conditional reason recorded).
+
+C002 does not rewrite the M005A/M005B closure history. M005 is again release-qualified for destructive use now that C002 is closed.
 
 ## 11. Cross-cutting reliability concerns
 

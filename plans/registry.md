@@ -14,7 +14,7 @@ Accepted architecture decisions:
 - plans/adr/001-workspace-output-ownership-and-cleanup-authorization.md
 
 Planning framework baseline: 97dee9fa64868534cedf3a9310e7160335a91be2
-Current repository planning baseline: 8177d82cb4d6abf313665e169ca2bf1bbbc6e0a7
+Current repository planning baseline: 35705a2
 
 ## Status vocabulary
 
@@ -32,7 +32,7 @@ Current repository planning baseline: 8177d82cb4d6abf313665e169ca2bf1bbbc6e0a7
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | C002 ready | Post-M005 source audit found ownership, simulation/preflight, progress, and generic-scan qualification defects. |
+| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M005 complete (C002 closed) | C002 closed; M005 again release-qualified. No blocked milestones. |
 
 ## Implementation handoffs
 
@@ -45,11 +45,11 @@ Current repository planning baseline: 8177d82cb4d6abf313665e169ca2bf1bbbc6e0a7
 | Artifact discovery and cleanup | C001 public-contract/MSRV/traversal reconciliation | **closed** | plans/implementation/artifact-discovery-cleanup/c001-public-contract-msrv-traversal-reconciliation.md | Closure: plans/closure/artifact-discovery-cleanup/c001-status.md. |
 | Artifact discovery and cleanup | M005A workspace output resolution, fail-fast scan, inline progress | **closed** | plans/implementation/artifact-discovery-cleanup/005a-workspace-output-resolution-fail-fast-progress.md | Closure: plans/closure/artifact-discovery-cleanup/005a-status.md. |
 | Artifact discovery and cleanup | M005B authorized redirected cleanup + full simulation | **closed** | plans/implementation/artifact-discovery-cleanup/005b-authorized-redirected-cleanup-and-dryrun.md | Historical closure: plans/closure/artifact-discovery-cleanup/005b-status.md; post-closure defects tracked by C002. |
-| Artifact discovery and cleanup | C002 M005 ownership safety, simulation parity, progress, global qualification | **ready** | plans/implementation/artifact-discovery-cleanup/c002-m005-safety-progress-performance-reconciliation.md | Start here. Corrective must close before M005 is again considered release-qualified. |
+| Artifact discovery and cleanup | C002 M005 ownership safety, simulation parity, progress, global qualification | **closed** | plans/implementation/artifact-discovery-cleanup/c002-m005-safety-progress-performance-reconciliation.md | Closure: plans/closure/artifact-discovery-cleanup/c002-status.md. M005 again release-qualified. |
 
 ## Immediate handoff
 
-Implement C002.
+C002 closed; M005 release qualification unblocked.
 
 Expected order:
 
@@ -59,17 +59,17 @@ C001 -> closed
 ADR 001 -> accepted
 M005A -> closed
 M005B -> historically closed
-C002 ownership/simulation/preflight/progress/performance correction -> ready
-C002 -> closure
-M005 release qualification -> only after C002 closure
+C002 ownership/simulation/preflight/progress/performance correction -> closed
+M005 complete (M005A + M005B historical + C002) -> release-qualified
 ~~~
 
-Post-M005 audit findings include: ExternalUnproven authorization violating ADR 001, incomplete Simulate/pre-spawn gate parity, incomplete final build/output preflight, unqualified multi-line progress/cleanup determinate state, redundant per-member locate calls, and unqualified generic-scan performance.
+Post-M005 audit findings (now corrected by C002 with history preserved): ExternalUnproven authorization violating ADR 001, incomplete Simulate/pre-spawn gate parity, incomplete final build/output preflight, unqualified multi-line progress/cleanup determinate state, redundant per-member locate calls, and unqualified generic-scan performance.
 
-M005 safety boundary:
+M005 safety boundary (restored by C002):
 
 - Cargo resolves workspace/output configuration.
-- Shared, uncertain, and external-unproven physical output is inventory-only.
-- External private output needs an explicit cleanup authorization boundary.
-- Progress UI is transient stderr state and is cleared before deterministic final stdout.
-- `--dryrun` in M005B runs the full cargo-cleanme path but invokes no Cargo clean command.
+- Only `PrivateBounded` may reach Cargo cleanup; shared, uncertain, and external-unproven physical output is inventory-only under any authorization configuration.
+- `cleanup.allowed_output_roots` is location authorization only for already-private groups and never manufactures ownership proof.
+- Progress UI is transient stderr state (one coordinated `MultiProgress`, determinate via observer contract) and is cleared before deterministic final stdout.
+- `--dryrun` runs the full decision path with all non-mutating gates but invokes no Cargo clean command.
+- Detailed counters/timings are opt-in via `--stats` (`--no-progress --stats` canonical).
