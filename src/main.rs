@@ -21,21 +21,50 @@ fn run() -> Result<i32, AppError> {
         Some(Command::Config { command }) => {
             match command {
                 ConfigCommand::Path => println!("{}", path.display()),
-                ConfigCommand::Init { force } => {
-                    config::init(&path, force)?;
-                    println!("created {}", path.display())
+                ConfigCommand::Show => {
+                    println!("{}", config::show(&config::load_or_create(&path)?)?)
                 }
-                ConfigCommand::Show => println!("{}", config::show(&config::load(&path)?)?),
+                ConfigCommand::Edit => {
+                    config::ensure_exists(&path)?;
+                    let (program, args) =
+                        cargo_cleanme::editor::resolve_editor().map_err(AppError::Config)?;
+                    let status = std::process::Command::new(&program)
+                        .args(args)
+                        .arg(&path)
+                        .status()
+                        .map_err(|e| {
+                            AppError::Config(format!(
+                                "cannot launch editor {}: {e}",
+                                program.display()
+                            ))
+                        })?;
+                    if !status.success() {
+                        eprintln!(
+                            "cargo-cleanme: editor exited with {status}; config was not reverted: {}",
+                            path.display()
+                        );
+                        return Ok(status.code().unwrap_or(1));
+                    }
+                    config::load(&path).map_err(|e| {
+                        AppError::Config(format!(
+                            "edited config {} is invalid: {e}",
+                            path.display()
+                        ))
+                    })?;
+                    println!("edited {}", path.display());
+                }
             }
             Ok(0)
         }
         Some(Command::Clean {
             root,
+            known,
+            full,
             dry_run,
             dryrun,
             yes,
         }) => {
-            let config = config::load(&path)?;
+            let config = config::load_or_create(&path)?;
             // Distinct spellings, distinct semantics:
             // `--dry-run` (Cargo preview, default) vs `--dryrun` (simulation).
             let mode = if yes {
@@ -49,12 +78,54 @@ fn run() -> Result<i32, AppError> {
             };
             // Accept a relative CLI root for ergonomics, but keep the
             // cleanup safety boundary absolute.
-            let effective_root = cli::absolutize_root(&root);
+            let (roots, state_generation) = if let Some(root) = root {
+                (vec![cli::absolutize_root(&root)], None)
+            } else if full {
+                let code = run_scan(None, true, &path, no_progress, stats)?;
+                if code != 0 {
+                    return Ok(code);
+                }
+                let state =
+                    cargo_cleanme::discovery_state::load_default().map_err(AppError::Config)?;
+                let generation = state.as_ref().and_then(|s| s.last_full_at);
+                (
+                    state
+                        .map(|s| s.learned_roots.into_iter().map(|r| r.path).collect())
+                        .unwrap_or_default(),
+                    generation,
+                )
+            } else if known {
+                let policy = cargo_cleanme::policy::resolve(
+                    cargo_cleanme::domain::ScanRequest {
+                        cli_root: None,
+                        full: false,
+                    },
+                    &config.scan,
+                )?;
+                let roots = match policy.scope {
+                    cargo_cleanme::domain::ScanScope::Routine(roots) => roots,
+                    _ => Vec::new(),
+                };
+                let generation = cargo_cleanme::discovery_state::load_default()
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.last_full_at);
+                (roots, generation)
+            } else {
+                return Err(AppError::Config(
+                    "clean requires ROOT, --known, or --full".into(),
+                ));
+            };
+            let roots = collapse_roots(roots);
+            if roots.is_empty() {
+                println!("no bounded cleanup roots are known; no cleanup commands were run");
+                return Ok(0);
+            }
             let show = cargo_cleanme::progress::should_show_progress(no_progress);
             let renderer = cargo_cleanme::progress::IndicatifRenderer::new(!show);
             let wall_start = std::time::Instant::now();
-            let report = cargo_cleanme::cleanup::clean_with(
-                &effective_root,
+            let report = cargo_cleanme::cleanup::clean_with_roots(
+                &roots,
                 config.scan.recency_seconds,
                 &config.cleanup.allowed_output_roots,
                 mode,
@@ -62,7 +133,18 @@ fn run() -> Result<i32, AppError> {
                 &renderer,
             )?;
             renderer.finish_and_clear();
-            println!("{}", report.render());
+            if let Some(generation) = state_generation {
+                println!("state generation last_full_at={generation} (Unix seconds)");
+            }
+            println!(
+                "combined roots {}\n{}",
+                roots
+                    .iter()
+                    .map(|r| r.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                report.render()
+            );
             if stats {
                 let elapsed = wall_start.elapsed();
                 // C003 §7.6: cleanup --stats must account for the final
@@ -79,12 +161,28 @@ fn run() -> Result<i32, AppError> {
             }
             Ok(if report.failed > 0 { 1 } else { 0 })
         }
-        Some(Command::Scan { root }) => run_scan(root, &path, no_progress, stats),
-        None => run_scan(None, &path, no_progress, stats),
+        Some(Command::Scan { root, full }) => run_scan(root, full, &path, no_progress, stats),
+        None => run_scan(None, false, &path, no_progress, stats),
     }
+}
+fn collapse_roots(roots: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
+    let mut roots: Vec<_> = roots
+        .into_iter()
+        .map(|p| std::fs::canonicalize(&p).unwrap_or(p))
+        .collect();
+    roots.sort();
+    roots.dedup();
+    let mut collapsed: Vec<std::path::PathBuf> = Vec::new();
+    for path in roots {
+        if !collapsed.iter().any(|parent| path.starts_with(parent)) {
+            collapsed.push(path);
+        }
+    }
+    collapsed
 }
 fn run_scan(
     root: Option<std::path::PathBuf>,
+    full: bool,
     config_path: &std::path::Path,
     no_progress: bool,
     stats: bool,
@@ -94,8 +192,14 @@ fn run_scan(
 
     let scan_start = SystemTime::now();
     let wall_start = std::time::Instant::now();
-    let c = config::load(config_path)?;
-    let policy = cargo_cleanme::policy::resolve(domain::ScanRequest { cli_root: root }, &c.scan)?;
+    let c = config::load_or_create(config_path)?;
+    let policy = cargo_cleanme::policy::resolve(
+        domain::ScanRequest {
+            cli_root: root,
+            full,
+        },
+        &c.scan,
+    )?;
     let recency = policy.recency;
 
     // Inline progress is transient stderr state; final report remains stdout.
@@ -109,12 +213,26 @@ fn run_scan(
 
     // Manifest-first discovery (no sibling target required).
     let discovery_start = std::time::Instant::now();
-    let discovered = cargo_cleanme::discovery::discover_manifests(&policy, observer)?;
+    let discovered =
+        cargo_cleanme::discovery::discover_manifests_with_attribution(&policy, observer, stats)?;
     let discovery_elapsed = discovery_start.elapsed();
     let mut counters = discovered.counters.clone();
     counters.discovery_nanos = counters
         .discovery_nanos
         .saturating_add(discovery_elapsed.as_nanos() as u64);
+    let uncertainty: Vec<std::path::PathBuf> = discovered
+        .diagnostics
+        .iter()
+        .filter(|d| {
+            matches!(
+                d.category,
+                domain::DiagnosticCategory::PermissionDenied
+                    | domain::DiagnosticCategory::Metadata
+                    | domain::DiagnosticCategory::Vanished
+            )
+        })
+        .filter_map(|d| d.path.clone())
+        .collect();
     let mut diagnostics: Vec<domain::ScanDiagnostic> = discovered.diagnostics;
     let manifests = discovered.manifests;
     counters.manifests_found = manifests.len() as u64;
@@ -130,6 +248,87 @@ fn run_scan(
         observer,
     );
     let _resolution_elapsed = resolution_start.elapsed();
+
+    let loaded_state = cargo_cleanme::discovery_state::load_default();
+    let mut state_reconciled = !full;
+    if full || loaded_state.as_ref().is_ok_and(Option::is_some) {
+        let prior = match &loaded_state {
+            Ok(Some(state)) => Some(state.clone()),
+            Ok(None) => Some(cargo_cleanme::discovery_state::DiscoveryState::default()),
+            Err(error) => {
+                eprintln!("cargo-cleanme: {error}; discovery state was not changed");
+                None
+            }
+        };
+        if let Some(prior) = prior {
+            let now = cargo_cleanme::discovery_state::now_seconds();
+            if full {
+                let mut resolved_by_manifest = std::collections::HashMap::new();
+                for ws in &workspaces {
+                    for member in &ws.members {
+                        resolved_by_manifest.insert(
+                            std::fs::canonicalize(&member.manifest_path)
+                                .unwrap_or_else(|_| member.manifest_path.clone()),
+                            ws.root.clone(),
+                        );
+                    }
+                }
+                let observations: Vec<_> = manifests
+                    .iter()
+                    .map(|manifest| {
+                        let key =
+                            std::fs::canonicalize(manifest).unwrap_or_else(|_| manifest.clone());
+                        cargo_cleanme::discovery_state::ProjectObservation {
+                            manifest: key.clone(),
+                            workspace: resolved_by_manifest.get(&key).cloned(),
+                        }
+                    })
+                    .collect();
+                let complete = !diagnostics.iter().any(|d| {
+                    d.category == domain::DiagnosticCategory::PlatformRoot
+                        && d.severity == domain::DiagnosticSeverity::Error
+                });
+                match cargo_cleanme::discovery_state::reconcile_full(
+                    &prior,
+                    &observations,
+                    &uncertainty,
+                    complete,
+                    now,
+                    c.scan.learned_root_retention_days,
+                    directories::BaseDirs::new()
+                        .map(|b| b.home_dir().to_path_buf())
+                        .as_deref(),
+                ) {
+                    cargo_cleanme::discovery_state::Reconciliation::Publish(next) => {
+                        match cargo_cleanme::discovery_state::publish(&next) {
+                            Ok(()) => state_reconciled = true,
+                            Err(error) => {
+                                eprintln!("cargo-cleanme: discovery state was not saved: {error}")
+                            }
+                        }
+                    }
+                    cargo_cleanme::discovery_state::Reconciliation::NoPublication(reason) => {
+                        eprintln!("cargo-cleanme: discovery state was not reconciled: {reason}")
+                    }
+                }
+            } else {
+                let observed: Vec<_> = workspaces.iter().map(|w| w.root.clone()).collect();
+                let mut next = prior;
+                for project in &observed {
+                    for root in &mut next.learned_roots {
+                        if project.starts_with(&root.path) {
+                            root.last_project_seen_at = root.last_project_seen_at.max(now);
+                        }
+                    }
+                }
+                if !observed.is_empty()
+                    && let Err(error) = cargo_cleanme::discovery_state::publish(&next)
+                {
+                    eprintln!("cargo-cleanme: discovery state was not saved: {error}");
+                }
+            }
+        }
+    }
 
     // Physical grouping before sizing; equal/nested output counted once.
     // Determinate analysis total is announced through the observer trait
@@ -155,6 +354,11 @@ fn run_scan(
         observer,
     );
 
+    let full_incomplete = full
+        && diagnostics.iter().any(|d| {
+            d.category == domain::DiagnosticCategory::PlatformRoot
+                && d.severity == domain::DiagnosticSeverity::Error
+        });
     // Deterministic final report: every group, deduplicated total, stable order.
     let mut report = domain::ScanReport {
         eligible: Vec::new(),
@@ -209,6 +413,9 @@ fn run_scan(
             eprintln!("scan top-level entries: {attribution}");
         }
         let _ = Duration::from_secs(0);
+    }
+    if full_incomplete || (full && !state_reconciled) {
+        return Ok(1);
     }
     Ok(0)
 }

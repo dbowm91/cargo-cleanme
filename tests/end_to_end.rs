@@ -26,7 +26,14 @@ fn end_to_end_reports_only_inactive_artifact_projects() {
         root: Some(temp.path().to_path_buf()),
         ..Default::default()
     };
-    let policy = policy::resolve(ScanRequest { cli_root: None }, &config).unwrap();
+    let policy = policy::resolve(
+        ScanRequest {
+            cli_root: None,
+            full: false,
+        },
+        &config,
+    )
+    .unwrap();
     let mut report = discovery::scan(&policy).unwrap();
     assert_eq!(report.eligible.len(), 1);
     let start = SystemTime::now() + Duration::from_secs(5);

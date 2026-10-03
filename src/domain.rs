@@ -6,11 +6,15 @@ use std::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScanRequest {
     pub cli_root: Option<PathBuf>,
+    pub full: bool,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ScanScope {
     Explicit(PathBuf),
+    /// Multiple explicit roots forming one discovery boundary (cleanup only).
+    ExplicitRoots(Vec<PathBuf>),
     Global(Vec<PathBuf>),
+    Routine(Vec<PathBuf>),
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DiscoveryFilters {

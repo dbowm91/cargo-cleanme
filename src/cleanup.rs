@@ -12,11 +12,9 @@
 //! no `cargo clean` command.
 
 use crate::{
-    config::ScanConfig,
     discovery,
     domain::*,
     error::AppError,
-    policy,
     progress::{ProgressObserver, ScanPhase},
     traverse,
     workspace::{self, CargoRunner},
@@ -78,13 +76,29 @@ pub struct CleanReport {
     pub scope_blocked: Option<String>,
     /// Structured participants retained for diagnostics and audit consumers.
     pub unresolved_ownership: Vec<UnresolvedOwnershipParticipant>,
+    pub selected_roots: Vec<PathBuf>,
+    pub discovered_manifests: usize,
+    pub resolved_workspaces: usize,
+    pub units_considered: usize,
 }
 
 impl CleanReport {
     pub fn render(&self) -> String {
         let mut out = String::new();
+        if !self.selected_roots.is_empty() {
+            out.push_str(&format!(
+                "combined scope: {} root(s) [{}], {} manifest(s), {} resolved workspace(s), {} CleanupUnit(s), {} unresolved ownership participant(s)\n",
+                self.selected_roots.len(),
+                self.selected_roots.iter().map(|p| escaped_path(p)).collect::<Vec<_>>().join(", "),
+                self.discovered_manifests,
+                self.resolved_workspaces,
+                self.units_considered,
+                self.unresolved_ownership.len(),
+            ));
+        }
         if let Some(reason) = &self.scope_blocked {
-            return format!("{reason}\n");
+            out.push_str(&format!("{reason}\n"));
+            return out;
         }
         let mut previewed = 0usize;
         let mut simulated = 0usize;
@@ -309,6 +323,20 @@ pub fn covering_is_authorized(
     clean_root: &Path,
     allowed_roots: &[PathBuf],
 ) -> Result<bool, String> {
+    covering_is_authorized_roots(
+        ownership,
+        covering,
+        std::slice::from_ref(&clean_root.to_path_buf()),
+        allowed_roots,
+    )
+}
+
+pub fn covering_is_authorized_roots(
+    ownership: OutputOwnershipClass,
+    covering: &[PathBuf],
+    clean_roots: &[PathBuf],
+    allowed_roots: &[PathBuf],
+) -> Result<bool, String> {
     // C002-F1: ownership class is authoritative and checked first.
     // ExternalUnproven is inventory-only even inside clean ROOT or a
     // configured allowed root.
@@ -352,12 +380,20 @@ pub fn covering_is_authorized(
             canonical_allowed.push(canonical);
         }
     }
-    let canonical_clean =
-        fs::canonicalize(clean_root).map_err(|e| format!("cannot resolve cleanup root: {e}"))?;
+    let canonical_clean: Vec<PathBuf> = clean_roots
+        .iter()
+        .map(|root| {
+            fs::canonicalize(root)
+                .map_err(|e| format!("cannot resolve cleanup root {}: {e}", root.display()))
+        })
+        .collect::<Result<_, _>>()?;
     // Every covering root must be inside an authorized boundary.
     for covering_root in covering {
         // Covering roots are already canonical (from build_groups).
-        if covering_root == &canonical_clean || covering_root.starts_with(&canonical_clean) {
+        if canonical_clean
+            .iter()
+            .any(|root| covering_root == root || covering_root.starts_with(root))
+        {
             continue;
         }
         if canonical_allowed
@@ -405,6 +441,18 @@ pub fn unit_block_reason(
     clean_root: &Path,
     allowed_output_roots: &[PathBuf],
 ) -> Result<(), String> {
+    unit_block_reason_roots(
+        unit,
+        std::slice::from_ref(&clean_root.to_path_buf()),
+        allowed_output_roots,
+    )
+}
+
+fn unit_block_reason_roots(
+    unit: &workspace::CleanupUnit,
+    clean_roots: &[PathBuf],
+    allowed_output_roots: &[PathBuf],
+) -> Result<(), String> {
     if let Some(root) = unit.unmapped.first() {
         return Err(format!(
             "{} output {} has unproven physical identity; cleanup deferred",
@@ -427,10 +475,10 @@ pub fn unit_block_reason(
             ));
         }
         // 2. Location authorization for this group only.
-        match covering_is_authorized(
+        match covering_is_authorized_roots(
             group.ownership,
             &group.covering,
-            clean_root,
+            clean_roots,
             allowed_output_roots,
         ) {
             Ok(true) => {}
@@ -483,24 +531,73 @@ pub fn clean_with(
     runner: &dyn CleanupRunner,
     observer: &dyn ProgressObserver,
 ) -> Result<CleanReport, AppError> {
-    if !root.is_absolute() {
-        return Err(AppError::InvalidRoot {
+    clean_with_roots(
+        std::slice::from_ref(&root.to_path_buf()),
+        recency_seconds,
+        allowed_output_roots,
+        mode,
+        runner,
+        observer,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn clean_with_roots(
+    roots: &[PathBuf],
+    recency_seconds: u64,
+    allowed_output_roots: &[PathBuf],
+    mode: CleanMode,
+    runner: &dyn CleanupRunner,
+    observer: &dyn ProgressObserver,
+) -> Result<CleanReport, AppError> {
+    for root in roots {
+        if !root.is_absolute() {
+            return Err(AppError::InvalidRoot {
+                path: root.display().to_string(),
+                reason: "cleanup requires an absolute sandbox root".into(),
+            });
+        }
+        let meta = fs::symlink_metadata(root).map_err(|e| AppError::InvalidRoot {
             path: root.display().to_string(),
-            reason: "cleanup requires an absolute sandbox root".into(),
+            reason: e.to_string(),
+        })?;
+        if !meta.is_dir() || meta.file_type().is_symlink() {
+            return Err(AppError::InvalidRoot {
+                path: root.display().to_string(),
+                reason: "expected a real directory".into(),
+            });
+        }
+    }
+    let roots = collapse_roots(roots.to_vec());
+    if roots.is_empty() {
+        return Err(AppError::InvalidRoot {
+            path: "<empty>".into(),
+            reason: "cleanup requires at least one bounded root".into(),
         });
     }
-    let cfg = ScanConfig {
-        recency_seconds,
-        root: None,
-        ignore: Vec::new(),
-        unignore: Vec::new(),
+    for root in &roots {
+        if !root.is_absolute() {
+            return Err(AppError::InvalidRoot {
+                path: root.display().to_string(),
+                reason: "cleanup requires an absolute sandbox root".into(),
+            });
+        }
+        let meta = fs::symlink_metadata(root).map_err(|e| AppError::InvalidRoot {
+            path: root.display().to_string(),
+            reason: e.to_string(),
+        })?;
+        if !meta.is_dir() || meta.file_type().is_symlink() {
+            return Err(AppError::InvalidRoot {
+                path: root.display().to_string(),
+                reason: "expected a real directory".into(),
+            });
+        }
+    }
+    let resolved = crate::domain::EffectiveScanPolicy {
+        recency: Duration::from_secs(recency_seconds),
+        scope: ScanScope::ExplicitRoots(roots.clone()),
+        discovery_filters: crate::domain::DiscoveryFilters::Bypassed,
     };
-    let resolved = policy::resolve(
-        ScanRequest {
-            cli_root: Some(root.to_path_buf()),
-        },
-        &cfg,
-    )?;
     let scan_start = SystemTime::now();
     let cleanup_phase = match mode {
         CleanMode::Preview => ScanPhase::CleanupPreview,
@@ -518,6 +615,22 @@ pub fn clean_with(
         .saturating_add(discovery_elapsed.as_nanos() as u64);
     let mut diagnostics: Vec<ScanDiagnostic> = discovered.diagnostics;
     let manifests = discovered.manifests;
+
+    if !diagnostics.is_empty() {
+        let mut report = CleanReport {
+            diagnostics: diagnostics.len(),
+            mode,
+            selected_roots: roots.clone(),
+            discovered_manifests: manifests.len(),
+            ..Default::default()
+        };
+        report.scope_blocked = Some(format!(
+            "combined cleanup ownership universe is incomplete: {} discovery diagnostic(s); no cleanup commands were run",
+            diagnostics.len()
+        ));
+        report.counters = counters;
+        return Ok(report);
+    }
 
     // Workspace resolution, physical grouping, fail-fast analysis, and
     // CleanupUnit construction share one clock.
@@ -537,6 +650,10 @@ pub fn clean_with(
     let mut report = CleanReport {
         diagnostics: diagnostics.len(),
         mode,
+        selected_roots: roots.clone(),
+        discovered_manifests: manifests.len(),
+        resolved_workspaces: workspaces.len(),
+        units_considered: units.len(),
         ..Default::default()
     };
 
@@ -551,6 +668,7 @@ pub fn clean_with(
             }
         ));
         report.unresolved_ownership = unresolved_ownership;
+        report.resolved_workspaces = workspaces.len();
         report.counters = counters;
         return Ok(report);
     }
@@ -576,7 +694,7 @@ pub fn clean_with(
         // C003 §7.2: unit-wide destructive gate. Every physical group the
         // invocation can affect must be private, authorized, and measured.
         // No Cargo process is spawned for any subset of a unit.
-        if let Err(msg) = unit_block_reason(unit, root, allowed_output_roots) {
+        if let Err(msg) = unit_block_reason_roots(unit, &roots, allowed_output_roots) {
             skipped(&mut report, msg);
             observer.unit_completed(cleanup_phase);
             continue;
@@ -585,10 +703,10 @@ pub fn clean_with(
         // Preview/Simulate/Execute, re-validated against the complete bounded
         // ownership universe. Simulate runs every non-mutating gate Execute
         // runs and only diverges by not spawning Cargo.
-        let proof = match final_cleanup_proof(
+        let proof = match final_cleanup_proof_roots(
             unit,
             &workspaces,
-            root,
+            &roots,
             allowed_output_roots,
             runner,
             recency_seconds,
@@ -870,6 +988,22 @@ fn canon(path: &Path) -> PathBuf {
     fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+fn collapse_roots(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
+    roots = roots
+        .into_iter()
+        .map(|p| fs::canonicalize(&p).unwrap_or(p))
+        .collect();
+    roots.sort();
+    roots.dedup();
+    let mut out: Vec<PathBuf> = Vec::new();
+    for root in roots {
+        if !out.iter().any(|parent| root.starts_with(parent)) {
+            out.push(root);
+        }
+    }
+    out
+}
+
 /// Resolve a path as far as the filesystem allows.
 ///
 /// Canonicalizes the deepest existing ancestor and re-appends the remaining
@@ -998,6 +1132,67 @@ fn refresh_proof_universe(
     )
 }
 
+/// Rediscover and resolve every selected source root for each candidate's final proof.
+fn refresh_combined_universe(
+    initial: &[ResolvedWorkspace],
+    roots: &[PathBuf],
+    runner: &dyn CleanupRunner,
+    counters: &mut ScanCounters,
+) -> Result<Vec<ResolvedWorkspace>, String> {
+    let policy = crate::domain::EffectiveScanPolicy {
+        recency: Duration::ZERO,
+        scope: ScanScope::ExplicitRoots(roots.to_vec()),
+        discovery_filters: crate::domain::DiscoveryFilters::Bypassed,
+    };
+    let discovered = discovery::discover_manifests(&policy, &crate::progress::NoopObserver)
+        .map_err(|e| {
+            format!("ownership could not be re-proven: combined root discovery failed: {e}")
+        })?;
+    if !discovered.diagnostics.is_empty() {
+        return Err(
+            "ownership could not be re-proven: combined selected-root discovery is incomplete"
+                .into(),
+        );
+    }
+    let adapter = WorkspaceCleanupAdapter { runner };
+    let mut diagnostics = Vec::new();
+    let mut refreshed_counters = ScanCounters::default();
+    let coverage = workspace::resolve_workspaces_with_coverage(
+        &discovered.manifests,
+        &adapter,
+        &mut refreshed_counters,
+        &mut diagnostics,
+        &crate::progress::NoopObserver,
+    );
+    counters.proof_cargo_metadata_calls = counters
+        .proof_cargo_metadata_calls
+        .saturating_add(refreshed_counters.cargo_metadata_calls);
+    counters.proof_cargo_metadata_nanos = counters
+        .proof_cargo_metadata_nanos
+        .saturating_add(refreshed_counters.cargo_metadata_nanos);
+    counters.proof_cargo_locate_calls = counters
+        .proof_cargo_locate_calls
+        .saturating_add(refreshed_counters.cargo_locate_calls);
+    counters.proof_cargo_locate_nanos = counters
+        .proof_cargo_locate_nanos
+        .saturating_add(refreshed_counters.cargo_locate_nanos);
+    counters.proof_workspaces_refreshed = counters
+        .proof_workspaces_refreshed
+        .saturating_add(refreshed_counters.cargo_metadata_calls);
+    if !coverage.unresolved.is_empty() {
+        return Err(format!(
+            "ownership could not be re-proven: combined selected-root universe has {} unresolved manifest(s); a workspace did not re-resolve",
+            coverage.unresolved.len()
+        ));
+    }
+    let fresh = coverage.workspaces;
+    let ids: std::collections::HashSet<_> = fresh.iter().map(|w| w.id.clone()).collect();
+    if initial.iter().any(|w| !ids.contains(&w.id)) {
+        return Err("ownership could not be re-proven: a workspace changed identity or disappeared from the initial combined universe".into());
+    }
+    refresh_proof_universe(&fresh, runner, counters)
+}
+
 fn refresh_proof_universe_with_limit(
     universe: &[ResolvedWorkspace],
     runner: &dyn CleanupRunner,
@@ -1118,13 +1313,34 @@ pub fn final_cleanup_proof(
     recency_seconds: u64,
     counters: &mut ScanCounters,
 ) -> Result<ExecutionProof, String> {
+    final_cleanup_proof_roots(
+        unit,
+        universe,
+        std::slice::from_ref(&clean_root.to_path_buf()),
+        allowed_output_roots,
+        runner,
+        recency_seconds,
+        counters,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn final_cleanup_proof_roots(
+    unit: &workspace::CleanupUnit,
+    universe: &[ResolvedWorkspace],
+    clean_roots: &[PathBuf],
+    allowed_output_roots: &[PathBuf],
+    runner: &dyn CleanupRunner,
+    recency_seconds: u64,
+    counters: &mut ScanCounters,
+) -> Result<ExecutionProof, String> {
     // 1. Unit-wide gate (defensive: the caller gates before dispatch, and the
     // final proof must be the single authority consumed by any spawn).
-    unit_block_reason(unit, clean_root, allowed_output_roots)?;
+    unit_block_reason_roots(unit, clean_roots, allowed_output_roots)?;
     // 2. Fresh Cargo resolution for the complete bounded ownership universe.
     // Uses canonicalized comparisons so `/tmp` vs `/private/tmp` (macOS
     // symlink) does not falsely report a change.
-    let fresh_universe = refresh_proof_universe(universe, runner, counters)?;
+    let fresh_universe = refresh_combined_universe(universe, clean_roots, runner, counters)?;
     // 3. Complete fresh physical output graph.
     let fresh_groups = workspace::build_groups(&fresh_universe);
     // 4/5. Candidate identity, member set, and target/build identity.
@@ -1537,11 +1753,10 @@ mod tests {
                 .unwrap()
                 .push((cwd.to_path_buf(), args.to_vec(), Vec::new()));
             if args.first().is_some_and(|a| a == "locate-project") {
-                if self
-                    .unresolved_manifest
-                    .as_ref()
-                    .is_some_and(|p| args.last().is_some_and(|arg| Path::new(arg) == p))
-                {
+                if self.unresolved_manifest.as_ref().is_some_and(|p| {
+                    args.last()
+                        .is_some_and(|arg| canon(Path::new(arg)) == canon(p))
+                }) {
                     return Ok(ProcessOutput {
                         success: false,
                         code: Some(1),
@@ -1768,11 +1983,14 @@ mod tests {
             let mut runner = FakeCleanupRunner::new(&root, &target, 1);
             runner.unresolved_manifest = Some(unresolved);
             let report = clean_with(&root, 0, &[], mode, &runner, &NoopObserver).unwrap();
-            assert_eq!(report.counters.unresolved_ownership, 1, "{mode:?}");
+            assert_eq!(
+                report.counters.unresolved_ownership, 1,
+                "{mode:?} {report:?}"
+            );
             assert_eq!(report.unresolved_ownership.len(), 1, "{mode:?}");
             assert_eq!(
                 report.unresolved_ownership[0].manifest,
-                root.join("unresolved/Cargo.toml")
+                canon(&root.join("unresolved/Cargo.toml"))
             );
             assert!(
                 report
@@ -2935,8 +3153,11 @@ mod tests {
                         report.results[0].detail
                     );
                 }
-                assert_eq!(report.counters.proof_cargo_locate_calls, 0);
-                assert_eq!(report.counters.proof_cargo_metadata_calls, 1);
+                assert_eq!(report.counters.proof_cargo_locate_calls, 1);
+                assert_eq!(
+                    report.counters.proof_cargo_metadata_calls,
+                    if mutation_kind == "member" { 2 } else { 1 }
+                );
                 assert!(
                     runner.inner.clean_calls().is_empty(),
                     "{mutation_kind} {mode:?}"
@@ -4236,7 +4457,7 @@ mod tests {
             "{}",
             row.detail
         );
-        assert_eq!(report.counters.proof_cargo_locate_calls, 0);
+        assert_eq!(report.counters.proof_cargo_locate_calls, 4);
         assert!(runner.clean_calls().is_empty());
     }
 
@@ -4393,21 +4614,165 @@ mod tests {
         let report = clean_with(d.path(), 0, &[], CleanMode::Simulate, &runner, &noop).unwrap();
         let counters = &report.counters;
         assert_eq!(counters.cargo_metadata_calls, 2, "initial analysis");
-        // Two cleanable candidates, each re-resolving the whole two-workspace
-        // ownership universe: 2 + 2 bounded metadata calls.
-        assert_eq!(counters.proof_workspaces_refreshed, 4);
-        assert_eq!(counters.proof_cargo_metadata_calls, 4);
-        assert_eq!(counters.proof_cargo_locate_calls, 0);
+        // Each final proof rediscovers/resolves and then refreshes the whole universe.
+        assert_eq!(counters.proof_workspaces_refreshed, 8);
+        assert_eq!(counters.proof_cargo_metadata_calls, 8);
+        assert_eq!(counters.proof_cargo_locate_calls, 4);
         assert!(counters.proof_cargo_metadata_nanos > 0);
         assert!(counters.proof_source_activity_nanos > 0);
         let line = counters.proof_stats_line();
-        assert!(line.contains("proof_metadata=4"), "{line}");
-        assert!(line.contains("proof_locate=0"), "{line}");
+        assert!(line.contains("proof_metadata=8"), "{line}");
+        assert!(line.contains("proof_locate=4"), "{line}");
         assert!(counters.proof_timings_line().contains("proof_metadata="));
         assert!(counters.proof_metadata_peak_concurrency >= 1);
         // The initial counters are not polluted by proof work.
         assert_eq!(counters.cargo_metadata_calls, 2);
         assert!(counters.stats_line().contains("metadata=2"));
+    }
+
+    #[test]
+    fn combined_roots_share_one_ownership_proof_and_simulation_never_cleans() {
+        let d = tempfile::tempdir().unwrap();
+        let root_a = ws_root(d.path(), "combined-a");
+        let root_b = ws_root(d.path(), "combined-b");
+        let target_a = cargo_output(&root_a.join("target"), 4096);
+        let target_b = cargo_output(&root_b.join("target"), 2048);
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        let mut runner = StagedCargo::new();
+        runner.add(&root_a, target_a, None);
+        runner.add(&root_b, target_b, None);
+        let report = clean_with_roots(
+            &[root_b.clone(), root_a.clone()],
+            0,
+            &[],
+            CleanMode::Simulate,
+            &runner,
+            &NoopObserver,
+        )
+        .unwrap();
+        assert_eq!(report.results.len(), 2);
+        assert!(
+            report
+                .results
+                .iter()
+                .all(|r| r.outcome == CleanOutcome::Simulated)
+        );
+        assert!(runner.clean_calls().is_empty());
+        assert_eq!(report.counters.proof_cargo_metadata_calls, 8);
+    }
+
+    #[test]
+    fn combined_private_roots_keep_preview_simulate_execute_parity() {
+        let d = tempfile::tempdir().unwrap();
+        let root_a = ws_root(d.path(), "parity-a");
+        let root_b = ws_root(d.path(), "parity-b");
+        let target_a = cargo_output(&root_a.join("target"), 4096);
+        let target_b = cargo_output(&root_b.join("target"), 2048);
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        let roots = [root_a.clone(), root_b.clone()];
+        for (mode, expected) in [
+            (CleanMode::Preview, CleanOutcome::Previewed),
+            (CleanMode::Simulate, CleanOutcome::Simulated),
+            (CleanMode::Execute, CleanOutcome::Cleaned),
+        ] {
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, target_a.clone(), None);
+            runner.add(&root_b, target_b.clone(), None);
+            let report = clean_with_roots(&roots, 0, &[], mode, &runner, &NoopObserver).unwrap();
+            assert_eq!(report.results.len(), 2, "{mode:?}");
+            assert!(
+                report.results.iter().all(|r| r.outcome == expected),
+                "{mode:?}: {:?}",
+                report.results
+            );
+            let calls = runner.clean_calls();
+            assert_eq!(
+                calls.len(),
+                if mode == CleanMode::Simulate { 0 } else { 2 },
+                "{mode:?}"
+            );
+            if mode == CleanMode::Preview {
+                assert!(
+                    calls
+                        .iter()
+                        .all(|(_, args, _)| args.iter().any(|a| a == "--dry-run"))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn combined_roots_classify_cross_root_output_as_shared_in_every_mode() {
+        let d = tempfile::tempdir().unwrap();
+        let root_a = ws_root(d.path(), "shared-a");
+        let root_b = ws_root(d.path(), "shared-b");
+        let target_a = cargo_output(&root_a.join("target"), 4096);
+        let _target_b = cargo_output(&root_b.join("target"), 2048);
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, target_a.clone(), None);
+            runner.add(&root_b, target_a.clone(), None);
+            let report = clean_with_roots(
+                &[root_a.clone(), root_b.clone()],
+                0,
+                &[],
+                mode,
+                &runner,
+                &NoopObserver,
+            )
+            .unwrap();
+            assert!(
+                report
+                    .results
+                    .iter()
+                    .all(|r| r.outcome == CleanOutcome::Skipped),
+                "{mode:?}: {:?}",
+                report.results
+            );
+            assert!(
+                report
+                    .results
+                    .iter()
+                    .any(|r| r.ownership == OutputOwnershipClass::Shared)
+            );
+            assert!(runner.clean_calls().is_empty(), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn unresolved_manifest_in_second_root_blocks_first_root_for_all_modes() {
+        let d = tempfile::tempdir().unwrap();
+        let root_a = ws_root(d.path(), "coverage-a");
+        let root_b = ws_root(d.path(), "coverage-b");
+        let target_a = cargo_output(&root_a.join("target"), 4096);
+        let target_b = cargo_output(&root_b.join("target"), 2048);
+        let unresolved = root_b.join("unresolved/Cargo.toml");
+        fs::create_dir_all(unresolved.parent().unwrap()).unwrap();
+        fs::write(
+            &unresolved,
+            "[package]\nname='unresolved'\nversion='0.1.0'\n",
+        )
+        .unwrap();
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, target_a.clone(), None);
+            runner.add(&root_b, target_b.clone(), None);
+            let report = clean_with_roots(
+                &[root_a.clone(), root_b.clone()],
+                0,
+                &[],
+                mode,
+                &runner,
+                &NoopObserver,
+            )
+            .unwrap();
+            assert_eq!(report.unresolved_ownership.len(), 1, "{mode:?}");
+            assert!(report.results.is_empty(), "{mode:?}");
+            assert!(report.render().contains("2 root(s)"), "{mode:?}");
+            assert!(runner.clean_calls().is_empty(), "{mode:?}");
+        }
     }
 
     #[test]
@@ -4444,9 +4809,9 @@ mod tests {
             report.counters.proof_metadata_peak_concurrency as usize,
             peak
         );
-        assert_eq!(report.counters.proof_workspaces_refreshed, 64);
-        assert_eq!(report.counters.proof_cargo_metadata_calls, 64);
-        assert_eq!(report.counters.proof_cargo_locate_calls, 0);
+        assert_eq!(report.counters.proof_workspaces_refreshed, 128);
+        assert_eq!(report.counters.proof_cargo_metadata_calls, 128);
+        assert_eq!(report.counters.proof_cargo_locate_calls, 64);
         assert_eq!(report.results.len(), 8);
         assert!(report.results.windows(2).all(|pair| {
             pair[0].before_bytes >= pair[1].before_bytes

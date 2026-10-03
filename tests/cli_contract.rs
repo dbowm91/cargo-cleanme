@@ -66,22 +66,101 @@ fn cargo_external_subcommand_help_matches_direct_help() {
 }
 
 #[test]
-fn cargo_external_config_init_help_matches_direct() {
+fn cargo_external_config_edit_help_matches_direct() {
     let (_dir_guard, _staged) = staged_cargo_cleanme();
     let direct = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
-        .args(["config", "init", "--help"])
+        .args(["config", "edit", "--help"])
         .output()
-        .expect("run direct config init --help");
+        .expect("run direct config edit --help");
     assert!(direct.status.success());
     let direct_stdout = String::from_utf8_lossy(&direct.stdout).into_owned();
-    assert!(direct_stdout.contains("--force"));
+    assert!(direct_stdout.contains("edit"));
 
     let external = Command::new("cargo")
-        .args(["cleanme", "config", "init", "--help"])
+        .args(["cleanme", "config", "edit", "--help"])
         .env("PATH", path_with(_dir_guard.path()))
         .env("CARGO_HOME", _dir_guard.path().join("cargo-home"))
         .output()
-        .expect("run cargo cleanme config init --help");
+        .expect("run cargo cleanme config edit --help");
     assert!(external.status.success());
     assert_eq!(direct_stdout, String::from_utf8_lossy(&external.stdout));
+}
+
+#[test]
+fn config_edit_uses_fake_editor_process_and_keeps_invalid_edits() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config path with spaces.toml");
+    let editor = dir.path().join(if cfg!(windows) {
+        "fake editor.ps1"
+    } else {
+        "fake editor.sh"
+    });
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::write(&editor, "#!/bin/sh\nfor last do :; done\ncase \"$CLEANME_EDITOR_MODE\" in invalid) printf 'invalid = [' > \"$last\";; valid) printf '[scan]\\nrecency_seconds = 42\\n' > \"$last\";; fail) exit 17;; esac\nexit 0\n").unwrap();
+        let mut mode = fs::metadata(&editor).unwrap().permissions();
+        mode.set_mode(0o755);
+        fs::set_permissions(&editor, mode).unwrap();
+    }
+    #[cfg(windows)]
+    fs::write(
+        &editor,
+        r#"param([string]$ConfigPath)
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+switch ($env:CLEANME_EDITOR_MODE) {
+  'invalid' { [System.IO.File]::WriteAllText($ConfigPath, 'invalid = [', $utf8) }
+  'valid' { [System.IO.File]::WriteAllText($ConfigPath, "[scan]`nrecency_seconds = 42`n", $utf8) }
+  'fail' { exit 17 }
+}
+exit 0
+"#,
+    )
+    .unwrap();
+    let visual = if cfg!(windows) {
+        format!(
+            "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{}\"",
+            editor.display()
+        )
+    } else {
+        format!("\"{}\" --wait", editor.display())
+    };
+    let run = |mode: &str| {
+        Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+            .args(["--config", config.to_str().unwrap(), "config", "edit"])
+            .env("VISUAL", &visual)
+            .env("EDITOR", "editor-that-must-not-win")
+            .env("CLEANME_EDITOR_MODE", mode)
+            .output()
+            .unwrap()
+    };
+    let failed = run("fail");
+    assert_eq!(failed.status.code(), Some(17));
+    let invalid = run("invalid");
+    assert!(!invalid.status.success());
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("is invalid"));
+    assert_eq!(fs::read_to_string(&config).unwrap(), "invalid = [");
+    let valid = run("valid");
+    assert!(
+        valid.status.success(),
+        "{}",
+        String::from_utf8_lossy(&valid.stderr)
+    );
+    assert!(String::from_utf8_lossy(&valid.stdout).contains("edited"));
+    assert_eq!(
+        cargo_cleanme::config::load(&config)
+            .unwrap()
+            .scan
+            .recency_seconds,
+        42
+    );
+    let noop = run("noop");
+    assert!(noop.status.success());
+    assert_eq!(
+        cargo_cleanme::config::load(&config)
+            .unwrap()
+            .scan
+            .recency_seconds,
+        42
+    );
 }

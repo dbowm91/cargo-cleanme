@@ -3,9 +3,11 @@ use crate::{
     domain::{DiscoveryFilters, EffectiveScanPolicy, ScanRequest, ScanScope},
     error::AppError,
 };
-#[cfg(unix)]
-use std::path::Path;
-use std::{fs, path::PathBuf, time::Duration};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 /// Roots and exclusions that apply only to an implicit machine-wide scan.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -15,6 +17,16 @@ pub struct GlobalDiscoveryPolicy {
     pub managed_tool_prunes: Vec<PathBuf>,
 }
 pub fn resolve(request: ScanRequest, config: &ScanConfig) -> Result<EffectiveScanPolicy, AppError> {
+    if request.full {
+        return Ok(EffectiveScanPolicy {
+            recency: Duration::from_secs(config.recency_seconds),
+            scope: ScanScope::Global(global_discovery_policy().roots),
+            discovery_filters: DiscoveryFilters::Active {
+                ignore: config.ignore.clone(),
+                unignore: config.unignore.clone(),
+            },
+        });
+    }
     let explicit = request.cli_root.or_else(|| config.root.clone());
     let (scope, discovery_filters) = if let Some(root) = explicit {
         let m = fs::symlink_metadata(&root).map_err(|e| AppError::InvalidRoot {
@@ -30,7 +42,7 @@ pub fn resolve(request: ScanRequest, config: &ScanConfig) -> Result<EffectiveSca
         (ScanScope::Explicit(root), DiscoveryFilters::Bypassed)
     } else {
         (
-            ScanScope::Global(global_roots()),
+            ScanScope::Routine(routine_roots(config.learned_root_retention_days)),
             DiscoveryFilters::Active {
                 ignore: config.ignore.clone(),
                 unignore: config.unignore.clone(),
@@ -43,15 +55,58 @@ pub fn resolve(request: ScanRequest, config: &ScanConfig) -> Result<EffectiveSca
         discovery_filters,
     })
 }
-#[cfg(unix)]
-fn global_roots() -> Vec<PathBuf> {
-    global_discovery_policy().roots
-}
-#[cfg(windows)]
-fn global_roots() -> Vec<PathBuf> {
-    global_discovery_policy().roots
+
+pub fn routine_seed_candidates(home: &Path) -> Vec<PathBuf> {
+    [
+        "Projects",
+        "projects",
+        "Developer",
+        "dev",
+        "Code",
+        "code",
+        "src",
+        "repos",
+        "Repos",
+        "GitHub",
+        "github",
+        "workspace",
+        "workspaces",
+    ]
+    .iter()
+    .map(|name| home.join(name))
+    .collect()
 }
 
+fn routine_roots(retention_days: u16) -> Vec<PathBuf> {
+    let Some(home) = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf()) else {
+        return Vec::new();
+    };
+    let mut roots: Vec<PathBuf> = routine_seed_candidates(&home)
+        .into_iter()
+        .filter(|p| p.is_dir())
+        .collect();
+    match crate::discovery_state::load_default() {
+        Ok(Some(state)) => {
+            let now = crate::discovery_state::now_seconds();
+            roots.extend(
+                state
+                    .learned_roots
+                    .into_iter()
+                    .filter(|r| {
+                        retention_days == 0
+                            || now < r.last_project_seen_at
+                            || now.saturating_sub(r.last_project_seen_at)
+                                <= u64::from(retention_days) * 86400
+                    })
+                    .map(|r| r.path),
+            );
+        }
+        Ok(None) => {}
+        Err(error) => eprintln!("cargo-cleanme: {error}; using seed/configured Routine roots"),
+    }
+    canonical_dedup_roots(roots)
+}
+#[cfg(unix)]
 #[cfg(unix)]
 pub fn global_discovery_policy() -> GlobalDiscoveryPolicy {
     let policy = unix_policy(
@@ -123,7 +178,16 @@ fn canonical_dedup_roots(roots: Vec<PathBuf>) -> Vec<PathBuf> {
         .collect();
     roots.sort();
     roots.dedup();
-    roots
+    let mut collapsed = Vec::new();
+    for root in roots {
+        if !collapsed
+            .iter()
+            .any(|parent: &PathBuf| root.starts_with(parent))
+        {
+            collapsed.push(root);
+        }
+    }
+    collapsed
 }
 
 fn managed_rust_prunes() -> Vec<PathBuf> {
@@ -179,6 +243,7 @@ mod tests {
         let p = resolve(
             ScanRequest {
                 cli_root: Some(cli.clone()),
+                full: false,
             },
             &c,
         )
@@ -195,7 +260,15 @@ mod tests {
             ..Default::default()
         };
         assert!(matches!(
-            resolve(ScanRequest { cli_root: None }, &c).unwrap().scope,
+            resolve(
+                ScanRequest {
+                    cli_root: None,
+                    full: false
+                },
+                &c
+            )
+            .unwrap()
+            .scope,
             ScanScope::Explicit(_)
         ));
     }

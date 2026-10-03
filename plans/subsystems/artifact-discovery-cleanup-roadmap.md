@@ -36,7 +36,7 @@ It does not own Cargo global cache GC, arbitrary build-system caches, a general 
 
 ## 3. Current-state evidence
 
-At the current audit baseline, M001-M005 and corrective C001-C004 are closed on main. The repository is Rust 1.89 / edition 2024, uses manifest-first discovery plus Cargo-authoritative workspace/output resolution, groups physical target/build output, reports deterministic allocated bytes, provides coordinated inline progress, and performs Cargo-mediated workspace CleanupUnit execution only after complete manifest ownership coverage and fresh full-graph revalidation. M005 destructive qualification is restored. The active work is M006 performance hardening: routine no-argument global discovery and lower-cost cleanup proof resolution without weakening those safety contracts.
+At the current audit baseline, M001-M005 and corrective C001-C004 are closed on main. The repository is Rust 1.89 / edition 2024, uses manifest-first discovery plus Cargo-authoritative workspace/output resolution, groups physical target/build output, reports deterministic allocated bytes, provides coordinated inline progress, and performs Cargo-mediated workspace CleanupUnit execution only after complete manifest ownership coverage and fresh full-graph revalidation. M005 destructive qualification is restored. The active work is M006 performance hardening: implementing ADR 002's bounded adaptive Routine discovery, explicit exhaustive Full reconciliation, and remaining traversal qualification without weakening those safety contracts.
 
 Relevant current ecosystem evidence:
 
@@ -92,7 +92,7 @@ ScanReport                    final fresh ownership proof
                           pre/post union report
 ~~~
 
-M006 optimizes the discovery and final-proof edges of this architecture without changing the ownership/safety boundary.
+M006 optimizes the discovery and final-proof edges of this architecture without changing the ownership/safety boundary. ADR 002 further separates fast adaptive Routine discovery from exhaustive Full reconciliation while keeping learned state outside destructive proof.
 
 ## 5. Dependency graph
 
@@ -132,7 +132,22 @@ C004 complete ownership-universe resolution coverage [closed]
                    v
 M006A global scan/pruning/path normalization [conditionally closed]
 M006B cleanup-proof resolution efficiency [closed]
-M006C global traversal throughput without scope narrowing [ready]
+M006C global traversal throughput without scope narrowing [conditionally closed]
+M006D global scan completion qualification [conditionally closed]
+M006E adaptive Routine/Full discovery state [closed by corrective C005]
+M006F exhaustive traversal hot-path qualification [closed]
+      |
+      v
+C005 uncertainty-aware state reconciliation + config/edit hardening [closed]
+      |
+      v
+M006E closure
+      |
+      v
+C006 combined-root cleanup ownership universe [closed]
+      |
+      v
+M007 learned/full cleanup orchestration [closed by corrective C006]
 ~~~
 
 ## 6. Milestone M001 — Foundation, CLI, config, and domain contracts
@@ -376,7 +391,7 @@ Outcome: cleanup resolution now retains authoritative manifest coverage and unre
 
 Status: active.
 
-M006 is split into ordered implementation tracks. M006A's policy, traversal, and path-normalization work is conditionally closed because the reference macOS scan exceeded 120 seconds. M006B is closed without weakening M006A's discovery contract. M006C landed bounded traversal improvements and parity coverage, but the reference scan still exceeded 120 seconds; it is conditionally closed with corrective work tracked by M006D. M006D identified traversal as the remaining cost and preserved writable project-bearing domains, but its native no-argument scan also exceeded 120 seconds. Proposed M006E seeks an explicit scope-versus-latency decision before changing product behavior.
+M006 is split into ordered implementation tracks. M006A, M006C, and M006D are conditionally closed after preserving exhaustive reachability while documenting the reference-host traversal bottleneck; M006B is closed. ADR 002 resolves the former scope-versus-latency question by separating bounded adaptive Routine discovery from explicit exhaustive Full reconciliation. M006E implemented that product split, machine-local learned discovery state, configurable 30-day retention, automatic config bootstrap, and `config edit`. Corrective C005 closes M006E's remaining state/config requirements: the reference Full traversal completed with localized diagnostics and Cargo resolution failures, and an isolated run published a schema 2 generation with 1,804 observations and six learned roots. Historical M006E closure evidence remains unchanged; see `plans/closure/artifact-discovery-cleanup/c005-status.md`. M006F's exhaustive-walker hot-path qualification is closed after hosted Linux/macOS/Windows and Rust 1.89 CI passed in run 37139155641.
 
 ### M006A — Global scan pruning, traversal policy, and path normalization
 
@@ -425,13 +440,45 @@ M006C preserved global scope, bounded the normal worker cap, added opt-in worker
 
 Status: conditionally closed. Closure: `plans/closure/artifact-discovery-cleanup/006d-status.md`.
 
-M006D identified traversal as the remaining measured cost and preserved global reachability, no-follow, manifest, filter, ordering, counter, and cleanup-proof semantics, but the exact native scan still exceeds 120 seconds. Proposed M006E seeks the explicit scope-versus-latency policy decision required before further product changes.
+M006D identified traversal as the remaining measured cost and preserved exhaustive reachability, no-follow, manifest, filter, ordering, counter, and cleanup-proof semantics. Its exact native scan still exceeded 120 seconds. That evidence motivated ADR 002; it is not discarded.
 
-### M006E — Global scan scope and latency policy
+### M006E — Adaptive Routine discovery and Full reconciliation state
 
-Status: proposed. Plan: `plans/implementation/artifact-discovery-cleanup/006e-global-scan-scope-and-latency-policy.md`.
+Status: closed by corrective C005. Plan: `plans/implementation/artifact-discovery-cleanup/006e-adaptive-routine-full-discovery-state.md`. Historical closure: `plans/closure/artifact-discovery-cleanup/006e-status.md`; corrective closure: `plans/closure/artifact-discovery-cleanup/c005-status.md`.
 
-M006E records the required product decision between retaining full-machine discovery with a revised representative latency bound, narrowing the default scope, or adding explicit scope controls. No option is selected until that decision is supplied.
+Architecture: `plans/adr/002-adaptive-routine-full-discovery-state.md`.
+
+M006E changes the no-argument/default mode to a bounded Routine scan over conservative seeds plus active learned developer roots, adds explicit `scan --full` exhaustive reconciliation, records exact Cargo workspaces and learned roots in versioned machine-local state, and expires learned roots only after successful Full reconciliation using a configurable 30-day default retention. It also replaces explicit config initialization with first-use bootstrap and adds `config edit` using VISUAL/EDITOR/fallback editor resolution with no shell execution.
+
+The old scope-decision proposal at `006e-global-scan-scope-and-latency-policy.md` is superseded.
+
+### M006F — Exhaustive traversal hot-path qualification
+
+Status: closed. Plan: `plans/implementation/artifact-discovery-cleanup/006f-exhaustive-traversal-hot-path-qualification.md`. Closure: `plans/closure/artifact-discovery-cleanup/006f-status.md`.
+
+M006F measures the bare dua-core ceiling versus cargo-cleanme callback overhead, removes first-level subtree attribution from the normal unprofiled hot path, qualifies completion-order versus parent-first delivery, and records a completed Full baseline without narrowing exhaustive scope.
+
+### C005 — Uncertainty-aware discovery-state reconciliation and config/edit hardening
+
+Status: closed. Plan: `plans/implementation/artifact-discovery-cleanup/c005-uncertainty-aware-state-reconciliation-and-config-edit-hardening.md`. Closure: `plans/closure/artifact-discovery-cleanup/c005-status.md`.
+
+C005 corrects M006E's all-or-nothing Full publication gate. A completed Full scan may publish positive Cargo-manifest/workspace evidence even when unrelated localized diagnostics exist. Learned-root expiration becomes path-scoped: only roots with trustworthy negative coverage may age out; roots intersecting traversal uncertainty are retained. C005 also persists containment-collapsed learned roots, surfaces corrupt/newer state diagnostics fail-soft, hardens state publication temp naming, defines retention=0 as expiration disabled, and completes cross-platform `config edit` editor-resolution/fake-editor qualification.
+
+C005 does not change cleanup proof or authorization. State remains a search optimization only.
+
+### M007 — Learned/full cleanup orchestration
+
+Status: closed by corrective C006. Plan: `plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-orchestration.md`. Historical closure: `plans/closure/artifact-discovery-cleanup/007-status.md`; corrective closure: `plans/closure/artifact-discovery-cleanup/c006-status.md`.
+
+Corrective C006 satisfies M007's remaining acceptance criteria with one combined selected-root ownership proof refreshed before each candidate disposition. Learned state remains discovery input only and never authorizes mutation.
+
+### C006 — Combined-root cleanup ownership universe and simulation parity
+
+Status: closed. Plan: `plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md`. Closure: `plans/closure/artifact-discovery-cleanup/c006-status.md`.
+
+C006 generalizes the existing C003/C004 safety model from one explicit cleanup root to the full selected root set used by `clean --known` and `clean --full`. Every selected root contributes to one manifest-coverage universe and one physical output graph; unresolved ownership anywhere in that combined scope blocks Preview/Simulate/Execute. Before each CleanupUnit disposition, the complete selected-root universe is refreshed so cross-root redirected/shared output and races are detected. `clean ROOT` should delegate to the same engine with a one-root vector where practical.
+
+C006 removes the blanket multi-root Execute block only after this proof is qualified.
 
 ## 11. Cross-cutting reliability concerns
 

@@ -10,26 +10,29 @@ One invocation that captures a scan start time, resolves configuration, enumerat
 
 The scan start time is fixed for the invocation. Recency decisions MUST NOT drift because a long scan repeatedly samples wall clock time.
 
-## 2. Scan scope
+## 2. Scan intent and scope
 
-The set of filesystem roots from which project discovery begins.
+A scan intent selects how discovery roots are obtained.
 
-A scan scope is either:
+Intents:
 
-- explicit: a CLI root or configured scan.root; or
-- global: platform-defined system roots.
+- **Routine** — bounded adaptive developer roots used by no-argument/default scans;
+- **Full** — explicit exhaustive machine reconciliation requested with `scan --full`;
+- **Explicit** — a CLI root or legacy configured `scan.root`.
+
+A scan scope is the concrete set of filesystem roots produced by that intent.
 
 ## 3. Explicit scope / sandbox root
 
 A user-supplied root that limits the entire scan to one tree.
 
-Effective precedence:
+Effective intent precedence:
 
 ~~~text
-CLI root > configured scan.root > global platform roots
+CLI root > --full > configured scan.root > Routine roots
 ~~~
 
-When an explicit scope is active, user ignore/unignore search filters are bypassed. Internal safety pruning still applies.
+CLI root and --full conflict. When an explicit scope is active, user ignore/unignore search filters are bypassed. Internal safety pruning still applies.
 
 ## 4. Discovery filter
 
@@ -293,3 +296,64 @@ A discovered cleanup-scope Cargo manifest that is not covered by any successfull
 Its output relationship is unknown. Because cargo-cleanme cannot prove it does not share another workspace's target/build output, any unresolved ownership participant makes the destructive ownership universe incomplete and blocks Preview, Simulate, and Execute for the entire clean scope.
 
 This strict rule does not apply to ordinary read-only scan partial results.
+
+
+## 38. Routine scan
+
+The default no-argument read-only scan over a bounded adaptive root set.
+
+Routine is shallow in scope, not depth: once a root is selected, recursive project discovery beneath it remains complete.
+
+Routine roots come from conservative seed roots plus active learned roots. Routine scans may refresh positive project-observation timestamps but do not expire learned roots from negative evidence.
+
+## 39. Full scan / Full reconciliation
+
+An explicit exhaustive read-only discovery operation requested with `scan --full`.
+
+Full uses the platform exhaustive-discovery policy and is the authority for reconciling exact project inventory and learned Routine roots. A Full scan must complete successfully before it may publish a pruned learned-state generation.
+
+A failed, cancelled, timed-out, or materially uncertain Full scan does not turn absence into evidence that a learned root is empty.
+
+## 40. Seed root
+
+A conservative, platform/user-relative directory that cargo-cleanme may include in Routine discovery before any learned state exists.
+
+Seed roots are existing directories only and deliberately exclude broad roots such as a filesystem/drive root, the user's home directory itself, /Users, and /home.
+
+## 41. Learned root
+
+A machine-local Routine discovery root derived from positive Cargo-project observations, normally a bounded parent container of one or more resolved workspace roots.
+
+A learned root records at least the last time a Rust project was positively observed beneath it.
+
+Learned roots are discovery hints only. They are not cleanup ownership or authorization evidence.
+
+## 42. Exact project inventory
+
+The canonical set of Cargo workspace/project identities positively resolved during discovery and retained in machine-local discovery state.
+
+Exact project inventory and learned roots are separate: exact projects answer what was found; learned roots answer where Routine discovery should search for existing and newly created sibling projects.
+
+## 43. Discovery state
+
+Versioned machine-local mutable state containing the exact project inventory, learned roots, observation timestamps, and Full-reconciliation metadata.
+
+Discovery state is separate from config.toml. It may be rebuilt by Full discovery and must fail soft for read-only scanning when corrupt or unavailable.
+
+A newer unsupported schema version must not be overwritten by an older binary.
+
+## 44. Learned-root retention
+
+The configured duration after which an old learned root may be removed from Routine scope when a successful Full reconciliation finds no Rust project there.
+
+Default: 30 days.
+
+Only Full reconciliation may expire roots from absence/age. Routine and Explicit scans may advance positive observation timestamps but do not prune learned roots.
+
+Retention never narrows Full or Explicit scope.
+
+## 45. Configuration edit
+
+The `config edit` operation that opens the effective cargo-cleanme config in a directly launched external editor.
+
+Editor resolution is non-empty `VISUAL`, then non-empty `EDITOR`, then bounded executable fallbacks. Editor arguments are parsed without invoking a shell. Successful editor exit is followed by config validation; invalid edits are reported but not silently discarded or replaced.

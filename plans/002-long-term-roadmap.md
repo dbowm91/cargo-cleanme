@@ -34,7 +34,7 @@ Deliverables:
 - cargo-cleanme binary usable as cargo cleanme;
 - default no-argument read-only scan command surface;
 - typed configuration and path validation;
-- platform config location and config init/path commands;
+- platform config location, automatic first-use config bootstrap, config path/show/edit commands;
 - domain records for scan scope, discovered project, activity result, artifact analysis, diagnostic, and report;
 - library/CLI separation suitable for deterministic tests;
 - Rust 1.89+ / Rust 2024 toolchain contract;
@@ -178,7 +178,7 @@ Required cases:
 
 Shared, uncertain, and externally unproven physical output remains inventory-only in M005.
 
-## Phase 7 — Performance hardening and routine machine-wide qualification
+## Phase 7 — Performance hardening and adaptive discovery
 
 Roadmap milestone: M006.
 
@@ -186,32 +186,63 @@ Status: active.
 
 Objective:
 
-Make the read-only global scan routine on representative developer machines and reduce cleanup-proof Cargo subprocess cost without weakening M005/C002-C004 semantics.
+Make routine read-only scanning proportional to the developer's actual working set while preserving explicit exhaustive discovery, and reduce cleanup-proof/traversal overhead without weakening M005/C002-C004 semantics.
 
 Implementation sequence:
 
-1. M006A — global scan pruning, platform traversal policy, one-pool multi-root discovery, and workspace member/output path normalization.
-2. M006B — cleanup proof resolution efficiency: direct Cargo metadata refresh from known root manifests, followed by evidence-gated bounded refresh concurrency if needed.
-3. M006C — bounded global traversal throughput without narrowing writable project-bearing roots (conditionally closed; reference scan still exceeds 120 seconds).
-4. M006D — global scan completion qualification (conditionally closed; exact scan exceeds 120 seconds).
-5. M006E — resolve the global scan scope-versus-latency policy before further scope changes.
-
-M006A and M006B may proceed in parallel.
+1. M006A — global scan pruning, platform traversal policy, one-pool multi-root discovery, and workspace member/output path normalization (conditionally closed).
+2. M006B — cleanup proof resolution efficiency (closed).
+3. M006C — bounded exhaustive traversal throughput without scope narrowing (conditionally closed).
+4. M006D — exhaustive scan completion qualification and bottleneck evidence (conditionally closed).
+5. M006E — adaptive Routine/Full discovery, machine-local learned state, 30-day configurable retention, first-run config bootstrap, and `config edit` (closed by C005).
+6. M006F — exhaustive traversal hot-path qualification after the product scope split (closed).
+7. C005 — uncertainty-aware state reconciliation and config/edit hardening (closed; M006E corrective closure).
 
 Hard constraints:
 
-- global performance pruning is evidence-based and must not silently remove writable user project domains;
-- explicit-root behavior remains authoritative;
+- Routine roots are bounded seeds plus learned developer roots;
+- Full discovery remains exhaustive under the established platform policy and can rediscover expired locations;
+- Explicit-root behavior remains authoritative;
+- only successful Full reconciliation may expire learned roots from absence/age;
+- machine-learned state never supplies cleanup ownership/authorization evidence;
 - cleanup proof still refreshes the complete bounded ownership universe immediately before each candidate disposition;
 - no cross-candidate stale ownership snapshot is introduced.
 
 Exit condition:
 
-- M006A's global policy and path/activity work is qualified across platforms; M006D documents the still-open 120-second no-argument reference-host scan bound, and proposed M006E owns the required policy decision;
-- M006B closes with zero redundant proof locate-project calls, material real-tree improvement, and the full C003/C004 regression matrix green.
-- M006C's and M006D's traversal changes preserve the full manifest set and global reachability; the exact 120-second bound remains unmet pending M006E's scope-versus-latency policy decision.
+- C005 closes M006E with path-scoped uncertainty-aware Full reconciliation that publishes positive project evidence on real hosts, conservative learned-root expiration, and cross-platform config/state qualification;
+- M006F remains closed with the bare-walker/adapter cost split, optional-attribution removal, traversal-default qualification, and completed reference Full traversal baseline;
+- M006B remains green with zero redundant proof locate-project calls and the C003/C004 regression matrix intact.
 
-## Phase 8 — Selective cleanup and policy
+The historical 120-second full-machine no-argument target is superseded by ADR 002. Routine and Full are separately qualified.
+
+## Phase 8 — Learned/full cleanup orchestration
+
+Roadmap milestone: M007.
+
+Status: closed by corrective C006; C005 closed M006E and C006 generalized the cleanup proof across all selected roots.
+
+Objective:
+
+Let known/adaptive and exhaustive discovery select bounded cleanup scopes without turning cached discovery state into destructive proof.
+
+Expected direction:
+
+- retain existing `clean ROOT` semantics unchanged;
+- add mutually exclusive known/full cleanup selection;
+- require successful Full reconciliation before Full cleanup begins;
+- construct one combined manifest-coverage and physical-output ownership universe from every selected known/full root;
+- refresh that complete selected-root universe before each CleanupUnit disposition;
+- preserve `--dryrun` as zero-`cargo clean` application simulation and `--dry-run` as Cargo preview, with the same combined safety disposition as Execute;
+- deduplicate overlapping learned roots and physical outputs;
+- preserve the existing single-root `clean ROOT` safety boundary through the same combined-capable engine.
+
+Plans:
+
+- `plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-orchestration.md`
+- `plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md`
+
+## Phase 9 — Selective cleanup and policy
 
 Status: deferred.
 
@@ -223,7 +254,7 @@ Potential capabilities:
 - include/exclude project policy;
 - non-interactive automation only after stable machine-readable contracts exist.
 
-## Phase 9 — Distribution and operational polish
+## Phase 10 — Distribution and operational polish
 
 Status: deferred.
 
@@ -261,7 +292,16 @@ M004 destructive cleanup
 M005 redirected/shared-output support
       |
       v
-M006 performance hardening
+M006 adaptive discovery/performance
+      |
+      v
+C005 M006E reconciliation corrective
+      |
+      v
+C006 combined-root cleanup proof
+      |
+      v
+M007 learned/full cleanup orchestration
       |
       v
 selective cleanup / distribution
