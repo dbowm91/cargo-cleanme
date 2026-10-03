@@ -2,7 +2,7 @@
 
 Status: conditionally closed
 
-Closure: `plans/closure/artifact-discovery-cleanup/006e-status.md`. The Routine/Full/Explicit split and state/config surfaces landed. Full traversal completed on the reference host, but a complete error-free reconciliation did not publish a state generation; qualification remains open for reliable uncertainty-scoped reconciliation and state publication.
+Closure: `plans/closure/artifact-discovery-cleanup/006e-status.md`. The Routine/Full/Explicit split and state/config surfaces landed. Full traversal completed on the reference host, but the all-or-nothing diagnostic gate prevented useful state publication. Corrective C005 (`plans/implementation/artifact-discovery-cleanup/c005-uncertainty-aware-state-reconciliation-and-config-edit-hardening.md`) is ready and owns uncertainty-scoped reconciliation plus the remaining state/config-editor qualification.
 
 Repository baseline: `52018219860d3a5412929a848a142236de78ca58`
 
