@@ -2,7 +2,10 @@
 use crate::{domain::*, error::AppError, progress::ProgressObserver, traverse};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use std::{
-    env, fs,
+    collections::HashMap,
+    env,
+    ffi::{OsStr, OsString},
+    fs,
     path::{Path, PathBuf},
 };
 
@@ -26,6 +29,9 @@ impl Filters {
         })
     }
     fn ignored(&self, p: &Path) -> bool {
+        if self.globs.is_empty() {
+            return false;
+        }
         let Some(s) = p.to_str() else {
             return false;
         };
@@ -35,8 +41,8 @@ impl Filters {
         self.unignore.iter().any(|u| u.starts_with(p))
     }
 }
-fn vcs(n: &str) -> bool {
-    matches!(n, ".git" | ".hg" | ".svn")
+fn vcs(n: &OsStr) -> bool {
+    n == OsStr::new(".git") || n == OsStr::new(".hg") || n == OsStr::new(".svn")
 }
 fn system_prune(_path: &Path) -> bool {
     #[cfg(target_os = "linux")]
@@ -96,6 +102,82 @@ fn is_cargo_home_pruned(path: &Path, prunes: &[PathBuf]) -> bool {
     prunes.iter().any(|p| path == *p || path.starts_with(p))
 }
 
+const MAX_DISCOVERY_PROFILE_WORKERS: usize = 32;
+const GLOBAL_DISCOVERY_WORKER_CAP: usize = 8;
+
+fn discovery_profile_workers(
+    profiling: bool,
+    requested: Option<&str>,
+    default_workers: usize,
+) -> usize {
+    if !profiling {
+        return default_workers;
+    }
+    requested
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|workers| *workers > 0)
+        .map(|workers| workers.min(MAX_DISCOVERY_PROFILE_WORKERS))
+        .unwrap_or(default_workers)
+}
+
+fn discovery_profile_skip_metadata(
+    profiling: bool,
+    requested: Option<&str>,
+    default_skip_metadata: bool,
+) -> bool {
+    if !profiling {
+        return default_skip_metadata;
+    }
+    match requested {
+        Some("1" | "true") => true,
+        Some("0" | "false") => false,
+        _ => default_skip_metadata,
+    }
+}
+
+fn discovery_profile_order(profiling: bool, requested: Option<&str>) -> dua_core::Order {
+    if profiling && requested == Some("completion") {
+        dua_core::Order::Completion
+    } else {
+        dua_core::Order::ParentFirst
+    }
+}
+
+fn top_level_component(entry: &dua_core::Entry, root: &Path) -> OsString {
+    if entry.depth == 0 {
+        return OsString::new();
+    }
+    if entry.depth == 1 {
+        return entry.file_name.clone();
+    }
+    entry
+        .parent_path
+        .strip_prefix(root)
+        .ok()
+        .and_then(|relative| relative.components().next())
+        .map(|component| component.as_os_str().to_owned())
+        .unwrap_or_else(|| entry.file_name.clone())
+}
+
+fn top_level_entry_map(
+    roots: &[(usize, PathBuf)],
+    counts: HashMap<(usize, OsString), u64>,
+) -> std::collections::BTreeMap<PathBuf, u64> {
+    let mut result = std::collections::BTreeMap::new();
+    for ((root_idx, component), count) in counts {
+        let Some((_, root)) = roots.get(root_idx) else {
+            continue;
+        };
+        let path = if component.is_empty() {
+            root.clone()
+        } else {
+            root.join(component)
+        };
+        *result.entry(path).or_insert(0) += count;
+    }
+    result
+}
+
 pub struct ManifestDiscovery {
     pub manifests: Vec<PathBuf>,
     pub visited_entries: u64,
@@ -146,6 +228,23 @@ pub fn discover_manifests(
     let mut visited = 0u64;
     let mut pruned = 0u64;
     if global {
+        let profile_subtrees = env::var_os("CARGO_CLEANME_PROFILE_SUBTREES").is_some();
+        let discovery_workers = discovery_profile_workers(
+            profile_subtrees,
+            env::var("CARGO_CLEANME_PROFILE_THREADS").ok().as_deref(),
+            traverse::worker_threads().min(GLOBAL_DISCOVERY_WORKER_CAP),
+        );
+        let skip_metadata = discovery_profile_skip_metadata(
+            profile_subtrees,
+            env::var("CARGO_CLEANME_PROFILE_SKIP_METADATA")
+                .ok()
+                .as_deref(),
+            cfg!(target_os = "linux"),
+        );
+        let order = discovery_profile_order(
+            profile_subtrees,
+            env::var("CARGO_CLEANME_PROFILE_ORDER").ok().as_deref(),
+        );
         return discover_global_roots(
             &roots,
             &filters,
@@ -159,6 +258,10 @@ pub fn discover_manifests(
             &mut visited,
             &mut pruned,
             observer,
+            discovery_workers,
+            profile_subtrees,
+            skip_metadata,
+            order,
         );
     }
     let explicit = matches!(policy.scope, ScanScope::Explicit(_));
@@ -224,6 +327,10 @@ fn discover_global_roots(
     visited: &mut u64,
     pruned: &mut u64,
     observer: &dyn ProgressObserver,
+    discovery_workers: usize,
+    profile_subtrees: bool,
+    skip_metadata: bool,
+    order: dua_core::Order,
 ) -> Result<ManifestDiscovery, AppError> {
     let mut canonical_roots = Vec::new();
     for root in roots {
@@ -263,9 +370,13 @@ fn discover_global_roots(
     let descend_system_prunes = system_prunes.clone();
     let walk = dua_core::walk_roots(
         roots.iter().map(|(i, p)| (*i, p.clone())),
-        traverse::worker_threads(),
-        dua_core::Order::ParentFirst,
-        dua_core::Options::default(),
+        discovery_workers,
+        order,
+        if skip_metadata {
+            dua_core::Options::default().skip_metadata()
+        } else {
+            dua_core::Options::default()
+        },
         move |root_idx, entry| {
             let path = entry.path();
             if !entry.file_type.is_dir() || entry.file_type.is_symlink() {
@@ -274,11 +385,7 @@ fn discover_global_roots(
             let Some((_, root)) = roots_for_walk.iter().find(|(i, _)| *i == root_idx) else {
                 return false;
             };
-            if path != *root
-                && path
-                    .file_name()
-                    .is_some_and(|n| n == "target" || vcs(&n.to_string_lossy()))
-            {
+            if path != *root && path.file_name().is_some_and(|n| n == "target" || vcs(n)) {
                 return false;
             }
             if descend_system_prunes
@@ -299,8 +406,7 @@ fn discover_global_roots(
     let mut ignore_count = 0;
     let mut batch_visited = 0;
     let mut batch_pruned = 0;
-    let mut top_level_entries = std::collections::BTreeMap::new();
-    let profile_subtrees = env::var_os("CARGO_CLEANME_PROFILE_SUBTREES").is_some();
+    let mut top_level_counts = HashMap::new();
     let mut last_profile = std::time::Instant::now();
     for (root_idx, event) in walk {
         let entry = match event {
@@ -320,16 +426,10 @@ fn discover_global_roots(
             }
             dua_core::RootEvent::Finished => continue,
         };
-        let path = entry.path();
         *visited = visited.saturating_add(1);
-        if let Some((_, root)) = roots.iter().find(|(i, _)| *i == root_idx) {
-            let key = path
-                .strip_prefix(root)
-                .ok()
-                .and_then(|relative| relative.components().next())
-                .map(|component| root.join(component.as_os_str()))
-                .unwrap_or_else(|| root.clone());
-            *top_level_entries.entry(key).or_insert(0) += 1;
+        if let Some((_, root)) = roots.get(root_idx) {
+            let component = top_level_component(&entry, root);
+            *top_level_counts.entry((root_idx, component)).or_insert(0) += 1;
         }
         batch_visited += 1;
         if batch_visited >= 512 {
@@ -337,18 +437,17 @@ fn discover_global_roots(
             batch_visited = 0;
         }
         if entry.file_type.is_dir() {
-            let Some((_, root)) = roots.iter().find(|(i, _)| *i == root_idx) else {
+            let Some((_, root)) = roots.get(root_idx) else {
                 continue;
             };
+            let path = entry.path();
             if path != *root {
                 let system = system_prunes
                     .iter()
                     .any(|p| path == *p || path.starts_with(p));
                 let cargo = is_cargo_home_pruned(&path, &cargo_prunes);
                 let rustup = is_cargo_home_pruned(&path, &rustup_prunes);
-                let target = path
-                    .file_name()
-                    .is_some_and(|n| n == "target" || vcs(&n.to_string_lossy()));
+                let target = path.file_name().is_some_and(|n| n == "target" || vcs(n));
                 let ignored = filters.ignored(&path) && !filters.exception_below(&path);
                 if system {
                     system_count += 1;
@@ -368,9 +467,11 @@ fn discover_global_roots(
             }
         }
         if entry.file_type.is_file()
-            && path.file_name().is_some_and(|n| n == "Cargo.toml")
-            && fs::symlink_metadata(&path).is_ok_and(|m| m.is_file() && !m.file_type().is_symlink())
+            && entry.file_name == "Cargo.toml"
+            && fs::symlink_metadata(entry.path())
+                .is_ok_and(|m| m.is_file() && !m.file_type().is_symlink())
         {
+            let path = entry.path();
             manifests.push(path.clone());
             observer.manifests_found(1);
         }
@@ -379,12 +480,21 @@ fn discover_global_roots(
             batch_pruned = 0;
         }
         if profile_subtrees && last_profile.elapsed() >= std::time::Duration::from_secs(5) {
+            let top_level_entries = top_level_entry_map(&roots, top_level_counts.clone());
             let profile = top_level_entries
                 .iter()
                 .map(|(path, count)| format!("{:?}={count}", path))
                 .collect::<Vec<_>>()
                 .join(" ");
-            eprintln!("scan subtree profile: visited={} {profile}", *visited);
+            eprintln!(
+                "scan subtree profile: workers={discovery_workers} skip_metadata={skip_metadata} order={} visited={} {profile}",
+                if matches!(order, dua_core::Order::Completion) {
+                    "completion"
+                } else {
+                    "parent-first"
+                },
+                *visited
+            );
             last_profile = std::time::Instant::now();
         }
     }
@@ -408,6 +518,7 @@ fn discover_global_roots(
         pruned_no_cargo: *pruned,
         ..Default::default()
     };
+    let top_level_entries = top_level_entry_map(&roots, top_level_counts);
     Ok(ManifestDiscovery {
         manifests: manifests.clone(),
         visited_entries: *visited,
@@ -495,10 +606,7 @@ fn discover_manifests_root(
             if entry.file_type.is_symlink() {
                 return false;
             }
-            if path != root_for_closure
-                && path
-                    .file_name()
-                    .is_some_and(|n| n == "target" || vcs(&n.to_string_lossy()))
+            if path != root_for_closure && path.file_name().is_some_and(|n| n == "target" || vcs(n))
             {
                 return false;
             }
@@ -539,9 +647,7 @@ fn discover_manifests_root(
         // Count pruned dirs for instrumentation (target/VCS/system/cargo/ignored).
         if entry.file_type.is_dir()
             && path != root_path
-            && (path
-                .file_name()
-                .is_some_and(|n| n == "target" || vcs(&n.to_string_lossy()))
+            && (path.file_name().is_some_and(|n| n == "target" || vcs(n))
                 || system_prune(&path)
                 || is_cargo_home_pruned(&path, prunes)
                 || (!explicit && filters.ignored(&path)))
@@ -599,11 +705,7 @@ fn discover_root(
             if entry.file_type.is_symlink() {
                 return false;
             }
-            if path != root_path
-                && path
-                    .file_name()
-                    .is_some_and(|n| n == "target" || vcs(&n.to_string_lossy()))
-            {
+            if path != root_path && path.file_name().is_some_and(|n| n == "target" || vcs(n)) {
                 return false;
             }
             if system_prune(&path) {
@@ -709,6 +811,10 @@ mod tests {
             &mut 0,
             &mut 0,
             &NoopObserver,
+            traverse::worker_threads(),
+            false,
+            cfg!(target_os = "linux"),
+            dua_core::Order::ParentFirst,
         )
         .unwrap();
         assert_eq!(found.manifests, vec![project.join("Cargo.toml")]);
@@ -757,9 +863,132 @@ mod tests {
             &mut 0,
             &mut 0,
             &NoopObserver,
+            traverse::worker_threads(),
+            false,
+            cfg!(target_os = "linux"),
+            dua_core::Order::ParentFirst,
         )
         .unwrap();
         assert_eq!(found.manifests, vec![project.join("Cargo.toml")]);
+    }
+
+    #[test]
+    fn profiling_worker_override_is_opt_in_and_bounded() {
+        assert_eq!(discovery_profile_workers(false, Some("2"), 4), 4);
+        assert_eq!(discovery_profile_workers(true, Some("2"), 6), 2);
+        assert_eq!(discovery_profile_workers(true, Some("64"), 6), 32);
+        assert_eq!(discovery_profile_workers(true, Some("0"), 6), 6);
+        assert_eq!(discovery_profile_workers(true, Some("invalid"), 6), 6);
+        assert!(!discovery_profile_skip_metadata(false, Some("1"), false));
+        assert!(discovery_profile_skip_metadata(true, Some("1"), false));
+        assert!(!discovery_profile_skip_metadata(true, Some("0"), true));
+        assert!(matches!(
+            discovery_profile_order(false, Some("completion")),
+            dua_core::Order::ParentFirst
+        ));
+        assert!(matches!(
+            discovery_profile_order(true, Some("completion")),
+            dua_core::Order::Completion
+        ));
+    }
+
+    #[test]
+    fn synthetic_wide_and_deep_manifest_set_is_stable_across_worker_caps() {
+        let d = tempdir().unwrap();
+        let root = d.path().join("tree");
+        let mut expected = Vec::new();
+        for branch in 0..24 {
+            for leaf in 0..12 {
+                let project = root
+                    .join(format!("branch-{branch:02}"))
+                    .join(format!("leaf-{leaf:02}"));
+                fs::create_dir_all(&project).unwrap();
+                let manifest = project.join("Cargo.toml");
+                fs::write(&manifest, "[package]\nname='fixture'\nversion='0.1.0'\n").unwrap();
+                fs::write(project.join("payload.dat"), [0u8; 64]).unwrap();
+                expected.push(manifest);
+            }
+        }
+        let deep = root.join("deep/a/b/c/d/e/f/g/h/i/j");
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("Cargo.toml"), "[workspace]\n").unwrap();
+        expected.push(deep.join("Cargo.toml"));
+        let hidden = root.join(".hidden-project");
+        fs::create_dir_all(&hidden).unwrap();
+        fs::write(hidden.join("Cargo.toml"), "[workspace]\n").unwrap();
+        expected.push(hidden.join("Cargo.toml"));
+        let archive_keep = root.join("archive/keep");
+        fs::create_dir_all(&archive_keep).unwrap();
+        fs::write(archive_keep.join("Cargo.toml"), "[workspace]\n").unwrap();
+        expected.push(archive_keep.join("Cargo.toml"));
+        let archive_drop = root.join("archive/drop");
+        fs::create_dir_all(&archive_drop).unwrap();
+        fs::write(archive_drop.join("Cargo.toml"), "[workspace]\n").unwrap();
+        fs::create_dir_all(root.join("branch-00/leaf-00/target/nested")).unwrap();
+        fs::write(
+            root.join("branch-00/leaf-00/target/nested/Cargo.toml"),
+            "[workspace]\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            let outside = d.path().join("outside");
+            fs::create_dir_all(&outside).unwrap();
+            fs::write(outside.join("Cargo.toml"), "[workspace]\n").unwrap();
+            std::os::unix::fs::symlink(&outside, root.join("linked-outside")).unwrap();
+        }
+        expected.sort();
+        let filters = Filters::new(
+            &[format!("{}/archive/*", root.display())],
+            std::slice::from_ref(&archive_keep),
+        )
+        .unwrap();
+
+        for workers in [1, 2, 4, 8, 16, 32] {
+            for skip_metadata in [false, true] {
+                for order in [dua_core::Order::ParentFirst, dua_core::Order::Completion] {
+                    let started = std::time::Instant::now();
+                    let found = discover_global_roots(
+                        std::slice::from_ref(&root),
+                        &filters,
+                        &[],
+                        &[],
+                        &[],
+                        &mut Vec::new(),
+                        &mut Vec::new(),
+                        &mut 0,
+                        &mut 0,
+                        &NoopObserver,
+                        workers,
+                        false,
+                        skip_metadata,
+                        order,
+                    )
+                    .unwrap();
+                    eprintln!(
+                        "synthetic global discovery: workers={workers} skip_metadata={skip_metadata} order={} elapsed={:.3}s entries={} manifests={}",
+                        if matches!(order, dua_core::Order::Completion) {
+                            "completion"
+                        } else {
+                            "parent-first"
+                        },
+                        started.elapsed().as_secs_f64(),
+                        found.visited_entries,
+                        found.manifests.len()
+                    );
+                    assert_eq!(
+                        found.manifests, expected,
+                        "workers={workers} skip_metadata={skip_metadata}"
+                    );
+                    assert_eq!(found.counters.manifests_found, expected.len() as u64);
+                    assert_eq!(
+                        found.top_level_entries.values().sum::<u64>(),
+                        found.visited_entries,
+                        "top-level attribution must account for every visited entry"
+                    );
+                }
+            }
+        }
     }
     #[test]
     fn discovers_real_target_and_prunes_target() {
