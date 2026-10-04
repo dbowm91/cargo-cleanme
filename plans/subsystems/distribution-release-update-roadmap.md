@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: M010A, M010B, and M010C are closed. M010D's repository-internal scope is complete; its publication scope is blocked on registry authentication and an explicit human decision to publish. No follow-on plan remains to activate.
+Status: **closed.** M010A, M010B, M010C, and M010D are closed, and corrective C011 is closed. `v0.1.0` and `v0.1.1` are published to GitHub and crates.io. C010 is an upstream request and is `proposed`; no follow-on plan remains to activate here.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 
@@ -125,7 +125,10 @@ Closure: `plans/closure/distribution-release-update/010b-status.md`
 
 Status: closed. The release contract, both public wrappers, and the per-platform
 fixture qualification are in place. Runtime qualification of the real release
-bytes remains open and is named as M010D step 7.
+bytes was the open item; M010D discharged it, and both the workflow's own
+`qualify_build_*`/`validate_build_*` jobs and a real installer install of the
+real asset now cover it. Static glibc 2.17.0 evidence is confirmed on both
+Linux targets.
 
 Primary outcomes:
 
@@ -173,17 +176,26 @@ Plan: `plans/implementation/distribution-release-update/010d-publication-operati
 
 Closure: `plans/closure/distribution-release-update/010d-status.md`
 
-Status: blocked on the publication half only. The repository-internal scope —
-generated completions and manpages with a CI drift gate, the benchmark baseline
-with counters gated and timings not, the operator release checklist, the support
-policy, and troubleshooting — is complete at `3e5f3ab`.
+Status: closed in both halves. The repository-internal scope — generated
+completions and manpages with a CI drift gate, the benchmark baseline with
+counters gated and timings not, the operator release checklist, the support
+policy, and troubleshooting — landed at `3e5f3ab`.
 
-Not done, and not doable from a planning session: crates.io publication,
-a staged GitHub draft release, per-target runtime qualification of the real
-release bytes, the external registry-only and release-only smoke, and the
-updater rehearsal across a real draft release. Each is enumerated in order in
-the M010D closure record, and the loop cannot be short-circuited: the release
-run is what produces the evidence that publication requires.
+The publication half completed after the user authorized it and supplied
+authentication. `v0.1.0` and `v0.1.1` are public releases; `cargo-cleanme 0.1.0`
+and `0.1.1` are on crates.io and neither is yanked. Release workflow run
+`37232595211` built, qualified, and validated all five targets green
+(20/20 jobs), and the staged draft was validated against the release contract
+before publication.
+
+Publication exposed a defect that no test could catch, and it is recorded as
+corrective **C011** rather than smoothed over: the `v0.1.0` updater could not
+read the version authority at all. See
+`plans/closure/distribution-release-update/c011-status.md`.
+
+One requirement is closed partial: the live updater **commit** path has no
+end-to-end rehearsal, because `v0.1.1` is both the newest published version and
+the first containing a working updater. Rehearsing it needs a `v0.1.2`.
 
 Primary outcomes:
 

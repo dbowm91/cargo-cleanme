@@ -1,6 +1,6 @@
 # M010D — Publication, Operational Polish, and Release Closure
 
-Status: blocked (publication half); repository-internal half complete
+Status: closed (internal and publication halves)
 
 Repository baseline: M010A `b4662af`, M010B `34a1d23`, M010C `d25beeb`.
 

@@ -1,8 +1,12 @@
 # M010B — Bootstrap Installers and Release Artifact Qualification
 
-Status: active
+Status: closed
 
 Repository baseline: `b4662af` (M010A implementation commit; closure `plans/closure/distribution-release-update/010a-status.md`).
+
+Runtime qualification of the real release bytes was deferred to M010D at
+closure and was discharged there by release workflow run `37232595211`; see the
+addendum in `plans/closure/distribution-release-update/010b-status.md`.
 
 Source roadmap: Phase 10 — Distribution and operational polish
 

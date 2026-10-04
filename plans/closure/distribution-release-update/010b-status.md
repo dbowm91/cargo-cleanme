@@ -106,12 +106,19 @@ An additional harness correction: the exec-bit assertion in the contract check
 used the filesystem, but a Windows checkout has no exec bit. It now reads the
 recorded mode from `git ls-files -s`, which is the durable fact.
 
-## Runtime release-artifact qualification: NOT obtained
+## Runtime release-artifact qualification: obtained later, in M010D
 
 The plan requires qualifying the actual release bytes for the five M010A
-targets. That requires dispatching `release-binaries.yml` for a real tag, which
-produces a GitHub draft release. **This was not done.** It is the explicit M010D
-precondition and the reason M010D's publication work cannot be closed here.
+targets, which requires dispatching `release-binaries.yml` for a real tag. That
+was not done at M010B closure and was named as the explicit M010D precondition.
+
+**It is now discharged.** Release workflow run `37232595211` built, qualified,
+and validated all five targets green, `scripts/validate-staged-release.py`
+validated the staged draft, and both Linux binaries were confirmed to require at
+most `GLIBC_2.17.0` by static ELF evidence. See
+`plans/closure/distribution-release-update/010d-status.md` for the full
+inventory and digests. The passage below is retained as written at M010B
+closure.
 
 What is qualified: the *wrappers* against a fixture that reproduces the release
 layout, including the version-free asset names that let one URL serve both
@@ -141,5 +148,7 @@ M010B closes and stabilizes the release convention that M010C depends on, so
 M010C is unblocked on its interface dependency. M010C's remaining hard
 dependency, Eggup acquisition M009, is satisfied: `eggup-curl 0.1.2` resolves
 from the crates.io registry, verified by a `cargo generate-lockfile` probe on
-2026-10-04. M010D remains blocked on M010B's runtime release-artifact
-qualification and M010C's closure, both of which require a real release.
+2026-10-04. M010D remained blocked at the time on M010B's runtime
+release-artifact qualification and M010C's closure, both of which require a real
+release. Both are discharged: see the addendum above and
+`plans/closure/distribution-release-update/c011-status.md`.
