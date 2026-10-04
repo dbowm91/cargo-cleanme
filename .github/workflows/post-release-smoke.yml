@@ -1,0 +1,60 @@
+name: Post-release smoke
+
+# Manual only. This rehearses the *real* self-update transaction against two
+# public releases, so it must be triggered deliberately during release
+# qualification and must not run on every push.
+on:
+  workflow_dispatch:
+    inputs:
+      from_version:
+        description: Published version to start from
+        required: true
+        default: '0.1.1'
+        type: string
+      to_version:
+        description: Published version to update to
+        required: true
+        default: '0.1.2'
+        type: string
+
+# No publication credentials. This workflow reads public HTTPS endpoints only
+# and has no write scope of any kind.
+permissions:
+  contents: read
+
+jobs:
+  self-update:
+    name: '${{ matrix.target }}'
+    # The runner for each target is asserted against the generated release
+    # workflow by scripts/check-post-release-smoke-contract.py, so this matrix
+    # cannot silently drift into a second, unguarded target list.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Rehearse the released updater against public releases
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-post-release-smoke-contract.py
+          bash scripts/post-release-smoke.sh \
+            --target '${{ matrix.target }}' \
+            --from '${{ inputs.from_version }}' \
+            --to '${{ inputs.to_version }}'

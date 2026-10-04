@@ -82,6 +82,10 @@ fi
 echo "release-check: installer wrappers match the contract"
 python3 scripts/check-installer-contract.py
 
+echo "release-check: post-release smoke matrix is bound to the release contract"
+python3 scripts/check-post-release-smoke-contract.py --self-test
+python3 scripts/check-post-release-smoke-contract.py
+
 echo "release-check: installer fixture qualification"
 python3 packaging/tests/test_installers.py
 
