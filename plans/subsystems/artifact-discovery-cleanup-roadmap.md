@@ -1,6 +1,6 @@
 # Artifact Discovery and Cleanup Roadmap
 
-Status: active; M008A/M008B are closed, M008C is conditionally closed, and M008D owns package-selector qualification
+Status: active; M008A/M008B are closed, M008C is conditionally closed, and M008D is closed. Phase 10 distribution remains deferred.
 
 Repository audit baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 
@@ -162,7 +162,7 @@ M008B machine-readable reporting/automation contract [closed]
 M008C Cargo profile/package selector qualification [conditionally closed; package selector deferred]
       |
       v
-M008D Cargo package-selector qualification and enablement [active]
+M008D Cargo package-selector qualification and enablement [closed]
 ~~~
 
 ## 6. Milestone M001 — Foundation, CLI, config, and domain contracts
@@ -551,7 +551,7 @@ Profile selection is enabled for exact qualified releases 1.89.0, 1.90.0, 1.91.1
 
 ### M008D — Cargo package-selector qualification and enablement
 
-Status: closing. Plan: `plans/implementation/artifact-discovery-cleanup/008d-cargo-package-selector-qualification-and-enablement.md`.
+Status: closed. Closure: `plans/closure/artifact-discovery-cleanup/008d-status.md`. Plan: `plans/implementation/artifact-discovery-cleanup/008d-cargo-package-selector-qualification-and-enablement.md`.
 
 M008D owns package-spec identity/ambiguity semantics, runtime Cargo capability gating, minimum-runtime configured-target qualification, shared dependency accounting, and the final package selector Execute decision. It inherits M008A's complete workspace ownership proof and M008B's typed output contract.
 

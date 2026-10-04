@@ -34,7 +34,7 @@ M008 planning baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M008D package-selector qualification | M008A/M008B are closed. M008C is conditionally closed with profile selection qualified. M008D is closing: package selection is enabled only for exact Cargo 1.98.1/1.99.0; hosted verification and its closure record remain. |
+| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | Phase 10 distribution (deferred) | M008A/M008B are closed, M008C conditionally closed, and M008D closed. No later registered plan is eligible; Phase 10 distribution remains deferred. |
 
 ## Implementation handoffs
 
@@ -64,11 +64,11 @@ M008 planning baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 | Artifact discovery and cleanup | M008A workspace selective cleanup policy | **closed** | plans/implementation/artifact-discovery-cleanup/008a-workspace-selective-cleanup-policy.md | Closure: plans/closure/artifact-discovery-cleanup/008a-status.md. Fresh policy races, excluded shared owner, all-mode zero-spawn assertions, Rust 1.89, and hosted platform CI passed. |
 | Artifact discovery and cleanup | M008B machine-readable reporting + automation contract | **closed** | plans/implementation/artifact-discovery-cleanup/008b-machine-readable-reporting-and-automation-contract.md | Closure: plans/closure/artifact-discovery-cleanup/008b-status.md. Typed subreason codes, selector/report DTOs, unattended fake-Cargo Execute, JSON scope metadata, Rust 1.89, and hosted CI passed. |
 | Artifact discovery and cleanup | M008C Cargo profile/package selective cleanup qualification | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/008c-cargo-profile-package-selective-cleanup-qualification.md | Closure: plans/closure/artifact-discovery-cleanup/008c-status.md. Real-Cargo matrix enables Cargo profile selection for qualified versions; package selection remains typed unsupported due shared-output and configured-target behavior. |
-| Artifact discovery and cleanup | M008D Cargo package-selector qualification and enablement | **closing** | plans/implementation/artifact-discovery-cleanup/008d-cargo-package-selector-qualification-and-enablement.md | Exact Cargo 1.98.1/1.99.0 behavior is qualified; package identity is retained and validated, unknown versions fail closed, and hosted verification/closure remain. |
+| Artifact discovery and cleanup | M008D Cargo package-selector qualification and enablement | **closed** | plans/implementation/artifact-discovery-cleanup/008d-cargo-package-selector-qualification-and-enablement.md | Closure: plans/closure/artifact-discovery-cleanup/008d-status.md. Exact Cargo 1.98.1/1.99.0 behavior, package identity validation, unknown-version failure, and hosted platform/MSRV gates pass. |
 
 ## Current handoff
 
-C007 and M008A/M008B are closed. M008C is conditionally closed: Cargo profile cleanup is enabled with unknown selector-byte accounting. M008D is closing; package cleanup is enabled for the exact qualified Cargo releases with unknown selector-byte accounting.
+C007 and M008A/M008B are closed. M008C is conditionally closed: Cargo profile cleanup is enabled with unknown selector-byte accounting. M008D is closed; package cleanup is enabled for the exact qualified Cargo releases with unknown selector-byte accounting. No subsequent implementation handoff is ready; Phase 10 distribution remains deferred.
 
 Milestone sequence:
 
@@ -83,10 +83,10 @@ C007 discovery-state recovery + post-M007 planning cleanup -> closed
 M008A workspace selective cleanup policy -> closed
 M008B machine-readable reporting/automation contract -> closed
 M008C Cargo profile/package selective cleanup -> conditionally closed; profile enabled, package deferred
-M008D Cargo package selector -> closing; complete after hosted CI and closure record
+M008D Cargo package selector -> closed
 ~~~
 
-Phase 9 planning is registered. M008D is closing after local implementation and qualification. Distribution remains deferred to Phase 10.
+Phase 9 planning is complete. M008D is closed. Distribution remains deferred to Phase 10 and is not unblocked by M008D.
 
 ### Current destructive safety boundary
 

@@ -1,6 +1,8 @@
 # M008D — Cargo Package-Selector Qualification and Enablement
 
-Status: closing
+Status: closed
+
+Closure: `plans/closure/artifact-discovery-cleanup/008d-status.md`.
 
 Repository baseline: M008C closure commit (see `plans/closure/artifact-discovery-cleanup/008c-status.md`).
 
