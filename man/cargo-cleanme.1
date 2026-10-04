@@ -1,0 +1,62 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH cargo-cleanme 1 0.1.0 https://github.com/dbowm91/cargo-cleanme "General Commands Manual"
+.SH NAME
+cargo\-cleanme \- Find inactive Cargo artifacts and safely preview their cleanup
+.SH SYNOPSIS
+\fBcargo\-cleanme\fR [\fB\-\-config\fR] [\fB\-\-no\-progress\fR] [\fB\-\-stats\fR] [\fB\-\-format\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIsubcommands\fR]
+.SH DESCRIPTION
+Find inactive Cargo artifacts and safely preview their cleanup
+.PP
+INVOCATION
+             After installation the binary is invoked by Cargo as an external
+             subcommand, so the supported spelling is:
+.PP
+             	cargo cleanme [SUBCOMMAND] [OPTIONS]
+.PP
+             A directly downloaded binary is invoked as
+	cargo\-cleanme [SUBCOMMAND] [OPTIONS]
+.PP
+             Both spellings accept exactly the same arguments.
+.SH OPTIONS
+.TP
+\fB\-\-config\fR \fI<CONFIG>\fR
+
+.TP
+\fB\-\-no\-progress\fR
+Disable transient progress UI (useful for benchmarks and debugging)
+.TP
+\fB\-\-stats\fR
+Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `\-\-no\-progress \-\-stats` is the canonical benchmark/debug combination
+.TP
+\fB\-\-format\fR \fI<FORMAT>\fR [default: human]
+Select human\-readable output or the versioned JSON automation contract
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+human
+.IP \(bu 2
+json
+.RE
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH SUBCOMMANDS
+.TP
+cargo\-cleanme\-scan(1)
+.TP
+cargo\-cleanme\-config(1)
+.TP
+cargo\-cleanme\-clean(1)
+Preview or execute cleanup of revalidated Cargo build artifacts
+.TP
+cargo\-cleanme\-update(1)
+Update this cargo\-cleanme to the latest stable published release
+.SH VERSION
+v0.1.0

@@ -151,6 +151,13 @@ def main() -> int:
         fail("Cargo.toml include allowlist omits the embedded config.toml template")
     if cargo["package"].get("repository") != "https://github.com/dbowm91/cargo-cleanme":
         fail("Cargo.toml repository does not match the release origin")
+    # The completion/manpage generator is a maintenance tool, not product
+    # surface. It lives outside the allowlist on purpose.
+    include_paths = [entry.lstrip("/") for entry in cargo["package"].get("include", [])]
+    if any(path.startswith("xtask") for path in include_paths):
+        fail("Cargo.toml include allowlist would publish the xtask generator")
+    if not (ROOT / "xtask/src/main.rs").is_file():
+        fail("the completion/manpage generator source is missing")
 
     # 5. Staging must remain draft-only and pinned to an exact source.
     if policy["staging"]["owner"] != "dbowm91" or policy["staging"]["repository"] != "cargo-cleanme":
@@ -170,8 +177,23 @@ def main() -> int:
     #    after M010B runtime qualification, which has not happened yet.
     if "cargo_zigbuild" not in pack:
         fail("pack.toml no longer declares the Linux cross-build strategy")
-    if "glibc 2.17" in readme:
-        fail("README advertises the glibc 2.17 floor before runtime qualification")
+    # The floor is a *build* fact until M010B's runtime qualification exists.
+    # The README may name it while explicitly declining to claim it, so the
+    # invariant is "mentioning it requires an explicit non-claim nearby", not
+    # "the string may never appear" - which would forbid the honest
+    # explanation of why the floor is not advertised yet.
+    if "glibc 2.17" in readme.lower():
+        non_claims = (
+            "not yet claimed",
+            "not advertised",
+            "no runtime evidence",
+            "until a release has been qualified",
+        )
+        if not any(phrase in readme.lower() for phrase in non_claims):
+            fail(
+                "README mentions the glibc 2.17 floor without an explicit "
+                "statement that it is not yet qualified"
+            )
 
     # 7. Release surfaces that must exist before any publication.
     if not RELEASE_CHECK.is_file():

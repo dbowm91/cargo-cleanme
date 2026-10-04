@@ -40,6 +40,13 @@ else
   exit 1
 fi
 
+echo "release-check: semantic counters match the recorded baseline"
+cargo build --release
+python3 scripts/release-benchmark.py --check
+
+echo "release-check: completions and manpage match the clap model"
+cargo run --quiet --features dev-tools --bin generate-docs -- --check
+
 echo "release-check: Eggpack workflow shape is derived"
 python3 scripts/gen-release-workflow-shape.py --check
 

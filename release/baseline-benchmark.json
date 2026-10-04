@@ -1,0 +1,28 @@
+{
+  "fixture": {
+    "projects": 2,
+    "artifacts": 8,
+    "artifact_bytes": 53248
+  },
+  "counters": {
+    "manifests": 2,
+    "workspaces": 2,
+    "locate": 2,
+    "metadata": 2,
+    "groups_measured": 0,
+    "reportable": 0,
+    "bytes": 0,
+    "failures": 0,
+    "unresolved_ownership": 0
+  },
+  "timings_observed_seconds": {
+    "discovery": 0.00068,
+    "locate": 0.48451,
+    "metadata": 0.03023,
+    "source_activity": 0.00098,
+    "output_sizing": 0.0,
+    "elapsed": 0.66
+  },
+  "release_binary_bytes": 5420664,
+  "normal_dependency_count": 82
+}

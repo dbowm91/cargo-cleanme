@@ -234,6 +234,79 @@ exact release bytes have been runtime-qualified on every target.
   result rather than guessing.
 - **Pre-1.0 versioning:** breaking changes to the CLI, JSON schema, or asset
   names can occur in any `0.x` release. Read `CHANGELOG.md` before upgrading.
+  There is no published release schedule; the sequence is
+  `0.1.0` -> `0.2.0` -> `1.0.0`, and `1.0.0` is when the CLI, JSON schema, and
+  asset names are declared stable.
+
+### Signing and notarization state
+
+| Platform | State |
+|---|---|
+| macOS | **unsigned, not notarized.** Gatekeeper will refuse a downloaded binary on first launch; see [troubleshooting](docs/TROUBLESHOOTING.md). |
+| Windows | **unsigned.** SmartScreen will warn on a downloaded binary. |
+| Linux | unsigned; no packages, formulae, or distribution packages are published. |
+
+No signature, transparency log, or reproducible-build claim is made for any
+target. A `.sha256` sidecar proves the bytes match what the release built; it
+does not prove who built them.
+
+### Linux ABI floor
+
+**Not yet claimed.** The two Linux targets are built with a pinned
+cross-toolchain that produces a glibc 2.17 floor, but no runtime evidence for
+the exact release bytes exists yet, so no floor is advertised. Once a release
+has been qualified on both Linux targets, this section will name the floor
+explicitly and `scripts/check-release-contract.py` will start requiring that
+the README states it.
+
+## Uninstalling
+
+There is nothing to uninstall beyond the binary and its config file. cargo-cleanme
+never installs a service, a daemon, or a background process.
+
+| How it was installed | How to remove it |
+|---|---|
+| `cargo install cargo-cleanme` | `cargo uninstall cargo-cleanme` |
+| `install.sh` / `install.ps1` | delete the binary it reported installing |
+| manually downloaded | delete the binary |
+
+Then remove the config, if you want a clean slate. Its path is printed by
+`cargo cleanme config path`:
+
+```sh
+rm -f "$(cargo cleanme config path)"
+```
+
+`cargo cleanme update` never runs against a Cargo-managed installation, so
+there is no state to reconcile between the package manager and the binary.
+
+## Shell completions and manpage
+
+Both are generated from the command model, not written by hand, and a CI job
+fails if they drift from the model:
+
+```sh
+cargo run --quiet --features dev-tools --bin generate-docs
+```
+
+| Shell | File |
+|---|---|
+| Bash | `completions/cargo-cleanme.bash` |
+| Zsh | `completions/_cargo-cleanme` |
+| Fish | `completions/cargo-cleanme.fish` |
+| PowerShell | `completions/_cargo-cleanme.ps1` |
+| Elvish | `completions/cargo-cleanme.elv` |
+
+Man pages: `man/cargo-cleanme.1` plus one page per subcommand. They document
+the `cargo cleanme` spelling, which is what works after a registry install.
+
+## Documentation
+
+- [docs/RELEASING.md](docs/RELEASING.md) — the operator release checklist.
+- [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) — installer and updater
+  failure modes, and the limits of the integrity evidence.
+- [CHANGELOG.md](CHANGELOG.md) — what changed, and what deliberately does not
+  exist yet.
 
 ## Planning
 

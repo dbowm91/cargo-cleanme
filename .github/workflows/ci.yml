@@ -34,6 +34,35 @@ jobs:
       - name: Qualify the public installers against a local fixture release
         shell: bash
         run: python3 packaging/tests/test_installers.py
+  generated-docs:
+    # Completions and the manpage are generated from the clap command model, so
+    # a command change that was not regenerated must fail rather than ship a
+    # stale manpage.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check completions and manpage match the clap model
+        run: cargo run --quiet --features dev-tools --bin generate-docs -- --check
+      - name: Check the release contract
+        run: python3 scripts/check-release-contract.py
+      - name: Check installer wrappers match the contract
+        run: python3 scripts/check-installer-contract.py
+  benchmark:
+    # Semantic counters are a hard gate; wall-clock timings are recorded and
+    # printed but never fail the build, because shared-runner timing is noise.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: cargo build --release
+      - run: python3 scripts/release-benchmark.py --check
   msrv:
     runs-on: ubuntu-latest
     steps:

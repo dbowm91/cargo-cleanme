@@ -1,0 +1,355 @@
+#compdef cargo
+
+autoload -U is-at-least
+
+_cargo() {
+    typeset -A opt_args
+    typeset -a _arguments_options
+    local ret=1
+
+    if is-at-least 5.2; then
+        _arguments_options=(-s -S -C)
+    else
+        _arguments_options=(-s -C)
+    fi
+
+    local context curcontext="$curcontext" state line
+    _arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_cargo_commands" \
+"*::: :->cargo" \
+&& ret=0
+    case $state in
+    (cargo)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:cargo-command-$line[1]:"
+        case $line[1] in
+            (cargo-cleanme)
+_arguments "${_arguments_options[@]}" : \
+'--config=[]:CONFIG:_files' \
+'--format=[Select human-readable output or the versioned JSON automation contract]:FORMAT:(human json)' \
+'--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
+'--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'-V[Print version]' \
+'--version[Print version]' \
+":: :_cargo__subcmd__cargo-cleanme_commands" \
+"*::: :->cargo-cleanme" \
+&& ret=0
+
+    case $state in
+    (cargo-cleanme)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:cargo-cargo-cleanme-command-$line[1]:"
+        case $line[1] in
+            (scan)
+_arguments "${_arguments_options[@]}" : \
+'--config=[]:CONFIG:_files' \
+'--format=[Select human-readable output or the versioned JSON automation contract]:FORMAT:(human json)' \
+'()--full[]' \
+'--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
+'--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::root:_files' \
+&& ret=0
+;;
+(config)
+_arguments "${_arguments_options[@]}" : \
+'--config=[]:CONFIG:_files' \
+'--format=[Select human-readable output or the versioned JSON automation contract]:FORMAT:(human json)' \
+'--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
+'--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_cargo__subcmd__cargo-cleanme__subcmd__config_commands" \
+"*::: :->config" \
+&& ret=0
+
+    case $state in
+    (config)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:cargo-cargo-cleanme-config-command-$line[1]:"
+        case $line[1] in
+            (path)
+_arguments "${_arguments_options[@]}" : \
+'--config=[]:CONFIG:_files' \
+'--format=[Select human-readable output or the versioned JSON automation contract]:FORMAT:(human json)' \
+'--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
+'--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(show)
+_arguments "${_arguments_options[@]}" : \
+'--config=[]:CONFIG:_files' \
+'--format=[Select human-readable output or the versioned JSON automation contract]:FORMAT:(human json)' \
+'--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
+'--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(edit)
+_arguments "${_arguments_options[@]}" : \
+'--config=[]:CONFIG:_files' \
+'--format=[Select human-readable output or the versioned JSON automation contract]:FORMAT:(human json)' \
+'--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
+'--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(clean)
+_arguments "${_arguments_options[@]}" : \
+'--min-reclaimable-bytes=[Require at least this many reclaimable bytes per workspace]:MIN_RECLAIMABLE_BYTES:_default' \
+'--older-than=[Require this many seconds of inactivity]:OLDER_THAN:_default' \
+'*--include=[Include canonical workspace roots matching this glob (repeatable)]:INCLUDE:_default' \
+'*--exclude=[Exclude canonical workspace roots matching this glob (repeatable)]:EXCLUDE:_default' \
+'(--package)--profile=[Ask Cargo to clean one named profile. Selector byte estimates are unknown]:PROFILE:_default' \
+'(--profile)--package=[Clean one validated workspace package through qualified Cargo versions]:PACKAGE:_default' \
+'--config=[]:CONFIG:_files' \
+'--format=[Select human-readable output or the versioned JSON automation contract]:FORMAT:(human json)' \
+'(--full)--known[Clean bounded roots selected by the current Routine policy]' \
+'(--known)--full[Complete Full reconciliation before cleaning its learned roots]' \
+'(--yes --dryrun)--dry-run[Cargo preview\: invoke Cargo'\''s own dry-run (the default mode). Distinct from \`--dryrun\` (cargo-cleanme simulation)]' \
+'(--yes --dry-run)--dryrun[Application simulation\: run the full decision/progress/report path but invoke no Cargo clean command. Distinct from \`--dry-run\`]' \
+'(--dry-run --dryrun)--yes[Execute Cargo clean after per-workspace revalidation]' \
+'--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
+'--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::root -- Optional bounded sandbox root. Omit with --known or --full:_files' \
+&& ret=0
+;;
+(update)
+_arguments "${_arguments_options[@]}" : \
+'--config=[]:CONFIG:_files' \
+'--format=[Select human-readable output or the versioned JSON automation contract]:FORMAT:(human json)' \
+'--dry-run[Resolve the plan and report it without acquiring or replacing bytes]' \
+'--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
+'--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_cargo__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:cargo-help-command-$line[1]:"
+        case $line[1] in
+            (cargo-cleanme)
+_arguments "${_arguments_options[@]}" : \
+":: :_cargo__subcmd__help__subcmd__cargo-cleanme_commands" \
+"*::: :->cargo-cleanme" \
+&& ret=0
+
+    case $state in
+    (cargo-cleanme)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:cargo-help-cargo-cleanme-command-$line[1]:"
+        case $line[1] in
+            (scan)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(config)
+_arguments "${_arguments_options[@]}" : \
+":: :_cargo__subcmd__help__subcmd__cargo-cleanme__subcmd__config_commands" \
+"*::: :->config" \
+&& ret=0
+
+    case $state in
+    (config)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:cargo-help-cargo-cleanme-config-command-$line[1]:"
+        case $line[1] in
+            (path)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(show)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(edit)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(clean)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(update)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+}
+
+(( $+functions[_cargo_commands] )) ||
+_cargo_commands() {
+    local commands; commands=(
+'cargo-cleanme:Find inactive Cargo artifacts and safely preview their cleanup' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'cargo commands' commands "$@"
+}
+(( $+functions[_cargo__subcmd__cargo-cleanme_commands] )) ||
+_cargo__subcmd__cargo-cleanme_commands() {
+    local commands; commands=(
+'scan:' \
+'config:' \
+'clean:Preview or execute cleanup of revalidated Cargo build artifacts' \
+'update:Update this cargo-cleanme to the latest stable published release' \
+    )
+    _describe -t commands 'cargo cargo-cleanme commands' commands "$@"
+}
+(( $+functions[_cargo__subcmd__cargo-cleanme__subcmd__clean_commands] )) ||
+_cargo__subcmd__cargo-cleanme__subcmd__clean_commands() {
+    local commands; commands=()
+    _describe -t commands 'cargo cargo-cleanme clean commands' commands "$@"
+}
+(( $+functions[_cargo__subcmd__cargo-cleanme__subcmd__config_commands] )) ||
+_cargo__subcmd__cargo-cleanme__subcmd__config_commands() {
+    local commands; commands=(
+'path:' \
+'show:' \
+'edit:' \
+    )
+    _describe -t commands 'cargo cargo-cleanme config commands' commands "$@"
+}
+(( $+functions[_cargo__subcmd__cargo-cleanme__subcmd__config__subcmd__edit_commands] )) ||
+_cargo__subcmd__cargo-cleanme__subcmd__config__subcmd__edit_commands() {
+    local commands; commands=()
+    _describe -t commands 'cargo cargo-cleanme config edit commands' commands "$@"
+}
+(( $+functions[_cargo__subcmd__cargo-cleanme__subcmd__config__subcmd__path_commands] )) ||
+_cargo__subcmd__cargo-cleanme__subcmd__config__subcmd__path_commands() {
+    local commands; commands=()
+    _describe -t commands 'cargo cargo-cleanme config path commands' commands "$@"
+}
+(( $+functions[_cargo__subcmd__cargo-cleanme__subcmd__config__subcmd__show_commands] )) ||
+_cargo__subcmd__cargo-cleanme__subcmd__config__subcmd__show_commands() {
+    local commands; commands=()
+    _describe -t commands 'cargo cargo-cleanme config show commands' commands "$@"
+}
+(( $+functions[_cargo__subcmd__cargo-cleanme__subcmd__scan_commands] )) ||
+_cargo__subcmd__cargo-cleanme__subcmd__scan_commands() {
+    local commands; commands=()
+    _describe -t commands 'cargo cargo-cleanme scan commands' commands "$@"
+}
+(( $+functions[_cargo__subcmd__cargo-cleanme__subcmd__update_commands] )) ||
+_cargo__subcmd__cargo-cleanme__subcmd__update_commands() {
+    local commands; commands=()
+    _describe -t commands 'cargo cargo-cleanme update commands' commands "$@"
+}
+(( $+functions[_cargo__subcmd__help_commands] )) ||
+_cargo__subcmd__help_commands() {
+    local commands; commands=(
+'cargo-cleanme:Find inactive Cargo artifacts and safely preview their cleanup' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'cargo help commands' commands "$@"
+}
+(( $+functions[_cargo__subcmd__help__subcmd__cargo-cleanme_commands] )) ||
+_cargo__subcmd__help__subcmd__cargo-cleanme_commands() {
+    local commands; commands=(
+'scan:' \
+'config:' \
+'clean:Preview or execute cleanup of revalidated Cargo build artifacts' \
+'update:Update this cargo-cleanme to the latest stable published release' \
+    )
+    _describe -t commands 'cargo help cargo-cleanme commands' commands "$@"
+}
+(( $+functions[_cargo__subcmd__help__subcmd__cargo-cleanme__subcmd__clean_commands] )) ||
+_cargo__subcmd__help__subcmd__cargo-cleanme__subcmd__clean_commands() {
+    local commands; commands=()
+    _describe -t commands 'cargo help cargo-cleanme clean commands' commands "$@"
+}
+(( $+functions[_cargo__subcmd__help__subcmd__cargo-cleanme__subcmd__config_commands] )) ||
+_cargo__subcmd__help__subcmd__cargo-cleanme__subcmd__config_commands() {
+    local commands; commands=(
+'path:' \
+'show:' \
+'edit:' \
+    )
+    _describe -t commands 'cargo help cargo-cleanme config commands' commands "$@"
+}
+(( $+functions[_cargo__subcmd__help__subcmd__cargo-cleanme__subcmd__config__subcmd__edit_commands] )) ||
+_cargo__subcmd__help__subcmd__cargo-cleanme__subcmd__config__subcmd__edit_commands() {
+    local commands; commands=()
+    _describe -t commands 'cargo help cargo-cleanme config edit commands' commands "$@"
+}
+(( $+functions[_cargo__subcmd__help__subcmd__cargo-cleanme__subcmd__config__subcmd__path_commands] )) ||
+_cargo__subcmd__help__subcmd__cargo-cleanme__subcmd__config__subcmd__path_commands() {
+    local commands; commands=()
+    _describe -t commands 'cargo help cargo-cleanme config path commands' commands "$@"
+}
+(( $+functions[_cargo__subcmd__help__subcmd__cargo-cleanme__subcmd__config__subcmd__show_commands] )) ||
+_cargo__subcmd__help__subcmd__cargo-cleanme__subcmd__config__subcmd__show_commands() {
+    local commands; commands=()
+    _describe -t commands 'cargo help cargo-cleanme config show commands' commands "$@"
+}
+(( $+functions[_cargo__subcmd__help__subcmd__cargo-cleanme__subcmd__scan_commands] )) ||
+_cargo__subcmd__help__subcmd__cargo-cleanme__subcmd__scan_commands() {
+    local commands; commands=()
+    _describe -t commands 'cargo help cargo-cleanme scan commands' commands "$@"
+}
+(( $+functions[_cargo__subcmd__help__subcmd__cargo-cleanme__subcmd__update_commands] )) ||
+_cargo__subcmd__help__subcmd__cargo-cleanme__subcmd__update_commands() {
+    local commands; commands=()
+    _describe -t commands 'cargo help cargo-cleanme update commands' commands "$@"
+}
+(( $+functions[_cargo__subcmd__help__subcmd__help_commands] )) ||
+_cargo__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'cargo help help commands' commands "$@"
+}
+
+if [ "$funcstack[1]" = "_cargo" ]; then
+    _cargo "$@"
+else
+    compdef _cargo cargo
+fi

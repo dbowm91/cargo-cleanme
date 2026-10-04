@@ -39,6 +39,14 @@ path = "src/lib.rs"
 name = "cargo-cleanme"
 path = "src/main.rs"
 
+# Maintenance-only generator for shell completions and the manpage. It lives
+# outside `src/`, so the `include` allowlist above keeps it out of the published
+# package: these are release artifacts, not product surface.
+[[bin]]
+name = "generate-docs"
+path = "xtask/src/main.rs"
+required-features = ["dev-tools"]
+
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 directories = "6"
@@ -63,6 +71,14 @@ toml = "0.8"
 eggup-acquisition = "0.1.2"
 eggup-core = "0.1.2"
 eggup-curl = "0.1.2"
+# Optional and feature-gated: only the completion/manpage generator needs them,
+# so a normal build and `cargo install` never compile them.
+clap_complete = { version = "4.5", optional = true }
+clap_mangen = { version = "0.2", optional = true }
+
+[features]
+# Off by default so a normal build and `cargo install` never compile it.
+dev-tools = ["dep:clap_complete", "dep:clap_mangen"]
 
 [dev-dependencies]
 tempfile = "3"
