@@ -53,8 +53,25 @@ pub struct CleanupV1 {
     pub scope_blocked: bool,
     pub scope_reason: Option<String>,
     pub unresolved_ownership: usize,
+    pub unresolved_participants: Vec<UnresolvedParticipantV1>,
+    pub selected_roots: Vec<String>,
+    pub effective_policy: Option<PolicyV1>,
+    pub state_generation_last_full_at: Option<u64>,
     pub units: Vec<CleanupUnitV1>,
     pub summary: CleanupSummaryV1,
+}
+#[derive(Serialize)]
+pub struct UnresolvedParticipantV1 {
+    pub manifest: String,
+    pub stage: &'static str,
+    pub reason: String,
+}
+#[derive(Serialize)]
+pub struct PolicyV1 {
+    pub min_reclaimable_bytes: u64,
+    pub min_inactive_seconds: Option<u64>,
+    pub include: Vec<String>,
+    pub exclude: Vec<String>,
 }
 #[derive(Serialize)]
 pub struct CleanupUnitV1 {
@@ -134,7 +151,11 @@ pub fn scan(report: &ScanReport, scope: impl Into<String>) -> EnvelopeV1<ScanV1>
     }
 }
 
-pub fn cleanup(report: &CleanReport, scope: impl Into<String>) -> EnvelopeV1<CleanupV1> {
+pub fn cleanup(
+    report: &CleanReport,
+    scope: impl Into<String>,
+    state_generation: Option<u64>,
+) -> EnvelopeV1<CleanupV1> {
     use crate::cleanup::CleanOutcome;
     let units = report
         .results
@@ -145,7 +166,7 @@ pub fn cleanup(report: &CleanReport, scope: impl Into<String>) -> EnvelopeV1<Cle
             ownership: r.ownership.label(),
             policy_disposition: r.policy_disposition.map(policy_code),
             outcome: format!("{:?}", r.outcome).to_lowercase(),
-            reason_code: reason_code(r),
+            reason_code: r.reason_code.as_str().into(),
             before_bytes: r.before_bytes,
             after_bytes: r.after_bytes,
             observed_decrease_bytes: r.observed_decrease,
@@ -194,6 +215,23 @@ pub fn cleanup(report: &CleanReport, scope: impl Into<String>) -> EnvelopeV1<Cle
             scope_blocked: report.scope_blocked.is_some(),
             scope_reason: report.scope_blocked.clone(),
             unresolved_ownership: report.unresolved_ownership.len(),
+            unresolved_participants: report
+                .unresolved_ownership
+                .iter()
+                .map(|p| UnresolvedParticipantV1 {
+                    manifest: path(&p.manifest),
+                    stage: p.stage,
+                    reason: p.reason.clone(),
+                })
+                .collect(),
+            selected_roots: report.selected_roots.iter().map(|p| path(p)).collect(),
+            effective_policy: report.effective_policy.as_ref().map(|p| PolicyV1 {
+                min_reclaimable_bytes: p.min_reclaimable_bytes,
+                min_inactive_seconds: p.min_inactive_seconds,
+                include: p.include.clone(),
+                exclude: p.exclude.clone(),
+            }),
+            state_generation_last_full_at: state_generation,
             units,
             summary,
         },
@@ -210,27 +248,6 @@ fn policy_code(code: crate::cleanup::PolicyDisposition) -> String {
         Excluded => "excluded",
     }
     .into()
-}
-
-fn reason_code(result: &crate::cleanup::CleanResult) -> String {
-    use crate::{cleanup::CleanOutcome::*, domain::OutputOwnershipClass::*};
-    if let Some(policy) = result.policy_disposition {
-        return policy_code(policy);
-    }
-    match result.outcome {
-        Previewed => "previewed".into(),
-        Simulated => "simulated".into(),
-        Cleaned if result.after_bytes.is_none() => "measurement_failed".into(),
-        Cleaned => "cleaned".into(),
-        Failed => "cargo_failed".into(),
-        Skipped => match result.ownership {
-            Shared => "skipped_shared",
-            Uncertain => "skipped_uncertain",
-            ExternalUnproven => "skipped_unauthorized",
-            PrivateBounded => "skipped_safety",
-        }
-        .into(),
-    }
 }
 
 fn path(p: &Path) -> String {

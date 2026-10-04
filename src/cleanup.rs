@@ -60,10 +60,72 @@ pub struct CleanResult {
     pub ownership: OutputOwnershipClass,
     pub outcome: CleanOutcome,
     pub policy_disposition: Option<PolicyDisposition>,
+    pub reason_code: CleanupReasonCode,
     pub before_bytes: Option<u64>,
     pub after_bytes: Option<u64>,
     pub observed_decrease: Option<u64>,
     pub detail: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CleanupReasonCode {
+    Previewed,
+    Simulated,
+    Cleaned,
+    BelowMinimumSize,
+    TooRecentForPolicy,
+    NotIncluded,
+    Excluded,
+    SkippedActive,
+    SkippedShared,
+    SkippedUncertain,
+    SkippedUnauthorized,
+    SkippedMarkerInvalid,
+    SkippedChangedBeforeCleanup,
+    SkippedSafety,
+    CargoFailed,
+    MeasurementFailed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProofFailure {
+    pub code: CleanupReasonCode,
+    pub detail: String,
+}
+
+impl From<String> for ProofFailure {
+    fn from(detail: String) -> Self {
+        let code = proof_skip_code(&detail);
+        Self { code, detail }
+    }
+}
+impl From<&str> for ProofFailure {
+    fn from(detail: &str) -> Self {
+        detail.to_owned().into()
+    }
+}
+
+impl CleanupReasonCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Previewed => "previewed",
+            Self::Simulated => "simulated",
+            Self::Cleaned => "cleaned",
+            Self::BelowMinimumSize => "below_minimum_size",
+            Self::TooRecentForPolicy => "too_recent_for_policy",
+            Self::NotIncluded => "not_included",
+            Self::Excluded => "excluded",
+            Self::SkippedActive => "skipped_active",
+            Self::SkippedShared => "skipped_shared",
+            Self::SkippedUncertain => "skipped_uncertain",
+            Self::SkippedUnauthorized => "skipped_unauthorized",
+            Self::SkippedMarkerInvalid => "skipped_marker_invalid",
+            Self::SkippedChangedBeforeCleanup => "skipped_changed_before_cleanup",
+            Self::SkippedSafety => "skipped_safety",
+            Self::CargoFailed => "cargo_failed",
+            Self::MeasurementFailed => "measurement_failed",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
@@ -91,6 +153,7 @@ pub struct CleanReport {
     pub discovered_manifests: usize,
     pub resolved_workspaces: usize,
     pub units_considered: usize,
+    pub effective_policy: Option<CleanupPolicy>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -666,6 +729,7 @@ pub fn clean_with_roots_policy(
             discovered_manifests: manifests.len(),
             ..Default::default()
         };
+        report.effective_policy = Some(policy.clone());
         report.scope_blocked = Some(format!(
             "combined cleanup ownership universe is incomplete: {} discovery diagnostic(s); no cleanup commands were run",
             diagnostics.len()
@@ -698,6 +762,7 @@ pub fn clean_with_roots_policy(
         units_considered: units.len(),
         ..Default::default()
     };
+    report.effective_policy = Some(policy.clone());
 
     if !unresolved_ownership.is_empty() {
         let unresolved = unresolved_ownership.len();
@@ -720,26 +785,30 @@ pub fn clean_with_roots_policy(
     observer.units_total(cleanup_phase, units.len() as u64);
 
     for unit in &units {
-        let skipped =
-            |report: &mut CleanReport, detail: String, disposition: Option<PolicyDisposition>| {
-                report.results.push(CleanResult {
-                    display_path: unit.root.clone(),
-                    workspace_roots: vec![unit.root.clone()],
-                    output_roots: unit.covering.clone(),
-                    ownership: unit_blocking_class(unit),
-                    outcome: CleanOutcome::Skipped,
-                    policy_disposition: disposition,
-                    before_bytes: Some(unit.bytes),
-                    after_bytes: None,
-                    observed_decrease: None,
-                    detail,
-                });
-            };
+        let skipped = |report: &mut CleanReport,
+                       detail: String,
+                       disposition: Option<PolicyDisposition>,
+                       reason_code: CleanupReasonCode| {
+            report.results.push(CleanResult {
+                display_path: unit.root.clone(),
+                workspace_roots: vec![unit.root.clone()],
+                output_roots: unit.covering.clone(),
+                ownership: unit_blocking_class(unit),
+                outcome: CleanOutcome::Skipped,
+                policy_disposition: disposition,
+                reason_code,
+                before_bytes: Some(unit.bytes),
+                after_bytes: None,
+                observed_decrease: None,
+                detail,
+            });
+        };
         if !includes.is_empty() && !includes.is_match(&unit.root) {
             skipped(
                 &mut report,
                 "cleanup policy: workspace root is not included".into(),
                 Some(PolicyDisposition::NotIncluded),
+                CleanupReasonCode::NotIncluded,
             );
             observer.unit_completed(cleanup_phase);
             continue;
@@ -749,6 +818,7 @@ pub fn clean_with_roots_policy(
                 &mut report,
                 "cleanup policy: workspace root is excluded".into(),
                 Some(PolicyDisposition::Excluded),
+                CleanupReasonCode::Excluded,
             );
             observer.unit_completed(cleanup_phase);
             continue;
@@ -761,6 +831,7 @@ pub fn clean_with_roots_policy(
                     unit.bytes, policy.min_reclaimable_bytes
                 ),
                 Some(PolicyDisposition::BelowMinimumSize),
+                CleanupReasonCode::BelowMinimumSize,
             );
             observer.unit_completed(cleanup_phase);
             continue;
@@ -769,7 +840,7 @@ pub fn clean_with_roots_policy(
         // invocation can affect must be private, authorized, and measured.
         // No Cargo process is spawned for any subset of a unit.
         if let Err(msg) = unit_block_reason_roots(unit, &roots, allowed_output_roots) {
-            skipped(&mut report, msg, None);
+            skipped(&mut report, msg, None, unit_skip_code(unit));
             observer.unit_completed(cleanup_phase);
             continue;
         }
@@ -787,8 +858,8 @@ pub fn clean_with_roots_policy(
             &mut counters,
         ) {
             Ok(p) => p,
-            Err(msg) => {
-                skipped(&mut report, msg, None);
+            Err(failure) => {
+                skipped(&mut report, failure.detail, None, failure.code);
                 observer.unit_completed(cleanup_phase);
                 continue;
             }
@@ -801,6 +872,7 @@ pub fn clean_with_roots_policy(
                     proof.pre_bytes, policy.min_reclaimable_bytes
                 ),
                 Some(PolicyDisposition::BelowMinimumSize),
+                CleanupReasonCode::BelowMinimumSize,
             );
             observer.unit_completed(cleanup_phase);
             continue;
@@ -811,6 +883,7 @@ pub fn clean_with_roots_policy(
                     &mut report,
                     "cleanup policy: required activity timestamp is unavailable".into(),
                     Some(PolicyDisposition::TooRecentForPolicy),
+                    CleanupReasonCode::TooRecentForPolicy,
                 );
                 observer.unit_completed(cleanup_phase);
                 continue;
@@ -825,6 +898,7 @@ pub fn clean_with_roots_policy(
                     &mut report,
                     "cleanup policy: workspace is too recent".into(),
                     Some(PolicyDisposition::TooRecentForPolicy),
+                    CleanupReasonCode::TooRecentForPolicy,
                 );
                 observer.unit_completed(cleanup_phase);
                 continue;
@@ -841,6 +915,7 @@ pub fn clean_with_roots_policy(
                     ownership: proof.ownership,
                     outcome: CleanOutcome::Simulated,
                     policy_disposition: Some(PolicyDisposition::Selected),
+                    reason_code: CleanupReasonCode::Simulated,
                     before_bytes: Some(proof.pre_bytes),
                     after_bytes: None,
                     observed_decrease: None,
@@ -872,6 +947,7 @@ pub fn clean_with_roots_policy(
                             ownership: proof.ownership,
                             outcome: CleanOutcome::Failed,
                             policy_disposition: Some(PolicyDisposition::Selected),
+                            reason_code: CleanupReasonCode::CargoFailed,
                             before_bytes: Some(proof.pre_bytes),
                             after_bytes: None,
                             observed_decrease: None,
@@ -890,6 +966,7 @@ pub fn clean_with_roots_policy(
                         ownership: proof.ownership,
                         outcome: CleanOutcome::Failed,
                         policy_disposition: Some(PolicyDisposition::Selected),
+                        reason_code: CleanupReasonCode::CargoFailed,
                         before_bytes: Some(proof.pre_bytes),
                         after_bytes: None,
                         observed_decrease: None,
@@ -906,6 +983,7 @@ pub fn clean_with_roots_policy(
                         ownership: proof.ownership,
                         outcome: CleanOutcome::Previewed,
                         policy_disposition: Some(PolicyDisposition::Selected),
+                        reason_code: CleanupReasonCode::Previewed,
                         before_bytes: Some(proof.pre_bytes),
                         after_bytes: None,
                         observed_decrease: None,
@@ -925,6 +1003,7 @@ pub fn clean_with_roots_policy(
                                 ownership: proof.ownership,
                                 outcome: CleanOutcome::Cleaned,
                                 policy_disposition: Some(PolicyDisposition::Selected),
+                                reason_code: CleanupReasonCode::Cleaned,
                                 before_bytes: Some(proof.pre_bytes),
                                 after_bytes: Some(after),
                                 observed_decrease: Some(decrease),
@@ -941,6 +1020,7 @@ pub fn clean_with_roots_policy(
                                 ownership: proof.ownership,
                                 outcome: CleanOutcome::Cleaned,
                                 policy_disposition: Some(PolicyDisposition::Selected),
+                                reason_code: CleanupReasonCode::MeasurementFailed,
                                 before_bytes: Some(proof.pre_bytes),
                                 after_bytes: None,
                                 observed_decrease: None,
@@ -972,6 +1052,58 @@ fn compile_policy_globs(patterns: &[String]) -> Result<globset::GlobSet, AppErro
     builder
         .build()
         .map_err(|e| AppError::Config(format!("invalid cleanup policy patterns: {e}")))
+}
+
+fn unit_skip_code(unit: &workspace::CleanupUnit) -> CleanupReasonCode {
+    if !unit.unmapped.is_empty() {
+        return CleanupReasonCode::SkippedUncertain;
+    }
+    for group in &unit.groups {
+        match group.ownership {
+            OutputOwnershipClass::Shared => return CleanupReasonCode::SkippedShared,
+            OutputOwnershipClass::Uncertain => return CleanupReasonCode::SkippedUncertain,
+            OutputOwnershipClass::ExternalUnproven => {
+                return CleanupReasonCode::SkippedUnauthorized;
+            }
+            OutputOwnershipClass::PrivateBounded => {}
+        }
+        if group.measured.is_none() {
+            return match group.skip {
+                Some(
+                    workspace::GroupSkipReason::ActiveSource
+                    | workspace::GroupSkipReason::ActiveOutput,
+                ) => CleanupReasonCode::SkippedActive,
+                Some(
+                    workspace::GroupSkipReason::UncertainSource
+                    | workspace::GroupSkipReason::UncertainOwnership
+                    | workspace::GroupSkipReason::UncertainMeasurement,
+                ) => CleanupReasonCode::SkippedUncertain,
+                _ => CleanupReasonCode::SkippedSafety,
+            };
+        }
+    }
+    CleanupReasonCode::SkippedUnauthorized
+}
+
+fn proof_skip_code(detail: &str) -> CleanupReasonCode {
+    if detail.contains("became active") || detail.contains("became recent") {
+        CleanupReasonCode::SkippedActive
+    } else if detail.contains("marker")
+        || detail.contains("CACHEDIR")
+        || detail.contains("signature")
+    {
+        CleanupReasonCode::SkippedMarkerInvalid
+    } else if detail.contains("uncertain") || detail.contains("cannot be established") {
+        CleanupReasonCode::SkippedUncertain
+    } else if detail.contains("changed before cleanup")
+        || detail.contains("preflight changed")
+        || detail.contains("re-proven")
+        || detail.contains("overlap")
+    {
+        CleanupReasonCode::SkippedChangedBeforeCleanup
+    } else {
+        CleanupReasonCode::SkippedSafety
+    }
 }
 
 /// Ownership class reported for a skipped CleanupUnit (C003 §7.2).
@@ -1442,7 +1574,7 @@ pub fn final_cleanup_proof(
     runner: &dyn CleanupRunner,
     recency_seconds: u64,
     counters: &mut ScanCounters,
-) -> Result<ExecutionProof, String> {
+) -> Result<ExecutionProof, ProofFailure> {
     final_cleanup_proof_roots(
         unit,
         universe,
@@ -1463,7 +1595,7 @@ fn final_cleanup_proof_roots(
     runner: &dyn CleanupRunner,
     recency_seconds: u64,
     counters: &mut ScanCounters,
-) -> Result<ExecutionProof, String> {
+) -> Result<ExecutionProof, ProofFailure> {
     // 1. Unit-wide gate (defensive: the caller gates before dispatch, and the
     // final proof must be the single authority consumed by any spawn).
     unit_block_reason_roots(unit, clean_roots, allowed_output_roots)?;
@@ -1533,14 +1665,16 @@ fn final_cleanup_proof_roots(
             "workspace changed before cleanup; skipped: target changed (was {}, now {})",
             old_target_canon.display(),
             new_target_canon.display()
-        ));
+        )
+        .into());
     }
     if old_build_canon != new_build_canon {
         return Err(format!(
             "workspace changed before cleanup; skipped: build-dir changed (was {}, now {})",
             old_build_canon.display(),
             new_build_canon.display()
-        ));
+        )
+        .into());
     }
     // 6/7. Remap the complete fresh candidate OutputSet onto the complete fresh
     // physical graph and require the same expected shape and ownership.
@@ -1559,7 +1693,8 @@ fn final_cleanup_proof_roots(
                 g.display.display(),
                 g.ownership.label(),
                 ownership_skip_detail(g.ownership)
-            ));
+            )
+            .into());
         }
         fresh_covering.extend(g.covering.iter().cloned());
     }
@@ -1586,7 +1721,7 @@ fn final_cleanup_proof_roots(
                         "ownership changed before cleanup; skipped: another discovered workspace ({}) now overlaps cleaned output {}",
                         other.root.display(),
                         other_path.display()
-                    ));
+                    ).into());
                 }
             }
         }
@@ -1599,9 +1734,7 @@ fn final_cleanup_proof_roots(
                 return Err("preflight changed: covering root disappeared".into());
             }
             Err(e) => {
-                return Err(format!(
-                    "preflight changed: cannot inspect covering root: {e}"
-                ));
+                return Err(format!("preflight changed: cannot inspect covering root: {e}").into());
             }
             Ok(m) if m.file_type().is_symlink() => {
                 return Err("preflight changed: covering root became symlink".into());
@@ -1729,7 +1862,7 @@ pub fn execute_pre_spawn_decision(
     allowed_output_roots: &[PathBuf],
     runner: &dyn CleanupRunner,
     recency_seconds: u64,
-) -> Result<ExecutionProof, String> {
+) -> Result<ExecutionProof, ProofFailure> {
     let mut counters = ScanCounters::default();
     final_cleanup_proof(
         unit,
@@ -2092,6 +2225,35 @@ mod tests {
                 serde_json::to_string(&value).unwrap(),
                 format!("\"{expected}\"")
             );
+        }
+    }
+
+    #[test]
+    fn cleanup_reason_codes_have_stable_contract_names() {
+        use CleanupReasonCode::*;
+        let expected = [
+            (Previewed, "previewed"),
+            (Simulated, "simulated"),
+            (Cleaned, "cleaned"),
+            (BelowMinimumSize, "below_minimum_size"),
+            (TooRecentForPolicy, "too_recent_for_policy"),
+            (NotIncluded, "not_included"),
+            (Excluded, "excluded"),
+            (SkippedActive, "skipped_active"),
+            (SkippedShared, "skipped_shared"),
+            (SkippedUncertain, "skipped_uncertain"),
+            (SkippedUnauthorized, "skipped_unauthorized"),
+            (SkippedMarkerInvalid, "skipped_marker_invalid"),
+            (
+                SkippedChangedBeforeCleanup,
+                "skipped_changed_before_cleanup",
+            ),
+            (SkippedSafety, "skipped_safety"),
+            (CargoFailed, "cargo_failed"),
+            (MeasurementFailed, "measurement_failed"),
+        ];
+        for (code, stable) in expected {
+            assert_eq!(code.as_str(), stable);
         }
     }
 
@@ -2774,6 +2936,7 @@ mod tests {
                 ownership: OutputOwnershipClass::PrivateBounded,
                 outcome: CleanOutcome::Cleaned,
                 policy_disposition: Some(PolicyDisposition::Selected),
+                reason_code: CleanupReasonCode::Cleaned,
                 before_bytes: Some(100),
                 after_bytes: Some(20),
                 observed_decrease: Some(80),
@@ -3197,6 +3360,7 @@ mod tests {
         base_root: PathBuf,
         base_target: PathBuf,
         calls: std::sync::atomic::AtomicU64,
+        clean_calls: std::sync::atomic::AtomicU64,
         mutate: Box<dyn Fn() + Send + Sync>,
         second_target: Option<PathBuf>,
         second_build: Option<PathBuf>,
@@ -3208,6 +3372,7 @@ mod tests {
                 base_root: root.to_path_buf(),
                 base_target: target.to_path_buf(),
                 calls: std::sync::atomic::AtomicU64::new(0),
+                clean_calls: std::sync::atomic::AtomicU64::new(0),
                 mutate: Box::new(mutate),
                 second_target: None,
                 second_build: None,
@@ -3219,6 +3384,7 @@ mod tests {
                 base_root: root.to_path_buf(),
                 base_target: target.to_path_buf(),
                 calls: std::sync::atomic::AtomicU64::new(0),
+                clean_calls: std::sync::atomic::AtomicU64::new(0),
                 mutate: Box::new(|| {}),
                 second_target: Some(second),
                 second_build: None,
@@ -3228,6 +3394,10 @@ mod tests {
 
     impl CargoRunner for RaceRunner {
         fn run(&self, _cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput> {
+            if args.first().is_some_and(|a| a == "clean") {
+                self.clean_calls
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
             if args.first().is_some_and(|a| a == "locate-project") {
                 let json = serde_json::json!({"root": self.base_root.join("Cargo.toml")});
                 return Ok(ProcessOutput {
@@ -3545,6 +3715,174 @@ mod tests {
         for r in &report.results {
             assert_ne!(r.outcome, CleanOutcome::Simulated);
         }
+    }
+
+    #[test]
+    fn fresh_size_policy_rejects_shrunk_output_before_any_cargo_clean() {
+        for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+            let (_d, root, target) = valid_fixture(1);
+            let changed_target = target.clone();
+            let did_shrink = std::sync::atomic::AtomicBool::new(false);
+            let runner = RaceRunner::new(&root, &target, move || {
+                if !did_shrink.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    fs::remove_file(changed_target.join("artifact.bin")).unwrap();
+                    backdate(
+                        &changed_target,
+                        SystemTime::now() - Duration::from_secs(3600),
+                    );
+                }
+            });
+            let policy = CleanupPolicy {
+                min_reclaimable_bytes: 6000,
+                ..Default::default()
+            };
+            let report = clean_with_roots_policy(
+                std::slice::from_ref(&root),
+                0,
+                &[],
+                mode,
+                &runner,
+                &NoopObserver,
+                &policy,
+            )
+            .unwrap();
+            assert_eq!(report.results.len(), 1, "{mode:?}");
+            assert_eq!(
+                report.results[0].policy_disposition,
+                Some(PolicyDisposition::BelowMinimumSize),
+                "{mode:?}: {}",
+                report.results[0].detail
+            );
+            assert_eq!(
+                runner
+                    .clean_calls
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                0,
+                "{mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fresh_source_and_output_age_policy_rejects_before_any_cargo_clean() {
+        for change_output in [false, true] {
+            for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+                let (_d, root, target) = valid_fixture(1);
+                let changed_root = root.clone();
+                let changed_target = target.clone();
+                let runner = RaceRunner::new(&root, &target, move || {
+                    let touched = if change_output {
+                        changed_target.join("artifact.bin")
+                    } else {
+                        changed_root.join("src/main.rs")
+                    };
+                    let now = SystemTime::now() - Duration::from_secs(60);
+                    let file = fs::OpenOptions::new().write(true).open(touched).unwrap();
+                    file.set_modified(now).unwrap();
+                });
+                let policy = CleanupPolicy {
+                    min_inactive_seconds: Some(1800),
+                    ..Default::default()
+                };
+                let report = clean_with_roots_policy(
+                    std::slice::from_ref(&root),
+                    0,
+                    &[],
+                    mode,
+                    &runner,
+                    &NoopObserver,
+                    &policy,
+                )
+                .unwrap();
+                assert_eq!(report.results.len(), 1, "{change_output} {mode:?}");
+                assert_eq!(
+                    report.results[0].policy_disposition,
+                    Some(PolicyDisposition::TooRecentForPolicy),
+                    "{change_output} {mode:?}: {}",
+                    report.results[0].detail
+                );
+                assert_eq!(
+                    runner
+                        .clean_calls
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                    0,
+                    "{change_output} {mode:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn excluded_workspace_still_makes_nonexcluded_shared_output_non_cleanable() {
+        let temp = tempfile::tempdir().unwrap();
+        let sandbox = temp.path().join("scope");
+        let shared = sandbox.join("shared-target");
+        fs::create_dir_all(&shared).unwrap();
+        fs::write(
+            shared.join("CACHEDIR.TAG"),
+            b"Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .unwrap();
+        fs::write(shared.join("artifact.bin"), vec![0u8; 8192]).unwrap();
+        for name in ["included", "excluded"] {
+            let project = sandbox.join(name);
+            fs::create_dir_all(project.join("src")).unwrap();
+            fs::write(
+                project.join("Cargo.toml"),
+                format!("[package]\nname='{name}'\nversion='0.1.0'\nedition='2021'\n"),
+            )
+            .unwrap();
+            fs::write(project.join("Cargo.lock"), "version = 4\n").unwrap();
+            fs::write(project.join("src/main.rs"), "fn main() {}\n").unwrap();
+            fs::create_dir_all(project.join(".cargo")).unwrap();
+            fs::write(
+                project.join(".cargo/config.toml"),
+                format!("[build]\ntarget-dir = {:?}\n", shared),
+            )
+            .unwrap();
+        }
+        backdate(temp.path(), SystemTime::now() - Duration::from_secs(3600));
+        let policy = CleanupPolicy {
+            include: vec!["**".into()],
+            exclude: vec!["**/excluded".into()],
+            ..Default::default()
+        };
+        let report = clean_with_roots_policy(
+            std::slice::from_ref(&sandbox),
+            0,
+            &[],
+            CleanMode::Simulate,
+            &SystemCleanupRunner,
+            &NoopObserver,
+            &policy,
+        )
+        .unwrap();
+        assert_eq!(
+            report.results.len(),
+            2,
+            "both workspaces must remain in the ownership universe"
+        );
+        assert!(
+            report
+                .results
+                .iter()
+                .all(|r| r.ownership == OutputOwnershipClass::Shared
+                    && r.outcome == CleanOutcome::Skipped)
+        );
+        assert!(
+            report
+                .results
+                .iter()
+                .any(|r| r.policy_disposition == Some(PolicyDisposition::Excluded)),
+            "{report:?}"
+        );
+        assert!(
+            report
+                .results
+                .iter()
+                .any(|r| r.policy_disposition.is_none()),
+            "included owner must still be blocked by excluded owner's shared output"
+        );
     }
 
     #[test]

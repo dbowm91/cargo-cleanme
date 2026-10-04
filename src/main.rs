@@ -125,29 +125,6 @@ fn run() -> Result<i32, AppError> {
                 ));
             };
             let roots = collapse_roots(roots);
-            if roots.is_empty() {
-                if format == cli::OutputFormat::Json {
-                    let empty = cargo_cleanme::cleanup::CleanReport {
-                        mode,
-                        ..Default::default()
-                    };
-                    println!(
-                        "{}",
-                        serde_json::to_string(&cargo_cleanme::output::cleanup(
-                            &empty,
-                            if full { "full" } else { "known" }
-                        ))
-                        .map_err(|e| AppError::Config(e.to_string()))?
-                    );
-                } else {
-                    println!("no bounded cleanup roots are known; no cleanup commands were run");
-                }
-                return Ok(0);
-            }
-            let show = format == cli::OutputFormat::Human
-                && cargo_cleanme::progress::should_show_progress(no_progress);
-            let renderer = cargo_cleanme::progress::IndicatifRenderer::new(!show);
-            let wall_start = std::time::Instant::now();
             let configured = &config.cleanup.policy;
             let policy = cargo_cleanme::cleanup::CleanupPolicy {
                 min_reclaimable_bytes: min_reclaimable_bytes
@@ -164,6 +141,31 @@ fn run() -> Result<i32, AppError> {
                     exclude
                 },
             };
+            if roots.is_empty() {
+                if format == cli::OutputFormat::Json {
+                    let empty = cargo_cleanme::cleanup::CleanReport {
+                        mode,
+                        effective_policy: Some(policy),
+                        ..Default::default()
+                    };
+                    println!(
+                        "{}",
+                        serde_json::to_string(&cargo_cleanme::output::cleanup(
+                            &empty,
+                            if full { "full" } else { "known" },
+                            state_generation
+                        ))
+                        .map_err(|e| AppError::Config(e.to_string()))?
+                    );
+                } else {
+                    println!("no bounded cleanup roots are known; no cleanup commands were run");
+                }
+                return Ok(0);
+            }
+            let show = format == cli::OutputFormat::Human
+                && cargo_cleanme::progress::should_show_progress(no_progress);
+            let renderer = cargo_cleanme::progress::IndicatifRenderer::new(!show);
+            let wall_start = std::time::Instant::now();
             let report = cargo_cleanme::cleanup::clean_with_roots_policy(
                 &roots,
                 config.scan.recency_seconds,
@@ -190,7 +192,8 @@ fn run() -> Result<i32, AppError> {
                             "known"
                         } else {
                             "explicit"
-                        }
+                        },
+                        state_generation
                     ))
                     .map_err(|e| AppError::Config(format!("cannot serialize JSON report: {e}")))?
                 );

@@ -183,6 +183,104 @@ fn json_scope_block_is_emitted_with_nonzero_exit_status() {
     assert_eq!(json["result"]["scope_blocked"], true);
 }
 
+#[cfg(unix)]
+#[test]
+fn json_unattended_yes_executes_through_cargo_and_emits_typed_result() {
+    use std::{
+        os::unix::fs::PermissionsExt,
+        time::{Duration, SystemTime},
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("workspace");
+    let target = root.join("target");
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(target.join("debug")).unwrap();
+    fs::create_dir_all(&bin).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname='fixture'\nversion='0.1.0'\nedition='2021'\n",
+    )
+    .unwrap();
+    fs::write(root.join("Cargo.lock"), "version = 4\n").unwrap();
+    fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    fs::write(
+        target.join("CACHEDIR.TAG"),
+        "Signature: 8a477f597d28d172789f06886806bc55\n",
+    )
+    .unwrap();
+    let artifact = target.join("artifact.bin");
+    fs::write(&artifact, vec![7u8; 4096]).unwrap();
+    let old = SystemTime::now() - Duration::from_secs(3600);
+    for file in [
+        root.join("src/main.rs"),
+        root.join("Cargo.toml"),
+        root.join("Cargo.lock"),
+        target.join("CACHEDIR.TAG"),
+        artifact.clone(),
+    ] {
+        fs::OpenOptions::new()
+            .write(true)
+            .open(file)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+    }
+    fs::File::open(&target).unwrap().set_modified(old).unwrap();
+    fs::File::open(target.join("debug"))
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    fs::File::open(root.join("src"))
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    let log = temp.path().join("cargo.log");
+    let fake = bin.join("cargo");
+    fs::write(&fake, r##"#!/bin/sh
+printf '%s\n' "$1" >> "$CARGO_LOG"
+case "$1" in
+  locate-project) printf '{"root":"%s/Cargo.toml"}\n' "$FIXTURE_ROOT" ;;
+  metadata) printf '{"packages":[{"id":"fixture 0.1.0","name":"fixture","manifest_path":"%s/Cargo.toml"}],"workspace_members":["fixture 0.1.0"],"workspace_root":"%s","target_directory":"%s"}\n' "$FIXTURE_ROOT" "$FIXTURE_ROOT" "$FIXTURE_TARGET" ;;
+  clean) rm -f "$FIXTURE_TARGET/artifact.bin" ;;
+  *) exit 2 ;;
+esac
+"##).unwrap();
+    let mut permissions = fs::metadata(&fake).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake, permissions).unwrap();
+    let config = temp.path().join("config.toml");
+    fs::write(&config, "[scan]\nrecency_seconds = 0\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--no-progress",
+            "clean",
+            root.to_str().unwrap(),
+            "--yes",
+            "--format",
+            "json",
+        ])
+        .env("PATH", path_with(&bin))
+        .env("FIXTURE_ROOT", &root)
+        .env("FIXTURE_TARGET", &target)
+        .env("CARGO_LOG", &log)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["result"]["summary"]["cleaned"], 1, "{json}");
+    assert_eq!(json["result"]["units"][0]["reason_code"], "cleaned");
+    assert!(!artifact.exists());
+    let calls = fs::read_to_string(log).unwrap();
+    assert_eq!(calls.lines().filter(|line| *line == "clean").count(), 1);
+}
+
 #[test]
 fn config_edit_uses_fake_editor_process_and_keeps_invalid_edits() {
     let dir = tempfile::tempdir().unwrap();

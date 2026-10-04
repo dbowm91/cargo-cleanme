@@ -12,7 +12,9 @@
 ## Cleanup result
 
 - `discovered_manifests`, `resolved_workspaces`, and `units_considered` describe scope coverage.
+- `selected_roots`, `effective_policy`, and optional `state_generation_last_full_at` identify the cleanup scope and policy inputs; learned-state generation is discovery metadata only.
 - `scope_blocked`, `scope_reason`, and `unresolved_ownership` report incomplete ownership coverage.
+- `unresolved_participants` retains each unresolved manifest, resolution stage, and diagnostic reason.
 - `units` contains the workspace root, affected output roots, ownership class, optional stable `policy_disposition`, operation outcome, distinct before/after/decrease byte fields, and optional human detail.
 - `reason_code` is a stable machine value. Current values include the policy dispositions, `previewed`, `simulated`, `cleaned`, `measurement_failed`, `cargo_failed`, `skipped_shared`, `skipped_uncertain`, `skipped_unauthorized`, and `skipped_safety`.
 - `summary` reports previewed, simulated, cleaned, skipped, failed, and diagnostic counts.
