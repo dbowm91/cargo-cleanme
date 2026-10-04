@@ -65,6 +65,8 @@ fn run() -> Result<i32, AppError> {
             older_than,
             include,
             exclude,
+            profile,
+            package,
             dry_run,
             dryrun,
             yes,
@@ -141,11 +143,15 @@ fn run() -> Result<i32, AppError> {
                     exclude
                 },
             };
+            let selector = profile
+                .map(cargo_cleanme::cleanup::CleanupSelector::Profile)
+                .or_else(|| package.map(cargo_cleanme::cleanup::CleanupSelector::Package));
             if roots.is_empty() {
                 if format == cli::OutputFormat::Json {
                     let empty = cargo_cleanme::cleanup::CleanReport {
                         mode,
                         effective_policy: Some(policy),
+                        selector: selector.clone(),
                         ..Default::default()
                     };
                     println!(
@@ -166,7 +172,7 @@ fn run() -> Result<i32, AppError> {
                 && cargo_cleanme::progress::should_show_progress(no_progress);
             let renderer = cargo_cleanme::progress::IndicatifRenderer::new(!show);
             let wall_start = std::time::Instant::now();
-            let report = cargo_cleanme::cleanup::clean_with_roots_policy(
+            let report = cargo_cleanme::cleanup::clean_with_roots_policy_selector(
                 &roots,
                 config.scan.recency_seconds,
                 &config.cleanup.allowed_output_roots,
@@ -174,6 +180,7 @@ fn run() -> Result<i32, AppError> {
                 &cargo_cleanme::cleanup::SystemCleanupRunner,
                 &renderer,
                 &policy,
+                selector,
             )?;
             renderer.finish_and_clear();
             if format == cli::OutputFormat::Human

@@ -1,6 +1,6 @@
 # M008A — Workspace Selective Cleanup Policy
 
-Status: conditionally closed
+Status: closed
 
 Repository baseline: `3ee9699a0b0d987287d08e427195284e08d079f7`
 

@@ -236,13 +236,15 @@ fn json_unattended_yes_executes_through_cargo_and_emits_typed_result() {
         .set_modified(old)
         .unwrap();
     let log = temp.path().join("cargo.log");
+    let args_log = temp.path().join("cargo-args.log");
     let fake = bin.join("cargo");
     fs::write(&fake, r##"#!/bin/sh
+if [ "$1" = "--version" ]; then printf 'cargo 1.99.0 (fixture)\n'; exit 0; fi
 printf '%s\n' "$1" >> "$CARGO_LOG"
 case "$1" in
   locate-project) printf '{"root":"%s/Cargo.toml"}\n' "$FIXTURE_ROOT" ;;
   metadata) printf '{"packages":[{"id":"fixture 0.1.0","name":"fixture","manifest_path":"%s/Cargo.toml"}],"workspace_members":["fixture 0.1.0"],"workspace_root":"%s","target_directory":"%s"}\n' "$FIXTURE_ROOT" "$FIXTURE_ROOT" "$FIXTURE_TARGET" ;;
-  clean) rm -f "$FIXTURE_TARGET/artifact.bin" ;;
+  clean) printf '%s\n' "$@" >> "$CARGO_ARGS_LOG"; rm -f "$FIXTURE_TARGET/artifact.bin" ;;
   *) exit 2 ;;
 esac
 "##).unwrap();
@@ -259,6 +261,8 @@ esac
             "clean",
             root.to_str().unwrap(),
             "--yes",
+            "--profile",
+            "dev",
             "--format",
             "json",
         ])
@@ -266,6 +270,7 @@ esac
         .env("FIXTURE_ROOT", &root)
         .env("FIXTURE_TARGET", &target)
         .env("CARGO_LOG", &log)
+        .env("CARGO_ARGS_LOG", &args_log)
         .output()
         .unwrap();
     assert!(
@@ -276,9 +281,135 @@ esac
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["result"]["summary"]["cleaned"], 1, "{json}");
     assert_eq!(json["result"]["units"][0]["reason_code"], "cleaned");
+    assert_eq!(json["result"]["selector_kind"], "profile");
+    assert_eq!(json["result"]["selector_value"], "dev");
+    assert_eq!(
+        json["result"]["units"][0]["before_bytes"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        json["result"]["units"][0]["selector_estimate_bytes"],
+        serde_json::Value::Null
+    );
+    assert!(
+        json["result"]["units"][0]["output_union_before_bytes"]
+            .as_u64()
+            .unwrap()
+            >= 4096
+    );
     assert!(!artifact.exists());
-    let calls = fs::read_to_string(log).unwrap();
+    let calls = fs::read_to_string(&log).unwrap();
     assert_eq!(calls.lines().filter(|line| *line == "clean").count(), 1);
+    assert!(
+        fs::read_to_string(&args_log)
+            .unwrap()
+            .lines()
+            .any(|line| line == "--profile")
+    );
+
+    let simulate_output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--no-progress",
+            "clean",
+            root.to_str().unwrap(),
+            "--profile",
+            "dev",
+            "--dryrun",
+            "--format",
+            "json",
+        ])
+        .env("PATH", path_with(&bin))
+        .env("FIXTURE_ROOT", &root)
+        .env("FIXTURE_TARGET", &target)
+        .env("CARGO_LOG", &log)
+        .output()
+        .unwrap();
+    let simulate_json: serde_json::Value = serde_json::from_slice(&simulate_output.stdout).unwrap();
+    assert_eq!(simulate_json["result"]["units"][0]["outcome"], "simulated");
+    assert_eq!(
+        fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .filter(|line| *line == "clean")
+            .count(),
+        1
+    );
+
+    let policy_output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--no-progress",
+            "clean",
+            root.to_str().unwrap(),
+            "--profile",
+            "dev",
+            "--min-reclaimable-bytes",
+            "1",
+            "--yes",
+            "--format",
+            "json",
+        ])
+        .env("PATH", path_with(&bin))
+        .env("FIXTURE_ROOT", &root)
+        .env("FIXTURE_TARGET", &target)
+        .env("CARGO_LOG", &log)
+        .output()
+        .unwrap();
+    let policy_json: serde_json::Value = serde_json::from_slice(&policy_output.stdout).unwrap();
+    assert_eq!(
+        policy_json["result"]["units"][0]["reason_code"],
+        "selector_unsupported"
+    );
+    assert_eq!(
+        policy_json["result"]["units"][0]["policy_disposition"],
+        "selector_estimate_unavailable"
+    );
+    assert_eq!(
+        fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .filter(|line| *line == "clean")
+            .count(),
+        1
+    );
+
+    let package_output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--no-progress",
+            "clean",
+            root.to_str().unwrap(),
+            "--package",
+            "fixture",
+            "--yes",
+            "--format",
+            "json",
+        ])
+        .env("PATH", path_with(&bin))
+        .env("FIXTURE_ROOT", &root)
+        .env("FIXTURE_TARGET", &target)
+        .env("CARGO_LOG", &log)
+        .env("CARGO_ARGS_LOG", &args_log)
+        .output()
+        .unwrap();
+    let package_json: serde_json::Value = serde_json::from_slice(&package_output.stdout).unwrap();
+    assert_eq!(
+        package_json["result"]["units"][0]["reason_code"],
+        "selector_unsupported"
+    );
+    assert_eq!(package_json["result"]["summary"]["skipped"], 1);
+    assert_eq!(
+        fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .filter(|line| *line == "clean")
+            .count(),
+        1
+    );
 }
 
 #[test]

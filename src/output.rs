@@ -56,6 +56,8 @@ pub struct CleanupV1 {
     pub unresolved_participants: Vec<UnresolvedParticipantV1>,
     pub selected_roots: Vec<String>,
     pub effective_policy: Option<PolicyV1>,
+    pub selector_kind: Option<&'static str>,
+    pub selector_value: Option<String>,
     pub state_generation_last_full_at: Option<u64>,
     pub units: Vec<CleanupUnitV1>,
     pub summary: CleanupSummaryV1,
@@ -82,6 +84,8 @@ pub struct CleanupUnitV1 {
     pub outcome: String,
     pub reason_code: String,
     pub before_bytes: Option<u64>,
+    pub selector_estimate_bytes: Option<u64>,
+    pub output_union_before_bytes: Option<u64>,
     pub after_bytes: Option<u64>,
     pub observed_decrease_bytes: Option<u64>,
     pub detail: String,
@@ -167,7 +171,17 @@ pub fn cleanup(
             policy_disposition: r.policy_disposition.map(policy_code),
             outcome: format!("{:?}", r.outcome).to_lowercase(),
             reason_code: r.reason_code.as_str().into(),
-            before_bytes: r.before_bytes,
+            before_bytes: if report.selector.is_some() {
+                None
+            } else {
+                r.before_bytes
+            },
+            selector_estimate_bytes: if report.selector.is_some() {
+                None
+            } else {
+                r.before_bytes
+            },
+            output_union_before_bytes: r.before_bytes,
             after_bytes: r.after_bytes,
             observed_decrease_bytes: r.observed_decrease,
             detail: r.detail.clone(),
@@ -231,6 +245,8 @@ pub fn cleanup(
                 include: p.include.clone(),
                 exclude: p.exclude.clone(),
             }),
+            selector_kind: report.selector.as_ref().map(|s| s.kind()),
+            selector_value: report.selector.as_ref().map(|s| s.value().to_owned()),
             state_generation_last_full_at: state_generation,
             units,
             summary,
@@ -246,6 +262,7 @@ fn policy_code(code: crate::cleanup::PolicyDisposition) -> String {
         TooRecentForPolicy => "too_recent_for_policy",
         NotIncluded => "not_included",
         Excluded => "excluded",
+        SelectorEstimateUnavailable => "selector_estimate_unavailable",
     }
     .into()
 }

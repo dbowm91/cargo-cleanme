@@ -2,9 +2,9 @@
 
 Plan: `plans/implementation/artifact-discovery-cleanup/008a-workspace-selective-cleanup-policy.md`
 
-Disposition: **conditionally closed**
+Disposition: **closed**
 
-Implementation commit: `aa758f6af6cdc4c007a6c05bde6938940ba7f2bf` (`Add workspace cleanup selection policy`).
+Implementation commits: `aa758f6af6cdc4c007a6c05bde6938940ba7f2bf` (`Add workspace cleanup selection policy`) and `ad5c84d91713f1dd5ddc4638ea2e871439b16c45` (`Complete M008A and M008B qualification fixtures`).
 
 Date: 2026-10-04
 
@@ -23,24 +23,19 @@ Date: 2026-10-04
 | Neutral backward-compatible config | `config::tests::legacy_cleanup_config_loads_with_neutral_policy` | Pass |
 | Invalid glob and overflowing duration rejected | `config::tests::cleanup_policy_globs_and_durations_are_validated` | Pass |
 | Policy CLI accepted for repeated patterns and orchestration modes | `cli::tests::cleanup_policy_options_are_repeatable_and_mode_independent` | Pass |
-| Fresh size/activity data collected by final proof | `cleanup::final_cleanup_proof_roots`; existing final-proof race suite | Implemented; policy-specific race fixtures still required |
-| Excluded workspaces remain in ownership universe | Policy selection occurs after `resolve_cleanup_scope`; no dedicated exclusion/shared-output fixture yet | Implemented by ordering; evidence incomplete |
+| Fresh size/activity data collected by final proof | `cleanup::final_cleanup_proof_roots`; `fresh_size_policy_rejects_shrunk_output_before_any_cargo_clean`; `fresh_source_and_output_age_policy_rejects_before_any_cargo_clean` | Pass; all three modes assert no Cargo clean spawn |
+| Excluded workspaces remain in ownership universe | `excluded_workspace_still_makes_nonexcluded_shared_output_non_cleanable` | Pass |
 | Policy outcomes are typed and machine-projectable | `CleanResult.policy_disposition`; `PolicyDisposition` serializes stable snake-case values; `plans/output-schema-v1.md` | Pass; interface frozen for M008B |
-| Policy filter behavior | `cleanup::tests::real_temp_project_preview_and_execute_with_redirected_target` now checks minimum-size, inactivity-age, include/exclude precedence dispositions | Partial; fresh shrink/source-change race, excluded shared-owner, and all-mode zero-spawn fixtures remain |
-| Hosted Linux/macOS/Windows and Rust 1.89 gates | Local Rust 1.89 checks/tests passed; no hosted matrix run in this implementation | Local pass; hosted evidence outstanding |
+| Policy filter behavior | `cleanup::tests::real_temp_project_preview_and_execute_with_redirected_target`; policy race and shared-owner fixtures above | Pass |
+| Hosted Linux/macOS/Windows and Rust 1.89 gates | GitHub Actions CI run `37175693985` | Pass on Ubuntu, macOS, Windows, and Rust 1.89 |
 
 ## Verification run
 
 - `rtk cargo fmt --check` — passed.
-- `rtk cargo test --all-targets --all-features` — passed, 187 tests.
+- `rtk cargo test --all-targets --all-features` — passed, 196 tests.
 - `rtk cargo clippy --all-targets --all-features -- -D warnings` — passed.
 - `rtk rustup run 1.89 cargo check --locked --all-targets` — passed.
-- `rtk rustup run 1.89 cargo test --locked --all-targets` — passed, 187 tests.
+- `rtk rustup run 1.89 cargo test --locked --all-targets` — passed, 188 tests.
 - `rtk git diff --check` — passed.
 
-## Qualification required before M008B
-
-1. Add policy-specific fresh-size shrink, source-age change, output-age change, excluded-owner/shared-output, and all-mode zero-Cargo fixtures.
-2. Run hosted Linux/macOS/Windows checks and record their results.
-
-No unsafe behavior was identified in the implemented path. M008B is unblocked against the frozen typed interface, but M008A's qualification record remains conditional on the fixtures and hosted platform results above. M008C remains blocked on M008A/M008B closure and its independent real-Cargo selector matrix.
+No unsafe behavior was identified. The required policy freshness, scope-ownership, all-mode no-spawn, MSRV, and hosted platform evidence is complete. M008B and M008C are unblocked.

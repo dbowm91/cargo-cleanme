@@ -34,7 +34,7 @@ M008 planning baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | blocked | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M008B/M008A qualification | M008A and M008B implementations are conditionally closed. M008A's policy race/ownership fixtures and hosted platform evidence remain; M008B's full typed reason/schema fixture matrix and hosted platform evidence remain. M008C remains blocked on complete M008A/M008B closure plus real-Cargo selector qualification. |
+| Artifact discovery and cleanup | active | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M008D package-selector qualification | M008A/M008B are closed. M008C is conditionally closed with profile selection enabled and package selection typed-deferred; M008D is ready to qualify package enablement. |
 
 ## Implementation handoffs
 
@@ -61,13 +61,14 @@ M008 planning baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 | Artifact discovery and cleanup | C005 uncertainty-aware state reconciliation + config/edit hardening | **closed** | plans/implementation/artifact-discovery-cleanup/c005-uncertainty-aware-state-reconciliation-and-config-edit-hardening.md | Closure: plans/closure/artifact-discovery-cleanup/c005-status.md. Localized Full uncertainty reconciles conservatively; isolated real Full published schema 2; hosted platform/MSRV gates pass. |
 | Artifact discovery and cleanup | C006 combined-root cleanup ownership universe | **closed** | plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md | Closure: plans/closure/artifact-discovery-cleanup/c006-status.md. Combined discovery/coverage/ownership proof and final per-candidate refresh pass hosted platform/MSRV gates. |
 | Artifact discovery and cleanup | C007 discovery-state recovery + post-M007 planning cleanup | **closed** | plans/implementation/artifact-discovery-cleanup/c007-discovery-state-recovery-and-post-m007-planning-cleanup.md | Closure: plans/closure/artifact-discovery-cleanup/c007-status.md. Hosted platform/MSRV run 37152008602 passed. |
-| Artifact discovery and cleanup | M008A workspace selective cleanup policy | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/008a-workspace-selective-cleanup-policy.md | Closure: plans/closure/artifact-discovery-cleanup/008a-status.md. Policy implementation and local/MSRV checks landed; M008B cannot start until typed dispositions and policy-specific final-proof fixtures are added and hosted platform gates pass. |
-| Artifact discovery and cleanup | M008B machine-readable reporting + automation contract | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/008b-machine-readable-reporting-and-automation-contract.md | Closure: plans/closure/artifact-discovery-cleanup/008b-status.md. JSON v1 and local CLI/exit checks landed; typed subreason matrix, complete schema fixtures, fake-Cargo unattended Execute, and hosted qualification remain. |
-| Artifact discovery and cleanup | M008C Cargo profile/package selective cleanup qualification | **blocked** | plans/implementation/artifact-discovery-cleanup/008c-cargo-profile-package-selective-cleanup-qualification.md | Hard dependencies: M008A and M008B closure. M008C Stage 1 then produces the real-Cargo selector mutation/accounting evidence required before Stage 2 Execute can be enabled. Unsupported/unqualified selectors remain fail-closed. |
+| Artifact discovery and cleanup | M008A workspace selective cleanup policy | **closed** | plans/implementation/artifact-discovery-cleanup/008a-workspace-selective-cleanup-policy.md | Closure: plans/closure/artifact-discovery-cleanup/008a-status.md. Fresh policy races, excluded shared owner, all-mode zero-spawn assertions, Rust 1.89, and hosted platform CI passed. |
+| Artifact discovery and cleanup | M008B machine-readable reporting + automation contract | **closed** | plans/implementation/artifact-discovery-cleanup/008b-machine-readable-reporting-and-automation-contract.md | Closure: plans/closure/artifact-discovery-cleanup/008b-status.md. Typed subreason codes, selector/report DTOs, unattended fake-Cargo Execute, JSON scope metadata, Rust 1.89, and hosted CI passed. |
+| Artifact discovery and cleanup | M008C Cargo profile/package selective cleanup qualification | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/008c-cargo-profile-package-selective-cleanup-qualification.md | Closure: plans/closure/artifact-discovery-cleanup/008c-status.md. Real-Cargo matrix enables Cargo profile selection for qualified versions; package selection remains typed unsupported due shared-output and configured-target behavior. |
+| Artifact discovery and cleanup | M008D Cargo package-selector qualification and enablement | **ready** | plans/implementation/artifact-discovery-cleanup/008d-cargo-package-selector-qualification-and-enablement.md | Depends on closed M008A/B contracts and M008C's qualification/selector-accounting decision. Package Execute remains disabled until package identity and runtime behavior are bounded. |
 
 ## Current handoff
 
-C007 is closed. M008A and M008B implementation slices are conditionally closed with qualification work recorded in their closure records. M008C remains dependency-blocked.
+C007 and M008A/M008B are closed. M008C is conditionally closed: Cargo profile cleanup is enabled with unknown selector-byte accounting; package cleanup is a typed no-clean disposition. M008D is the next ready handoff for package selector qualification.
 
 Milestone sequence:
 
@@ -79,12 +80,13 @@ C005 -> closed
 C006 -> closed
 M007 -> closed by C006
 C007 discovery-state recovery + post-M007 planning cleanup -> closed
-M008A workspace selective cleanup policy -> conditionally closed; typed disposition and qualification follow-up remains
-M008B machine-readable reporting/automation contract -> conditionally closed; full reason/schema/platform qualification remains
-M008C Cargo profile/package selective cleanup -> blocked on M008A/M008B; Stage 2 Execute gated on Stage 1 qualification
+M008A workspace selective cleanup policy -> closed
+M008B machine-readable reporting/automation contract -> closed
+M008C Cargo profile/package selective cleanup -> conditionally closed; profile enabled, package deferred
+M008D Cargo package selector -> ready; runtime and package identity qualification gates Execute
 ~~~
 
-Phase 9 planning is registered. No M008 implementation handoff is currently ready: M008A/M008B qualification follow-ups block M008C, which also requires its staged Cargo selector evidence. Distribution remains deferred to Phase 10.
+Phase 9 planning is registered. M008D is the only ready implementation handoff. Distribution remains deferred to Phase 10.
 
 ### Current destructive safety boundary
 

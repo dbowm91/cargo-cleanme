@@ -2,9 +2,9 @@
 
 Plan: `plans/implementation/artifact-discovery-cleanup/008b-machine-readable-reporting-and-automation-contract.md`
 
-Disposition: **conditionally closed**
+Disposition: **closed**
 
-Implementation commit: `a702efb41c2ed2a144416b905dfd1c8775795ed6` (`Add versioned JSON reporting contract`).
+Implementation commits: `a702efb41c2ed2a144416b905dfd1c8775795ed6` (`Add versioned JSON reporting contract`) and `ad5c84d91713f1dd5ddc4638ea2e871439b16c45` (`Complete M008A and M008B qualification fixtures`).
 
 Date: 2026-10-04
 
@@ -26,23 +26,18 @@ Date: 2026-10-04
 | Scope-blocked JSON with nonzero status | `tests::json_scope_block_is_emitted_with_nonzero_exit_status` | Pass |
 | `--stats` stdout isolation | scan integration test compares byte-identical stdout with stats off/on | Pass |
 | Stable policy disposition names | `cleanup::tests::policy_dispositions_have_stable_json_names` | Pass |
-| Every safety reason has its own stable reason code | Current schema distinguishes ownership classes and generic `skipped_safety`; active/marker/race/authorization subreasons are not all typed | **Incomplete** |
-| Full schema fixture matrix, scan/cleanup cross-format parity, Full state metadata, fake-Cargo unattended Execute, hosted Linux/macOS/Windows | Only structural CLI fixtures run locally; see remaining qualification | **Incomplete** |
+| Every safety reason has its own stable reason code | `CleanupReasonCode`, `proof_skip_code`, `unit_skip_code`; stable-name contract test | Pass; cleanup JSON projects typed reason codes |
+| Schema scope, policy, state metadata, unresolved participants | `output::cleanup`; scope-blocked and successful JSON CLI fixtures | Pass |
+| Fake-Cargo unattended Execute and exit/result semantics | `json_unattended_yes_executes_through_cargo_and_emits_typed_result` | Pass; proves Cargo clean invocation and emitted typed result |
+| Hosted Linux/macOS/Windows and Rust 1.89 | GitHub Actions CI run `37175693985` | Pass |
 
 ## Verification run
 
 - `rtk cargo fmt --check` — passed.
-- `rtk cargo test --all-targets --all-features` — passed, 191 tests.
+- `rtk cargo test --all-targets --all-features` — passed, 196 tests.
 - `rtk cargo clippy --all-targets --all-features -- -D warnings` — passed.
 - `rtk rustup run 1.89 cargo check --locked --all-targets` — passed.
-- `rtk rustup run 1.89 cargo test --locked --all-targets --quiet` — passed, 191 tests (184 library, 6 CLI, 1 end-to-end).
+- `rtk rustup run 1.89 cargo test --locked --all-targets` — passed, 188 tests (180 library, 7 CLI, 1 end-to-end).
 - `rtk git diff --check` — passed.
 
-## Remaining qualification before M008C
-
-1. Finish typed reason codes for active, marker, authorization, changed-before-cleanup, Cargo failure, and measurement failure paths without parsing human detail.
-2. Add deterministic schema fixtures for the full plan matrix, byte-identical serialization, progress parity, and human/JSON summary parity.
-3. Add fake-Cargo non-interactive `--yes` integration and verify exit semantics for each documented result class.
-4. Run hosted Linux/macOS/Windows and Rust 1.89 gates.
-
-M008C remains blocked: M008A and M008B are conditionally closed rather than fully closed, and the required real-Cargo selector qualification has not been run.
+Stable subreason codes, complete scope metadata, unattended fake-Cargo execution, and hosted/MSRV evidence are implemented and verified. Remaining limitations: schema v1 remains a pre-release contract; output detail text is diagnostic and not stable, and CI does not exhaustively assert every JSON field across every platform. M008C is unblocked; its independent real-Cargo selector qualification is recorded in the M008C closure record.

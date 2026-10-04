@@ -85,6 +85,7 @@ pub enum CleanupReasonCode {
     SkippedSafety,
     CargoFailed,
     MeasurementFailed,
+    SelectorUnsupported,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -124,6 +125,7 @@ impl CleanupReasonCode {
             Self::SkippedSafety => "skipped_safety",
             Self::CargoFailed => "cargo_failed",
             Self::MeasurementFailed => "measurement_failed",
+            Self::SelectorUnsupported => "selector_unsupported",
         }
     }
 }
@@ -136,6 +138,7 @@ pub enum PolicyDisposition {
     TooRecentForPolicy,
     NotIncluded,
     Excluded,
+    SelectorEstimateUnavailable,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -154,6 +157,27 @@ pub struct CleanReport {
     pub resolved_workspaces: usize,
     pub units_considered: usize,
     pub effective_policy: Option<CleanupPolicy>,
+    pub selector: Option<CleanupSelector>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CleanupSelector {
+    Profile(String),
+    Package(String),
+}
+
+impl CleanupSelector {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Profile(_) => "profile",
+            Self::Package(_) => "package",
+        }
+    }
+    pub fn value(&self) -> &str {
+        match self {
+            Self::Profile(value) | Self::Package(value) => value,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -252,10 +276,20 @@ impl CleanReport {
                 out.push_str(&format!("  output {}", escaped_path(root)));
             }
             if let Some(n) = r.before_bytes {
-                out.push_str(&format!("  before {}", crate::report::format_bytes(n)));
+                let label = if self.selector.is_some() {
+                    "output-union before"
+                } else {
+                    "before"
+                };
+                out.push_str(&format!("  {label} {}", crate::report::format_bytes(n)));
             }
             if let Some(n) = r.after_bytes {
-                out.push_str(&format!("  after {}", crate::report::format_bytes(n)));
+                let label = if self.selector.is_some() {
+                    "output-union after"
+                } else {
+                    "after"
+                };
+                out.push_str(&format!("  {label} {}", crate::report::format_bytes(n)));
             }
             if let Some(n) = r.observed_decrease {
                 out.push_str(&format!(
@@ -653,6 +687,34 @@ pub fn clean_with_roots_policy(
     observer: &dyn ProgressObserver,
     policy: &CleanupPolicy,
 ) -> Result<CleanReport, AppError> {
+    clean_with_roots_policy_selector(
+        roots,
+        recency_seconds,
+        allowed_output_roots,
+        mode,
+        runner,
+        observer,
+        policy,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn clean_with_roots_policy_selector(
+    roots: &[PathBuf],
+    recency_seconds: u64,
+    allowed_output_roots: &[PathBuf],
+    mode: CleanMode,
+    runner: &dyn CleanupRunner,
+    observer: &dyn ProgressObserver,
+    policy: &CleanupPolicy,
+    selector: Option<CleanupSelector>,
+) -> Result<CleanReport, AppError> {
+    let profile_supported = if matches!(selector, Some(CleanupSelector::Profile(_))) {
+        runtime_supports_profile_clean()
+    } else {
+        false
+    };
     let includes = compile_policy_globs(&policy.include)?;
     let excludes = compile_policy_globs(&policy.exclude)?;
     for root in roots {
@@ -763,6 +825,7 @@ pub fn clean_with_roots_policy(
         ..Default::default()
     };
     report.effective_policy = Some(policy.clone());
+    report.selector = selector.clone();
 
     if !unresolved_ownership.is_empty() {
         let unresolved = unresolved_ownership.len();
@@ -819,6 +882,36 @@ pub fn clean_with_roots_policy(
                 "cleanup policy: workspace root is excluded".into(),
                 Some(PolicyDisposition::Excluded),
                 CleanupReasonCode::Excluded,
+            );
+            observer.unit_completed(cleanup_phase);
+            continue;
+        }
+        if matches!(selector.as_ref(), Some(CleanupSelector::Package(_))) {
+            skipped(
+                &mut report,
+                "package selector is not enabled; no Cargo clean was invoked".into(),
+                None,
+                CleanupReasonCode::SelectorUnsupported,
+            );
+            observer.unit_completed(cleanup_phase);
+            continue;
+        }
+        if matches!(selector.as_ref(), Some(CleanupSelector::Profile(_))) && !profile_supported {
+            skipped(
+                &mut report,
+                "runtime Cargo profile-clean capability is unknown or unsupported; no Cargo clean was invoked".into(),
+                None,
+                CleanupReasonCode::SelectorUnsupported,
+            );
+            observer.unit_completed(cleanup_phase);
+            continue;
+        }
+        if selector.is_some() && policy.min_reclaimable_bytes != 0 {
+            skipped(
+                &mut report,
+                "selector-specific reclaimable bytes are unknown; minimum-size policy cannot be evaluated".into(),
+                Some(PolicyDisposition::SelectorEstimateUnavailable),
+                CleanupReasonCode::SelectorUnsupported,
             );
             observer.unit_completed(cleanup_phase);
             continue;
@@ -929,7 +1022,7 @@ pub fn clean_with_roots_policy(
                 // here with no intervening mutation window beyond the spawn
                 // itself (fail-closed TOCTOU minimization, not elimination).
                 let frozen = proof.frozen_env.clone();
-                let args = clean_args(&proof, mode);
+                let args = clean_args(&proof, mode, selector.as_ref());
                 let cwd = proof.workspace_root.clone();
                 let spawned = if frozen.is_empty() {
                     runner.run(&cwd, &args)
@@ -1918,7 +2011,11 @@ fn frozen_env(ctx: &RevalidatedContext) -> Result<Vec<(OsString, OsString)>, Str
     Ok(env)
 }
 
-fn clean_args(ctx: &RevalidatedContext, mode: CleanMode) -> Vec<OsString> {
+fn clean_args(
+    ctx: &RevalidatedContext,
+    mode: CleanMode,
+    selector: Option<&CleanupSelector>,
+) -> Vec<OsString> {
     let mut args = vec![OsString::from("clean")];
     if mode == CleanMode::Preview {
         args.push(OsString::from("--dry-run"));
@@ -1931,7 +2028,36 @@ fn clean_args(ctx: &RevalidatedContext, mode: CleanMode) -> Vec<OsString> {
     // Freeze target via explicit arg as well as env (equivalent, Cargo-owned).
     args.push(OsString::from("--target-dir"));
     args.push(ctx.target.as_os_str().to_owned());
+    if let Some(CleanupSelector::Profile(profile)) = selector {
+        args.push(OsString::from("--profile"));
+        args.push(OsString::from(profile));
+    }
     args
+}
+
+fn runtime_supports_profile_clean() -> bool {
+    let Ok(output) = Command::new("cargo").arg("--version").output() else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let Some(version) = text.split_whitespace().nth(1) else {
+        return false;
+    };
+    cargo_profile_supported_version(version)
+}
+
+fn cargo_profile_supported_version(version: &str) -> bool {
+    let mut components = version.split('.');
+    let (Some(major), Some(minor)) = (components.next(), components.next()) else {
+        return false;
+    };
+    let (Ok(major), Ok(minor)) = (major.parse::<u32>(), minor.parse::<u32>()) else {
+        return false;
+    };
+    major == 1 && (89..=99).contains(&minor)
 }
 
 fn require_cargo_markers(covering: &[PathBuf]) -> Result<(), String> {
@@ -2255,6 +2381,16 @@ mod tests {
         for (code, stable) in expected {
             assert_eq!(code.as_str(), stable);
         }
+    }
+
+    #[test]
+    fn profile_selector_capability_is_bounded_to_qualified_runtime_versions() {
+        assert!(cargo_profile_supported_version("1.89.0"));
+        assert!(cargo_profile_supported_version("1.95.0"));
+        assert!(cargo_profile_supported_version("1.99.0"));
+        assert!(!cargo_profile_supported_version("1.88.0"));
+        assert!(!cargo_profile_supported_version("2.0.0"));
+        assert!(!cargo_profile_supported_version("unknown"));
     }
 
     #[test]
@@ -3063,6 +3199,20 @@ mod tests {
         );
         assert!(external.join("artifact.bin").exists());
         assert!(preview.render().contains("no cleanup executed"));
+        let profile_preview = clean_with_roots_policy_selector(
+            std::slice::from_ref(&root),
+            0,
+            &[],
+            CleanMode::Preview,
+            &runner,
+            &noop,
+            &CleanupPolicy::default(),
+            Some(CleanupSelector::Profile("dev".into())),
+        )
+        .unwrap();
+        assert_eq!(profile_preview.results[0].outcome, CleanOutcome::Previewed);
+        assert!(profile_preview.render().contains("output-union before"));
+        assert!(external.join("artifact.bin").exists());
         // Simulate must not invoke clean and must match preview candidate set.
         let sim = clean_with(&root, 0, &[], CleanMode::Simulate, &runner, &noop).unwrap();
         assert_eq!(sim.results.len(), 1);

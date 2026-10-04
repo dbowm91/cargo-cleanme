@@ -1,6 +1,6 @@
 # M008C — Cargo Profile/Package Selective Cleanup Qualification
 
-Status: blocked on M008A and M008B closure; Stage 2 Execute is gated on Stage 1 Cargo selector qualification evidence
+Status: conditionally closed; profile selection is qualified and implemented, package selection is deferred to M008D
 
 Repository baseline: `3ee9699a0b0d987287d08e427195284e08d079f7`
 

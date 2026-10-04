@@ -64,6 +64,12 @@ pub enum Command {
         /// Exclude canonical workspace roots matching this glob (repeatable).
         #[arg(long = "exclude")]
         exclude: Vec<String>,
+        /// Ask Cargo to clean one named profile. Selector byte estimates are unknown.
+        #[arg(long, conflicts_with = "package", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+        profile: Option<String>,
+        /// Reserved package selector; currently returns a typed deferred result.
+        #[arg(long, conflicts_with = "profile", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+        package: Option<String>,
         /// Cargo preview: invoke Cargo's own dry-run (the default mode).
         /// Distinct from `--dryrun` (cargo-cleanme simulation).
         #[arg(long, conflicts_with = "yes", conflicts_with = "dryrun")]
@@ -259,6 +265,30 @@ mod tests {
         .unwrap();
         assert!(
             matches!(parsed.command, Some(Command::Clean { min_reclaimable_bytes: Some(42), older_than: Some(60), include, exclude, .. }) if include.len() == 2 && exclude == ["**/tmp"])
+        );
+        let selected = Cli::try_parse_from([
+            "cargo-cleanme",
+            "clean",
+            "/tmp",
+            "--profile",
+            "custom",
+            "--yes",
+        ])
+        .unwrap();
+        assert!(
+            matches!(selected.command, Some(Command::Clean { profile: Some(p), .. }) if p == "custom")
+        );
+        assert!(
+            Cli::try_parse_from([
+                "cargo-cleanme",
+                "clean",
+                "/tmp",
+                "--profile",
+                "release",
+                "--package",
+                "app",
+            ])
+            .is_err()
         );
     }
 
