@@ -302,17 +302,31 @@ Exit condition:
 
 ## Phase 10 — Distribution and operational polish
 
-Status: deferred.
+Status: active planning; M010A is ready.
 
-Potential work:
+Subsystem roadmap:
 
-- crates.io publication;
-- release binaries for common Linux/macOS/Windows architectures;
-- package-manager integration;
-- optional shell installer/self-update only if justified;
-- shell completion/manpage;
-- benchmark tracking;
-- support policy and release documentation.
+- `plans/subsystems/distribution-release-update-roadmap.md`
+
+Implementation sequence:
+
+1. M010A — Eggpack distribution contract and Cargo package readiness.
+2. M010B — product-owned bootstrap installers and release-artifact qualification.
+3. M010C — Eggup-backed self-update and explicit install-provenance policy.
+4. M010D — crates.io/GitHub publication, completions/manpage, benchmark/support evidence, and release closure.
+
+Required direction:
+
+- use Eggpack as the producer-side release contract/build/qualification/manifest/generated-CI authority instead of adding a parallel distribution framework;
+- use Eggup as the consumer-side verified acquisition/staging/replacement/rollback authority instead of copying updater machinery from Gregg;
+- retain cargo-cleanme ownership of public install wrappers, release/version authority, target/fallback policy, install destination/provenance policy, and CLI presentation;
+- qualify release binaries for x86_64/aarch64 Linux, Intel/Apple Silicon macOS, and x86_64 Windows;
+- publish only after package/release bytes, installer semantics, and updater behavior have closure evidence;
+- keep Cargo selector support policy distinct from application/platform support;
+- generate shell completions/manpage from the clap model and drift-check generated artifacts;
+- record release-oriented semantic counters, timings, dependency footprint, and binary-size baselines.
+
+Eggpack needs no upstream feature plan for the initial direct single-binary release. The preferred lightweight self-update path depends on a separately registered Eggup acquisition milestone to publish the already-qualified `eggup-curl` adapter.
 
 ## Dependency summary
 
@@ -366,7 +380,7 @@ M008C Cargo profile/package selector qualification [closed by M008D evidence;
 M008D Cargo package-selector qualification and enablement [closed]
       |
       v
-Phase 10 distribution and operational polish [deferred]
+Phase 10 distribution and operational polish [M010A ready; M010B-D dependency-ordered]
 ~~~
 
 Destructive work MUST NOT be pulled forward merely to make the tool feel complete.
