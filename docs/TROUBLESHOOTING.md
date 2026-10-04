@@ -72,12 +72,16 @@ This is the intended path for registry installs, not a limitation to work
 around. It also means an update through Cargo picks up the full dependency
 graph, which a single-binary replacement does not.
 
-### `update` says no usable `curl` executable was found
+### `update` could not reach the registry
 
-`update` uses your system's `curl` rather than embedding an HTTP/TLS stack in a
-CLI that self-updates rarely. If `curl` is not on `PATH`, `update` stops with
-this error and prints the manager command. It will **not** fall back to a
-second transport. Install `curl`, or use `cargo install --force`.
+Current releases identify themselves to the registry with a descriptive
+User-Agent, which crates.io requires. In `0.1.0` the updater used your system's
+`curl` executable, which has no way to set one, so crates.io answered HTTP 403
+and `update` always failed. `0.1.1` replaces it with a transport that can.
+
+If you see a transport failure, check outbound HTTPS and any proxy
+configuration, then retry. It will not silently switch to a different transport,
+and it prints the manager command to use instead.
 
 ### `update` says this host has no published binary
 
@@ -96,6 +100,20 @@ or via Cargo, then retry.
 That is success. `update` only offers strictly newer stable releases, and it
 refuses prereleases, because it cannot express "I accept that tradeoff" the way
 an explicit `cargo install` can.
+
+### `update` says this build is newer than the published release
+
+Also correct, and also new behavior. If you are running a build from `main` or
+`cargo install --git`, its version is ahead of the latest published release.
+The registry is the version authority for *releases*, not for a build that was
+never published, so `update` refuses to replace it with the older one instead of
+reporting a bogus "newer version available".
+
+Install the published release directly to go back to a released version:
+
+```sh
+cargo install cargo-cleanme --locked --force
+```
 
 ## Integrity and security expectations
 

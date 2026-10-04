@@ -6,6 +6,69 @@ All notable changes to cargo-cleanme are documented here. The format follows
 stance: the `0.x` line may make breaking changes in any release, and the
 command-line, JSON, and release-asset contracts are the stable surface.
 
+## [0.1.1] - 2026-10-04
+
+### Fixed
+
+- `cargo cleanme update` could not reach the version authority. The production
+  transport was `eggup-curl`, whose `CurlConfig` in 0.1.2 exposes no
+  User-Agent seam and whose adapter clears the child environment, so every
+  request went out as `curl/x.y`. The crates.io registry answers **HTTP 403** to
+  any non-descriptive User-Agent, so `update` always ended in a transport
+  failure. It now reports already-current correctly against the live registry.
+
+  This was found by the 0.1.0 release smoke, not by the test suite: the fixture
+  suite never talks to the registry, so no unit or fixture test could have
+  caught it. The 19 updater tests were all green while the feature was
+  non-functional in production.
+
+  The transport is now `eggup-eggfetch`, the already-published Eggup transport
+  whose `EggfetchConfig` has the `user_agent` seam the requirement needs. The
+  curl path is not kept as a fallback: a fallback that cannot reach the
+  authority is a second way to fail for no benefit.
+
+- `cargo cleanme update` could offer to **downgrade** a build that is newer than
+  the published release. Once 0.1.1 was published, a 0.1.1 install would have
+  compared 0.1.1 against 0.1.0, taken the "newer version available" branch, and
+  replaced itself with the older binary. The registry is the version authority
+  for releases, not for a build that was never published, so a build newer than
+  the published stable version now stops with a refusal instead of an offer.
+
+  This was also found by the release smoke, for the same reason as the 403: the
+  fixture suite drives a transport that always answers, so it could not express
+  a registry that reports an older version than the one running.
+
+- The release consumer validator now runs on every CI lane. It previously ran
+  only inside the release workflow, so a Windows-only defect in the validator
+  stayed invisible until a release was attempted.
+
+### Changed
+
+- The self-update transport is now an embedded HTTP/TLS stack rather than the
+  external `curl` executable. This is a real cost and is not hidden:
+
+  | Measurement | 0.1.0 (curl) | 0.1.1 (eggfetch) |
+  |---|---|---|
+  | Release binary | 5,420,664 bytes | 12,125,624 bytes |
+  | Normal dependencies | 82 | 177 |
+
+  `curl` was originally chosen because it is much smaller, and that reasoning
+  was correct about size and wrong about qualification: a transport that cannot
+  perform the required transaction is not a cheaper transport, it is a broken
+  one. The original footprint argument should not have been used to close the
+  question before a live registry request had ever been made.
+
+### Known limitations
+
+- `update` requires no external HTTP client now, but the binary is roughly twice
+  the size it was. On a size-constrained platform this is the wrong trade and
+  the updater should be a separate optional binary instead; that is registered
+  as a follow-up, not resolved here.
+- The bounded upstream gap is recorded rather than worked around: `eggup-curl`
+  0.1.2 cannot set a User-Agent, so curl cannot be a viable production
+  transport for any registry-backed updater. That request is named in the M010C
+  closure record.
+
 ## [0.1.0] - 2026-10-04
 
 Initial distribution-ready release candidate. Nothing in this entry is

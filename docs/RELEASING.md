@@ -153,6 +153,20 @@ candidate as a rehearsal before you publish.
 - Do not self-update a manager-owned installation behind the manager's back.
   `update` already refuses this; do not work around it.
 
+## A warning the 0.1.0 release earned
+
+`release/eggpack/pack.toml` pins the Rust toolchain as `stable`, not as a
+specific version. That means re-running a release for the same tag can produce
+different bytes, which is why "do not rebuild after qualification" matters so
+much here: there is no reproducibility guarantee to fall back on. Pin an exact
+toolchain before a release whose bytes must be reproduced.
+
+The 0.1.0 release also shipped a defect that no test could catch, because the
+feature depended on a live third-party service and every test was a fixture.
+Run the external smoke in `docs/RELEASING.md` against a *staged draft* before
+publishing anything, not only after. The registry's User-Agent policy is not
+something a fixture can model.
+
 ## Post-release
 
 Record in the Phase 10 closure record: the exact source revision, the tag, the

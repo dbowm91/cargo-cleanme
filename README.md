@@ -98,7 +98,7 @@ are:
 
 ```sh
 cargo install cargo-cleanme --locked          # from the crates.io registry
-cargo install cargo-cleanme --locked --version 0.1.0  # pin an exact release
+cargo install cargo-cleanme --locked --version 0.1.1  # pin an exact release
 ```
 
 Installing the package is enough for Cargo to expose the external
@@ -176,10 +176,13 @@ after itself:
 - Bytes are replaced only after the asset's `.sha256` sidecar verifies, the
   sidecar is confirmed to be evidence for *that* asset, and the candidate is
   executed and required to print exactly `cargo-cleanme X.Y.Z`.
-- The transport is the external `curl` executable via the published Eggup
-  crates, so no HTTP/TLS stack is embedded. If `curl` cannot be found, the run
-  ends with a typed error and the manager command; it never silently switches
-  to a second transport.
+- The transport is the published `eggup-eggfetch` adapter. Exactly one
+  production transport is wired, and the run never silently switches to
+  another. Note that 0.1.0 used the external `curl` executable instead and
+  could not reach the registry at all: crates.io answers HTTP 403 to a
+  non-descriptive User-Agent, and that adapter had no way to set one. The
+  embedded HTTP/TLS stack is the measured cost of a transport that works — the
+  release binary is roughly twice the size it was in 0.1.0.
 - Verified replacement, rollback, and staging are Eggup's, not a second copy
   here. A commit that is not cleanly `Committed` is reported as such, including
   when recovery is required.

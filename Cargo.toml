@@ -1,6 +1,6 @@
 [package]
 name = "cargo-cleanme"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.89"
 description = "Find inactive Cargo artifacts and safely preview their cleanup"
@@ -62,15 +62,22 @@ toml = "0.8"
 # and rollback are owned by the published Eggup crates, not reimplemented
 # here.
 #
-# `eggup-curl` is the production transport: `eggup-acquisition` has zero
-# dependencies, so the curl path adds no embedded HTTP/TLS stack to a CLI
-# whose self-update is infrequent. `eggup-eggfetch` would add `eggfetch-core`
-# plus rustls; that alternative was measured and rejected (see the M010C
-# closure record). The transport is discovered at runtime and degrades to a
-# typed adapter-unavailable result, never to a second production transport.
+# `eggup-eggfetch` is the production transport. It was NOT the first choice:
+# `eggup-curl` is smaller because `eggup-acquisition` has zero dependencies.
+# It is the choice because `CurlConfig` in `eggup-curl` 0.1.2 has no
+# User-Agent seam and the adapter clears the child environment, so the request
+# goes out as `curl/x.y`, and crates.io answers 403 to any non-descriptive
+# User-Agent. A transport that cannot reach the version authority is not
+# qualified, regardless of its size. `EggfetchConfig::user_agent` is the seam
+# the requirement needs.
+#
+# The cost of that correctness is an embedded HTTP/TLS stack
+# (`eggfetch-core` + rustls + tokio). The measured delta is recorded in the M010C
+# closure record. Exactly one production transport is wired; the curl path is
+# not kept as a fallback, because it cannot perform the required transaction.
 eggup-acquisition = "0.1.2"
 eggup-core = "0.1.2"
-eggup-curl = "0.1.2"
+eggup-eggfetch = "0.1.2"
 # Optional and feature-gated: only the completion/manpage generator needs them,
 # so a normal build and `cargo install` never compile them.
 clap_complete = { version = "4.5", optional = true }

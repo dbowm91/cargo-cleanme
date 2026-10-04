@@ -16,13 +16,13 @@
     "unresolved_ownership": 0
   },
   "timings_observed_seconds": {
-    "discovery": 0.00068,
-    "locate": 0.48451,
-    "metadata": 0.03023,
-    "source_activity": 0.00098,
+    "discovery": 0.00063,
+    "locate": 0.02624,
+    "metadata": 0.027030000000000002,
+    "source_activity": 0.00083,
     "output_sizing": 0.0,
-    "elapsed": 0.66
+    "elapsed": 0.07
   },
-  "release_binary_bytes": 5420664,
-  "normal_dependency_count": 82
+  "release_binary_bytes": 12125624,
+  "normal_dependency_count": 177
 }

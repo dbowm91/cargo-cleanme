@@ -29,11 +29,26 @@
 //!
 //! # Transport
 //!
-//! `eggup-curl` is the only production transport. `eggup-acquisition` has zero
-//! dependencies, so the curl path adds no embedded HTTP/TLS stack. If no curl
-//! executable is discoverable, the run ends in a typed
-//! [`UpdateError::TransportUnavailable`] and prints the exact manager command.
-//! It never silently becomes a second transport.
+//! `eggup-eggfetch` is the only production transport.
+//!
+//! It was not the first choice. `eggup-curl` is smaller, because
+//! `eggup-acquisition` has zero dependencies, and avoiding an embedded HTTP/TLS
+//! stack in a CLI that self-updates rarely is a real advantage. It was
+//! replaced because `CurlConfig` in `eggup-curl` 0.1.2 exposes no User-Agent
+//! seam and the adapter clears the child environment, so every request goes out
+//! as `curl/x.y`. The crates.io registry answers **403** to any non-descriptive
+//! User-Agent, so the curl transport could not read the version authority at
+//! all. This was found by the first live release smoke, not by the fixture
+//! suite, because the fixture suite never talks to the registry.
+//!
+//! A transport that cannot perform the required transaction is not qualified,
+//! however small it is. `EggfetchConfig::user_agent` is the seam the
+//! requirement needs, and it costs an embedded TLS stack. That cost is
+//! measured and recorded rather than assumed.
+//!
+//! Exactly one production transport is wired. The curl path is deliberately
+//! not kept as a fallback, because a fallback that cannot reach the authority
+//! is a second way to fail for no benefit.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -241,13 +256,21 @@ pub struct UpdatePlan {
 /// Where the run stopped, in a form that is stable enough to reason about.
 #[derive(Debug)]
 pub enum UpdateError {
-    /// No `curl` executable could be discovered. The chosen production
-    /// transport is unavailable; the manager command is printed.
+    /// The chosen production transport is unavailable. The manager command is
+    /// printed rather than silently switching transports.
     TransportUnavailable { detail: String },
     /// crates.io did not report a usable stable version.
     NoPublishedStableVersion { detail: String },
     /// The published stable version is not newer than the running one.
     AlreadyCurrent { current: String, published: String },
+    /// The published stable version is *older* than the running one.
+    ///
+    /// This happens when the running binary is a locally bumped or development
+    /// build. Replacing it with the older published release would be a
+    /// downgrade, which `update` must never perform. The registry is the
+    /// version authority for *releases*, not for a build that was never
+    /// published.
+    NewerThanPublished { current: String, published: String },
     /// The acquisition itself failed for a non-absence reason.
     Acquisition { stage: String, detail: String },
     /// The `.sha256` sidecar was absent, malformed, or did not describe the
@@ -271,10 +294,7 @@ impl std::fmt::Display for UpdateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             UpdateError::TransportUnavailable { detail } => {
-                write!(
-                    f,
-                    "no usable curl executable was found for the update transport: {detail}"
-                )
+                write!(f, "the update transport is unavailable: {detail}")
             }
             UpdateError::NoPublishedStableVersion { detail } => {
                 write!(
@@ -286,6 +306,13 @@ impl std::fmt::Display for UpdateError {
                 write!(
                     f,
                     "already at the latest stable version ({current}; published is {published})"
+                )
+            }
+            UpdateError::NewerThanPublished { current, published } => {
+                write!(
+                    f,
+                    "this build ({current}) is newer than the published release \
+                     ({published}); refusing to downgrade it"
                 )
             }
             UpdateError::Acquisition { stage, detail } => {
@@ -471,6 +498,25 @@ pub fn published_stable_version(metadata: &[u8]) -> Result<String, UpdateError> 
     Ok(version.to_owned())
 }
 
+/// Compare two plain `X.Y.Z` versions.
+///
+/// `None` when either side is not a plain release, so a caller can never
+/// accidentally order a prerelease or a malformed string.
+pub fn compare_release_versions(left: &str, right: &str) -> Option<std::cmp::Ordering> {
+    let parse = |value: &str| -> Option<[u64; 3]> {
+        let mut parts = value.split('.');
+        let mut out = [0u64; 3];
+        for slot in out.iter_mut() {
+            *slot = parts.next()?.parse::<u64>().ok()?;
+        }
+        if parts.next().is_some() {
+            return None;
+        }
+        Some(out)
+    };
+    Some(parse(left)?.cmp(&parse(right)?))
+}
+
 /// A plain `X.Y.Z` release with no prerelease or build suffix.
 pub fn is_release_version(version: &str) -> bool {
     let mut parts = version.split('.');
@@ -508,31 +554,38 @@ pub trait UpdateEnvironment {
     fn cleanup(&self, staging: &Path);
 }
 
-/// The real environment: the published curl transport plus the process's own
+/// The User-Agent every outbound request identifies itself with.
+///
+/// The registry rejects anonymous or generic clients outright: an unspecified
+/// agent and a bare `curl/x.y` both return HTTP 403, while a descriptive agent
+/// returns 200. This is a hard requirement of the version authority, not
+/// politeness, and it is the reason the production transport is
+/// `eggup-eggfetch` rather than `eggup-curl`.
+const USER_AGENT: &str = concat!(
+    "cargo-cleanme/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/dbowm91/cargo-cleanme)"
+);
+
+/// The real environment: the published transport plus the process's own
 /// filesystem view.
-struct CurlEnvironment {
-    transport: eggup_curl::CurlTransport,
+struct HttpEnvironment {
+    transport: eggup_eggfetch::EggfetchTransport,
 }
 
-impl CurlEnvironment {
+impl HttpEnvironment {
     fn new() -> Result<Self, UpdateError> {
-        let executable = eggup_curl::discover_curl_executable().map_err(|error| {
+        // Strict: bounded deadlines, bounded redirects, explicit proxy decision,
+        // and an identifying User-Agent. Request deadlines can only tighten the
+        // adapter's ceilings (see FetchLimits::effective).
+        let config = eggup_eggfetch::EggfetchConfig::strict()
+            .user_agent(USER_AGENT)
+            .timeouts(CONNECT_TIMEOUT, TOTAL_TIMEOUT);
+        let transport = eggup_eggfetch::EggfetchTransport::strict(config).map_err(|error| {
             UpdateError::TransportUnavailable {
                 detail: describe_acquisition(&error),
             }
         })?;
-        // Strict: no user config, follow redirects within the same protocols,
-        // and the adapter's own timeouts are the ceiling. Request deadlines can
-        // only tighten them (see FetchLimits::effective).
-        let config = eggup_curl::CurlConfig::strict()
-            .timeouts(CONNECT_TIMEOUT, TOTAL_TIMEOUT)
-            .allowed_protocols(vec!["https".to_owned()]);
-        let transport =
-            eggup_curl::CurlTransport::with_executable(executable, config).map_err(|error| {
-                UpdateError::TransportUnavailable {
-                    detail: describe_acquisition(&error),
-                }
-            })?;
         Ok(Self { transport })
     }
 
@@ -546,7 +599,7 @@ impl CurlEnvironment {
     }
 }
 
-impl UpdateEnvironment for CurlEnvironment {
+impl UpdateEnvironment for HttpEnvironment {
     fn current_exe(&self) -> Result<PathBuf, UpdateError> {
         std::env::current_exe().map_err(|error| UpdateError::Transaction {
             detail: format!("could not resolve the running executable: {error}"),
@@ -657,11 +710,32 @@ pub fn run(
     let metadata = environment.fetch_metadata(&crates_io_metadata_url(), MAX_METADATA_BYTES)?;
     let to_version = published_stable_version(&metadata)?;
 
-    if to_version == current_version {
-        return Err(UpdateError::AlreadyCurrent {
-            current: current_version,
-            published: to_version,
-        });
+    match compare_release_versions(&to_version, &current_version) {
+        Some(std::cmp::Ordering::Equal) => {
+            return Err(UpdateError::AlreadyCurrent {
+                current: current_version,
+                published: to_version,
+            });
+        }
+        Some(std::cmp::Ordering::Less) => {
+            // Never downgrade. A build that is newer than the published stable
+            // release is a local or unreleased build, and the registry is not
+            // entitled to replace it.
+            return Err(UpdateError::NewerThanPublished {
+                current: current_version,
+                published: to_version,
+            });
+        }
+        Some(std::cmp::Ordering::Greater) => {}
+        // An unorderable pair means one side is not a plain release, which
+        // `published_stable_version` already rejects; refuse rather than guess.
+        None => {
+            return Err(UpdateError::NoPublishedStableVersion {
+                detail: format!(
+                    "cannot order published {to_version:?} against running {current_version:?}"
+                ),
+            });
+        }
     }
 
     let plan = UpdatePlan {
@@ -852,7 +926,7 @@ fn execute(
 
 /// Convenience entry point for the CLI.
 pub fn update(check_only: bool) -> Result<UpdatePlan, UpdateError> {
-    let environment = CurlEnvironment::new()?;
+    let environment = HttpEnvironment::new()?;
     run(&environment, check_only)
 }
 
@@ -1461,6 +1535,108 @@ mod tests {
             );
         }
         assert_eq!(PUBLISHED_TARGETS.len(), 5);
+    }
+
+    #[test]
+    fn versions_order_numerically_not_lexically() {
+        use std::cmp::Ordering;
+        assert_eq!(
+            compare_release_versions("0.1.10", "0.1.9"),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            compare_release_versions("0.10.0", "0.9.9"),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            compare_release_versions("1.0.0", "1.0.0"),
+            Some(Ordering::Equal)
+        );
+        assert_eq!(
+            compare_release_versions("0.1.0", "0.2.0"),
+            Some(Ordering::Less)
+        );
+        for bad in [("1.2", "1.2.0"), ("1.2.3-rc.1", "1.2.3"), ("x", "1.2.3")] {
+            assert_eq!(compare_release_versions(bad.0, bad.1), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_newer_local_build_is_never_downgraded() {
+        // Regression guard: `update` reached the registry, found 0.1.0, and
+        // offered to "update" a 0.1.1 build down to 0.1.0. Found by the live
+        // release smoke, not by a fixture.
+        let base = FixtureEnvironment::new(PathBuf::from("/nonexistent"), "0.1.1");
+        let environment = release(base, "0.1.0", candidate_bytes("0.1.0"), None);
+        match run(&environment, true) {
+            Err(UpdateError::NewerThanPublished { current, published }) => {
+                assert_eq!(current, "0.1.1");
+                assert_eq!(published, "0.1.0");
+            }
+            other => panic!("expected NewerThanPublished, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_older_published_version_is_not_offered_to_a_matching_build() {
+        // A build that is exactly the published version is already current.
+        let base = FixtureEnvironment::new(PathBuf::from("/nonexistent"), "0.1.0");
+        let environment = release(base, "0.1.0", candidate_bytes("0.1.0"), None);
+        assert!(matches!(
+            run(&environment, true),
+            Err(UpdateError::AlreadyCurrent { .. })
+        ));
+    }
+
+    #[test]
+    fn the_production_transport_identifies_itself_descriptively() {
+        // Regression guard for the 0.1.0 defect.
+        //
+        // The original production transport was `eggup-curl`, which has no
+        // User-Agent seam and clears the child environment, so every request
+        // went out as `curl/x.y`. The crates.io registry answers HTTP 403 to any
+        // non-descriptive User-Agent, so `update` could not read the version
+        // authority at all. No fixture test could catch that, because no fixture
+        // talks to the registry.
+        //
+        // This asserts the property the requirement actually is: whatever
+        // transport is wired must send an agent that names the product. It does
+        // not model the registry's policy, which would be a fixture that lies
+        // about the thing most likely to change.
+        let environment =
+            HttpEnvironment::new().expect("the production transport must be constructible");
+        let agent = environment.transport.config().user_agent.clone();
+        assert!(
+            agent.contains(PRODUCT),
+            "the update User-Agent must name the product, got {agent:?}"
+        );
+        assert!(
+            !agent.starts_with("curl/") && agent != *"",
+            "the update User-Agent must not be a generic tool name, got {agent:?}"
+        );
+        assert_eq!(agent, USER_AGENT);
+        // A bare token is exactly what a registry rejects.
+        assert!(
+            agent.contains('/') && agent.contains(' '),
+            "expected a descriptive agent, got {agent:?}"
+        );
+    }
+
+    #[test]
+    fn the_version_authority_url_is_https_and_product_scoped() {
+        let url = crates_io_metadata_url();
+        assert!(url.starts_with("https://"), "{url}");
+        assert!(url.ends_with(PRODUCT), "{url}");
+    }
+
+    #[test]
+    fn release_urls_are_constructed_from_the_tag_and_contracted_asset() {
+        let asset = asset_for_target(host_target().unwrap()).unwrap();
+        let url = release_asset_url("v9.9.9", asset);
+        assert!(url.starts_with("https://github.com/dbowm91/cargo-cleanme/releases/download/"));
+        assert!(url.ends_with(asset), "{url}");
+        // No traversal or injection is possible from a validated tag.
+        assert!(!url.contains(".."), "{url}");
     }
 
     #[test]
