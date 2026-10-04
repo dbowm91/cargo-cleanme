@@ -3437,8 +3437,10 @@ mod tests {
         }
         backdate(&root, SystemTime::now() - Duration::from_secs(3600));
         let target = root.join("target/debug");
-        assert!(target.join("app-a").exists());
-        assert!(target.join("app-b").exists());
+        let executable =
+            |name: &str| target.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+        assert!(executable("app-a").exists());
+        assert!(executable("app-b").exists());
 
         let report = clean_with_roots_policy_selector(
             std::slice::from_ref(&root),
@@ -3453,8 +3455,8 @@ mod tests {
         .unwrap();
         assert_eq!(report.results.len(), 1, "{:?}", report.results);
         assert_eq!(report.results[0].outcome, CleanOutcome::Cleaned);
-        assert!(!target.join("app-a").exists());
-        assert!(target.join("app-b").exists());
+        assert!(!executable("app-a").exists());
+        assert!(executable("app-b").exists());
     }
 
     #[test]
