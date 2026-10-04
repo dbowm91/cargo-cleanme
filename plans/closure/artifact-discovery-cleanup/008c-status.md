@@ -4,7 +4,7 @@ Plan: `plans/implementation/artifact-discovery-cleanup/008c-cargo-profile-packag
 
 Disposition: **conditionally closed**
 
-Implementation commit: pending commit for this closure slice.
+Implementation commit: `d70c18e6374ab4a34ac3acfb0f49292a33c33009` (`Qualify and enable Cargo profile cleanup`).
 
 Date: 2026-10-04
 
@@ -46,21 +46,21 @@ Package `--dry-run --verbose` was non-mutating and did not provide a stable dele
 | Shared output/ownership proof remains full-workspace | Existing C003/C004/C006 tests plus M008A excluded shared-owner regression | Pass |
 | Selector bytes are not mislabeled; size policy fails closed | JSON fixture asserts selector estimate and `before_bytes` null, output-union context separate; min-size typed skip | Pass |
 | Preview/Simulate/Execute command behavior | Real-Cargo Preview fixture; fake-Cargo profile Execute; profile Simulate and no-clean count assertion | Pass |
-| Current-Cargo hosted Linux/macOS/Windows and Rust 1.89 gates | GitHub Actions CI run for implementation commit (recorded after push) | Pending |
+| Current-Cargo hosted Linux/macOS/Windows and Rust 1.89 gates | GitHub Actions CI run `37176614679` | Pass on Ubuntu, macOS, Windows, and Rust 1.89 |
 
 ## Verification
 
-- `bash scripts/qualify-cargo-selectors.sh 1.89 stable` — pass.
-- `bash scripts/qualify-cargo-selectors.sh 1.91 stable` — pass.
-- `bash scripts/qualify-cargo-selectors.sh 1.92 stable` — pass.
-- `bash scripts/qualify-cargo-selectors.sh 1.93 stable` — pass.
-- `bash scripts/qualify-cargo-selectors.sh 1.94 stable` — pass.
-- `bash scripts/qualify-cargo-selectors.sh 1.95 stable` — pass.
-- `bash scripts/qualify-cargo-selectors.sh stable stable` — pass (Cargo 1.99.0).
-- `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all-targets --all-features` — pass, 197 tests.
-- `rustup run 1.89 cargo check --locked --all-targets` — pass.
-- `rustup run 1.89 cargo test --locked --all-targets` — pass, 197 tests.
-- `git diff --check` — pass.
+- `rtk bash scripts/qualify-cargo-selectors.sh 1.89 stable` — pass.
+- `rtk bash scripts/qualify-cargo-selectors.sh 1.91 stable` — pass.
+- `rtk bash scripts/qualify-cargo-selectors.sh 1.92 stable` — pass.
+- `rtk bash scripts/qualify-cargo-selectors.sh 1.93 stable` — pass.
+- `rtk bash scripts/qualify-cargo-selectors.sh 1.94 stable` — pass.
+- `rtk bash scripts/qualify-cargo-selectors.sh 1.95 stable` — pass.
+- `rtk bash scripts/qualify-cargo-selectors.sh stable stable` — pass (Cargo 1.99.0).
+- `rtk cargo fmt --check`, `rtk cargo clippy --all-targets --all-features -- -D warnings`, `rtk cargo test --all-targets --all-features` — pass, 197 tests.
+- `rtk rustup run 1.89 cargo check --locked --all-targets` — pass.
+- `rtk rustup run 1.89 cargo test --locked --all-targets` — pass, 197 tests.
+- `rtk git diff --check` — pass.
 
 ## Deferred work and handoff
 
