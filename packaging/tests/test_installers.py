@@ -50,12 +50,16 @@ PRODUCT = "cargo-cleanme"
 VERSION = "0.1.0"
 
 
-def host_contract_target() -> str | None:
-    """The contracted triple this host's wrapper will request.
+WINDOWS_TARGET = "x86_64-pc-windows-msvc"
 
-    Mirrors the wrapper's own os/arch mapping. Publishing only the Linux asset
+
+def host_posix_target() -> str | None:
+    """The contracted triple this host's *POSIX* wrapper will request.
+
+    Mirrors install.sh's own os/arch mapping. Publishing only the Linux asset
     would make every macOS case a false 404-to-fallback instead of testing what
-    it claims to test.
+    it claims to test. Returns None off Linux/macOS, where install.sh has no
+    contracted target at all.
     """
     machine = platform.machine().lower()
     arch = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64"}.get(machine)
@@ -71,9 +75,9 @@ def host_contract_target() -> str | None:
     return None
 
 
-HOST_TARGET = host_contract_target()
-HOST_ASSET = f"{PRODUCT}-{HOST_TARGET}" if HOST_TARGET else ""
-SIDECAR = f"{HOST_ASSET}.sha256" if HOST_ASSET else ""
+def asset_for(target: str) -> str:
+    """The contracted asset name for a target, straight from the contract."""
+    return f"{PRODUCT}-{target}.exe" if target.endswith("-pc-windows-msvc") else f"{PRODUCT}-{target}"
 
 failures: list[str] = []
 passes = 0
@@ -95,20 +99,28 @@ def make_candidate_stub(version: str = VERSION) -> bytes:
     return f'#!/bin/sh\necho "{PRODUCT} {version}"\n'.encode()
 
 
-def build_release_root(base: Path) -> Path:
-    """Create <base>/<version>/<asset> plus the latest alias and sidecar."""
+def build_release_root(base: Path, targets: list[str]) -> Path:
+    """Publish `<version>/<asset>` and the latest alias for each target.
+
+    Only the assets the blocks actually running on this host will request are
+    published. Publishing the wrong one turns every case into a 404-to-fallback
+    that proves nothing about the subject under test.
+    """
     release = base / "release"
     version_dir = release / f"v{VERSION}"
     version_dir.mkdir(parents=True)
 
-    payload = make_candidate_stub()
-    (version_dir / HOST_ASSET).write_bytes(payload)
-    digest = hashlib.sha256(payload).hexdigest()
-    (version_dir / SIDECAR).write_text(f"{digest}  {HOST_ASSET}\n")
+    for target in targets:
+        asset = asset_for(target)
+        sidecar = f"{asset}.sha256"
+        payload = make_candidate_stub()
+        (version_dir / asset).write_bytes(payload)
+        digest = hashlib.sha256(payload).hexdigest()
+        (version_dir / sidecar).write_text(f"{digest}  {asset}\n")
 
-    # Latest alias: same asset names at the release root.
-    (release / HOST_ASSET).write_bytes(payload)
-    (release / SIDECAR).write_text(f"{digest}  {HOST_ASSET}\n")
+        # Latest alias: the same version-free asset name at the release root.
+        (release / asset).write_bytes(payload)
+        (release / sidecar).write_text(f"{digest}  {asset}\n")
 
     (release / CONTROL_DIR).mkdir(exist_ok=True)
     return release
@@ -260,9 +272,9 @@ def tools_without_cargo(bindir: Path) -> Path:
 
 
 # ---------------------------------------------------------------------- cases
-def case_happy_path(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path) -> None:
-    clear_control(release, HOST_ASSET)
-    clear_control(release, SIDECAR)
+def case_happy_path(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path, asset: str) -> None:
+    clear_control(release, asset)
+    clear_control(release, f"{asset}.sha256")
     dest = work / f"happy-{runner_name}"
     # No cargo on PATH at all: a correct binary install never needs it.
     result = runner(["--dir", str(dest)], base_url, {"PATH": str(tools_dir / "fallback")})
@@ -284,8 +296,8 @@ def case_happy_path(runner_name: str, runner, release: Path, base_url: str, work
     record(name, True)
 
 
-def case_exact_version(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path) -> None:
-    clear_control(release, HOST_ASSET)
+def case_exact_version(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path, asset: str) -> None:
+    clear_control(release, asset)
     dest = work / f"exact-{runner_name}"
     if runner_name == "posix":
         args = ["--version", VERSION, "--dir", str(dest)]
@@ -299,10 +311,10 @@ def case_exact_version(runner_name: str, runner, release: Path, base_url: str, w
     record(name, installed_binary(dest).is_file(), "binary was not placed")
 
 
-def case_binary_404_falls_back(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path) -> None:
+def case_binary_404_falls_back(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path, asset: str) -> None:
     """The one documented absence condition: the binary is genuinely absent."""
-    clear_control(release, HOST_ASSET)
-    set_control(release, HOST_ASSET, mode=MODE_404)
+    clear_control(release, asset)
+    set_control(release, asset, mode=MODE_404)
     dest = work / f"fallback-{runner_name}"
     args = (["--dir", str(dest)] if runner_name == "posix" else ["-Directory", str(dest)])
     # Cargo is genuinely unavailable, so a correct installer must refuse rather
@@ -318,9 +330,9 @@ def case_binary_404_falls_back(runner_name: str, runner, release: Path, base_url
         record(name, False, f"no Cargo fallback message; output: {combined[:200]}")
 
 
-def case_checksum_absent_is_fatal(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path) -> None:
-    clear_control(release, HOST_ASSET)
-    set_control(release, SIDECAR, mode=MODE_404)
+def case_checksum_absent_is_fatal(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path, asset: str) -> None:
+    clear_control(release, asset)
+    set_control(release, f"{asset}.sha256", mode=MODE_404)
     dest = work / f"nosum-{runner_name}"
     args = (["--dir", str(dest)] if runner_name == "posix" else ["-Directory", str(dest)])
     result = runner(args, base_url)
@@ -338,12 +350,12 @@ def case_checksum_absent_is_fatal(runner_name: str, runner, release: Path, base_
     record(name, True)
 
 
-def case_malformed_digest(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path) -> None:
-    clear_control(release, HOST_ASSET)
-    clear_control(release, SIDECAR)
+def case_malformed_digest(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path, asset: str) -> None:
+    clear_control(release, asset)
+    clear_control(release, f"{asset}.sha256")
     # The sidecar lives in the shared fixture, so the corruption must be
     # undone or every later case inherits a broken release.
-    sidecar = release / SIDECAR
+    sidecar = release / f"{asset}.sha256"
     original = sidecar.read_text()
     try:
         sidecar.write_text("not-a-digest\n")
@@ -359,9 +371,9 @@ def case_malformed_digest(runner_name: str, runner, release: Path, base_url: str
         sidecar.write_text(original)
 
 
-def case_digest_mismatch(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path) -> None:
-    clear_control(release, HOST_ASSET)
-    set_control(release, HOST_ASSET, mode="corrupt")
+def case_digest_mismatch(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path, asset: str) -> None:
+    clear_control(release, asset)
+    set_control(release, asset, mode="corrupt")
     dest = work / f"mismatch-{runner_name}"
     args = (["--dir", str(dest)] if runner_name == "posix" else ["-Directory", str(dest)])
     result = runner(args, base_url)
@@ -372,10 +384,10 @@ def case_digest_mismatch(runner_name: str, runner, release: Path, base_url: str,
     record(name, True)
 
 
-def case_wrong_candidate(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path) -> None:
+def case_wrong_candidate(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path, asset: str) -> None:
     for mode, label in (("wrong-product", "wrong product"), ("wrong-version", "wrong version")):
-        clear_control(release, HOST_ASSET)
-        set_control(release, HOST_ASSET, mode=mode)
+        clear_control(release, asset)
+        set_control(release, asset, mode=mode)
         dest = work / f"wrong-{label.replace(' ', '')}-{runner_name}"
         args = (["--dir", str(dest)] if runner_name == "posix" else ["-Directory", str(dest)])
         result = runner(args, base_url)
@@ -386,9 +398,9 @@ def case_wrong_candidate(runner_name: str, runner, release: Path, base_url: str,
             record(name, True)
 
 
-def case_transport_failure(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path) -> None:
-    clear_control(release, HOST_ASSET)
-    set_control(release, HOST_ASSET, status="503")
+def case_transport_failure(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path, asset: str) -> None:
+    clear_control(release, asset)
+    set_control(release, asset, status="503")
     dest = work / f"transport-{runner_name}"
     args = (["--dir", str(dest)] if runner_name == "posix" else ["-Directory", str(dest)])
     result = runner(args, base_url)
@@ -402,8 +414,8 @@ def case_transport_failure(runner_name: str, runner, release: Path, base_url: st
         record(name, True)
 
 
-def case_existing_destination(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path) -> None:
-    clear_control(release, HOST_ASSET)
+def case_existing_destination(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path, asset: str) -> None:
+    clear_control(release, asset)
     dest = work / f"existing-{runner_name}"
     dest.mkdir(parents=True, exist_ok=True)
     binary = installed_binary(dest)
@@ -434,8 +446,8 @@ def case_existing_destination(runner_name: str, runner, release: Path, base_url:
         record(name, False, f"exit {forced.returncode}: {forced.stderr.strip()[:160]}")
 
 
-def case_unwritable_destination(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path) -> None:
-    clear_control(release, HOST_ASSET)
+def case_unwritable_destination(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path, asset: str) -> None:
+    clear_control(release, asset)
     if not hasattr(os, "geteuid") or os.geteuid() == 0:
         record(f"[{runner_name}] unwritable destination is rejected", True, "skipped as root")
         return
@@ -454,7 +466,7 @@ def case_unwritable_destination(runner_name: str, runner, release: Path, base_ur
         dest.chmod(0o700)
 
 
-def case_bad_version_syntax(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path) -> None:
+def case_bad_version_syntax(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path, asset: str) -> None:
     dest = work / f"badver-{runner_name}"
     args = (
         ["--version", "1.2", "--dir", str(dest)]
@@ -469,10 +481,10 @@ def case_bad_version_syntax(runner_name: str, runner, release: Path, base_url: s
         record(name, True)
 
 
-def case_cargo_missing(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path) -> None:
+def case_cargo_missing(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path, asset: str) -> None:
     """Cargo is required for the fallback but is not on PATH."""
-    clear_control(release, HOST_ASSET)
-    set_control(release, HOST_ASSET, mode=MODE_404)
+    clear_control(release, asset)
+    set_control(release, asset, mode=MODE_404)
     dest = work / f"nocargo-{runner_name}"
     args = (["--dir", str(dest)] if runner_name == "posix" else ["-Directory", str(dest)])
     result = runner(args, base_url, {"PATH": str(tools_dir / "fallback")})
@@ -483,10 +495,10 @@ def case_cargo_missing(runner_name: str, runner, release: Path, base_url: str, w
         record(name, True)
 
 
-def case_cargo_produces_nothing(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path) -> None:
+def case_cargo_produces_nothing(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path, asset: str) -> None:
     """Cargo reports success but produces no binary: that must not be success."""
-    clear_control(release, HOST_ASSET)
-    set_control(release, HOST_ASSET, mode=MODE_404)
+    clear_control(release, asset)
+    set_control(release, asset, mode=MODE_404)
     dest = work / f"emptycargo-{runner_name}"
     args = (["--dir", str(dest)] if runner_name == "posix" else ["-Directory", str(dest)])
     stub_dir = fake_cargo(work / f"stub-{runner_name}")
@@ -498,10 +510,10 @@ def case_cargo_produces_nothing(runner_name: str, runner, release: Path, base_ur
         record(name, True)
 
 
-def case_temp_cleanup(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path) -> None:
+def case_temp_cleanup(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path, asset: str) -> None:
     """A failing run must leave no invocation-owned state behind."""
-    clear_control(release, HOST_ASSET)
-    set_control(release, HOST_ASSET, status="503")
+    clear_control(release, asset)
+    set_control(release, asset, status="503")
     dest = work / f"cleanup-{runner_name}"
     args = (["--dir", str(dest)] if runner_name == "posix" else ["-Directory", str(dest)])
     before = set(Path(tempfile.gettempdir()).glob("cargo-cleanme*"))
@@ -540,55 +552,57 @@ def main() -> int:
     work = Path(tempfile.mkdtemp(prefix="cargo-cleanme-installer-tests-"))
     tools = work / "tools"
     tools_without_cargo(tools / "fallback")
-    release = build_release_root(work)
+
+    # Decide which blocks can honestly run here before building any fixture.
+    # A block that cannot run must not influence the fixture contents, and a
+    # block that runs must have its own asset published.
+    posix_target = host_posix_target()
+    run_posix = posix_shell() is not None and posix_target is not None
+    run_powershell = os.name == "nt" and have_pwsh()
+
+    blocks: list[tuple[str, object, str, str]] = []
+    if run_posix:
+        assert posix_target is not None
+        blocks.append(("posix", run_sh, posix_target, asset_for(posix_target)))
+    if run_powershell:
+        blocks.append(("powershell", run_ps1, WINDOWS_TARGET, asset_for(WINDOWS_TARGET)))
+
+    if not blocks:
+        print("no installer block can run on this host; nothing to qualify", file=sys.stderr)
+        return 0
+
+    release = build_release_root(work, [target for _, _, target, _ in blocks])
     server, port = serve(release)
     base_url = f"http://127.0.0.1:{port}"
     try:
         print(f"fixture release at {release}")
         print(f"fixture server on {base_url}\n")
-        subprocess.run(
-            ["curl", "--fail", "--silent", f"{base_url}/__ping__"],
-            capture_output=True,
-            check=False,
-        )
 
         case_contract_projection()
 
-        if posix_shell() is None or HOST_TARGET is None:
-            print("  skip posix block: this host has no contracted target for install.sh;")
+        if not run_posix:
+            print("  skip posix block: install.sh has no contracted target on this host;")
             print("  its cases are qualified on the Linux/macOS lanes instead.\n")
-            runners = []
-        else:
-            runners = [("posix", run_sh)]
-        if os.name != "nt":
-            # install.ps1 refuses to run on a non-Windows host by design. Its
-            # negative cases would then "pass" at the platform guard without
-            # ever reaching the logic under test, which is worse than not
-            # running them. Hosted Windows CI runs the PowerShell block for
-            # real; do not fake it here.
+        if not run_powershell:
             print("  skip powershell block: install.ps1 only runs on Windows;")
             print("  its cases are qualified by the hosted Windows lane instead.\n")
-        elif not have_pwsh():
-            print("  skip powershell block: pwsh is not installed\n")
-        else:
-            runners.append(("powershell", run_ps1))
 
-        for runner_name, runner in runners:
-            print(f"--- {runner_name} ---")
-            case_happy_path(runner_name, runner, release, base_url, work, tools)
-            case_exact_version(runner_name, runner, release, base_url, work, tools)
-            case_binary_404_falls_back(runner_name, runner, release, base_url, work, tools)
-            case_checksum_absent_is_fatal(runner_name, runner, release, base_url, work, tools)
-            case_malformed_digest(runner_name, runner, release, base_url, work, tools)
-            case_digest_mismatch(runner_name, runner, release, base_url, work, tools)
-            case_wrong_candidate(runner_name, runner, release, base_url, work, tools)
-            case_transport_failure(runner_name, runner, release, base_url, work, tools)
-            case_existing_destination(runner_name, runner, release, base_url, work, tools)
-            case_unwritable_destination(runner_name, runner, release, base_url, work, tools)
-            case_bad_version_syntax(runner_name, runner, release, base_url, work, tools)
-            case_cargo_missing(runner_name, runner, release, base_url, work, tools)
-            case_cargo_produces_nothing(runner_name, runner, release, base_url, work, tools)
-            case_temp_cleanup(runner_name, runner, release, base_url, work, tools)
+        for runner_name, runner, _target, asset in blocks:
+            print(f"--- {runner_name} ({_target}) ---")
+            case_happy_path(runner_name, runner, release, base_url, work, tools, asset)
+            case_exact_version(runner_name, runner, release, base_url, work, tools, asset)
+            case_binary_404_falls_back(runner_name, runner, release, base_url, work, tools, asset)
+            case_checksum_absent_is_fatal(runner_name, runner, release, base_url, work, tools, asset)
+            case_malformed_digest(runner_name, runner, release, base_url, work, tools, asset)
+            case_digest_mismatch(runner_name, runner, release, base_url, work, tools, asset)
+            case_wrong_candidate(runner_name, runner, release, base_url, work, tools, asset)
+            case_transport_failure(runner_name, runner, release, base_url, work, tools, asset)
+            case_existing_destination(runner_name, runner, release, base_url, work, tools, asset)
+            case_unwritable_destination(runner_name, runner, release, base_url, work, tools, asset)
+            case_bad_version_syntax(runner_name, runner, release, base_url, work, tools, asset)
+            case_cargo_missing(runner_name, runner, release, base_url, work, tools, asset)
+            case_cargo_produces_nothing(runner_name, runner, release, base_url, work, tools, asset)
+            case_temp_cleanup(runner_name, runner, release, base_url, work, tools, asset)
             print()
     finally:
         server.shutdown()
