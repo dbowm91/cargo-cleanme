@@ -1,8 +1,8 @@
 # Artifact Discovery and Cleanup Roadmap
 
-Status: planning; no active implementation milestone
+Status: ready; M008A workspace selective cleanup policy is the active handoff
 
-Repository audit baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
+Repository audit baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 
 Canonical references:
 
@@ -36,7 +36,7 @@ It does not own Cargo global cache GC, arbitrary build-system caches, a general 
 
 ## 3. Current-state evidence
 
-At the current audit baseline, M001-M005 and corrective C001-C004 are closed on main. The repository is Rust 1.89 / edition 2024, uses manifest-first discovery plus Cargo-authoritative workspace/output resolution, groups physical target/build output, reports deterministic allocated bytes, provides coordinated inline progress, and performs Cargo-mediated workspace CleanupUnit execution only after complete manifest ownership coverage and fresh full-graph revalidation. M005 destructive qualification is restored. The active work is M006 performance hardening: implementing ADR 002's bounded adaptive Routine discovery, explicit exhaustive Full reconciliation, and remaining traversal qualification without weakening those safety contracts.
+At the current audit baseline, M001-M007 and corrective C001-C007 are closed on main; M006A/C/D retain historical conditional evidence but are not active blockers. The repository is Rust 1.89 / edition 2024, uses manifest-first discovery plus Cargo-authoritative workspace/output resolution, supports bounded Routine and explicit exhaustive Full discovery with machine-local learned state, groups physical target/build output, reports deterministic allocated bytes, provides coordinated inline progress/stats, and performs Cargo-mediated workspace CleanupUnit execution only after complete combined-root manifest ownership coverage and fresh full-graph revalidation. Phase 9 selective cleanup is now decomposed into M008A-M008C: workspace selection policy first, stable machine-readable automation contracts second, and real-Cargo-qualified package/profile selectors last.
 
 Relevant current ecosystem evidence:
 
@@ -92,7 +92,7 @@ ScanReport                    final fresh ownership proof
                           pre/post union report
 ~~~
 
-M006 optimizes the discovery and final-proof edges of this architecture without changing the ownership/safety boundary. ADR 002 further separates fast adaptive Routine discovery from exhaustive Full reconciliation while keeping learned state outside destructive proof.
+M006 optimized the discovery and final-proof edges of this architecture without changing the ownership/safety boundary. ADR 002 separates fast adaptive Routine discovery from exhaustive Full reconciliation while keeping learned state outside destructive proof. M008A adds a selection-policy layer after complete ownership resolution; policy-rejected workspaces remain in the ownership universe. M008B adds a versioned output projection over typed results. M008C may narrow Cargo's mutation selector only after the complete ownership proof and real-Cargo qualification.
 
 ## 5. Dependency graph
 
@@ -151,6 +151,15 @@ M007 learned/full cleanup orchestration [closed by corrective C006]
       |
       v
 C007 discovery-state recovery/planning cleanup [closed]
+      |
+      v
+M008A workspace selective cleanup policy [ready]
+      |
+      v
+M008B machine-readable reporting/automation contract [blocked on M008A]
+      |
+      v
+M008C Cargo package/profile selector qualification [blocked on M008A/M008B]
 ~~~
 
 ## 6. Milestone M001 — Foundation, CLI, config, and domain contracts
@@ -392,7 +401,7 @@ Outcome: cleanup resolution now retains authoritative manifest coverage and unre
 
 ## 10D. Milestone M006 — Performance hardening
 
-Status: active.
+Status: closed for current objectives; M006A/C/D retain historical conditional evidence and are not blockers.
 
 M006 is split into ordered implementation tracks. M006A, M006C, and M006D are conditionally closed after preserving exhaustive reachability while documenting the reference-host traversal bottleneck; M006B is closed. ADR 002 resolves the former scope-versus-latency question by separating bounded adaptive Routine discovery from explicit exhaustive Full reconciliation. M006E implemented that product split, machine-local learned discovery state, configurable 30-day retention, automatic config bootstrap, and `config edit`. Corrective C005 closes M006E's remaining state/config requirements: the reference Full traversal completed with localized diagnostics and Cargo resolution failures, and an isolated run published a schema 2 generation with 1,804 observations and six learned roots. Historical M006E closure evidence remains unchanged; see `plans/closure/artifact-discovery-cleanup/c005-status.md`. M006F's exhaustive-walker hot-path qualification is closed after hosted Linux/macOS/Windows and Rust 1.89 CI passed in run 37139155641.
 
@@ -491,7 +500,51 @@ C007 is a bounded operational/documentation corrective after M007 closure. It al
 
 The same corrective reconciles active planning so closed M007 is no longer presented as the current milestone, audits stale canonical wording, and records safe retirement criteria for merged/superseded branches. It does not change discovery scope, retention, cleanup proof, authorization, or feature roadmap semantics.
 
-This subsystem has no active implementation milestone; future selective-cleanup/policy work requires separate research and planning.
+## 10E. Milestone M008 — Selective cleanup and policy
+
+M008 implements Phase 9 as three dependency-ordered tracks. Workspace-level policy is deliberately separated from Cargo package/profile selectors because the former only narrows which complete CleanupUnits are selected, while the latter narrows Cargo's mutation request inside a workspace and therefore requires separate runtime/accounting proof.
+
+### M008A — Workspace selective cleanup policy
+
+Status: ready. Plan: `plans/implementation/artifact-discovery-cleanup/008a-workspace-selective-cleanup-policy.md`.
+
+Purpose:
+
+- add minimum reclaimable-size and minimum inactivity-age thresholds;
+- add canonical workspace include/exclude selection;
+- preserve newest trustworthy source activity through workspace analysis;
+- keep policy-rejected workspaces inside the complete ownership universe;
+- recompute fresh size/activity policy inputs during the existing final proof before Cargo spawn;
+- introduce typed policy dispositions for later machine output.
+
+M008A does not change the CleanupUnit destructive boundary and does not add package/profile cleanup.
+
+### M008B — Machine-readable reporting and automation contract
+
+Status: blocked on M008A public policy/disposition interface. Plan: `plans/implementation/artifact-discovery-cleanup/008b-machine-readable-reporting-and-automation-contract.md`.
+
+Purpose:
+
+- add versioned deterministic JSON projections for scan and cleanup;
+- replace automation-relevant string parsing with stable typed reason/disposition codes;
+- define process exit semantics for partial/skipped/failed operations;
+- document supported unattended `--yes` operation while keeping scheduling external.
+
+M008B must not serialize internal structs directly as an accidental public compatibility contract and must not change destructive authority.
+
+### M008C — Cargo profile/package selective cleanup qualification
+
+Status: blocked on M008A/M008B closure and real-Cargo selector evidence. Plan: `plans/implementation/artifact-discovery-cleanup/008c-cargo-profile-package-selective-cleanup-qualification.md`.
+
+Purpose:
+
+- qualify package/profile `cargo clean` behavior across relevant runtime Cargo capability boundaries;
+- keep complete workspace/output ownership proof even when the requested Cargo mutation is selective;
+- define selector-specific accounting or explicitly report it as unknown;
+- fail closed for unsupported/unqualified runtime-selector combinations;
+- avoid all parsing of Cargo-private artifact layout.
+
+M008C may close only for selectors whose real-Cargo mutation footprint and reporting semantics are proven. A selector that cannot satisfy that bar must remain deferred rather than weakening whole-workspace cleanup.
 
 ## 11. Cross-cutting reliability concerns
 
@@ -553,4 +606,4 @@ The implementation should specifically verify:
 
 ## 14. Completion definition
 
-The initial read-only boundary was reached when M001-M003 closed with evidence that cargo cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004 adds separately scoped Cargo-mediated cleanup while scans remain read-only.
+The initial read-only boundary was reached when M001-M003 closed with evidence that cargo cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004-M007 and C001-C007 establish Cargo-mediated cleanup, complete ownership/freshness proof, adaptive discovery, and combined-root orchestration while scans remain read-only. The current completion target is M008A: workspace-level policy must narrow selection without narrowing the ownership universe; M008B and M008C remain dependency-gated.
