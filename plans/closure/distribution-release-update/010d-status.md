@@ -121,6 +121,10 @@ check failed each time, then confirming it passed after regeneration:
 | semantic counter drifted to `manifests: 99` | 1 |
 | none | 0 |
 
+Both new gates are also hosted: the `generated-docs` and `benchmark` jobs in
+CI run `37228509633` on `19bd128` are green, alongside the five pre-existing
+lanes, so all nine jobs pass.
+
 One earlier attempt to tamper appeared to pass, which was a flaw in the *test*
 of the gate rather than in the gate: the string `"dry-run"` does not appear
 literally in roff output, so the replacement was a no-op. That is recorded

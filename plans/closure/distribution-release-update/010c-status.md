@@ -119,8 +119,11 @@ Local, on `d25beeb` (and re-verified on `3e5f3ab`):
   stable version to resolve.
 
 Hosted CI on `d25beeb` (`37227583886`) failed only in the Windows **installer**
-lane, for the fixture-stub reason fixed in `34a1d23`; every lane on `34a1d23`
-(`37227663867`) is green.
+lane, for the fixture-stub reason fixed in `34a1d23`, and touched no updater
+code. Every lane is green on `34a1d23` (`37227663867`) and on `19bd128`
+(`37228509633`). The updater's 19 fixture tests are part of the `msrv` and
+`checks` lanes, so they are qualified on Linux, macOS, and Windows, with the
+Windows target additionally compile-checked for the `cfg`-gated fixtures.
 
 ## Known limitations and deferred work
 
