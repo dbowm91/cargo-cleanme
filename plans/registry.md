@@ -35,7 +35,7 @@ M008 planning baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
 | Artifact discovery and cleanup | closed/current objectives | plans/subsystems/artifact-discovery-cleanup-roadmap.md | Phase 9 closed; C009 corrective closed | C008 closed the cleanup feature roadmap's current objectives; C009 then restored the green hosted Windows lane. Phase 10 is owned by the separate distribution/release/update subsystem. |
-| Distribution, release, and update | closed | plans/subsystems/distribution-release-update-roadmap.md | Phase 10 closed: M010A-M010D plus correctives C011 and C012 | M010A-M010D are closed and v0.1.0 and v0.1.1 are published. C011 discharged the updater transport defect found by the v0.1.0 smoke; C012 discharged a Windows installer fixture that was green without executing. C010 is a bounded upstream request (`proposed`) that nothing here waits on. |
+| Distribution, release, and update | ready / post-release corrective | plans/subsystems/distribution-release-update-roadmap.md | C013 fixture-premise audit | Phase 10 remains closed. C013 is ready. C014 prepares v0.1.2 live-update/reproducibility hardening but publication is blocked on C013 closure. C010 remains an upstream request that nothing here waits on. |
 
 ## Implementation handoffs
 
@@ -74,6 +74,8 @@ M008 planning baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 | Distribution, release, and update | M010D publication + operational polish + release closure | **closed** | plans/implementation/distribution-release-update/010d-publication-operational-polish-and-release-closure.md | Closure: plans/closure/distribution-release-update/010d-status.md. Both halves complete. v0.1.0 and v0.1.1 published; run `37232595211` green 20/20; v0.1.1 crate checksum `8dfb3d18f648…`. One requirement is closed partial: the live updater commit path, which needs a v0.1.2 to rehearse. |
 | Distribution, release, and update | C011 self-update transport qualification corrective | **closed** | plans/implementation/distribution-release-update/c011-self-update-transport-qualification-corrective.md | Closure: plans/closure/distribution-release-update/c011-status.md. Implementation `95bb38e` (tag `v0.1.1`). Reversed the transport to `eggup-eggfetch` and added the missing no-downgrade guard. |
 | Distribution, release, and update | C012 Windows installer-fixture corrective | **closed** | plans/implementation/distribution-release-update/c012-windows-installer-fixture-corrective.md | Closure: plans/closure/distribution-release-update/c012-status.md. Implementation `ab4b080`. The Windows case had never executed; it was green on an unrelated real-cargo failure. Fixed with a `cargo.cmd` shim, `os.pathsep`, and a premise check. CI `37235169841` green 9/9. |
+| Distribution, release, and update | C013 cross-platform fixture-premise audit | **ready** | plans/implementation/distribution-release-update/c013-cross-platform-fixture-premise-audit.md | Immediate handoff. Audits every external-process fixture for truthful executable resolution/branch evidence across the platforms it claims. No production behavior change expected. |
+| Distribution, release, and update | C014 v0.1.2 live update + release reproducibility | **blocked** | plans/implementation/distribution-release-update/c014-v0.1.2-live-update-and-release-reproducibility-corrective.md | Publication hard-blocked on C013 closure. Non-publication prep may proceed: exact release Rust pin, source/tag identity gate, repeatable post-release smoke harness. Closure requires real public v0.1.1 -> v0.1.2 self-update evidence. |
 | Distribution, release, and update | C010 upstream: `CurlConfig::user_agent` seam | **proposed** | plans/implementation/distribution-release-update/c010-eggup-curl-user-agent-seam.md | Bounded upstream Eggup request. No closure record: it cannot be closed from this repository, and nothing here is waiting on it. |
 
 ## Current handoff
@@ -99,7 +101,7 @@ failure reports coverage that does not exist. Correctives C011 and C012 both
 landed a premise assertion — the transport's User-Agent, the stub's
 resolvability — rather than only fixing the symptom.
 
-Two items remain registered and neither blocks anything. **C010** is a bounded upstream request for a `User-Agent` seam on `eggup-curl`; it is `proposed`, it is upstream's to accept or decline, and nothing in this repository waits on it. The live updater commit path has no end-to-end rehearsal because `v0.1.1` is simultaneously the newest published version and the first containing a working updater; rehearsing it requires a `v0.1.2`.
+A post-release corrective line is now registered. **C013** is the immediate ready handoff and closes the remaining fixture-premise evidence debt. **C014** owns the real v0.1.1 -> v0.1.2 updater commit rehearsal, exact release-toolchain pinning, and exact tag/source publication rule; its publication step is blocked on C013 closure, while non-publication preparation may proceed in parallel. **C010** remains a bounded upstream request for a `User-Agent` seam on `eggup-curl`; it is `proposed`, upstream may accept or decline it, and cargo-cleanme waits on none of it because the production updater uses Eggfetch.
 
 No secret was created or stored; publication used the operator's pre-existing `gh` and crates.io credentials. Eggpack required no upstream implementation plan because its existing producer contract, manifest, bootstrap, CI-generation, drift, and draft-staging surfaces already cover cargo-cleanme's direct single-binary release.
 
@@ -125,12 +127,15 @@ M010C Eggup self-update + install provenance -> closed
 M010D publication + operational polish + release closure -> closed
 C011 self-update transport qualification corrective -> closed
 C012 Windows installer-fixture corrective -> closed
+C013 cross-platform fixture-premise audit -> ready
+C014 v0.1.2 live update/release reproducibility -> blocked on C013 for publication
 C010 upstream CurlConfig::user_agent seam -> proposed (upstream; nothing waits on it)
 
 Published: v0.1.0, v0.1.1 (GitHub releases and crates.io)
+Next qualification release: v0.1.2 under C014 after C013 closure
 ~~~
 
-Phase 10 is closed. This work does not alter the destructive cleanup boundary: the distribution milestones touch release, packaging, and update paths only, and correctives C009 and C011 touched test fixtures and the updater's transport respectively. Two tags and two releases were created, and two crate versions were published, with the evidence recorded in the M010D closure record.
+Phase 10 remains closed. C013/C014 are post-release correctives and do not reopen the feature phase or alter the destructive cleanup boundary. C013 is test-evidence hardening; C014 is release/update qualification and reproducibility. Two tags/releases and two crate versions are currently published; v0.1.2 publication is authorized only through C014 after its C013 precondition.
 
 ### Current destructive safety boundary
 
