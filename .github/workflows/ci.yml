@@ -27,6 +27,13 @@ jobs:
         run: |
           candidate="target/debug/cargo-cleanme$(python -c "import sys; print('.exe' if sys.platform == 'win32' else '')")"
           python3 scripts/smoke-release-candidate.py "$candidate"
+      # C013: the portability guard runs its own negative samples first, so a
+      # guard that can no longer detect the C012 defect shape fails here rather
+      # than passing quietly on a tree that no longer contains it.
+      - name: Fixture portability guard is itself a real guard
+        run: python3 scripts/check-fixture-portability.py --self-test
+      - name: Fixture portability guard
+        run: python3 scripts/check-fixture-portability.py
   installers:
     # Fixture-driven installer qualification. No test here contacts the public
     # GitHub service or a real release; the fixture server is local.
@@ -47,6 +54,13 @@ jobs:
       - name: Qualify the public installers against a local fixture release
         shell: bash
         run: python3 packaging/tests/test_installers.py
+      # C013: the branch assertions the installer cases depend on are only
+      # meaningful if they reject a broken setup. This is where the C012 class
+      # of false green is proven to be detectable, and it runs on the Windows
+      # lane specifically because that is where the defect lived.
+      - name: Installer premise guards reject a broken setup
+        shell: bash
+        run: python3 packaging/tests/test_installers.py --self-test
   generated-docs:
     # Completions and the manpage are generated from the clap command model, so
     # a command change that was not regenerated must fail rather than ship a

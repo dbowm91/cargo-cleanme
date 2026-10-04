@@ -37,9 +37,92 @@ fn path_with(prefix: &std::path::Path) -> std::ffi::OsString {
     std::env::join_paths(paths).expect("join PATH")
 }
 
+/// The first `cargo-cleanme[.exe]` on `path_value`, resolved the way Cargo
+/// resolves an external subcommand.
+///
+/// This exists so the external-subcommand cases can assert their own premise.
+/// A staged binary that is never the one Cargo picks produces a test that
+/// passes or fails for reasons that have nothing to do with the product: the
+/// Windows installer case in C012 was green for an entire release cycle that
+/// way. `EXE_SUFFIX` is what makes the probe correct on Windows, where an
+/// extensionless staged file is invisible to the lookup.
+///
+/// The path is passed in rather than read from this process's environment on
+/// purpose. The child is the thing whose lookup matters, and reading the
+/// parent's `PATH` would assert against a different environment than the one
+/// Cargo actually searches -- which is how a real installed `cargo-cleanme`
+/// can be sitting on `PATH` while the staged fixture is what really runs.
+fn resolve_external_subcommand(path_value: &std::ffi::OsStr) -> Option<PathBuf> {
+    let file_name = format!("cargo-cleanme{}", std::env::consts::EXE_SUFFIX);
+    std::env::split_paths(path_value)
+        .map(|dir| dir.join(&file_name))
+        .find(|candidate| candidate.is_file())
+}
+
+/// Fail unless the staged binary is provably the one Cargo will execute.
+fn assert_staged_is_resolved(path_value: &std::ffi::OsStr, staged: &std::path::Path) {
+    let resolved = resolve_external_subcommand(path_value).unwrap_or_else(|| {
+        panic!(
+            "no cargo-cleanme{} on the staged PATH; the external-subcommand \
+             cases would be exercising something else",
+            std::env::consts::EXE_SUFFIX
+        )
+    });
+    assert_eq!(
+        resolved, staged,
+        "Cargo would resolve {resolved:?}, not the staged {staged:?}; \
+         the external-subcommand assertions below would prove nothing about \
+         this build"
+    );
+}
+
+#[test]
+fn the_staged_binary_is_the_external_subcommand_cargo_will_run() {
+    // The premise of the two cases below, asserted as its own case: a
+    // successful `cargo cleanme --version` proves the staged bytes ran, and
+    // resolving the file name proves they are the ones Cargo selects. Without
+    // both, an unrelated `cargo-cleanme` on PATH would satisfy every equality
+    // assertion while the product under test was never invoked.
+    let (dir, staged) = staged_cargo_cleanme();
+    let env_path = path_with(dir.path());
+    let search_order = std::env::split_paths(&env_path).collect::<Vec<_>>();
+    assert_eq!(
+        search_order.first().map(|p| p.as_path()),
+        Some(dir.path()),
+        "the staged directory must come first on PATH"
+    );
+    assert_staged_is_resolved(&env_path, &staged);
+
+    let direct = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .arg("--version")
+        .output()
+        .expect("run direct --version");
+    assert!(direct.status.success());
+    let external = Command::new("cargo")
+        .args(["cleanme", "--version"])
+        .env("PATH", &env_path)
+        .env("CARGO_HOME", dir.path().join("cargo-home"))
+        .output()
+        .expect("run cargo cleanme --version");
+    assert!(
+        external.status.success(),
+        "cargo cleanme --version failed: {}",
+        String::from_utf8_lossy(&external.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&external.stdout),
+        String::from_utf8_lossy(&direct.stdout),
+        "cargo ran something other than the staged binary"
+    );
+}
+
 #[test]
 fn cargo_external_subcommand_help_matches_direct_help() {
-    let (_dir_guard, _staged) = staged_cargo_cleanme();
+    let (dir, staged) = staged_cargo_cleanme();
+    // Premise first: the staged binary must be the one Cargo resolves, or the
+    // stdout comparison below proves nothing about this build.
+    let env_path = path_with(dir.path());
+    assert_staged_is_resolved(&env_path, &staged);
     // Direct invocation of the built binary.
     let direct = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
         .arg("--help")
@@ -51,10 +134,10 @@ fn cargo_external_subcommand_help_matches_direct_help() {
     // Cargo external-subcommand form: `cargo cleanme --help`.
     let external = Command::new("cargo")
         .args(["cleanme", "--help"])
-        .env("PATH", path_with(_dir_guard.path()))
+        .env("PATH", &env_path)
         // Isolate Cargo home so no user state is touched; the help path
         // performs no filesystem mutation anyway.
-        .env("CARGO_HOME", _dir_guard.path().join("cargo-home"))
+        .env("CARGO_HOME", dir.path().join("cargo-home"))
         .output()
         .expect("run cargo cleanme --help");
     assert!(
@@ -69,7 +152,9 @@ fn cargo_external_subcommand_help_matches_direct_help() {
 
 #[test]
 fn cargo_external_config_edit_help_matches_direct() {
-    let (_dir_guard, _staged) = staged_cargo_cleanme();
+    let (dir, staged) = staged_cargo_cleanme();
+    let env_path = path_with(dir.path());
+    assert_staged_is_resolved(&env_path, &staged);
     let direct = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
         .args(["config", "edit", "--help"])
         .output()
@@ -80,8 +165,8 @@ fn cargo_external_config_edit_help_matches_direct() {
 
     let external = Command::new("cargo")
         .args(["cleanme", "config", "edit", "--help"])
-        .env("PATH", path_with(_dir_guard.path()))
-        .env("CARGO_HOME", _dir_guard.path().join("cargo-home"))
+        .env("PATH", &env_path)
+        .env("CARGO_HOME", dir.path().join("cargo-home"))
         .output()
         .expect("run cargo cleanme config edit --help");
     assert!(external.status.success());
@@ -185,6 +270,17 @@ fn json_scope_block_is_emitted_with_nonzero_exit_status() {
     assert_eq!(json["result"]["scope_blocked"], true);
 }
 
+// Platform scope: this case substitutes a POSIX `/bin/sh` Cargo stub, which is
+// deliberately Unix-only.
+//
+// A `#!/bin/sh` file named `cargo` is not a Windows executable: PowerShell and
+// `CreateProcess` resolve through PATHEXT and will not run it, so a Windows
+// counterpart would have to be a compiled stub rather than the same fixture
+// with a different extension. Rather than claim Windows coverage that does not
+// exist, the case is scoped to the platform whose executable semantics it
+// actually matches. The Unix-only assertions inside it are load-bearing, not
+// incidental: the stub is what makes the `clean` invocation observable, and the
+// cases assert the stub's own log and argument file.
 #[cfg(unix)]
 #[test]
 fn json_unattended_yes_executes_through_cargo_and_emits_typed_result() {

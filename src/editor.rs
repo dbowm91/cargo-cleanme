@@ -176,6 +176,12 @@ mod tests {
         // EDITOR named a perfectly good program.
         let program = tempfile::tempdir().unwrap();
         let editor = program.path().join("ed");
+        // fixture-scope: never executed on any platform, so the `#!` line is
+        // not a claim that this file is an executable. `resolve_editor` only
+        // *resolves* a program (`resolve_program` accepts any existing file for
+        // an explicit path); it never spawns it. The case asserts the
+        // fall-through from an unusable VISUAL to a usable EDITOR, and would be
+        // identical with an empty file.
         fs::write(&editor, "#!/bin/sh\nexit 0\n").unwrap();
         #[cfg(unix)]
         {

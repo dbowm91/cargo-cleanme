@@ -66,6 +66,16 @@ python3 scripts/check-installer-contract.py
 echo "release-check: installer fixture qualification"
 python3 packaging/tests/test_installers.py
 
+echo "release-check: installer premise guards reject a broken setup"
+python3 packaging/tests/test_installers.py --self-test
+
+echo "release-check: fixture portability guard"
+python3 scripts/check-fixture-portability.py --self-test
+python3 scripts/check-fixture-portability.py
+
+echo "release-check: release candidate smoke validator"
+python3 scripts/smoke-release-candidate.py target/debug/cargo-cleanme
+
 echo "release-check: package"
 cargo package --locked
 

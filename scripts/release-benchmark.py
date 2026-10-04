@@ -159,7 +159,15 @@ def binary_size() -> int:
     return BINARY.stat().st_size
 
 
-def dependency_count() -> int:
+def dependency_count() -> int | None:
+    """`cargo tree` normal-edge count, or None when Cargo could not answer.
+
+    A failed `cargo tree` must not be recorded as a count of zero: the baseline
+    and the printed comparison would then carry a number that came from a
+    broken tool rather than from the dependency graph. It is not a hard gate
+    (only the semantic counters are), but a reported figure has to be a real
+    figure.
+    """
     result = subprocess.run(
         ["cargo", "tree", "--edges", "normal", "--prefix", "none"],
         capture_output=True,
@@ -168,7 +176,7 @@ def dependency_count() -> int:
         check=False,
     )
     if result.returncode != 0:
-        return 0
+        return None
     return len({line.strip() for line in result.stdout.splitlines() if line.strip()})
 
 
@@ -246,10 +254,17 @@ def main() -> int:
         after = current["timings_observed_seconds"][key]
         print(f"    {key}: {before:.4f}s -> {after:.4f}s")
     print(f"release binary: {recorded.get('release_binary_bytes')} -> {current['release_binary_bytes']} bytes")
-    print(
-        f"normal dependencies: {recorded.get('normal_dependency_count')} -> "
-        f"{current['normal_dependency_count']}"
-    )
+    observed_dependencies = current["normal_dependency_count"]
+    if observed_dependencies is None:
+        print(
+            f"normal dependencies: {recorded.get('normal_dependency_count')} -> "
+            f"unavailable (cargo tree did not succeed; not a gate)"
+        )
+    else:
+        print(
+            f"normal dependencies: {recorded.get('normal_dependency_count')} -> "
+            f"{observed_dependencies}"
+        )
 
     if drift:
         print("\nsemantic counter drift:", file=sys.stderr)

@@ -49,6 +49,20 @@ INSTALL_PS1 = ROOT / "packaging" / "install.ps1"
 PRODUCT = "cargo-cleanme"
 VERSION = "0.1.0"
 
+# The exact wrapper diagnostics the branch-level cases must observe. Both
+# packaging/install.sh and packaging/install.ps1 emit these substrings, so one
+# assertion states the branch on every platform instead of a per-wrapper pair.
+# They are asserted rather than inferred from an exit status: see
+# `require_diagnostic`.
+#
+# The three form a chain, which is why each case asserts a different link:
+# a 404 binary must *enter* the documented fallback; that fallback must then
+# refuse when cargo is genuinely absent; and a stubbed cargo that reports
+# success without producing anything must trip the wrapper's own guard.
+FALLBACK_ENTERED = "no published binary for this release; using the Cargo source fallback"
+CARGO_ABSENT = "cargo is required for the source fallback but was not found"
+CARGO_PRODUCED_NOTHING = "Cargo reported success but"
+
 
 WINDOWS_TARGET = "x86_64-pc-windows-msvc"
 
@@ -80,6 +94,7 @@ def asset_for(target: str) -> str:
     return f"{PRODUCT}-{target}.exe" if target.endswith("-pc-windows-msvc") else f"{PRODUCT}-{target}"
 
 failures: list[str] = []
+skips: list[tuple[str, str]] = []
 passes = 0
 
 
@@ -91,6 +106,46 @@ def record(name: str, ok: bool, detail: str = "") -> None:
     else:
         failures.append(f"{name}: {detail}")
         print(f"  FAIL {name}: {detail}")
+
+
+def skip(name: str, reason: str) -> None:
+    """A case that could not run here, recorded as a skip and never as a pass.
+
+    A skip and a pass are different claims. Printing `ok` for a case that never
+    executed is the same false-green shape as the defect this suite was opened
+    to fix: the run looks green and the coverage does not exist.
+    """
+    skips.append((name, reason))
+    print(f"  skip {name}: {reason}")
+
+
+def diagnostic_present(result: subprocess.CompletedProcess[str], needle: str) -> str | None:
+    """None when the expected branch fired, else why it cannot be claimed.
+
+    "exited non-zero and placed nothing" is satisfied by a missing shell, a
+    dead fixture server, a typo in an argument, or a real Cargo install that
+    failed for unrelated reasons. Only the wrapper's own message proves the
+    branch under test is the branch that ran. Both wrappers emit these exact
+    substrings, so one assertion holds on every platform.
+    """
+    combined = result.stdout + result.stderr
+    if needle.lower() not in combined.lower():
+        return (
+            f"exit {result.returncode} without the expected diagnostic "
+            f"{needle!r}; output: {combined.strip()[:240]!r}"
+        )
+    if result.returncode == 0:
+        return f"exit 0 despite the expected diagnostic {needle!r}"
+    return None
+
+
+def require_diagnostic(name: str, result: subprocess.CompletedProcess[str], needle: str) -> None:
+    """Record the branch assertion for `name`."""
+    problem = diagnostic_present(result, needle)
+    if problem is None:
+        record(name, True)
+    else:
+        record(name, False, problem)
 
 
 # --------------------------------------------------------------------- fixture
@@ -345,6 +400,7 @@ def tools_without_cargo(bindir: Path) -> Path:
 
 
 # ---------------------------------------------------------------------- cases
+
 def case_happy_path(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path, asset: str) -> None:
     clear_control(release, asset)
     clear_control(release, f"{asset}.sha256")
@@ -394,13 +450,12 @@ def case_binary_404_falls_back(runner_name: str, runner, release: Path, base_url
     # than pretend the fallback succeeded.
     result = runner(args, base_url, {"PATH": str(tools_dir / "fallback")})
     name = f"[{runner_name}] absent binary enters the documented Cargo fallback"
-    combined = (result.stdout + result.stderr).lower()
     if result.returncode == 0 and installed_binary(dest).is_file():
         record(name, False, "installed something even though the binary was absent")
-    elif "cargo" in combined:
-        record(name, True)
     else:
-        record(name, False, f"no Cargo fallback message; output: {combined[:200]}")
+        # The branch under test is "binary absent -> say so, then fall back".
+        # "cargo" appearing anywhere in the output is not that branch.
+        require_diagnostic(name, result, FALLBACK_ENTERED)
 
 
 def case_checksum_absent_is_fatal(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path, asset: str) -> None:
@@ -416,8 +471,7 @@ def case_checksum_absent_is_fatal(runner_name: str, runner, release: Path, base_
     if installed_binary(dest).exists():
         record(name, False, "a binary was placed despite the missing checksum")
         return
-    combined = (result.stdout + result.stderr).lower()
-    if "cargo" in combined and "build" in combined:
+    if FALLBACK_ENTERED.lower() in (result.stdout + result.stderr).lower():
         record(name, False, "fell back to Cargo after a verification failure")
         return
     record(name, True)
@@ -478,10 +532,9 @@ def case_transport_failure(runner_name: str, runner, release: Path, base_url: st
     args = (["--dir", str(dest)] if runner_name == "posix" else ["-Directory", str(dest)])
     result = runner(args, base_url)
     name = f"[{runner_name}] transport failure is not a Cargo fallback signal"
-    combined = (result.stdout + result.stderr).lower()
     if result.returncode == 0 or installed_binary(dest).exists():
         record(name, False, f"exit {result.returncode} with binary={installed_binary(dest).exists()}")
-    elif "cargo" in combined and "build" in combined:
+    elif FALLBACK_ENTERED.lower() in (result.stdout + result.stderr).lower():
         record(name, False, "fell back to Cargo after a transport failure")
     else:
         record(name, True)
@@ -526,7 +579,14 @@ def case_existing_destination(runner_name: str, runner, release: Path, base_url:
 def case_unwritable_destination(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path, asset: str) -> None:
     clear_control(release, asset)
     if not hasattr(os, "geteuid") or os.geteuid() == 0:
-        record(f"[{runner_name}] unwritable destination is rejected", True, "skipped as root")
+        # Recorded as a skip, never as a pass: root can write to a 0500
+        # directory, so the case did not test anything. Printing `ok` here would
+        # make a run that never exercised the guard indistinguishable from one
+        # that proved it.
+        skip(
+            f"[{runner_name}] unwritable destination is rejected",
+            "running as root, where a 0500 directory is still writable",
+        )
         return
     dest = work / f"readonly-{runner_name}"
     dest.mkdir(parents=True, exist_ok=True)
@@ -566,13 +626,55 @@ def case_cargo_missing(runner_name: str, runner, release: Path, base_url: str, w
     args = (["--dir", str(dest)] if runner_name == "posix" else ["-Directory", str(dest)])
     result = runner(args, base_url, {"PATH": str(tools_dir / "fallback")})
     name = f"[{runner_name}] absent binary with no cargo is a hard failure"
-    if result.returncode == 0 or installed_binary(dest).exists():
-        record(name, False, f"exit {result.returncode}")
-    else:
-        record(name, True)
+    require_diagnostic(name, result, CARGO_ABSENT)
 
 
-def case_fake_cargo_is_actually_resolved(runner_name: str, work: Path) -> None:
+def probe_resolved_cargo(runner_name: str, env: dict[str, str]) -> str:
+    """The `cargo` this platform's own lookup rules would run.
+
+    POSIX uses the shell's `command -v`; Windows resolves through PATHEXT, so
+    `Get-Command` is the only probe that answers the question the wrapper will
+    actually ask. Asking the wrong question is what made the Windows case
+    meaningless: the stub existed, was on PATH, and was not what ran.
+    """
+    if runner_name == "posix":
+        probe = subprocess.run(
+            [posix_shell() or "sh", "-c", "command -v cargo"],
+            capture_output=True, text=True, env=env, timeout=60, check=False,
+        )
+        return probe.stdout.strip()
+    probe = subprocess.run(
+        ["pwsh", "-NoProfile", "-NonInteractive",
+         "-Command", "(Get-Command cargo -ErrorAction SilentlyContinue).Source"],
+        capture_output=True, text=True, env=env, timeout=120, check=False,
+    )
+    return probe.stdout.strip().splitlines()[-1].strip() if probe.stdout.strip() else ""
+
+
+def cargo_premise(runner_name: str, stub_dir: Path, env: dict[str, str]) -> str | None:
+    """None when the stub is provably the cargo that will run, else the reason.
+
+    Returns the verdict instead of recording it so the negative direction can
+    be exercised too (see `self_test`): a premise assertion that has only ever
+    been observed to pass has not been shown to fail.
+    """
+    resolved = probe_resolved_cargo(runner_name, env)
+    if not resolved:
+        return "no cargo was resolvable at all"
+    if Path(resolved).parent.resolve() != stub_dir.resolve():
+        return f"resolved to {resolved!r}, not the stub in {stub_dir}"
+    return None
+
+
+def case_fake_cargo_is_actually_resolved(
+    runner_name: str,
+    runner,
+    release: Path,
+    base_url: str,
+    work: Path,
+    tools_dir: Path,
+    asset: str,
+) -> None:
     """The premise of the cargo-fallback cases must itself be asserted.
 
     `case_cargo_produces_nothing` only means something if the `cargo` the
@@ -590,31 +692,25 @@ def case_fake_cargo_is_actually_resolved(runner_name: str, work: Path) -> None:
     env = host_env("")
     env["PATH"] = os.pathsep.join([str(stub_dir), os.environ.get("PATH", "")])
     name = f"[{runner_name}] the cargo stub is the cargo the wrapper will resolve"
-
-    if runner_name == "posix":
-        probe = subprocess.run(
-            [posix_shell() or "sh", "-c", "command -v cargo"],
-            capture_output=True, text=True, env=env, timeout=60, check=False,
-        )
-        resolved = probe.stdout.strip()
-    else:
-        probe = subprocess.run(
-            ["pwsh", "-NoProfile", "-NonInteractive",
-             "-Command", "(Get-Command cargo -ErrorAction SilentlyContinue).Source"],
-            capture_output=True, text=True, env=env, timeout=120, check=False,
-        )
-        resolved = probe.stdout.strip().splitlines()[-1].strip() if probe.stdout.strip() else ""
-
-    if not resolved:
-        record(name, False, "no cargo was resolvable at all")
-    elif Path(resolved).parent.resolve() != stub_dir.resolve():
-        record(name, False, f"resolved to {resolved!r}, not the stub in {stub_dir}")
-    else:
+    problem = cargo_premise(runner_name, stub_dir, env)
+    if problem is None:
         record(name, True)
+    else:
+        record(name, False, problem)
 
 
 def case_cargo_produces_nothing(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path, asset: str) -> None:
-    """Cargo reports success but produces no binary: that must not be success."""
+    """Cargo reports success but produces no binary: that must not be success.
+
+    The stub exits 0, so the wrapper's own `Cargo reported success but ... was
+    not produced` guard is the only thing that can stop this install. Asserting
+    merely "non-zero exit, no binary" would accept a fixture server that died,
+    a shell that was missing, or a real `cargo install` that failed for an
+    unrelated reason -- the exact false-green that kept C012's Windows case
+    green while the real Cargo did the work. The premise case above proves the
+    stub is the cargo that ran; this assertion proves the branch that fired was
+    ours.
+    """
     clear_control(release, asset)
     set_control(release, asset, mode=MODE_404)
     dest = work / f"emptycargo-{runner_name}"
@@ -624,10 +720,10 @@ def case_cargo_produces_nothing(runner_name: str, runner, release: Path, base_ur
         args, base_url, {"PATH": os.pathsep.join([str(stub_dir), os.environ.get("PATH", "")])}
     )
     name = f"[{runner_name}] a Cargo run that produces no binary is a hard failure"
-    if result.returncode == 0 or installed_binary(dest).exists():
-        record(name, False, f"exit {result.returncode}")
-    else:
-        record(name, True)
+    if installed_binary(dest).exists():
+        record(name, False, "a binary was placed even though Cargo produced none")
+        return
+    require_diagnostic(name, result, CARGO_PRODUCED_NOTHING)
 
 
 def case_temp_cleanup(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path, asset: str) -> None:
@@ -663,11 +759,141 @@ def case_contract_projection() -> None:
         record(name, False, result.stderr.strip()[:300] or result.stdout.strip()[:300])
 
 
+# The roster is a list rather than a hand-written call sequence so the driver
+# can state how many cases a run owes the operator. A case quietly dropped from
+# this tuple would otherwise reduce coverage while every remaining case stayed
+# green, which is the failure mode this suite exists to prevent.
+CASES = (
+    case_happy_path,
+    case_exact_version,
+    case_binary_404_falls_back,
+    case_checksum_absent_is_fatal,
+    case_malformed_digest,
+    case_digest_mismatch,
+    case_wrong_candidate,
+    case_transport_failure,
+    case_existing_destination,
+    case_unwritable_destination,
+    case_bad_version_syntax,
+    case_cargo_missing,
+    case_fake_cargo_is_actually_resolved,
+    case_cargo_produces_nothing,
+    case_temp_cleanup,
+)
+
+
+def self_test() -> int:
+    """Prove the two new guards actually reject a broken premise.
+
+    A premise assertion that has only ever been observed to pass has not been
+    shown to work. C012's case was green for an entire release cycle precisely
+    because nothing ever checked the guards in the direction that matters: with
+    the stub *not* reachable, and with the real tool winning the lookup.
+
+    Each check below asserts the guard's own verdict on a deliberately broken
+    setup. If a guard stops rejecting these, this mode fails, and CI runs it on
+    every lane.
+    """
+    problems: list[str] = []
+
+    def expect(name: str, rejected: bool, detail: str) -> None:
+        if rejected:
+            print(f"  ok   {name}")
+        else:
+            problems.append(f"{name}: the guard accepted a broken premise ({detail})")
+            print(f"  FAIL {name}: the guard accepted a broken premise ({detail})")
+
+    def completed(returncode: int, stdout: str, stderr: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=["install.sh"], returncode=returncode, stdout=stdout, stderr=stderr
+        )
+
+    print("--- self test: branch assertions reject an unrelated failure ---")
+    # What the pre-C013 cases accepted: non-zero exit, nothing placed, and no
+    # evidence at all about which branch produced it.
+    unrelated = completed(1, "", "sh: cargo: not found")
+    expect(
+        "a non-zero exit with no wrapper diagnostic is not accepted as the branch",
+        diagnostic_present(unrelated, CARGO_PRODUCED_NOTHING) is not None,
+        "the assertion would have passed on any unrelated failure",
+    )
+    exit_zero = completed(0, f"{PRODUCT}: Cargo reported success but /tmp/bin/{PRODUCT}", "")
+    expect(
+        "exit 0 is not accepted even when the wording matches",
+        diagnostic_present(exit_zero, CARGO_PRODUCED_NOTHING) is not None,
+        "a successful install claiming a guard fired is not a pass",
+    )
+    expect(
+        "the real diagnostic is accepted",
+        diagnostic_present(
+            completed(1, "", f"{PRODUCT}: Cargo reported success but /tmp/bin/{PRODUCT} was not produced"),
+            CARGO_PRODUCED_NOTHING,
+        )
+        is None,
+        "a correct branch was rejected",
+    )
+
+    print("\n--- self test: the resolution premise rejects a lost stub ---")
+    runner_name = "posix" if posix_shell() is not None else "powershell"
+    if runner_name != "posix":
+        print("  skip the premise negatives: they need a POSIX host to stage a stub")
+        print("  and the Windows lane proves the same two directions for PowerShell.\n")
+        return 1 if problems else 0
+
+    work = Path(tempfile.mkdtemp(prefix="cargo-cleanme-installer-selftest-"))
+    try:
+        stub_dir = fake_cargo(work / "stub")
+        inherited = os.environ.get("PATH", "")
+
+        first = host_env("")
+        first["PATH"] = os.pathsep.join([str(stub_dir), inherited])
+        expect(
+            "the stub is accepted when it is the first PATH entry",
+            cargo_premise(runner_name, stub_dir, first) is None,
+            "a correct premise was rejected",
+        )
+
+        reversed_env = host_env("")
+        reversed_env["PATH"] = os.pathsep.join([inherited, str(stub_dir)])
+        expect(
+            "the stub is rejected when PATH precedence is reversed",
+            cargo_premise(runner_name, stub_dir, reversed_env) is not None,
+            "a real cargo ahead of the stub was accepted as the stub",
+        )
+
+        without = host_env("")
+        without["PATH"] = str(tools_without_cargo(work / "nocargo"))
+        expect(
+            "the premise is rejected when no cargo is resolvable at all",
+            cargo_premise(runner_name, stub_dir, without) is not None,
+            "an unresolvable cargo was accepted as the stub",
+        )
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+    print()
+    if problems:
+        print(f"FAILED: {len(problems)} premise guard(s) did not reject a broken setup", file=sys.stderr)
+        for problem in problems:
+            print(f"  - {problem}", file=sys.stderr)
+        return 1
+    print("self test passed: every premise guard rejects a broken setup")
+    return 0
+
+
 # ------------------------------------------------------------------------ main
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--keep", action="store_true", help="keep the temporary fixture tree")
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="prove the premise guards reject a broken setup, then exit",
+    )
     args = parser.parse_args()
+
+    if args.self_test:
+        return self_test()
 
     work = Path(tempfile.mkdtemp(prefix="cargo-cleanme-installer-tests-"))
     tools = work / "tools"
@@ -688,8 +914,23 @@ def main() -> int:
         blocks.append(("powershell", run_ps1, WINDOWS_TARGET, asset_for(WINDOWS_TARGET)))
 
     if not blocks:
-        print("no installer block can run on this host; nothing to qualify", file=sys.stderr)
-        return 0
+        # Exiting 0 here would report a green run that qualified nothing: the
+        # worst possible answer from a suite whose entire purpose is proving
+        # which installer actually executed. A host that can run neither block
+        # has no installer evidence, and that is a failure of the run, not a
+        # pass. The hosted Linux/macOS/Windows lanes each run one block.
+        print(
+            "no installer block can run on this host, so this run qualified "
+            "nothing; refusing to report success",
+            file=sys.stderr,
+        )
+        print(
+            "  install.sh needs a Linux or macOS host; install.ps1 needs "
+            "Windows with pwsh on PATH",
+            file=sys.stderr,
+        )
+        shutil.rmtree(work, ignore_errors=True)
+        return 1
 
     release = build_release_root(work, [target for _, _, target, _ in blocks])
     server, port = serve(release)
@@ -707,23 +948,12 @@ def main() -> int:
             print("  skip powershell block: install.ps1 only runs on Windows;")
             print("  its cases are qualified by the hosted Windows lane instead.\n")
 
+        executed = 0
         for runner_name, runner, _target, asset in blocks:
             print(f"--- {runner_name} ({_target}) ---")
-            case_happy_path(runner_name, runner, release, base_url, work, tools, asset)
-            case_exact_version(runner_name, runner, release, base_url, work, tools, asset)
-            case_binary_404_falls_back(runner_name, runner, release, base_url, work, tools, asset)
-            case_checksum_absent_is_fatal(runner_name, runner, release, base_url, work, tools, asset)
-            case_malformed_digest(runner_name, runner, release, base_url, work, tools, asset)
-            case_digest_mismatch(runner_name, runner, release, base_url, work, tools, asset)
-            case_wrong_candidate(runner_name, runner, release, base_url, work, tools, asset)
-            case_transport_failure(runner_name, runner, release, base_url, work, tools, asset)
-            case_existing_destination(runner_name, runner, release, base_url, work, tools, asset)
-            case_unwritable_destination(runner_name, runner, release, base_url, work, tools, asset)
-            case_bad_version_syntax(runner_name, runner, release, base_url, work, tools, asset)
-            case_cargo_missing(runner_name, runner, release, base_url, work, tools, asset)
-            case_fake_cargo_is_actually_resolved(runner_name, work)
-            case_cargo_produces_nothing(runner_name, runner, release, base_url, work, tools, asset)
-            case_temp_cleanup(runner_name, runner, release, base_url, work, tools, asset)
+            for case in CASES:
+                case(runner_name, runner, release, base_url, work, tools, asset)
+                executed += 1
             print()
     finally:
         server.shutdown()
@@ -733,7 +963,25 @@ def main() -> int:
         else:
             shutil.rmtree(work, ignore_errors=True)
 
-    print(f"{passes} passed, {len(failures)} failed")
+    # The roster and the driver must not drift apart: a case removed from
+    # CASES would otherwise shrink coverage silently while the run stayed green.
+    expected_cases = len(blocks) * len(CASES)
+    if executed != expected_cases:
+        record(
+            "[suite] every declared case ran for every block",
+            False,
+            f"executed {executed} of {expected_cases} "
+            f"({len(CASES)} cases x {len(blocks)} block(s))",
+        )
+    else:
+        record(
+            "[suite] every declared case ran for every block",
+            True,
+        )
+
+    print(f"{passes} passed, {len(failures)} failed, {len(skips)} skipped")
+    for name, reason in skips:
+        print(f"  SKIP {name}: {reason}")
     for failure in failures:
         print(f"  FAIL {failure}")
     return 1 if failures else 0

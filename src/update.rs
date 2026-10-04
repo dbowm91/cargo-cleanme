@@ -1346,6 +1346,25 @@ mod tests {
 
     // ------------------------------------------------------------ transaction
 
+    // Platform scope for the commit-path cases below.
+    //
+    // Eggup's `ExactIdentityValidator` *executes* the acquired candidate to
+    // prove its own identity, so the fixture candidate has to be a real
+    // executable for the platform under test. `candidate_bytes` therefore
+    // writes a `#!/bin/sh` script on Unix and inert `MZ` bytes elsewhere: a
+    // script is not a Windows executable, and pretending otherwise would make
+    // every Windows lane green while the commit path never ran.
+    //
+    // The cases that actually execute the candidate are consequently
+    // `#[cfg(unix)]`. The cases above them are not scoped, because they never
+    // execute anything: the transport is a trait fixture
+    // (`FixtureEnvironment`), the version authority is fixture metadata, and
+    // the assertions are about planning, ownership, and refusal. Those run
+    // everywhere, truthfully.
+    //
+    // Windows commit-path evidence therefore comes from C014's live
+    // self-update rehearsal against a real published release, not from a
+    // fixture that could not run.
     #[cfg(unix)]
     #[test]
     fn a_verified_candidate_replaces_the_live_binary() {

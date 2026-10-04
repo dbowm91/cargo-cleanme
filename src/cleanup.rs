@@ -3481,12 +3481,32 @@ mod tests {
 
     #[test]
     fn real_cargo_package_selector_preserves_sibling_workspace_artifacts() {
+        // This case integrates with the *real* Cargo rather than a stub, so
+        // its premise is that a real Cargo answered. An unreadable version
+        // string used to make `supported` false and return early, which
+        // reported success for a test that had proven nothing -- a missing or
+        // broken Cargo must be a loud failure, not a green case.
         let version = Command::new("cargo").arg("--version").output().unwrap();
+        assert!(
+            version.status.success(),
+            "cargo --version failed: {}",
+            String::from_utf8_lossy(&version.stderr)
+        );
         let version = String::from_utf8_lossy(&version.stdout);
-        let supported = version.split_whitespace().nth(1).is_some_and(|version| {
-            workspace::clean_capabilities_from_version(version).package_selector
-        });
+        let reported = version
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or_else(|| panic!("cargo --version printed no version: {version:?}"));
+        let supported = workspace::clean_capabilities_from_version(reported).package_selector;
         if !supported {
+            // An honest capability gate, stated out loud. `cargo clean
+            // --package` predates this toolchain, so on an old Cargo the case
+            // cannot run; saying so is the difference between recorded
+            // coverage and implied coverage.
+            eprintln!(
+                "skipping real_cargo_package_selector_preserves_sibling_workspace_artifacts: \
+                 cargo {reported} has no `clean --package` support"
+            );
             return;
         }
         let temp = tempfile::tempdir().unwrap();

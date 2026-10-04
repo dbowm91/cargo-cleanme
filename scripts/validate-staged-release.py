@@ -121,10 +121,19 @@ def parse_sidecar(path: Path) -> tuple[str, str]:
 
 
 def glibc_floor(path: Path) -> str | None:
-    """Highest glibc version symbol the ELF requires, or None if not dynamic."""
+    """Highest glibc version symbol the ELF requires, or None if not measurable.
+
+    A missing `readelf` is *not* a pass. The caller must be able to tell "this
+    binary requires at most GLIBC_2.17" apart from "nobody measured this
+    binary", so the two are reported as different states rather than both
+    collapsing into None.
+    """
     readelf = shutil.which("readelf")
     if readelf is None:
-        return None
+        raise LookupError(
+            "readelf is not on PATH, so the glibc floor of this binary cannot "
+            "be measured at all"
+        )
     result = subprocess.run(
         [readelf, "--version-info", str(path)], capture_output=True, text=True, check=False
     )
@@ -273,9 +282,21 @@ def main() -> int:
             path = work / asset
             if not path.is_file():
                 continue
-            floor = glibc_floor(path)
+            try:
+                floor = glibc_floor(path)
+            except LookupError as error:
+                # An unmeasurable floor is a failed claim, not an absent one.
+                # The M010B/M010D closure evidence depends on this number, so
+                # a silent "no version info found" would let a release proceed
+                # with the glibc claim unverified.
+                fail(f"{triple}: {error}")
+                continue
             if floor is None:
-                note(f"{triple}: no glibc version info found (static read only)")
+                note(
+                    f"{triple}: readelf reported no glibc version symbols; "
+                    f"the 2.17 floor is UNVERIFIED for this binary "
+                    f"(static read only)"
+                )
             else:
                 note(f"{triple}: requires at most GLIBC_{floor} (static ELF evidence)")
 
