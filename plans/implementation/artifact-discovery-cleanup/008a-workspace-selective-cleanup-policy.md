@@ -1,6 +1,6 @@
 # M008A — Workspace Selective Cleanup Policy
 
-Status: ready
+Status: conditionally closed
 
 Repository baseline: `3ee9699a0b0d987287d08e427195284e08d079f7`
 
@@ -376,3 +376,5 @@ The closure record must include:
 - hosted Linux/macOS/Windows CI;
 - Rust 1.89 gates;
 - any observed performance delta for cleanup selection/final proof.
+
+Current disposition and remaining qualification are recorded in `plans/closure/artifact-discovery-cleanup/008a-status.md`. The policy implementation landed, but public typed dispositions and fresh-policy race fixtures remain a hard handoff condition before M008B can begin.

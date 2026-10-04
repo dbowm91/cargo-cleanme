@@ -1,6 +1,6 @@
 # Artifact Discovery and Cleanup Roadmap
 
-Status: ready; M008A workspace selective cleanup policy is the active handoff
+Status: blocked; M008A policy code is conditionally closed pending typed dispositions, focused qualification fixtures, and hosted platform evidence
 
 Repository audit baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 
@@ -153,7 +153,7 @@ M007 learned/full cleanup orchestration [closed by corrective C006]
 C007 discovery-state recovery/planning cleanup [closed]
       |
       v
-M008A workspace selective cleanup policy [ready]
+M008A workspace selective cleanup policy [conditionally closed; qualification follow-up]
       |
       v
 M008B machine-readable reporting/automation contract [blocked on M008A]
@@ -505,6 +505,8 @@ The same corrective reconciles active planning so closed M007 is no longer prese
 M008 implements Phase 9 as three dependency-ordered tracks. Workspace-level policy is deliberately separated from Cargo package/profile selectors because the former only narrows which complete CleanupUnits are selected, while the latter narrows Cargo's mutation request inside a workspace and therefore requires separate runtime/accounting proof.
 
 ### M008A — Workspace selective cleanup policy
+
+Status: conditionally closed by `plans/closure/artifact-discovery-cleanup/008a-status.md`. Policy code landed; typed disposition, policy-specific fresh-proof fixtures, and hosted platform evidence remain before M008B is unblocked.
 
 Status: ready. Plan: `plans/implementation/artifact-discovery-cleanup/008a-workspace-selective-cleanup-policy.md`.
 
