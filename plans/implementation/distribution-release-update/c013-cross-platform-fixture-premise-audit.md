@@ -1,6 +1,10 @@
 # C013 — Cross-Platform Fixture Premise Audit
 
-Status: ready
+Status: closed
+
+Closure: `plans/closure/distribution-release-update/c013-status.md`
+
+Implementation commit: `51d70f1`
 
 Repository baseline: `c9b0104c5c6480c4056be3cacd11b893b7d52642`
 

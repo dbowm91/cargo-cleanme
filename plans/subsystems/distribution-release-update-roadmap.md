@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: Phase 10 remains **closed**, with a post-release corrective line now registered. C013 cross-platform fixture-premise audit is **ready**. C014 v0.1.2 live-update/release-reproducibility corrective is **blocked on C013 for publication**; its non-publication toolchain/source-identity preparation may proceed in parallel. C010 remains an upstream request (`proposed`) that nothing here waits on.
+Status: Phase 10 remains **closed**, with a post-release corrective line in progress. C013 cross-platform fixture-premise audit is **closed**; its sweep registered C015 for a product defect it found. C014 v0.1.2 live-update/release-reproducibility corrective is **ready** and now owns v0.1.2 publication. C015 is a separate product corrective that does not gate publication. C010 remains an upstream request (`proposed`) that nothing here waits on.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 
@@ -196,7 +196,8 @@ read the version authority at all. See
 One requirement was closed partial: the live updater **commit** path has no
 end-to-end rehearsal, because `v0.1.1` is both the newest published version and
 the first containing a working updater. That gap is now explicitly owned by
-post-release corrective C014, with C013 as its publication precondition.
+post-release corrective C014, whose publication precondition (C013) is now
+satisfied.
 
 Primary outcomes:
 
@@ -213,9 +214,10 @@ Primary outcomes:
 
 Plan: `plans/implementation/distribution-release-update/c013-cross-platform-fixture-premise-audit.md`
 
-Status: ready.
+Status: **closed**. Implementation `51d70f1`; closure record
+`plans/closure/distribution-release-update/c013-status.md`.
 
-C013 closes the low-severity evidence debt left by C012: audit every fixture that substitutes or resolves an external executable, PATH entry, shell/editor command, or platform-specific process and prove that the executable the test intends to exercise is the executable the subject actually resolves. The audit may keep intentionally Unix-only tests platform-scoped; it must not claim cross-platform coverage from a fixture that cannot execute on that platform.
+C013 closed the low-severity evidence debt left by C012: audit every fixture that substitutes or resolves an external executable, PATH entry, shell/editor command, or platform-specific process and prove that the executable the test intends to exercise is the executable the subject actually resolves. The audit may keep intentionally Unix-only tests platform-scoped; it must not claim cross-platform coverage from a fixture that cannot execute on that platform.
 
 Primary outcomes:
 
@@ -225,13 +227,20 @@ Primary outcomes:
 - explicit scoping for deliberately platform-only fixtures;
 - no medium-or-higher fixture-evidence finding remaining.
 
-C013 does not reopen Phase 10 and should not change production behavior. A product defect discovered by the audit gets a separate corrective.
+C013 did not reopen Phase 10 and changed no production behavior. The audit
+recorded a 25-row fixture inventory, corrected nine evidence defects, and proved
+every new premise guard in the failing direction.
+
+Its most serious finding was not a test: the release-candidate smoke validator
+that C009 added to CI was green on all three hosted lanes while the subject under
+test was failing. Tightening that validator exposed a real product defect, which
+by C013's own failure semantics became a separate corrective — see §8C.
 
 ## 8B. C014 — v0.1.2 live update and release reproducibility corrective
 
 Plan: `plans/implementation/distribution-release-update/c014-v0.1.2-live-update-and-release-reproducibility-corrective.md`
 
-Status: blocked on C013 for publication. Toolchain/source-identity preparation may proceed in parallel.
+Status: **ready**. C013 is closed, so publication is authorized.
 
 C014 uses v0.1.2 as a deliberately small qualification release. It closes M010D's partial live-updater evidence and the two release-process weaknesses recorded during v0.1.1 publication.
 
@@ -239,13 +248,35 @@ Required outcomes:
 
 - replace floating `rust = "stable"` release inputs with one exact qualified Rust release while preserving Rust 1.89 MSRV;
 - mechanically enforce exact tag/version/source identity for crate publication;
-- publish v0.1.2 only after C013 closure and the normal Eggpack staged-release gates;
+- publish v0.1.2 only after the normal Eggpack staged-release gates and the tag/source identity gate (the C013 precondition is closed);
 - exercise the released v0.1.1 updater through a real self-managed v0.1.1 -> public v0.1.2 networked commit;
 - require the installed post-update binary digest to equal the public v0.1.2 asset digest;
 - prove a Cargo-managed v0.1.1 install refuses self-update without mutation and emits the correct v0.1.2 manager remediation;
 - make the live smoke repeatable on the supported release platform matrix to the extent claimed.
 
 A failure after immutable publication must be handled by yanking/annotating and a new corrective/version, never by replacing v0.1.2 bytes.
+
+## 8C. C015 — Relative scan root Cargo resolution
+
+Plan: `plans/implementation/distribution-release-update/c015-relative-scan-root-cargo-resolution-corrective.md`
+
+Status: ready. Discovered by C013.
+
+An explicitly relative scan root — `cargo-cleanme scan fixture` — silently
+resolves **zero** Cargo workspaces. Discovery preserves the caller's spelling, and
+the product then passes that relative manifest path to `cargo locate-project` with
+the child's working directory set to the manifest's own parent, so the path does
+not resolve. The scan still exits 0 with a valid JSON document reporting no
+groups.
+
+Severity is medium. The failure direction is fail-safe: a degraded scan reports
+*less* reclaimable space, so `clean` deletes less and never more. But a user can
+read "nothing to clean" as a false all-clear, and the difference is invisible in
+the machine-readable channel.
+
+C015 does not block v0.1.2 publication for that reason. It is the one production
+defect the post-release corrective line has produced, and it is tracked as a
+product corrective rather than folded into test-evidence work.
 
 ## 9. Verification strategy
 
