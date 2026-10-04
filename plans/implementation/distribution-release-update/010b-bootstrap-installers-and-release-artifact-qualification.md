@@ -8,6 +8,10 @@ Runtime qualification of the real release bytes was deferred to M010D at
 closure and was discharged there by release workflow run `37232595211`; see the
 addendum in `plans/closure/distribution-release-update/010b-status.md`.
 
+One installer fixture case was green on Windows without executing; that was
+discharged by corrective C012. See the second addendum in the same closure
+record.
+
 Source roadmap: Phase 10 — Distribution and operational polish
 
 Hard dependency: M010A closed.

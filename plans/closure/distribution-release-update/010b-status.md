@@ -152,3 +152,33 @@ from the crates.io registry, verified by a `cargo generate-lockfile` probe on
 release-artifact qualification and M010C's closure, both of which require a real
 release. Both are discharged: see the addendum above and
 `plans/closure/distribution-release-update/c011-status.md`.
+
+## Addendum (2026-10-04, after the v0.1.1 publication)
+
+**One row in the installer matrix above was green without executing.** The case
+"a Cargo run that produces no binary is a hard failure" is listed as passing on
+the hosted Windows lane. It had never run there.
+
+The harness's fake `cargo` was an extensionless `#!/bin/sh` file.
+`install.ps1` resolves cargo through PATHEXT, so the stub was invisible and the
+real `cargo.exe` was used. The PATH was additionally merged with `:` rather than
+`os.pathsep`, which on Windows left the real cargo reachable. The case was
+exercising a real `cargo install cargo-cleanme`, not the wrapper.
+
+It passed regardless, because before 0.1.0 was published that real install
+failed — and a real failing cargo is observationally identical to a correct
+wrapper rejecting an empty Cargo run. When 0.1.0 reached crates.io the real
+install began succeeding and the case turned red, on a commit that changed only
+`plans/**`. The defect was disclosed by the product working correctly.
+
+`install.ps1` itself is correct and is unchanged. Nothing in v0.1.0 or v0.1.1 is
+affected; the defect was in the test harness alone.
+
+Discharged by corrective
+`plans/implementation/distribution-release-update/c012-windows-installer-fixture-corrective.md`
+(implementation `ab4b080`), closure
+`plans/closure/distribution-release-update/c012-status.md`. The fixture now
+writes a `cargo.cmd` shim on Windows, merges PATH with `os.pathsep`, and asserts
+its own premise — that the cargo the wrapper resolves is the stub — before any
+case depends on it. Hosted CI run `37235169841` is green on all nine jobs
+including `installers (windows-latest)`.

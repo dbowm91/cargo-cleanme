@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: **closed.** M010A, M010B, M010C, and M010D are closed, and corrective C011 is closed. `v0.1.0` and `v0.1.1` are published to GitHub and crates.io. C010 is an upstream request and is `proposed`; no follow-on plan remains to activate here.
+Status: **closed.** M010A, M010B, M010C, and M010D are closed, and correctives C011 and C012 are closed. `v0.1.0` and `v0.1.1` are published to GitHub and crates.io. C010 is an upstream request and is `proposed`; no follow-on plan remains to activate here.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 

@@ -35,7 +35,7 @@ M008 planning baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
 | Artifact discovery and cleanup | closed/current objectives | plans/subsystems/artifact-discovery-cleanup-roadmap.md | Phase 9 closed; C009 corrective closed | C008 closed the cleanup feature roadmap's current objectives; C009 then restored the green hosted Windows lane. Phase 10 is owned by the separate distribution/release/update subsystem. |
-| Distribution, release, and update | closed | plans/subsystems/distribution-release-update-roadmap.md | Phase 10 closed: M010A-M010D plus corrective C011 | M010A-M010D are closed and v0.1.0 and v0.1.1 are published. C011 discharged the updater transport defect found by the v0.1.0 smoke. C010 is a bounded upstream request (`proposed`) that nothing here waits on. |
+| Distribution, release, and update | closed | plans/subsystems/distribution-release-update-roadmap.md | Phase 10 closed: M010A-M010D plus correctives C011 and C012 | M010A-M010D are closed and v0.1.0 and v0.1.1 are published. C011 discharged the updater transport defect found by the v0.1.0 smoke; C012 discharged a Windows installer fixture that was green without executing. C010 is a bounded upstream request (`proposed`) that nothing here waits on. |
 
 ## Implementation handoffs
 
@@ -73,6 +73,7 @@ M008 planning baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 | Distribution, release, and update | M010C Eggup self-update + install provenance | **closed, with a recorded defect discharged by C011** | plans/implementation/distribution-release-update/010c-eggup-self-update-and-install-provenance.md | Closure: plans/closure/distribution-release-update/010c-status.md (addendum). The transport-selection requirement was **not** satisfied when written: `eggup-curl` cannot set a User-Agent, so crates.io returned 403. Provenance, identity, and ownership invariants are unaffected and stand. |
 | Distribution, release, and update | M010D publication + operational polish + release closure | **closed** | plans/implementation/distribution-release-update/010d-publication-operational-polish-and-release-closure.md | Closure: plans/closure/distribution-release-update/010d-status.md. Both halves complete. v0.1.0 and v0.1.1 published; run `37232595211` green 20/20; v0.1.1 crate checksum `8dfb3d18f648…`. One requirement is closed partial: the live updater commit path, which needs a v0.1.2 to rehearse. |
 | Distribution, release, and update | C011 self-update transport qualification corrective | **closed** | plans/implementation/distribution-release-update/c011-self-update-transport-qualification-corrective.md | Closure: plans/closure/distribution-release-update/c011-status.md. Implementation `95bb38e` (tag `v0.1.1`). Reversed the transport to `eggup-eggfetch` and added the missing no-downgrade guard. |
+| Distribution, release, and update | C012 Windows installer-fixture corrective | **closed** | plans/implementation/distribution-release-update/c012-windows-installer-fixture-corrective.md | Closure: plans/closure/distribution-release-update/c012-status.md. Implementation `ab4b080`. The Windows case had never executed; it was green on an unrelated real-cargo failure. Fixed with a `cargo.cmd` shim, `os.pathsep`, and a premise check. CI `37235169841` green 9/9. |
 | Distribution, release, and update | C010 upstream: `CurlConfig::user_agent` seam | **proposed** | plans/implementation/distribution-release-update/c010-eggup-curl-user-agent-seam.md | Bounded upstream Eggup request. No closure record: it cannot be closed from this repository, and nothing here is waiting on it. |
 
 ## Current handoff
@@ -83,7 +84,20 @@ Publication is complete. `v0.1.0` and `v0.1.1` are public GitHub releases and `c
 
 Publication was not a formality. The external smoke of `v0.1.0` found that `cargo cleanme update` returned HTTP 403 from crates.io on every host, because the production transport cannot set a `User-Agent`. Corrective **C011** replaced the transport and added the missing no-downgrade guard; it shipped as `v0.1.1`. M010C's closure record was **not** edited to imply it succeeded — it carries an addendum naming the unsatisfied requirement.
 
-The lesson from two milestones is recorded rather than left implicit: a feature whose correctness depends on a live third party's policy is not closed by fixtures. Both the C009 Windows lane and the C011 updater defect were invisible to a green test suite. A milestone in that class needs at least one rehearsal against the real service before closure.
+The lesson from three findings is recorded rather than left implicit: a green
+test proves only that its own premises hold, and both "the code is exercised"
+and "the code ran" are premises that go unchecked by default. C009 was a
+POSIX-only fixture passing on no platform. C011 was a feature whose transport
+could not reach its version authority, green because the fixture registry
+always answered. C012 was a Windows installer case that had never executed and
+was green only because an unrelated real `cargo install` failed — and it was
+disclosed by the product starting to work correctly.
+
+The general form: a fixture that stubs a tool the subject cannot invoke is
+indistinguishable from no stub, and a case whose pass condition is an unrelated
+failure reports coverage that does not exist. Correctives C011 and C012 both
+landed a premise assertion — the transport's User-Agent, the stub's
+resolvability — rather than only fixing the symptom.
 
 Two items remain registered and neither blocks anything. **C010** is a bounded upstream request for a `User-Agent` seam on `eggup-curl`; it is `proposed`, it is upstream's to accept or decline, and nothing in this repository waits on it. The live updater commit path has no end-to-end rehearsal because `v0.1.1` is simultaneously the newest published version and the first containing a working updater; rehearsing it requires a `v0.1.2`.
 
@@ -110,6 +124,7 @@ M010B bootstrap installers/release qualification -> closed
 M010C Eggup self-update + install provenance -> closed
 M010D publication + operational polish + release closure -> closed
 C011 self-update transport qualification corrective -> closed
+C012 Windows installer-fixture corrective -> closed
 C010 upstream CurlConfig::user_agent seam -> proposed (upstream; nothing waits on it)
 
 Published: v0.1.0, v0.1.1 (GitHub releases and crates.io)
