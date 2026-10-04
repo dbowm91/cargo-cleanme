@@ -160,3 +160,48 @@ release convention is stable, and `eggup-curl` is published. M010D's remaining
 blockers are therefore purely its own: registry authentication and an
 irreversible publication, neither of which can be completed from this session
 without explicit authorization and credentials.
+
+## Addendum (2026-10-04, after the v0.1.0 publication smoke)
+
+**The transport-selection requirement above was not satisfied when this record
+was written.** The rows "Prefer the lightweight curl path; measure both" and
+"`curl` unavailability is typed, never a second transport" record a real
+measurement and a real decision, and both were correct about what they
+asserted. Neither asserted the requirement they stood in for: that the
+production transport can read the version authority.
+
+It cannot. `eggup-curl` 0.1.2 has no `User-Agent` seam — verified in the
+published source: `CurlConfig` exposes no `user_agent` builder, the curl
+argument vector is built from a fixed set with no argument seam, and there is
+zero User-Agent handling anywhere in the crate. The adapter additionally calls
+`env_clear()` and restores only proxy variables, which closes the `CURL_*` and
+`~/.curlrc` escape hatches. Every request therefore went out as
+`curl/<version>`, and crates.io answers HTTP 403 to any non-descriptive agent.
+
+So `update` could never read the version authority, on any host, in any state,
+while all 19 of its tests were green. The executive finding's "No update was
+performed against a real release, because no release exists" was accepted as
+sufficient at the time. It was not: a feature whose correctness depends on a
+remote service's policy needs at least one rehearsal against that service
+before its milestone is closed.
+
+A second defect was masked behind the first: version comparison accepted any
+differing pair as "newer available", so publishing 0.1.1 would have caused
+every 0.1.1 install to be offered a downgrade to 0.1.0.
+
+Both are fixed by corrective
+`plans/implementation/distribution-release-update/c011-self-update-transport-qualification-corrective.md`
+(implementation `95bb38e`, tag `v0.1.1`), closure
+`plans/closure/distribution-release-update/c011-status.md`. The production
+transport is now `eggup-eggfetch` 0.1.2, whose `EggfetchConfig` has the
+`user_agent` seam. The curl path is not retained as a fallback.
+
+The rest of this record stands. The provenance, identity, and ownership
+invariants are unaffected: they never depended on the transport, and they held
+in production exactly as written.
+
+The bounded upstream gap — that `eggup-curl` cannot set a User-Agent and so
+cannot be a viable transport for any registry-backed updater — is recorded
+separately as
+`plans/implementation/distribution-release-update/c010-eggup-curl-user-agent-seam.md`
+(status `proposed`).

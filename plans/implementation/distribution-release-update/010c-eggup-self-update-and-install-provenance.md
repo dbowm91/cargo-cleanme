@@ -1,6 +1,8 @@
 # M010C — Eggup Self-Update and Install Provenance
 
-Status: closed
+Status: closed, with a recorded defect in the transport-selection requirement
+discharged by corrective C011 (see the addendum in
+`plans/closure/distribution-release-update/010c-status.md`)
 
 Repository baseline: M010A closure commit plus the registered Eggup acquisition M009 publication dependency.
 
