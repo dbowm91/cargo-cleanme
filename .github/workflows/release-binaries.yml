@@ -81,11 +81,11 @@ jobs:
       - name: Set up Rust toolchain
         uses: "dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c"
         with:
-          toolchain: "stable"
+          toolchain: "1.99.0"
           targets: "aarch64-apple-darwin"
       - name: Verify Rust toolchain
         shell: bash
-        run: cargo +'stable' --version
+        run: cargo +'1.99.0' --version
       - name: Install pinned Eggpack tool
         shell: bash
         timeout-minutes: 20
@@ -99,7 +99,7 @@ jobs:
         shell: bash
         env:
           CARGO_TARGET_DIR: "${{ runner.temp }}/eggpack/${{ github.run_id }}-${{ github.run_attempt }}"
-        run: "'cargo' '+stable' 'build' '--release' '--locked' '--target' 'aarch64-apple-darwin' '--package' 'cargo-cleanme' '--bin' 'cargo-cleanme'"
+        run: "'cargo' '+1.99.0' 'build' '--release' '--locked' '--target' 'aarch64-apple-darwin' '--package' 'cargo-cleanme' '--bin' 'cargo-cleanme'"
       - name: Capture canonical build handoff
         shell: bash
         run: "'eggpack' 'ci' '_capture-build' '--release-plan' 'eggpack-runtime/release-plan.json' '--build-bindings' 'release/eggpack/build-bindings.toml' '--target' 'aarch64-apple-darwin' '--cargo-target-dir' '${{ runner.temp }}/eggpack/${{ github.run_id }}-${{ github.run_attempt }}' '--output-dir' './eggpack-build/build_aarch64_apple_darwin'"
@@ -131,7 +131,7 @@ jobs:
       - name: Set up Rust toolchain
         uses: "dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c"
         with:
-          toolchain: "stable"
+          toolchain: "1.99.0"
           targets: "aarch64-unknown-linux-gnu"
       - name: Install exact cargo-zigbuild
         shell: bash
@@ -194,7 +194,7 @@ jobs:
           CARGO_TARGET_DIR: "${{ runner.temp }}/eggpack/${{ github.run_id }}-${{ github.run_attempt }}"
           CARGO_ZIGBUILD_ZIG_PATH: ${{ env.CARGO_ZIGBUILD_ZIG_PATH }}
           CARGO_ZIGBUILD_CACHE_DIR: ${{ env.CARGO_ZIGBUILD_CACHE_DIR }}
-        run: "'cargo' '+stable' 'zigbuild' '--release' '--locked' '--target' 'aarch64-unknown-linux-gnu.2.17' '--package' 'cargo-cleanme' '--bin' 'cargo-cleanme'"
+        run: "'cargo' '+1.99.0' 'zigbuild' '--release' '--locked' '--target' 'aarch64-unknown-linux-gnu.2.17' '--package' 'cargo-cleanme' '--bin' 'cargo-cleanme'"
       - name: Capture canonical build handoff
         shell: bash
         run: "'eggpack' 'ci' '_capture-build' '--release-plan' 'eggpack-runtime/release-plan.json' '--build-bindings' 'release/eggpack/build-bindings.toml' '--target' 'aarch64-unknown-linux-gnu' '--cargo-target-dir' '${{ runner.temp }}/eggpack/${{ github.run_id }}-${{ github.run_attempt }}' '--output-dir' './eggpack-build/build_aarch64_unknown_linux_gnu'"
@@ -226,11 +226,11 @@ jobs:
       - name: Set up Rust toolchain
         uses: "dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c"
         with:
-          toolchain: "stable"
+          toolchain: "1.99.0"
           targets: "x86_64-apple-darwin"
       - name: Verify Rust toolchain
         shell: bash
-        run: cargo +'stable' --version
+        run: cargo +'1.99.0' --version
       - name: Install pinned Eggpack tool
         shell: bash
         timeout-minutes: 20
@@ -244,7 +244,7 @@ jobs:
         shell: bash
         env:
           CARGO_TARGET_DIR: "${{ runner.temp }}/eggpack/${{ github.run_id }}-${{ github.run_attempt }}"
-        run: "'cargo' '+stable' 'build' '--release' '--locked' '--target' 'x86_64-apple-darwin' '--package' 'cargo-cleanme' '--bin' 'cargo-cleanme'"
+        run: "'cargo' '+1.99.0' 'build' '--release' '--locked' '--target' 'x86_64-apple-darwin' '--package' 'cargo-cleanme' '--bin' 'cargo-cleanme'"
       - name: Capture canonical build handoff
         shell: bash
         run: "'eggpack' 'ci' '_capture-build' '--release-plan' 'eggpack-runtime/release-plan.json' '--build-bindings' 'release/eggpack/build-bindings.toml' '--target' 'x86_64-apple-darwin' '--cargo-target-dir' '${{ runner.temp }}/eggpack/${{ github.run_id }}-${{ github.run_attempt }}' '--output-dir' './eggpack-build/build_x86_64_apple_darwin'"
@@ -276,11 +276,11 @@ jobs:
       - name: Set up Rust toolchain
         uses: "dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c"
         with:
-          toolchain: "stable"
+          toolchain: "1.99.0"
           targets: "x86_64-pc-windows-msvc"
       - name: Verify Rust toolchain
         shell: bash
-        run: cargo +'stable' --version
+        run: cargo +'1.99.0' --version
       - name: Install pinned Eggpack tool
         shell: bash
         timeout-minutes: 20
@@ -294,7 +294,7 @@ jobs:
         shell: bash
         env:
           CARGO_TARGET_DIR: "${{ runner.temp }}/eggpack/${{ github.run_id }}-${{ github.run_attempt }}"
-        run: "'cargo' '+stable' 'build' '--release' '--locked' '--target' 'x86_64-pc-windows-msvc' '--package' 'cargo-cleanme' '--bin' 'cargo-cleanme'"
+        run: "'cargo' '+1.99.0' 'build' '--release' '--locked' '--target' 'x86_64-pc-windows-msvc' '--package' 'cargo-cleanme' '--bin' 'cargo-cleanme'"
       - name: Capture canonical build handoff
         shell: bash
         run: "'eggpack' 'ci' '_capture-build' '--release-plan' 'eggpack-runtime/release-plan.json' '--build-bindings' 'release/eggpack/build-bindings.toml' '--target' 'x86_64-pc-windows-msvc' '--cargo-target-dir' '${{ runner.temp }}/eggpack/${{ github.run_id }}-${{ github.run_attempt }}' '--output-dir' './eggpack-build/build_x86_64_pc_windows_msvc'"
@@ -326,7 +326,7 @@ jobs:
       - name: Set up Rust toolchain
         uses: "dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c"
         with:
-          toolchain: "stable"
+          toolchain: "1.99.0"
           targets: "x86_64-unknown-linux-gnu"
       - name: Install exact cargo-zigbuild
         shell: bash
@@ -389,7 +389,7 @@ jobs:
           CARGO_TARGET_DIR: "${{ runner.temp }}/eggpack/${{ github.run_id }}-${{ github.run_attempt }}"
           CARGO_ZIGBUILD_ZIG_PATH: ${{ env.CARGO_ZIGBUILD_ZIG_PATH }}
           CARGO_ZIGBUILD_CACHE_DIR: ${{ env.CARGO_ZIGBUILD_CACHE_DIR }}
-        run: "'cargo' '+stable' 'zigbuild' '--release' '--locked' '--target' 'x86_64-unknown-linux-gnu.2.17' '--package' 'cargo-cleanme' '--bin' 'cargo-cleanme'"
+        run: "'cargo' '+1.99.0' 'zigbuild' '--release' '--locked' '--target' 'x86_64-unknown-linux-gnu.2.17' '--package' 'cargo-cleanme' '--bin' 'cargo-cleanme'"
       - name: Capture canonical build handoff
         shell: bash
         run: "'eggpack' 'ci' '_capture-build' '--release-plan' 'eggpack-runtime/release-plan.json' '--build-bindings' 'release/eggpack/build-bindings.toml' '--target' 'x86_64-unknown-linux-gnu' '--cargo-target-dir' '${{ runner.temp }}/eggpack/${{ github.run_id }}-${{ github.run_attempt }}' '--output-dir' './eggpack-build/build_x86_64_unknown_linux_gnu'"

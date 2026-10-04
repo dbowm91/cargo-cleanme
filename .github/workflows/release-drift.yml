@@ -47,6 +47,15 @@ jobs:
       - name: Check release contract
         shell: bash
         run: python3 scripts/check-release-contract.py
+      # The tag/source identity gate and the exact-toolchain rule are both
+      # verified in the failing direction here, so neither can rot into a check
+      # that always passes.
+      - name: Release contract rejects a floating release toolchain
+        shell: bash
+        run: python3 scripts/check-release-contract.py --self-test
+      - name: Release identity gate rejects a tag/source mismatch
+        shell: bash
+        run: python3 scripts/check-release-identity.py --self-test
       - name: Check installer wrappers are a projection of the contract
         shell: bash
         run: python3 scripts/check-installer-contract.py

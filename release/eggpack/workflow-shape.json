@@ -201,7 +201,7 @@
       "support": "required",
       "target": "aarch64-apple-darwin",
       "toolchain": {
-        "rust": "stable"
+        "rust": "1.99.0"
       }
     },
     {
@@ -218,7 +218,7 @@
       "target": "aarch64-unknown-linux-gnu",
       "toolchain": {
         "cargo_zigbuild": "0.23.3",
-        "rust": "stable",
+        "rust": "1.99.0",
         "zig": "0.14.1"
       }
     },
@@ -233,7 +233,7 @@
       "support": "required",
       "target": "x86_64-apple-darwin",
       "toolchain": {
-        "rust": "stable"
+        "rust": "1.99.0"
       }
     },
     {
@@ -247,7 +247,7 @@
       "support": "required",
       "target": "x86_64-pc-windows-msvc",
       "toolchain": {
-        "rust": "stable"
+        "rust": "1.99.0"
       }
     },
     {
@@ -264,7 +264,7 @@
       "target": "x86_64-unknown-linux-gnu",
       "toolchain": {
         "cargo_zigbuild": "0.23.3",
-        "rust": "stable",
+        "rust": "1.99.0",
         "zig": "0.14.1"
       }
     }

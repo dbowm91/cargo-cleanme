@@ -76,6 +76,11 @@ jobs:
         run: cargo run --quiet --features dev-tools --bin generate-docs -- --check
       - name: Check the release contract
         run: python3 scripts/check-release-contract.py
+      # The exact-toolchain rule is the gate that keeps a rebuild of one tag from
+      # using a different compiler, so it is verified in the failing direction
+      # here rather than trusted because the tree currently passes.
+      - name: Release contract rejects a floating release toolchain
+        run: python3 scripts/check-release-contract.py --self-test
       - name: Check installer wrappers match the contract
         run: python3 scripts/check-installer-contract.py
   benchmark:

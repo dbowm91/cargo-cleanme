@@ -2,10 +2,20 @@
 # Single local gate for everything that must hold before a cargo-cleanme
 # release may be staged. It performs no publication: the last two steps are a
 # package build and a publish *dry run*.
+#
+# Pass the exact release tag to also prove the tag matches the source identity
+# in the tree:
+#
+#     bash scripts/release-check.sh v0.1.2
+#
+# Without an argument the identity check runs in self-test mode only, so the
+# gate is still meaningful for ordinary work.
 set -euo pipefail
 
 ROOT=$(git rev-parse --show-toplevel)
 cd "$ROOT"
+
+RELEASE_TAG=${1:-}
 
 if [[ -n "$(git status --porcelain)" ]]; then
   echo "release-check: working tree is not clean" >&2
@@ -59,6 +69,15 @@ eggpack ci check \
 
 echo "release-check: release contract is consistent"
 python3 scripts/check-release-contract.py
+python3 scripts/check-release-contract.py --self-test
+
+echo "release-check: release identity"
+if [[ -n "$RELEASE_TAG" ]]; then
+  python3 scripts/check-release-identity.py --tag "$RELEASE_TAG"
+else
+  echo "no release tag given; proving the identity gate rejects mismatches only"
+  python3 scripts/check-release-identity.py --self-test
+fi
 
 echo "release-check: installer wrappers match the contract"
 python3 scripts/check-installer-contract.py
