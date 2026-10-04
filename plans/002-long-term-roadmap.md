@@ -243,19 +243,59 @@ Plans:
 - `plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md`
 - post-closure corrective: `plans/implementation/artifact-discovery-cleanup/c007-discovery-state-recovery-and-post-m007-planning-cleanup.md`
 
-Phase 8 has no remaining implementation work. Selective-cleanup/policy work in Phase 9 is future research and planning, not an active handoff.
+Phase 8 has no remaining implementation work. Phase 9 is now decomposed into the dependency-ordered M008A-M008C implementation series.
 
 ## Phase 9 — Selective cleanup and policy
 
-Status: future planning; no active implementation handoff.
+Roadmap milestone series: M008A-M008C.
 
-Potential capabilities:
+Status: planned. M008A is ready; M008B and M008C are dependency-gated.
 
-- minimum reclaimable size;
-- age classes;
-- profile/package-aware cleanup where Cargo supports it safely;
-- include/exclude project policy;
-- non-interactive automation only after stable machine-readable contracts exist.
+Objective:
+
+Add useful cleanup selection policy and stable automation contracts without allowing policy to weaken the complete Cargo ownership proof. Fine-grained package/profile cleanup is treated as a separate mutation-footprint problem and remains blocked until real-Cargo qualification proves safe behavior.
+
+Implementation sequence:
+
+1. M008A — workspace selective cleanup policy:
+   - minimum reclaimable size;
+   - minimum inactivity age using newest trustworthy source/output activity;
+   - canonical workspace include/exclude policy;
+   - typed policy dispositions;
+   - fresh final-proof size/age revalidation.
+2. M008B — machine-readable reporting and automation contract:
+   - versioned deterministic JSON for scan and cleanup;
+   - stable policy/safety/action reason codes;
+   - documented process exit semantics;
+   - supported non-interactive execution contract without adding a scheduler/daemon.
+3. M008C — Cargo profile/package selective cleanup qualification:
+   - real-Cargo compatibility matrix across relevant runtime capability boundaries;
+   - selector-aware mutation/accounting contract;
+   - guarded package/profile execution only for qualified runtime behavior;
+   - fail-closed unsupported/unknown selector combinations.
+
+Hard constraints:
+
+- policy filtering occurs after complete manifest/workspace/output resolution; policy-rejected workspaces remain in the ownership universe;
+- the destructive unit remains the complete workspace CleanupUnit unless M008C qualification proves a narrower Cargo selector can be safely expressed without weakening complete ownership proof;
+- M008A policy cannot promote Shared, Uncertain, ExternalUnproven, unresolved, unauthorized, active, symlinked, or marker-invalid output;
+- dynamic size/age thresholds are re-evaluated from fresh final-proof observations before Cargo execution;
+- machine-readable consumers never need to parse human detail text to determine disposition;
+- cargo-cleanme remains a command-line tool; scheduling/load policy remains the responsibility of external orchestrators;
+- package/profile cleanup must delegate selection to Cargo and must not parse Cargo-private artifact layout.
+
+Plans:
+
+- `plans/implementation/artifact-discovery-cleanup/008a-workspace-selective-cleanup-policy.md`
+- `plans/implementation/artifact-discovery-cleanup/008b-machine-readable-reporting-and-automation-contract.md`
+- `plans/implementation/artifact-discovery-cleanup/008c-cargo-profile-package-selective-cleanup-qualification.md`
+
+Exit condition:
+
+- M008A and M008B are closed with hosted platform/MSRV evidence;
+- any enabled M008C selector has real-Cargo qualification evidence and selector-specific accounting that is trustworthy or explicitly unknown;
+- unsupported fine-grained selectors remain fail-closed rather than weakening existing whole-workspace cleanup;
+- existing C003/C004/C006 ownership and freshness regressions remain green.
 
 ## Phase 10 — Distribution and operational polish
 
@@ -310,7 +350,13 @@ M007 learned/full cleanup orchestration [closed]
 C007 state recovery/planning cleanup [closed]
       |
       v
-future selective-cleanup / policy research and planning
+M008A workspace selective cleanup policy [ready]
+      |
+      v
+M008B machine-readable automation contract [blocked on M008A]
+      |
+      v
+M008C Cargo package/profile selector qualification [blocked on M008A/M008B]
 ~~~
 
 Destructive work MUST NOT be pulled forward merely to make the tool feel complete.
