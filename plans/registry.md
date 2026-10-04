@@ -63,7 +63,7 @@ M008 planning baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 | Artifact discovery and cleanup | C007 discovery-state recovery + post-M007 planning cleanup | **closed** | plans/implementation/artifact-discovery-cleanup/c007-discovery-state-recovery-and-post-m007-planning-cleanup.md | Closure: plans/closure/artifact-discovery-cleanup/c007-status.md. Hosted platform/MSRV run 37152008602 passed. |
 | Artifact discovery and cleanup | M008A workspace selective cleanup policy | **ready** | plans/implementation/artifact-discovery-cleanup/008a-workspace-selective-cleanup-policy.md | Next implementation handoff. Adds minimum size/age and canonical workspace include/exclude after complete ownership resolution; fresh final proof re-evaluates dynamic policy. CleanupUnit/combined ownership boundaries are unchanged. |
 | Artifact discovery and cleanup | M008B machine-readable reporting + automation contract | **blocked** | plans/implementation/artifact-discovery-cleanup/008b-machine-readable-reporting-and-automation-contract.md | Hard dependency: M008A closure or explicit freeze of its typed policy/disposition interface. Adds versioned deterministic JSON, stable reason codes, and exit semantics; no scheduler/daemon. |
-| Artifact discovery and cleanup | M008C Cargo profile/package selective cleanup qualification | **blocked** | plans/implementation/artifact-discovery-cleanup/008c-cargo-profile-package-selective-cleanup-qualification.md | Hard dependencies: M008A and M008B closure plus real-Cargo selector mutation/accounting qualification across relevant runtime capability boundaries. Unsupported/unqualified selectors remain fail-closed. |
+| Artifact discovery and cleanup | M008C Cargo profile/package selective cleanup qualification | **blocked** | plans/implementation/artifact-discovery-cleanup/008c-cargo-profile-package-selective-cleanup-qualification.md | Hard dependencies: M008A and M008B closure. M008C Stage 1 then produces the real-Cargo selector mutation/accounting evidence required before Stage 2 Execute can be enabled. Unsupported/unqualified selectors remain fail-closed. |
 
 ## Current handoff
 
@@ -81,7 +81,7 @@ M007 -> closed by C006
 C007 discovery-state recovery + post-M007 planning cleanup -> closed
 M008A workspace selective cleanup policy -> ready
 M008B machine-readable reporting/automation contract -> blocked on M008A
-M008C Cargo profile/package selective cleanup -> blocked on M008A/M008B + real-Cargo qualification
+M008C Cargo profile/package selective cleanup -> blocked on M008A/M008B; Stage 2 Execute gated on Stage 1 qualification
 ~~~
 
 Phase 9 planning is registered. M008A is the only ready implementation handoff. Distribution remains deferred to Phase 10.
