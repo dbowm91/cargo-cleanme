@@ -17,6 +17,7 @@ fn run() -> Result<i32, AppError> {
     let path = ConfigPathResolver::new(cli.config.clone()).path()?;
     let no_progress = cli.no_progress;
     let stats = cli.stats;
+    let format = cli.format;
     match cli.command {
         Some(Command::Config { command }) => {
             match command {
@@ -85,7 +86,7 @@ fn run() -> Result<i32, AppError> {
             let (roots, state_generation) = if let Some(root) = root {
                 (vec![cli::absolutize_root(&root)], None)
             } else if full {
-                let code = run_scan(None, true, &path, no_progress, stats)?;
+                let code = run_scan(None, true, &path, no_progress, stats, format, false)?;
                 if code != 0 {
                     return Ok(code);
                 }
@@ -125,10 +126,26 @@ fn run() -> Result<i32, AppError> {
             };
             let roots = collapse_roots(roots);
             if roots.is_empty() {
-                println!("no bounded cleanup roots are known; no cleanup commands were run");
+                if format == cli::OutputFormat::Json {
+                    let empty = cargo_cleanme::cleanup::CleanReport {
+                        mode,
+                        ..Default::default()
+                    };
+                    println!(
+                        "{}",
+                        serde_json::to_string(&cargo_cleanme::output::cleanup(
+                            &empty,
+                            if full { "full" } else { "known" }
+                        ))
+                        .map_err(|e| AppError::Config(e.to_string()))?
+                    );
+                } else {
+                    println!("no bounded cleanup roots are known; no cleanup commands were run");
+                }
                 return Ok(0);
             }
-            let show = cargo_cleanme::progress::should_show_progress(no_progress);
+            let show = format == cli::OutputFormat::Human
+                && cargo_cleanme::progress::should_show_progress(no_progress);
             let renderer = cargo_cleanme::progress::IndicatifRenderer::new(!show);
             let wall_start = std::time::Instant::now();
             let configured = &config.cleanup.policy;
@@ -157,18 +174,37 @@ fn run() -> Result<i32, AppError> {
                 &policy,
             )?;
             renderer.finish_and_clear();
-            if let Some(generation) = state_generation {
+            if format == cli::OutputFormat::Human
+                && let Some(generation) = state_generation
+            {
                 println!("state generation last_full_at={generation} (Unix seconds)");
             }
-            println!(
-                "combined roots {}\n{}",
-                roots
-                    .iter()
-                    .map(|r| r.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                report.render()
-            );
+            if format == cli::OutputFormat::Json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&cargo_cleanme::output::cleanup(
+                        &report,
+                        if full {
+                            "full"
+                        } else if known {
+                            "known"
+                        } else {
+                            "explicit"
+                        }
+                    ))
+                    .map_err(|e| AppError::Config(format!("cannot serialize JSON report: {e}")))?
+                );
+            } else {
+                println!(
+                    "combined roots {}\n{}",
+                    roots
+                        .iter()
+                        .map(|r| r.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    report.render()
+                );
+            }
             if stats {
                 let elapsed = wall_start.elapsed();
                 // C003 §7.6: cleanup --stats must account for the final
@@ -183,10 +219,16 @@ fn run() -> Result<i32, AppError> {
                     elapsed.as_secs_f64(),
                 );
             }
-            Ok(if report.failed > 0 { 1 } else { 0 })
+            Ok(if report.failed > 0 || report.scope_blocked.is_some() {
+                1
+            } else {
+                0
+            })
         }
-        Some(Command::Scan { root, full }) => run_scan(root, full, &path, no_progress, stats),
-        None => run_scan(None, false, &path, no_progress, stats),
+        Some(Command::Scan { root, full }) => {
+            run_scan(root, full, &path, no_progress, stats, format, true)
+        }
+        None => run_scan(None, false, &path, no_progress, stats, format, true),
     }
 }
 fn collapse_roots(roots: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
@@ -210,10 +252,13 @@ fn run_scan(
     config_path: &std::path::Path,
     no_progress: bool,
     stats: bool,
+    format: cli::OutputFormat,
+    emit_output: bool,
 ) -> Result<i32, AppError> {
     use cargo_cleanme::{domain, progress};
     use std::time::{Duration, SystemTime};
 
+    let explicit_scope = root.is_some();
     let scan_start = SystemTime::now();
     let wall_start = std::time::Instant::now();
     let c = config::load_or_create(config_path)?;
@@ -228,7 +273,7 @@ fn run_scan(
 
     // Inline progress is transient stderr state; final report remains stdout.
     // Non-TTY or `--no-progress` forces the no-op path without control noise.
-    let show = progress::should_show_progress(no_progress);
+    let show = format == cli::OutputFormat::Human && progress::should_show_progress(no_progress);
     let renderer = progress::IndicatifRenderer::new(!show);
     // Progress-render failure must degrade to hidden rather than fail a scan.
     // Construction is infallible; refresh throttling bounds overhead.
@@ -413,7 +458,26 @@ fn run_scan(
     renderer.finish_and_clear();
 
     // M005A total is an inventory estimate, never recovered bytes.
-    println!("{}", cargo_cleanme::report::render(&mut report));
+    if emit_output {
+        if format == cli::OutputFormat::Json {
+            println!(
+                "{}",
+                serde_json::to_string(&cargo_cleanme::output::scan(
+                    &report,
+                    if full {
+                        "full"
+                    } else if explicit_scope {
+                        "explicit"
+                    } else {
+                        "routine"
+                    }
+                ))
+                .map_err(|e| AppError::Config(format!("cannot serialize JSON report: {e}")))?
+            );
+        } else {
+            println!("{}", cargo_cleanme::report::render(&mut report));
+        }
+    }
     if !report.diagnostics.is_empty() {
         eprintln!(
             "{} filesystem diagnostics; rerun with a bounded root if needed",

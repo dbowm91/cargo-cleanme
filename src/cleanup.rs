@@ -59,10 +59,21 @@ pub struct CleanResult {
     pub output_roots: Vec<PathBuf>,
     pub ownership: OutputOwnershipClass,
     pub outcome: CleanOutcome,
+    pub policy_disposition: Option<PolicyDisposition>,
     pub before_bytes: Option<u64>,
     pub after_bytes: Option<u64>,
     pub observed_decrease: Option<u64>,
     pub detail: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyDisposition {
+    Selected,
+    BelowMinimumSize,
+    TooRecentForPolicy,
+    NotIncluded,
+    Excluded,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -709,23 +720,26 @@ pub fn clean_with_roots_policy(
     observer.units_total(cleanup_phase, units.len() as u64);
 
     for unit in &units {
-        let skipped = |report: &mut CleanReport, detail: String| {
-            report.results.push(CleanResult {
-                display_path: unit.root.clone(),
-                workspace_roots: vec![unit.root.clone()],
-                output_roots: unit.covering.clone(),
-                ownership: unit_blocking_class(unit),
-                outcome: CleanOutcome::Skipped,
-                before_bytes: Some(unit.bytes),
-                after_bytes: None,
-                observed_decrease: None,
-                detail,
-            });
-        };
+        let skipped =
+            |report: &mut CleanReport, detail: String, disposition: Option<PolicyDisposition>| {
+                report.results.push(CleanResult {
+                    display_path: unit.root.clone(),
+                    workspace_roots: vec![unit.root.clone()],
+                    output_roots: unit.covering.clone(),
+                    ownership: unit_blocking_class(unit),
+                    outcome: CleanOutcome::Skipped,
+                    policy_disposition: disposition,
+                    before_bytes: Some(unit.bytes),
+                    after_bytes: None,
+                    observed_decrease: None,
+                    detail,
+                });
+            };
         if !includes.is_empty() && !includes.is_match(&unit.root) {
             skipped(
                 &mut report,
                 "cleanup policy: workspace root is not included".into(),
+                Some(PolicyDisposition::NotIncluded),
             );
             observer.unit_completed(cleanup_phase);
             continue;
@@ -734,6 +748,7 @@ pub fn clean_with_roots_policy(
             skipped(
                 &mut report,
                 "cleanup policy: workspace root is excluded".into(),
+                Some(PolicyDisposition::Excluded),
             );
             observer.unit_completed(cleanup_phase);
             continue;
@@ -745,6 +760,7 @@ pub fn clean_with_roots_policy(
                     "cleanup policy: {0} bytes is below minimum {1}",
                     unit.bytes, policy.min_reclaimable_bytes
                 ),
+                Some(PolicyDisposition::BelowMinimumSize),
             );
             observer.unit_completed(cleanup_phase);
             continue;
@@ -753,7 +769,7 @@ pub fn clean_with_roots_policy(
         // invocation can affect must be private, authorized, and measured.
         // No Cargo process is spawned for any subset of a unit.
         if let Err(msg) = unit_block_reason_roots(unit, &roots, allowed_output_roots) {
-            skipped(&mut report, msg);
+            skipped(&mut report, msg, None);
             observer.unit_completed(cleanup_phase);
             continue;
         }
@@ -772,7 +788,7 @@ pub fn clean_with_roots_policy(
         ) {
             Ok(p) => p,
             Err(msg) => {
-                skipped(&mut report, msg);
+                skipped(&mut report, msg, None);
                 observer.unit_completed(cleanup_phase);
                 continue;
             }
@@ -784,6 +800,7 @@ pub fn clean_with_roots_policy(
                     "cleanup policy: fresh size {} bytes is below minimum {}",
                     proof.pre_bytes, policy.min_reclaimable_bytes
                 ),
+                Some(PolicyDisposition::BelowMinimumSize),
             );
             observer.unit_completed(cleanup_phase);
             continue;
@@ -793,6 +810,7 @@ pub fn clean_with_roots_policy(
                 skipped(
                     &mut report,
                     "cleanup policy: required activity timestamp is unavailable".into(),
+                    Some(PolicyDisposition::TooRecentForPolicy),
                 );
                 observer.unit_completed(cleanup_phase);
                 continue;
@@ -806,6 +824,7 @@ pub fn clean_with_roots_policy(
                 skipped(
                     &mut report,
                     "cleanup policy: workspace is too recent".into(),
+                    Some(PolicyDisposition::TooRecentForPolicy),
                 );
                 observer.unit_completed(cleanup_phase);
                 continue;
@@ -821,6 +840,7 @@ pub fn clean_with_roots_policy(
                     output_roots: proof.covering.clone(),
                     ownership: proof.ownership,
                     outcome: CleanOutcome::Simulated,
+                    policy_disposition: Some(PolicyDisposition::Selected),
                     before_bytes: Some(proof.pre_bytes),
                     after_bytes: None,
                     observed_decrease: None,
@@ -851,6 +871,7 @@ pub fn clean_with_roots_policy(
                             output_roots: proof.covering.clone(),
                             ownership: proof.ownership,
                             outcome: CleanOutcome::Failed,
+                            policy_disposition: Some(PolicyDisposition::Selected),
                             before_bytes: Some(proof.pre_bytes),
                             after_bytes: None,
                             observed_decrease: None,
@@ -868,6 +889,7 @@ pub fn clean_with_roots_policy(
                         output_roots: proof.covering.clone(),
                         ownership: proof.ownership,
                         outcome: CleanOutcome::Failed,
+                        policy_disposition: Some(PolicyDisposition::Selected),
                         before_bytes: Some(proof.pre_bytes),
                         after_bytes: None,
                         observed_decrease: None,
@@ -883,6 +905,7 @@ pub fn clean_with_roots_policy(
                         output_roots: proof.covering.clone(),
                         ownership: proof.ownership,
                         outcome: CleanOutcome::Previewed,
+                        policy_disposition: Some(PolicyDisposition::Selected),
                         before_bytes: Some(proof.pre_bytes),
                         after_bytes: None,
                         observed_decrease: None,
@@ -901,6 +924,7 @@ pub fn clean_with_roots_policy(
                                 output_roots: proof.covering.clone(),
                                 ownership: proof.ownership,
                                 outcome: CleanOutcome::Cleaned,
+                                policy_disposition: Some(PolicyDisposition::Selected),
                                 before_bytes: Some(proof.pre_bytes),
                                 after_bytes: Some(after),
                                 observed_decrease: Some(decrease),
@@ -916,6 +940,7 @@ pub fn clean_with_roots_policy(
                                 output_roots: proof.covering.clone(),
                                 ownership: proof.ownership,
                                 outcome: CleanOutcome::Cleaned,
+                                policy_disposition: Some(PolicyDisposition::Selected),
                                 before_bytes: Some(proof.pre_bytes),
                                 after_bytes: None,
                                 observed_decrease: None,
@@ -2051,6 +2076,26 @@ mod tests {
     }
 
     #[test]
+    fn policy_dispositions_have_stable_json_names() {
+        let values = [
+            (PolicyDisposition::Selected, "selected"),
+            (PolicyDisposition::BelowMinimumSize, "below_minimum_size"),
+            (
+                PolicyDisposition::TooRecentForPolicy,
+                "too_recent_for_policy",
+            ),
+            (PolicyDisposition::NotIncluded, "not_included"),
+            (PolicyDisposition::Excluded, "excluded"),
+        ];
+        for (value, expected) in values {
+            assert_eq!(
+                serde_json::to_string(&value).unwrap(),
+                format!("\"{expected}\"")
+            );
+        }
+    }
+
+    #[test]
     fn preview_is_default_and_simulate_invokes_no_clean() {
         let (_d, root, target) = valid_fixture(1);
         let runner = FakeCleanupRunner::new(&root, &target, 1);
@@ -2728,6 +2773,7 @@ mod tests {
                 output_roots: vec![PathBuf::from(format!("/tmp/g{i}"))],
                 ownership: OutputOwnershipClass::PrivateBounded,
                 outcome: CleanOutcome::Cleaned,
+                policy_disposition: Some(PolicyDisposition::Selected),
                 before_bytes: Some(100),
                 after_bytes: Some(20),
                 observed_decrease: Some(80),
@@ -2783,6 +2829,61 @@ mod tests {
         backdate(d.path(), old);
         let noop = NoopObserver;
         let runner = SystemCleanupRunner;
+        let policy = CleanupPolicy {
+            min_reclaimable_bytes: u64::MAX,
+            ..Default::default()
+        };
+        let small = clean_with_roots_policy(
+            std::slice::from_ref(&root),
+            0,
+            &[],
+            CleanMode::Simulate,
+            &runner,
+            &noop,
+            &policy,
+        )
+        .unwrap();
+        assert_eq!(
+            small.results[0].policy_disposition,
+            Some(PolicyDisposition::BelowMinimumSize)
+        );
+        let policy = CleanupPolicy {
+            min_inactive_seconds: Some(7200),
+            ..Default::default()
+        };
+        let young = clean_with_roots_policy(
+            std::slice::from_ref(&root),
+            0,
+            &[],
+            CleanMode::Simulate,
+            &runner,
+            &noop,
+            &policy,
+        )
+        .unwrap();
+        assert_eq!(
+            young.results[0].policy_disposition,
+            Some(PolicyDisposition::TooRecentForPolicy)
+        );
+        let policy = CleanupPolicy {
+            include: vec!["**/proj".into()],
+            exclude: vec!["**/proj".into()],
+            ..Default::default()
+        };
+        let excluded = clean_with_roots_policy(
+            std::slice::from_ref(&root),
+            0,
+            &[],
+            CleanMode::Simulate,
+            &runner,
+            &noop,
+            &policy,
+        )
+        .unwrap();
+        assert_eq!(
+            excluded.results[0].policy_disposition,
+            Some(PolicyDisposition::Excluded)
+        );
         // Preview (Cargo dry-run) must not mutate.
         let preview = clean_with(&root, 0, &[], CleanMode::Preview, &runner, &noop).unwrap();
         assert_eq!(

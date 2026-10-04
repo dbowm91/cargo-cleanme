@@ -1,6 +1,13 @@
 use clap::{Parser, Subcommand};
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum)]
+pub enum OutputFormat {
+    #[default]
+    Human,
+    Json,
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "cargo-cleanme",
@@ -18,6 +25,9 @@ pub struct Cli {
     /// canonical benchmark/debug combination.
     #[arg(long, global = true)]
     pub stats: bool,
+    /// Select human-readable output or the versioned JSON automation contract.
+    #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Human)]
+    pub format: OutputFormat,
     #[command(subcommand)]
     pub command: Option<Command>,
 }

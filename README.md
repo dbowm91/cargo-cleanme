@@ -31,7 +31,9 @@ cargo-cleanme scan --full     # exhaustive reconciliation of platform roots
 cargo-cleanme scan ./projects  # scan one explicit scope
 cargo-cleanme scan ./projects --no-progress # scan without transient UI
 cargo-cleanme scan ./projects --no-progress --stats # benchmark/debug: no UI, counters+timings on stderr
+cargo-cleanme scan ./projects --format json # stable versioned JSON on stdout
 cargo-cleanme clean ./projects # Cargo preview (default, `--dry-run`)
+cargo-cleanme clean ./projects --format json --dryrun # machine-readable simulation
 cargo-cleanme clean ./projects --dry-run # explicit Cargo preview
 cargo-cleanme clean ./projects --dryrun # simulation: full path, no `cargo clean`
 cargo-cleanme clean ./projects --yes # execute cleanup for verified workspaces
@@ -45,6 +47,10 @@ cargo-cleanme clean --known --older-than 2592000 --exclude '**/archived/**'
 ```
 
 Global flags: `--no-progress` disables transient UI; `--stats` prints detailed semantic counters and phase/process timings to stderr (never stdout) for `scan` and `clean` (preview/simulate/execute). Default runs emit no debug counter line; stdout reports are byte-equivalent with and without `--stats`.
+
+`--format human|json` selects the output format (human is the default). JSON emits one newline-terminated schema version 1 document to stdout; progress is disabled in JSON mode and `--stats` remains stderr-only. See [`plans/output-schema-v1.md`](plans/output-schema-v1.md) for field and compatibility details. Exit status is 0 when the requested operation completed, including safe per-unit skips; status 1 means cleanup scope was incomplete or one or more operations failed; status 2 means invocation/configuration failed before a report could be formed.
+
+For unattended cleanup, an external scheduler can invoke an explicit bounded command such as `cargo-cleanme clean --known --older-than 2592000 --yes --format json`. `--yes` remains required for mutation. cargo-cleanme does not schedule or run in the background; callers should enforce cadence and resource limits.
 
 `--dry-run`, `--dryrun`, and `--yes` conflict pairwise and have intentionally distinct spellings:
 

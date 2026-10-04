@@ -87,6 +87,103 @@ fn cargo_external_config_edit_help_matches_direct() {
 }
 
 #[test]
+fn json_scan_is_one_versioned_document_and_stats_stay_on_stderr() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
+    let run = |stats: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args(["--config", config.to_str().unwrap(), "--no-progress"]);
+        if stats {
+            command.arg("--stats");
+        }
+        command.args(["--format", "json", "scan", dir.path().to_str().unwrap()]);
+        command.output().unwrap()
+    };
+    let plain = run(false);
+    assert!(
+        plain.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    let with_stats = run(true);
+    assert!(with_stats.status.success());
+    assert_eq!(plain.stdout, with_stats.stdout);
+    let output: serde_json::Value = serde_json::from_slice(&plain.stdout).unwrap();
+    assert_eq!(output["schema_version"], 1);
+    assert_eq!(output["operation"], "scan");
+    assert_eq!(output["scope"], "explicit");
+    assert!(String::from_utf8_lossy(&with_stats.stderr).contains("scan stats:"));
+    assert_eq!(plain.stdout.iter().filter(|b| **b == b'\n').count(), 1);
+}
+
+#[test]
+fn json_cleanup_emits_the_requested_mode_and_machine_summary() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("Cargo.toml"),
+        "[package]\nname = \"json-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    fs::create_dir(dir.path().join("src")).unwrap();
+    fs::write(dir.path().join("src/lib.rs"), "pub fn fixture() {}\n").unwrap();
+    let config = dir.path().join("config.toml");
+    fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--no-progress",
+            "clean",
+            dir.path().to_str().unwrap(),
+            "--dryrun",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["operation"], "clean");
+    assert_eq!(json["mode"], "simulate");
+    assert_eq!(json["result"]["summary"]["simulated"], 0);
+    assert_eq!(output.stdout.iter().filter(|b| **b == b'\n').count(), 1);
+}
+
+#[test]
+fn json_scope_block_is_emitted_with_nonzero_exit_status() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("Cargo.toml"),
+        "this is not valid cargo manifest [\n",
+    )
+    .unwrap();
+    let config = dir.path().join("config.toml");
+    fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--no-progress",
+            "clean",
+            dir.path().to_str().unwrap(),
+            "--dryrun",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["result"]["scope_blocked"], true);
+}
+
+#[test]
 fn config_edit_uses_fake_editor_process_and_keeps_invalid_edits() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config path with spaces.toml");
