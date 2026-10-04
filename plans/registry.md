@@ -16,6 +16,7 @@ Accepted architecture decisions:
 
 Planning framework baseline: 97dee9fa64868534cedf3a9310e7160335a91be2
 M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
+M008 planning baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 
 ## Status vocabulary
 
@@ -33,7 +34,7 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | planning | plans/subsystems/artifact-discovery-cleanup-roadmap.md | none / roadmap planning | Phase 7/M006 and Phase 8/M007 are closed. M006A/C/D retain historical conditional evidence and are not blockers. No implementation handoff is active; future selective-cleanup/policy work needs separate research and planning. |
+| Artifact discovery and cleanup | ready | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M008A workspace selective cleanup policy | M001-M007/C001-C007 are closed for current objectives. M006A/C/D retain historical conditional evidence and are not blockers. M008A is ready; M008B depends on the M008A public policy/disposition interface; M008C depends on M008A/M008B plus real-Cargo selector qualification. |
 
 ## Implementation handoffs
 
@@ -60,10 +61,13 @@ M006 implementation baseline: 47574fa8a087ac2f9111e29821c23b13657e7bbe
 | Artifact discovery and cleanup | C005 uncertainty-aware state reconciliation + config/edit hardening | **closed** | plans/implementation/artifact-discovery-cleanup/c005-uncertainty-aware-state-reconciliation-and-config-edit-hardening.md | Closure: plans/closure/artifact-discovery-cleanup/c005-status.md. Localized Full uncertainty reconciles conservatively; isolated real Full published schema 2; hosted platform/MSRV gates pass. |
 | Artifact discovery and cleanup | C006 combined-root cleanup ownership universe | **closed** | plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md | Closure: plans/closure/artifact-discovery-cleanup/c006-status.md. Combined discovery/coverage/ownership proof and final per-candidate refresh pass hosted platform/MSRV gates. |
 | Artifact discovery and cleanup | C007 discovery-state recovery + post-M007 planning cleanup | **closed** | plans/implementation/artifact-discovery-cleanup/c007-discovery-state-recovery-and-post-m007-planning-cleanup.md | Closure: plans/closure/artifact-discovery-cleanup/c007-status.md. Hosted platform/MSRV run 37152008602 passed. |
+| Artifact discovery and cleanup | M008A workspace selective cleanup policy | **ready** | plans/implementation/artifact-discovery-cleanup/008a-workspace-selective-cleanup-policy.md | Next implementation handoff. Adds minimum size/age and canonical workspace include/exclude after complete ownership resolution; fresh final proof re-evaluates dynamic policy. CleanupUnit/combined ownership boundaries are unchanged. |
+| Artifact discovery and cleanup | M008B machine-readable reporting + automation contract | **blocked** | plans/implementation/artifact-discovery-cleanup/008b-machine-readable-reporting-and-automation-contract.md | Hard dependency: M008A closure or explicit freeze of its typed policy/disposition interface. Adds versioned deterministic JSON, stable reason codes, and exit semantics; no scheduler/daemon. |
+| Artifact discovery and cleanup | M008C Cargo profile/package selective cleanup qualification | **blocked** | plans/implementation/artifact-discovery-cleanup/008c-cargo-profile-package-selective-cleanup-qualification.md | Hard dependencies: M008A and M008B closure plus real-Cargo selector mutation/accounting qualification across relevant runtime capability boundaries. Unsupported/unqualified selectors remain fail-closed. |
 
-## Current closure
+## Current handoff
 
-C007 is closed. No implementation handoff is active.
+C007 is closed. M008A is ready for implementation. M008B and M008C are registered but dependency-blocked.
 
 Milestone sequence:
 
@@ -75,9 +79,12 @@ C005 -> closed
 C006 -> closed
 M007 -> closed by C006
 C007 discovery-state recovery + post-M007 planning cleanup -> closed
+M008A workspace selective cleanup policy -> ready
+M008B machine-readable reporting/automation contract -> blocked on M008A
+M008C Cargo profile/package selective cleanup -> blocked on M008A/M008B + real-Cargo qualification
 ~~~
 
-No later feature implementation handoff is currently registered. Selective cleanup/policy and distribution remain future roadmap topics requiring separate research before implementation planning.
+Phase 9 planning is registered. M008A is the only ready implementation handoff. Distribution remains deferred to Phase 10.
 
 ### Current destructive safety boundary
 
