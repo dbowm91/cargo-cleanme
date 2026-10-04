@@ -258,12 +258,32 @@ def installed_binary(install_dir: Path) -> Path:
 
 
 def fake_cargo(tmp: Path) -> Path:
-    """A cargo stub that reports success without producing a binary."""
+    """A cargo stub that reports success without producing a binary.
+
+    The stub has to be invocable by the *wrapper under test*, not just exist.
+    On POSIX that means an executable `cargo` script. On Windows the PowerShell
+    wrapper resolves `cargo` through PATHEXT, so an extensionless `#!/bin/sh`
+    file named `cargo` is invisible to it: `Get-Command cargo` skips it and
+    finds the real cargo further down PATH.
+
+    That is not hypothetical. The Windows lane ran this case as green for the
+    entire pre-release period while the real cargo was doing the work. It only
+    turned red once `cargo-cleanme 0.1.0` was actually published and the real
+    `cargo install` started succeeding. The case had never been exercised on
+    Windows at all.
+    """
     bindir = tmp / "fakebin"
     bindir.mkdir(parents=True, exist_ok=True)
-    stub = bindir / "cargo"
-    stub.write_text('#!/bin/sh\nexit 0\n')
-    stub.chmod(stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    if os.name == "nt":
+        # `cargo.cmd` is what PATHEXT resolution finds, and `@exit /b 0` is the
+        # batch form of a successful exit. `.cmd` is used rather than `.bat`
+        # because cmd.exe never auto-executes a bare `.bat` from a path lookup.
+        stub = bindir / "cargo.cmd"
+        stub.write_text("@exit /b 0\r\n")
+    else:
+        stub = bindir / "cargo"
+        stub.write_text('#!/bin/sh\nexit 0\n')
+        stub.chmod(stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     return bindir
 
 
@@ -552,6 +572,47 @@ def case_cargo_missing(runner_name: str, runner, release: Path, base_url: str, w
         record(name, True)
 
 
+def case_fake_cargo_is_actually_resolved(runner_name: str, work: Path) -> None:
+    """The premise of the cargo-fallback cases must itself be asserted.
+
+    `case_cargo_produces_nothing` only means something if the `cargo` the
+    wrapper finds is the stub. When the stub was not invocable on the host --
+    which is what an extensionless `#!/bin/sh` file is on Windows, where
+    PowerShell resolves `cargo` through PATHEXT -- the wrapper silently used the
+    real cargo instead. The case then passed or failed for a reason that had
+    nothing to do with the wrapper, and stayed green on Windows for the entire
+    pre-release period.
+
+    So the stub's resolvability is checked directly, in the same environment
+    the wrapper will see, before any case depends on it.
+    """
+    stub_dir = fake_cargo(work / f"stubpremise-{runner_name}")
+    env = host_env("")
+    env["PATH"] = os.pathsep.join([str(stub_dir), os.environ.get("PATH", "")])
+    name = f"[{runner_name}] the cargo stub is the cargo the wrapper will resolve"
+
+    if runner_name == "posix":
+        probe = subprocess.run(
+            [posix_shell() or "sh", "-c", "command -v cargo"],
+            capture_output=True, text=True, env=env, timeout=60, check=False,
+        )
+        resolved = probe.stdout.strip()
+    else:
+        probe = subprocess.run(
+            ["pwsh", "-NoProfile", "-NonInteractive",
+             "-Command", "(Get-Command cargo -ErrorAction SilentlyContinue).Source"],
+            capture_output=True, text=True, env=env, timeout=120, check=False,
+        )
+        resolved = probe.stdout.strip().splitlines()[-1].strip() if probe.stdout.strip() else ""
+
+    if not resolved:
+        record(name, False, "no cargo was resolvable at all")
+    elif Path(resolved).parent.resolve() != stub_dir.resolve():
+        record(name, False, f"resolved to {resolved!r}, not the stub in {stub_dir}")
+    else:
+        record(name, True)
+
+
 def case_cargo_produces_nothing(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path, asset: str) -> None:
     """Cargo reports success but produces no binary: that must not be success."""
     clear_control(release, asset)
@@ -559,7 +620,9 @@ def case_cargo_produces_nothing(runner_name: str, runner, release: Path, base_ur
     dest = work / f"emptycargo-{runner_name}"
     args = (["--dir", str(dest)] if runner_name == "posix" else ["-Directory", str(dest)])
     stub_dir = fake_cargo(work / f"stub-{runner_name}")
-    result = runner(args, base_url, {"PATH": f"{stub_dir}:{os.environ.get('PATH', '')}"})
+    result = runner(
+        args, base_url, {"PATH": os.pathsep.join([str(stub_dir), os.environ.get("PATH", "")])}
+    )
     name = f"[{runner_name}] a Cargo run that produces no binary is a hard failure"
     if result.returncode == 0 or installed_binary(dest).exists():
         record(name, False, f"exit {result.returncode}")
@@ -658,6 +721,7 @@ def main() -> int:
             case_unwritable_destination(runner_name, runner, release, base_url, work, tools, asset)
             case_bad_version_syntax(runner_name, runner, release, base_url, work, tools, asset)
             case_cargo_missing(runner_name, runner, release, base_url, work, tools, asset)
+            case_fake_cargo_is_actually_resolved(runner_name, work)
             case_cargo_produces_nothing(runner_name, runner, release, base_url, work, tools, asset)
             case_temp_cleanup(runner_name, runner, release, base_url, work, tools, asset)
             print()
