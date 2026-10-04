@@ -1,6 +1,7 @@
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::{HashMap, HashSet},
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -156,11 +157,22 @@ pub fn reconcile_full(
             });
         }
     }
+    // "Is there a fresh root at or below this path?" answered by one lookup
+    // instead of a scan of every fresh root. Every ancestor of every fresh root
+    // is indexed; the walk stops as soon as it reaches an already-indexed
+    // ancestor, because that ancestor's own ancestors are indexed too (L5/O2).
+    let mut covered: HashSet<PathBuf> = HashSet::new();
+    for root in &learned {
+        let mut cursor = Some(root.path.as_path());
+        while let Some(candidate) = cursor {
+            if !covered.insert(candidate.to_path_buf()) {
+                break;
+            }
+            cursor = candidate.parent();
+        }
+    }
     for old in &prior.learned_roots {
-        let fresh = learned
-            .iter()
-            .any(|r| r.path == old.path || r.path.starts_with(&old.path));
-        if fresh {
+        if covered.contains(&old.path) {
             continue;
         }
         if uncertainty
@@ -175,16 +187,30 @@ pub fn reconcile_full(
         }
     }
     learned.sort_by(|a, b| a.path.cmp(&b.path));
+    // Collapse by nearest already-represented ancestor. `learned` is sorted, and
+    // a parent always sorts before its children, so every possible parent has
+    // been seen when its child is reached (L5/O2).
     let mut collapsed: Vec<LearnedRoot> = Vec::new();
+    let mut representative: HashMap<PathBuf, usize> = HashMap::new();
     for root in learned {
-        if let Some(parent) = collapsed
-            .iter_mut()
-            .find(|p| root.path == p.path || root.path.starts_with(&p.path))
-        {
-            parent.last_project_seen_at =
-                parent.last_project_seen_at.max(root.last_project_seen_at);
-        } else {
-            collapsed.push(root);
+        let mut cursor = root.path.parent();
+        let parent = loop {
+            let Some(candidate) = cursor else { break None };
+            if let Some(&index) = representative.get(candidate) {
+                break Some(index);
+            }
+            cursor = candidate.parent();
+        };
+        match parent {
+            Some(index) => {
+                collapsed[index].last_project_seen_at = collapsed[index]
+                    .last_project_seen_at
+                    .max(root.last_project_seen_at);
+            }
+            None => {
+                representative.insert(root.path.clone(), collapsed.len());
+                collapsed.push(root);
+            }
         }
     }
     next.learned_roots = collapsed;

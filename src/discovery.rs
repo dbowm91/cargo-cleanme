@@ -32,13 +32,33 @@ impl Filters {
         if self.globs.is_empty() {
             return false;
         }
-        let Some(s) = p.to_str() else {
-            return false;
-        };
-        self.globs.is_match(s) && !self.unignore.iter().any(|u| p.starts_with(u))
+        // Match the lossy form when a name is not valid UTF-8 (Linux only): a
+        // broad pattern such as `*` must still match, or a non-UTF-8 directory
+        // would silently escape a rule the user wrote. A pattern that spells
+        // the valid part still only matches what it spells.
+        let s = p.to_string_lossy();
+        self.globs.is_match(s.as_ref()) && !self.unignore.iter().any(|u| p.starts_with(u))
     }
     fn exception_below(&self, p: &Path) -> bool {
         self.unignore.iter().any(|u| u.starts_with(p))
+    }
+}
+/// Whether an on-disk name is a Cargo manifest on this platform's volumes.
+///
+/// macOS and Windows volumes are case-insensitive by default, so a manifest
+/// *stored* as `cargo.toml` is opened by Cargo exactly like `Cargo.toml` and
+/// is a real, buildable project - matching it case-sensitively would silently
+/// drop it from every report. Linux volumes are case-sensitive, where a
+/// lowercase manifest is not a project Cargo can build, so it must not match.
+fn is_manifest_name(name: &OsStr) -> bool {
+    #[cfg(any(target_os = "macos", windows))]
+    {
+        name.to_str()
+            .is_some_and(|n| n.eq_ignore_ascii_case("Cargo.toml"))
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        name == OsStr::new("Cargo.toml")
     }
 }
 fn vcs(n: &OsStr) -> bool {
@@ -310,16 +330,9 @@ pub fn discover_manifests_with_attribution(
         policy.scope,
         ScanScope::Explicit(_) | ScanScope::ExplicitRoots(_)
     );
+    let mut visited_dirs = 0u64;
     for root in roots {
-        if !root.exists() {
-            diagnostics.push(diag(
-                DiagnosticCategory::PlatformRoot,
-                &root,
-                "scan root is unavailable",
-            ));
-            if let Some(last) = diagnostics.last_mut() {
-                last.severity = DiagnosticSeverity::Error;
-            }
+        if !root_is_usable(&root, &mut diagnostics) {
             continue;
         }
         discover_manifests_root(
@@ -330,6 +343,7 @@ pub fn discover_manifests_with_attribution(
             &mut manifests,
             &mut diagnostics,
             &mut visited,
+            &mut visited_dirs,
             &mut pruned,
             observer,
         )?;
@@ -337,10 +351,9 @@ pub fn discover_manifests_with_attribution(
     manifests.sort();
     manifests.dedup();
     let counters = ScanCounters {
-        directories_visited: visited,
+        directories_visited: visited_dirs,
         directories_pruned: pruned,
         manifests_found: manifests.len() as u64,
-        pruned_no_cargo: pruned,
         ..Default::default()
     };
     Ok(ManifestDiscovery {
@@ -363,6 +376,33 @@ fn canonical_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
     roots
 }
 
+/// A scan root must be an existing, real directory.
+///
+/// `Path::exists` and `Path::is_dir` follow symlinks, but the walker never does,
+/// so a symlinked root has to be refused explicitly: it would otherwise report a
+/// successful *empty* scan for a directory the user asked for (L7).
+fn root_is_usable(root: &Path, diagnostics: &mut Vec<ScanDiagnostic>) -> bool {
+    let problem = if fs::symlink_metadata(root).is_ok_and(|m| m.file_type().is_symlink()) {
+        Some("scan root is a symlink; pass the real directory instead")
+    } else if !root.is_dir() {
+        Some("scan root is unavailable")
+    } else {
+        None
+    };
+    match problem {
+        None => true,
+        Some(message) => {
+            diagnostics.push(ScanDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                category: DiagnosticCategory::PlatformRoot,
+                path: Some(root.to_path_buf()),
+                message: message.into(),
+            });
+            false
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn discover_global_roots(
     roots: &[PathBuf],
@@ -383,15 +423,7 @@ fn discover_global_roots(
 ) -> Result<ManifestDiscovery, AppError> {
     let mut canonical_roots = Vec::new();
     for root in roots {
-        if !root.is_dir() {
-            diagnostics.push(diag(
-                DiagnosticCategory::PlatformRoot,
-                root,
-                "scan root is unavailable",
-            ));
-            if let Some(last) = diagnostics.last_mut() {
-                last.severity = DiagnosticSeverity::Error;
-            }
+        if !root_is_usable(root, diagnostics) {
             continue;
         }
         canonical_roots.push((
@@ -468,20 +500,32 @@ fn discover_global_roots(
     let mut manifest_validation_time = std::time::Duration::ZERO;
     let mut last_profile = std::time::Instant::now();
     let traversal_started = std::time::Instant::now();
+    // Traversal errors arrive in worker-completion order, which is not
+    // reproducible. They are buffered per root and flushed in root order so the
+    // diagnostic stream is byte-identical across runs (L8).
+    let mut walk_diagnostics: HashMap<usize, Vec<ScanDiagnostic>> = HashMap::new();
+    let mut visited_dirs = 0u64;
     for (root_idx, event) in walk {
         let entry = match event {
             dua_core::RootEvent::Entry(Ok(e)) => e,
             dua_core::RootEvent::Entry(Err(e)) => {
-                diagnostics.push(ScanDiagnostic {
-                    severity: DiagnosticSeverity::Warning,
-                    category: if e.kind() == std::io::ErrorKind::PermissionDenied {
-                        DiagnosticCategory::PermissionDenied
-                    } else {
-                        DiagnosticCategory::Metadata
-                    },
-                    path: roots.get(root_idx).map(|(_, root)| root.clone()),
-                    message: "filesystem traversal entry could not be read".into(),
-                });
+                // dua-core reports the io error without the entry it applies
+                // to, so the scan root is the finest honest attribution
+                // available; a deeper path would be a guess. The OS error is
+                // carried in the message so the cause stays actionable (L3).
+                walk_diagnostics
+                    .entry(root_idx)
+                    .or_default()
+                    .push(ScanDiagnostic {
+                        severity: DiagnosticSeverity::Warning,
+                        category: if e.kind() == std::io::ErrorKind::PermissionDenied {
+                            DiagnosticCategory::PermissionDenied
+                        } else {
+                            DiagnosticCategory::Metadata
+                        },
+                        path: roots.get(root_idx).map(|(_, root)| root.clone()),
+                        message: format!("filesystem traversal entry could not be read: {e}"),
+                    });
                 continue;
             }
             dua_core::RootEvent::Finished => {
@@ -511,6 +555,11 @@ fn discover_global_roots(
             }
         }
         batch_visited += 1;
+        if entry.file_type.is_dir() {
+            // `directories_visited` counts directories only; `visited` keeps
+            // counting every entry (files included) as the traversal total (L6).
+            visited_dirs += 1;
+        }
         if batch_visited >= 512 {
             observer.dirs_visited(batch_visited);
             batch_visited = 0;
@@ -545,7 +594,7 @@ fn discover_global_roots(
                 batch_pruned += 1;
             }
         }
-        if entry.file_type.is_file() && entry.file_name == "Cargo.toml" {
+        if entry.file_type.is_file() && is_manifest_name(&entry.file_name) {
             manifest_candidates += 1;
             let path = entry.path();
             let validation_started = profile_subtrees.then(std::time::Instant::now);
@@ -594,6 +643,12 @@ fn discover_global_roots(
     if batch_pruned > 0 {
         observer.dirs_pruned(batch_pruned);
     }
+    let mut buffered: Vec<(usize, ScanDiagnostic)> = walk_diagnostics
+        .into_iter()
+        .flat_map(|(idx, ds)| ds.into_iter().map(move |d| (idx, d)))
+        .collect();
+    buffered.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.message.cmp(&b.1.message)));
+    diagnostics.extend(buffered.into_iter().map(|(_, d)| d));
     if profile_subtrees {
         eprintln!(
             "scan phase: traversal_complete elapsed={:.3}s visited={} manifest_candidates={manifest_candidates} manifests_validated={manifest_validated} manifest_validation_seconds={:.3} diagnostics={}",
@@ -616,7 +671,7 @@ fn discover_global_roots(
         );
     }
     let counters = ScanCounters {
-        directories_visited: *visited,
+        directories_visited: visited_dirs,
         directories_pruned: *pruned,
         platform_system_prunes: system_count,
         cargo_home_prunes: cargo_count,
@@ -624,7 +679,6 @@ fn discover_global_roots(
         target_vcs_prunes: target_count,
         user_ignore_prunes: ignore_count,
         manifests_found: manifests.len() as u64,
-        pruned_no_cargo: *pruned,
         ..Default::default()
     };
     let attribution_started = collect_attribution.then(std::time::Instant::now);
@@ -654,48 +708,6 @@ fn discover_global_roots(
     })
 }
 
-pub fn scan(policy: &EffectiveScanPolicy) -> Result<ScanReport, AppError> {
-    // M004-compatible wrapper: manifest-first traversal, then conventional
-    // direct-target filter. No Cargo subprocesses are invoked here.
-    let roots = match &policy.scope {
-        ScanScope::Explicit(p) => vec![p.clone()],
-        ScanScope::ExplicitRoots(v) => v.clone(),
-        ScanScope::Global(v) | ScanScope::Routine(v) => v.clone(),
-    };
-    let (ignore, unignore) = match &policy.discovery_filters {
-        DiscoveryFilters::Active { ignore, unignore } => (ignore.as_slice(), unignore.as_slice()),
-        DiscoveryFilters::Bypassed => (&[][..], &[][..]),
-    };
-    let filters = Filters::new(ignore, unignore)?;
-    let mut out = ScanReport::default();
-    for root in roots {
-        if !root.exists() {
-            out.diagnostics.push(diag(
-                DiagnosticCategory::PlatformRoot,
-                &root,
-                "scan root is unavailable",
-            ));
-            continue;
-        }
-        discover_root(
-            &root,
-            &filters,
-            matches!(policy.scope, ScanScope::Explicit(_)),
-            &mut out,
-        )?;
-    }
-    out.discovered = out.eligible.len() as u64;
-    Ok(out)
-}
-fn diag(cat: DiagnosticCategory, p: &Path, msg: &str) -> ScanDiagnostic {
-    ScanDiagnostic {
-        severity: DiagnosticSeverity::Warning,
-        category: cat,
-        path: Some(p.into()),
-        message: msg.into(),
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn discover_manifests_root(
     root: &Path,
@@ -705,6 +717,7 @@ fn discover_manifests_root(
     manifests: &mut Vec<PathBuf>,
     diagnostics: &mut Vec<ScanDiagnostic>,
     visited: &mut u64,
+    visited_dirs: &mut u64,
     pruned: &mut u64,
     observer: &dyn ProgressObserver,
 ) -> Result<(), AppError> {
@@ -758,12 +771,17 @@ fn discover_manifests_root(
                     severity: DiagnosticSeverity::Warning,
                     category,
                     path: Some(root.to_path_buf()),
-                    message: "filesystem traversal entry could not be read".into(),
+                    message: format!("filesystem traversal entry could not be read: {e}"),
                 });
                 continue;
             }
         };
         *visited = visited.saturating_add(1);
+        if entry.file_type.is_dir() {
+            // `directories_visited` counts directories only; `visited` keeps
+            // counting every entry (files included) as the traversal total (L6).
+            *visited_dirs = visited_dirs.saturating_add(1);
+        }
         batch_visited += 1;
         if batch_visited >= 512 {
             observer.dirs_visited(batch_visited);
@@ -785,7 +803,7 @@ fn discover_manifests_root(
                 batch_pruned = 0;
             }
         }
-        if entry.file_type.is_file() && path.file_name().is_some_and(|n| n == "Cargo.toml") {
+        if entry.file_type.is_file() && path.file_name().is_some_and(is_manifest_name) {
             // Require a real file; symlinked manifests are ignored.
             if let Ok(meta) = fs::symlink_metadata(&path)
                 && meta.is_file()
@@ -805,89 +823,6 @@ fn discover_manifests_root(
     Ok(())
 }
 
-fn discover_root(
-    root: &Path,
-    filters: &Filters,
-    explicit: bool,
-    out: &mut ScanReport,
-) -> Result<(), AppError> {
-    let walker_root = root.to_path_buf();
-    let root_path = walker_root.clone();
-    let descend_filters = Filters {
-        globs: filters.globs.clone(),
-        unignore: filters.unignore.clone(),
-    };
-    let prunes = cargo_home_prunes();
-    let mut walk = dua_core::walk(
-        &walker_root,
-        traverse::worker_threads(),
-        dua_core::Order::ParentFirst,
-        dua_core::Options::default(),
-        move |entry| {
-            let path = entry.path();
-            if !entry.file_type.is_dir() {
-                return false;
-            }
-            if entry.file_type.is_symlink() {
-                return false;
-            }
-            if path != root_path && path.file_name().is_some_and(|n| n == "target" || vcs(n)) {
-                return false;
-            }
-            if system_prune(&path) {
-                return false;
-            }
-            if is_cargo_home_pruned(&path, &prunes) {
-                return false;
-            }
-            explicit || !descend_filters.ignored(&path) || descend_filters.exception_below(&path)
-        },
-    );
-    for item in &mut walk {
-        let entry = match item {
-            Ok(e) => e,
-            Err(e) => {
-                let category = if e.kind() == std::io::ErrorKind::PermissionDenied {
-                    DiagnosticCategory::PermissionDenied
-                } else {
-                    DiagnosticCategory::Metadata
-                };
-                out.diagnostics.push(ScanDiagnostic {
-                    severity: DiagnosticSeverity::Warning,
-                    category,
-                    path: None,
-                    message: "filesystem traversal entry could not be read".into(),
-                });
-                continue;
-            }
-        };
-        out.visited_entries = out.visited_entries.saturating_add(1);
-        let path = entry.path();
-        if entry.file_type.is_file() && path.file_name().is_some_and(|n| n == "Cargo.toml") {
-            // Manifest must be a real file.
-            if fs::symlink_metadata(&path).is_ok_and(|m| m.is_file() && !m.file_type().is_symlink())
-                && let Some(project_root) = path.parent()
-            {
-                let target = project_root.join("target");
-                if fs::symlink_metadata(&target)
-                    .is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink())
-                {
-                    out.eligible.push(EligibleProject {
-                        project_root: project_root.to_path_buf(),
-                        artifact: ArtifactAnalysis {
-                            target_path: target,
-                            bytes: 0,
-                            metric: SizeMetric::Apparent,
-                            newest_mtime: None,
-                            artifact_entries: 0,
-                        },
-                    });
-                }
-            }
-        }
-    }
-    Ok(())
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1119,20 +1054,144 @@ mod tests {
             }
         }
     }
+    /// Explicit-root discovery, as `scan <dir>` runs it. An explicit root is
+    /// scanned exactly as asked: `scan.ignore` deliberately does not apply.
+    fn explicit_manifests(root: &Path) -> ManifestDiscovery {
+        discover_manifests(
+            &EffectiveScanPolicy {
+                recency: std::time::Duration::from_secs(300),
+                scope: ScanScope::Explicit(root.to_path_buf()),
+                discovery_filters: DiscoveryFilters::Bypassed,
+            },
+            &NoopObserver,
+        )
+        .unwrap()
+    }
+
+    /// Routine-scope discovery: the mode that consults `scan.ignore` against
+    /// canonical walk paths (M2/H1).
+    fn routine_manifests(
+        roots: Vec<PathBuf>,
+        ignore: &[String],
+        unignore: &[PathBuf],
+    ) -> ManifestDiscovery {
+        discover_manifests(
+            &EffectiveScanPolicy {
+                recency: std::time::Duration::from_secs(300),
+                scope: ScanScope::Routine(roots),
+                discovery_filters: DiscoveryFilters::Active {
+                    ignore: ignore.to_vec(),
+                    unignore: unignore.to_vec(),
+                },
+            },
+            &NoopObserver,
+        )
+        .unwrap()
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
     #[test]
-    fn discovers_real_target_and_prunes_target() {
+    fn manifest_name_is_matched_case_insensitively_where_the_volume_is() {
+        // H2: on a case-insensitive volume a project may be stored as
+        // `cargo.toml`. Cargo opens it, so the tool must find it too.
+        let d = tempdir().unwrap();
+        let p = d.path().join("lowercase");
+        fs::create_dir_all(&p).unwrap();
+        fs::write(p.join("cargo.toml"), "").unwrap();
+        let canonical = fs::canonicalize(d.path()).unwrap();
+        let found = routine_manifests(vec![canonical.clone()], &[], &[]);
+        assert_eq!(
+            found.manifests,
+            vec![canonical.join("lowercase/cargo.toml")],
+            "lowercase manifest must be discovered"
+        );
+    }
+
+    // Only Linux (and other Unix filesystems with raw byte names) can hold a
+    // non-UTF-8 name; APFS/NTFS reject one.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn non_utf8_directory_still_matches_a_broad_ignore_pattern() {
+        // L4: a non-UTF-8 name used to bypass every ignore glob, so `*` did not
+        // prune it and the walker descended into a directory the user excluded.
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        let d = tempdir().unwrap();
+        let p = d.path().join("keep");
+        let odd = p.join(OsString::from_vec(b"weird-\xff".to_vec()));
+        fs::create_dir_all(&odd).unwrap();
+        fs::write(odd.join("Cargo.toml"), "").unwrap();
+        let canonical = fs::canonicalize(&p).unwrap();
+        let filters = Filters::new(&[format!("{}/*", canonical.display())], &[]).unwrap();
+        assert!(
+            filters.ignored(&odd),
+            "a broad pattern must match a non-UTF-8 name"
+        );
+        // The finder itself is unchanged for valid paths.
+        assert!(!filters.ignored(&canonical));
+    }
+
+    #[test]
+    fn directories_visited_counts_directories_not_files() {
+        // L6: the counter claimed directories but tallied every entry.
+        let d = tempdir().unwrap();
+        let p = d.path().join("p");
+        fs::create_dir_all(p.join("sub/deeper")).unwrap();
+        for file in ["a", "sub/b", "sub/deeper/c"] {
+            fs::write(p.join(file), "").unwrap();
+        }
+        fs::write(p.join("Cargo.toml"), "").unwrap();
+        let found = explicit_manifests(d.path());
+        assert_eq!(found.manifests, vec![p.join("Cargo.toml")]);
+        // d.path(), p, p/sub, p/sub/deeper = 4 directories; entries = 8.
+        assert_eq!(found.counters.directories_visited, 4);
+        assert_eq!(found.visited_entries, 8);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_scan_root_is_refused_instead_of_scanning_nothing() {
+        // L7: `is_dir` follows symlinks, so a symlinked root used to produce a
+        // successful *empty* scan.
+        use std::os::unix::fs::symlink;
+        let d = tempdir().unwrap();
+        let real = d.path().join("real");
+        fs::create_dir_all(&real).unwrap();
+        fs::write(real.join("Cargo.toml"), "").unwrap();
+        let link = d.path().join("link");
+        symlink(&real, &link).unwrap();
+        let mut diagnostics = Vec::new();
+        let found = discover_manifests(
+            &EffectiveScanPolicy {
+                recency: std::time::Duration::from_secs(300),
+                scope: ScanScope::Explicit(link.clone()),
+                discovery_filters: DiscoveryFilters::Bypassed,
+            },
+            &NoopObserver,
+        )
+        .unwrap();
+        diagnostics.extend(found.diagnostics);
+        assert!(found.manifests.is_empty());
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("symlink") && d.severity == DiagnosticSeverity::Error),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn discovers_real_manifest_and_prunes_target() {
         let d = tempdir().unwrap();
         let p = d.path().join("p");
         fs::create_dir_all(p.join("target/nested")).unwrap();
         fs::write(p.join("Cargo.toml"), "").unwrap();
         fs::write(p.join("target/nested/Cargo.toml"), "").unwrap();
-        let f = Filters::new(&[], &[]).unwrap();
-        let mut r = ScanReport::default();
-        discover_root(d.path(), &f, true, &mut r).unwrap();
-        assert_eq!(r.eligible.len(), 1);
-        assert_eq!(r.eligible[0].project_root, p);
+        let found = explicit_manifests(d.path());
+        // Only the real manifest: a nested manifest inside `target/` is pruned.
+        assert_eq!(found.manifests, vec![p.join("Cargo.toml")]);
         assert_eq!(
-            r.visited_entries, 4,
+            found.visited_entries, 4,
             "target descendants must be pruned during discovery"
         );
     }
@@ -1253,15 +1312,27 @@ mod tests {
             fs::create_dir_all(p.join("target")).unwrap();
             fs::write(p.join("Cargo.toml"), "").unwrap();
         }
-        let f = Filters::new(
-            &[format!("{}/*", archive.display())],
-            &[archive.join("keep")],
-        )
-        .unwrap();
-        let mut r = ScanReport::default();
-        discover_root(d.path(), &f, false, &mut r).unwrap();
-        assert_eq!(r.eligible.len(), 1);
-        assert_eq!(r.eligible[0].project_root, archive.join("keep"));
+        // Global and routine scans walk canonical roots, so ignore patterns are
+        // matched against canonical paths. `config::load` normalizes a pattern's
+        // literal prefix (M2/H1); the walker itself compares canonical spellings.
+        let canonical = fs::canonicalize(d.path()).unwrap();
+        let canonical_archive = canonical.join("archive");
+        let found = routine_manifests(
+            vec![canonical.clone()],
+            &[format!("{}/*", canonical_archive.display())],
+            &[canonical_archive.join("keep")],
+        );
+        assert_eq!(
+            found.manifests,
+            vec![canonical_archive.join("keep/Cargo.toml")]
+        );
+        // Without the exception the whole archive is pruned.
+        let pruned = routine_manifests(
+            vec![canonical],
+            &[format!("{}/*", canonical_archive.display())],
+            &[],
+        );
+        assert!(pruned.manifests.is_empty());
     }
     #[cfg(unix)]
     #[test]
@@ -1274,10 +1345,6 @@ mod tests {
         fs::create_dir_all(&project).unwrap();
         fs::write(project.join("Cargo.toml"), "").unwrap();
         symlink(&external, project.join("target")).unwrap();
-        let f = Filters::new(&[], &[]).unwrap();
-        let mut r = ScanReport::default();
-        discover_root(d.path(), &f, true, &mut r).unwrap();
-        assert!(r.eligible.is_empty());
         // Manifest-first discovery still finds the manifest; eligibility is
         // decided later by output grouping (symlink -> Uncertain).
         let policy = EffectiveScanPolicy {

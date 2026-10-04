@@ -231,10 +231,14 @@ fn json_unattended_yes_executes_through_cargo_and_emits_typed_result() {
         .unwrap()
         .set_modified(old)
         .unwrap();
-    fs::File::open(root.join("src"))
-        .unwrap()
-        .set_modified(old)
-        .unwrap();
+    // The workspace directory's own mtime is source activity too, so it has to
+    // be backdated for the fixture to look inactive under a real recency window.
+    for directory in [root.clone(), root.join("src")] {
+        fs::File::open(directory)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+    }
     let log = temp.path().join("cargo.log");
     let args_log = temp.path().join("cargo-args.log");
     let fake = bin.join("cargo");
@@ -252,7 +256,10 @@ esac
     permissions.set_mode(0o755);
     fs::set_permissions(&fake, permissions).unwrap();
     let config = temp.path().join("config.toml");
-    fs::write(&config, "[scan]\nrecency_seconds = 0\n").unwrap();
+    // The fixture is backdated by an hour, so the default recency window keeps
+    // it eligible; `recency_seconds = 0` is no longer accepted (it would
+    // disable the inactivity guard).
+    fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
         .args([
             "--config",

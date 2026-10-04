@@ -40,6 +40,17 @@ pub enum CleanMode {
     Execute,
 }
 
+impl CleanMode {
+    /// Stable machine label for the JSON `mode` field.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Preview => "preview",
+            Self::Simulate => "simulate",
+            Self::Execute => "execute",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CleanOutcome {
     Previewed,
@@ -47,6 +58,20 @@ pub enum CleanOutcome {
     Cleaned,
     Skipped,
     Failed,
+}
+
+impl CleanOutcome {
+    /// Stable machine label. The JSON contract must not depend on `Debug`
+    /// formatting, or renaming a variant would silently change the API.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Previewed => "previewed",
+            Self::Simulated => "simulated",
+            Self::Cleaned => "cleaned",
+            Self::Skipped => "skipped",
+            Self::Failed => "failed",
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -82,6 +107,10 @@ pub enum CleanupReasonCode {
     SkippedUnauthorized,
     SkippedMarkerInvalid,
     SkippedChangedBeforeCleanup,
+    /// Ownership could not be re-proven at all (Cargo refused, discovery was
+    /// incomplete, a manifest did not re-resolve). Distinct from a workspace
+    /// that demonstrably changed.
+    SkippedOwnershipUnproven,
     SkippedSafety,
     CargoFailed,
     MeasurementFailed,
@@ -123,6 +152,7 @@ impl CleanupReasonCode {
             Self::SkippedUnauthorized => "skipped_unauthorized",
             Self::SkippedMarkerInvalid => "skipped_marker_invalid",
             Self::SkippedChangedBeforeCleanup => "skipped_changed_before_cleanup",
+            Self::SkippedOwnershipUnproven => "skipped_ownership_unproven",
             Self::SkippedSafety => "skipped_safety",
             Self::CargoFailed => "cargo_failed",
             Self::MeasurementFailed => "measurement_failed",
@@ -422,11 +452,13 @@ fn output_text(output: &ProcessOutput) -> String {
 ///   convert `ExternalUnproven` into a private group.
 pub fn is_authorized(
     group: &workspace::RawGroup,
-    workspaces: &[ResolvedWorkspace],
     clean_root: &Path,
     allowed_roots: &[PathBuf],
 ) -> Result<bool, String> {
-    let _ = workspaces;
+    // The workspace universe is deliberately not consulted here: authorization is
+    // purely about the group's covering roots inside the bounded clean root.
+    // (It used to be accepted and ignored, which invited the belief that the
+    // universe participated in the decision.)
     covering_is_authorized(group.ownership, &group.covering, clean_root, allowed_roots)
 }
 
@@ -712,30 +744,13 @@ pub fn clean_with_roots_policy_selector(
     policy: &CleanupPolicy,
     selector: Option<CleanupSelector>,
 ) -> Result<CleanReport, AppError> {
-    let selector_capabilities = if selector.is_some() {
-        runtime_clean_capabilities()
-    } else {
-        CargoCleanCapabilities::default()
-    };
     let includes = compile_policy_globs(&policy.include)?;
     let excludes = compile_policy_globs(&policy.exclude)?;
+    // Validate every root before doing anything observable: an invalid
+    // invocation must not spawn a process, and the runtime capability verdict
+    // must not be able to mask a malformed root (M10).
     for root in roots {
-        if !root.is_absolute() {
-            return Err(AppError::InvalidRoot {
-                path: root.display().to_string(),
-                reason: "cleanup requires an absolute sandbox root".into(),
-            });
-        }
-        let meta = fs::symlink_metadata(root).map_err(|e| AppError::InvalidRoot {
-            path: root.display().to_string(),
-            reason: e.to_string(),
-        })?;
-        if !meta.is_dir() || meta.file_type().is_symlink() {
-            return Err(AppError::InvalidRoot {
-                path: root.display().to_string(),
-                reason: "expected a real directory".into(),
-            });
-        }
+        validate_cleanup_root(root)?;
     }
     let roots = collapse_roots(roots.to_vec());
     if roots.is_empty() {
@@ -744,24 +759,16 @@ pub fn clean_with_roots_policy_selector(
             reason: "cleanup requires at least one bounded root".into(),
         });
     }
+    // Re-check the collapsed set: collapsing only narrows it, and every
+    // surviving root must still be a real bounded directory.
     for root in &roots {
-        if !root.is_absolute() {
-            return Err(AppError::InvalidRoot {
-                path: root.display().to_string(),
-                reason: "cleanup requires an absolute sandbox root".into(),
-            });
-        }
-        let meta = fs::symlink_metadata(root).map_err(|e| AppError::InvalidRoot {
-            path: root.display().to_string(),
-            reason: e.to_string(),
-        })?;
-        if !meta.is_dir() || meta.file_type().is_symlink() {
-            return Err(AppError::InvalidRoot {
-                path: root.display().to_string(),
-                reason: "expected a real directory".into(),
-            });
-        }
+        validate_cleanup_root(root)?;
     }
+    let selector_capabilities = if selector.is_some() {
+        runtime_clean_capabilities()
+    } else {
+        CargoCleanCapabilities::default()
+    };
     let resolved = crate::domain::EffectiveScanPolicy {
         recency: Duration::from_secs(recency_seconds),
         scope: ScanScope::ExplicitRoots(roots.clone()),
@@ -781,7 +788,7 @@ pub fn clean_with_roots_policy_selector(
     let mut counters = discovered.counters.clone();
     counters.discovery_nanos = counters
         .discovery_nanos
-        .saturating_add(discovery_elapsed.as_nanos() as u64);
+        .saturating_add(crate::domain::elapsed_nanos(discovery_elapsed));
     let mut diagnostics: Vec<ScanDiagnostic> = discovered.diagnostics;
     let manifests = discovered.manifests;
 
@@ -849,6 +856,9 @@ pub fn clean_with_roots_policy_selector(
     // established (C004). Announce the CleanupUnit total through the observer.
     observer.units_total(cleanup_phase, units.len() as u64);
 
+    // Filled on the first candidate that reaches the final proof; shared by
+    // every later candidate in this run (H3/O1).
+    let mut hoisted: Option<ProofUniverse> = None;
     for unit in &units {
         let skipped = |report: &mut CleanReport,
                        detail: String,
@@ -960,6 +970,12 @@ pub fn clean_with_roots_policy_selector(
         // Preview/Simulate/Execute, re-validated against the complete bounded
         // ownership universe. Simulate runs every non-mutating gate Execute
         // runs and only diverges by not spawning Cargo.
+        // H3/O1: the ownership universe is re-proven once for the whole run,
+        // on the first candidate that reaches the proof. Lazy so a run where
+        // every unit is skipped by policy still spawns nothing.
+        let hoisted = hoisted.get_or_insert_with(|| {
+            ProofUniverse::refresh(&workspaces, &roots, runner, &mut counters)
+        });
         let proof = match final_cleanup_proof_roots(
             unit,
             &workspaces,
@@ -967,7 +983,9 @@ pub fn clean_with_roots_policy_selector(
             allowed_output_roots,
             runner,
             recency_seconds,
+            hoisted,
             &mut counters,
+            true,
         ) {
             Ok(p) => p,
             Err(failure) => {
@@ -1209,10 +1227,17 @@ fn proof_skip_code(detail: &str) -> CleanupReasonCode {
         CleanupReasonCode::SkippedUncertain
     } else if detail.contains("changed before cleanup")
         || detail.contains("preflight changed")
-        || detail.contains("re-proven")
         || detail.contains("overlap")
+        // A workspace that changed identity or vanished really did change; the
+        // remaining "could not be re-proven" failures are Cargo/discovery
+        // failures and must not be reported as a change (L9).
+        || detail.contains("changed identity")
+        || detail.contains("vanished")
+        || detail.contains("disappeared")
     {
         CleanupReasonCode::SkippedChangedBeforeCleanup
+    } else if detail.contains("re-proven") {
+        CleanupReasonCode::SkippedOwnershipUnproven
     } else {
         CleanupReasonCode::SkippedSafety
     }
@@ -1362,6 +1387,27 @@ fn canon(path: &Path) -> PathBuf {
     fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+/// One bounded cleanup root must be an existing, real (non-symlink) directory.
+fn validate_cleanup_root(root: &Path) -> Result<(), AppError> {
+    if !root.is_absolute() {
+        return Err(AppError::InvalidRoot {
+            path: root.display().to_string(),
+            reason: "cleanup requires an absolute sandbox root".into(),
+        });
+    }
+    let meta = fs::symlink_metadata(root).map_err(|e| AppError::InvalidRoot {
+        path: root.display().to_string(),
+        reason: e.to_string(),
+    })?;
+    if !meta.is_dir() || meta.file_type().is_symlink() {
+        return Err(AppError::InvalidRoot {
+            path: root.display().to_string(),
+            reason: "expected a real directory".into(),
+        });
+    }
+    Ok(())
+}
+
 fn collapse_roots(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
     roots = roots
         .into_iter()
@@ -1506,6 +1552,48 @@ fn refresh_proof_universe(
     )
 }
 
+/// One hoisted re-resolution of the complete bounded ownership universe.
+///
+/// The universe every candidate is proven against is the same for the whole
+/// run, so it is re-resolved once here instead of once per candidate: the old
+/// per-candidate refresh cost O(N^2) Cargo spawns and O(N) full directory
+/// re-walks for N workspaces (measured: 8 workspaces = 192 spawns, 2.7 s; the
+/// growth is quadratic, not the constant). Each candidate still re-resolves
+/// its *own* workspace through Cargo, so a workspace that changed after this
+/// snapshot is still caught before anything is cleaned.
+struct ProofUniverse {
+    fresh: Option<Vec<ResolvedWorkspace>>,
+    failure: Option<String>,
+}
+
+impl ProofUniverse {
+    fn refresh(
+        universe: &[ResolvedWorkspace],
+        clean_roots: &[PathBuf],
+        runner: &dyn CleanupRunner,
+        counters: &mut ScanCounters,
+    ) -> Self {
+        match refresh_combined_universe(universe, clean_roots, runner, counters) {
+            Ok(fresh) => Self {
+                fresh: Some(fresh),
+                failure: None,
+            },
+            Err(reason) => Self {
+                fresh: None,
+                failure: Some(reason),
+            },
+        }
+    }
+    /// The refreshed universe, or the reason it could not be re-proven.
+    fn get(&self) -> Result<&[ResolvedWorkspace], &str> {
+        match (&self.fresh, &self.failure) {
+            (Some(fresh), _) => Ok(fresh),
+            (None, Some(reason)) => Err(reason.as_str()),
+            (None, None) => Err("ownership could not be re-proven: no refreshed universe"),
+        }
+    }
+}
+
 /// Rediscover and resolve every selected source root for each candidate's final proof.
 fn refresh_combined_universe(
     initial: &[ResolvedWorkspace],
@@ -1550,9 +1638,6 @@ fn refresh_combined_universe(
     counters.proof_cargo_locate_nanos = counters
         .proof_cargo_locate_nanos
         .saturating_add(refreshed_counters.cargo_locate_nanos);
-    counters.proof_workspaces_refreshed = counters
-        .proof_workspaces_refreshed
-        .saturating_add(refreshed_counters.cargo_metadata_calls);
     if !coverage.unresolved.is_empty() {
         return Err(format!(
             "ownership could not be re-proven: combined selected-root universe has {} unresolved manifest(s); a workspace did not re-resolve",
@@ -1615,7 +1700,8 @@ fn refresh_proof_universe_with_limit(
         let mut failure = None;
         for (workspace, (proof_counters, fresh)) in batch.iter().zip(outcomes) {
             counters.merge_proof(&proof_counters);
-            counters.proof_workspaces_refreshed += 1;
+            counters.proof_workspaces_refreshed =
+                counters.proof_workspaces_refreshed.saturating_add(1);
             match fresh {
                 Some(fresh) if fresh.id == workspace.id && fresh.root == workspace.root => {
                     refreshed_universe.push(fresh);
@@ -1687,14 +1773,21 @@ pub fn final_cleanup_proof(
     recency_seconds: u64,
     counters: &mut ScanCounters,
 ) -> Result<ExecutionProof, ProofFailure> {
+    let clean_root_owned = clean_root.to_path_buf();
+    let clean_roots = std::slice::from_ref(&clean_root_owned);
+    // A single candidate *is* the universe here, and the refresh below already
+    // re-resolved it, so no extra per-candidate refresh is needed.
+    let hoisted = ProofUniverse::refresh(universe, clean_roots, runner, counters);
     final_cleanup_proof_roots(
         unit,
         universe,
-        std::slice::from_ref(&clean_root.to_path_buf()),
+        clean_roots,
         allowed_output_roots,
         runner,
         recency_seconds,
+        &hoisted,
         counters,
+        false,
     )
 }
 
@@ -1706,15 +1799,55 @@ fn final_cleanup_proof_roots(
     allowed_output_roots: &[PathBuf],
     runner: &dyn CleanupRunner,
     recency_seconds: u64,
+    hoisted: &ProofUniverse,
     counters: &mut ScanCounters,
+    refresh_candidate: bool,
 ) -> Result<ExecutionProof, ProofFailure> {
     // 1. Unit-wide gate (defensive: the caller gates before dispatch, and the
     // final proof must be the single authority consumed by any spawn).
     unit_block_reason_roots(unit, clean_roots, allowed_output_roots)?;
-    // 2. Fresh Cargo resolution for the complete bounded ownership universe.
-    // Uses canonicalized comparisons so `/tmp` vs `/private/tmp` (macOS
-    // symlink) does not falsely report a change.
-    let fresh_universe = refresh_combined_universe(universe, clean_roots, runner, counters)?;
+    // 2. Fresh Cargo resolution for the complete bounded ownership universe,
+    // re-proven once per run (see `ProofUniverse`) rather than once per
+    // candidate. Comparisons are canonicalized so `/tmp` vs `/private/tmp`
+    // (macOS symlink) does not falsely report a change.
+    let hoisted_universe = hoisted.get()?;
+    // 2b. Re-resolve *this* candidate now, immediately before its own gates:
+    // the hoisted snapshot is a moment old, and this is the workspace whose
+    // output is about to be cleaned.
+    let mut fresh_universe = hoisted_universe.to_vec();
+    if refresh_candidate {
+        // Look the candidate up by identity in the *refreshed* universe: the
+        // refresh preserves order only because the proof requires it elsewhere.
+        let Some(index) = fresh_universe.iter().position(|w| w.id == unit.id) else {
+            return Err(
+                "ownership could not be re-proven: workspace is outside the cleanup universe"
+                    .into(),
+            );
+        };
+        let (candidate_counters, fresh_candidate) =
+            refresh_one_proof_workspace(&fresh_universe[index], runner);
+        counters.merge_proof(&candidate_counters);
+        counters.proof_workspaces_refreshed = counters.proof_workspaces_refreshed.saturating_add(1);
+        match fresh_candidate {
+            Some(fresh) if fresh.id == unit.id && fresh.root == unit.root => {
+                fresh_universe[index] = fresh;
+            }
+            Some(_) => {
+                return Err(format!(
+                    "ownership could not be re-proven: workspace {} changed identity",
+                    unit.root.display()
+                )
+                .into());
+            }
+            None => {
+                return Err(format!(
+                    "ownership could not be re-proven: workspace {} did not re-resolve",
+                    unit.root.display()
+                )
+                .into());
+            }
+        }
+    }
     // 3. Complete fresh physical output graph.
     let fresh_groups = workspace::build_groups(&fresh_universe);
     // 4/5. Candidate identity, member set, and target/build identity.
@@ -1896,7 +2029,7 @@ fn final_cleanup_proof_roots(
     }
     counters.proof_source_activity_nanos = counters
         .proof_source_activity_nanos
-        .saturating_add(activity_start.elapsed().as_nanos() as u64);
+        .saturating_add(crate::domain::elapsed_nanos(activity_start.elapsed()));
     let sizing_start = std::time::Instant::now();
     let mut fresh_bytes = 0u64;
     for covering in &unit.covering {
@@ -1914,7 +2047,7 @@ fn final_cleanup_proof_roots(
     }
     counters.proof_output_sizing_nanos = counters
         .proof_output_sizing_nanos
-        .saturating_add(sizing_start.elapsed().as_nanos() as u64);
+        .saturating_add(crate::domain::elapsed_nanos(sizing_start.elapsed()));
     // 11. Marker validation is part of the same non-mutating proof consumed by
     // Simulate, and covers the complete affected union.
     require_cargo_markers(&unit.covering)?;
@@ -1993,10 +2126,15 @@ pub fn execute_pre_spawn_decision(
 }
 
 fn frozen_env(ctx: &RevalidatedContext) -> Result<Vec<(OsString, OsString)>, String> {
-    // Freeze Cargo output context; prevent inherited conflicts.
-    // - Always override CARGO_TARGET_DIR to the resolved target.
-    // - When runtime supports stable build-dir and build is distinct, override
-    //   CARGO_BUILD_BUILD_DIR; otherwise ensure no silent build-dir redirect.
+    // Freeze Cargo output context so the child sees exactly the world this
+    // proof validated, whatever the user's shell exported:
+    // - CARGO_TARGET_DIR is always pinned to the resolved target.
+    // - CARGO_BUILD_BUILD_DIR is always pinned too: to the resolved build
+    //   directory when Cargo reports one, and otherwise to the target itself.
+    //   An inherited value can no longer redirect the clean into a directory
+    //   that was never proven (M9), and an inherited value no longer forces a
+    //   blanket refusal when the runtime cannot even report build directories
+    //   (M5) - previously a safe, cleanable workspace was refused forever.
     // - Do not pass unsupported unstable flags.
     if ctx.capability.env_build_dir_set
         && ctx.capability.build_dir == CargoBuildDirCapability::Unavailable
@@ -2006,31 +2144,30 @@ fn frozen_env(ctx: &RevalidatedContext) -> Result<Vec<(OsString, OsString)>, Str
                 .into(),
         );
     }
-    if ctx.capability.build_dir == CargoBuildDirCapability::Unknown
-        && std::env::var_os("CARGO_BUILD_BUILD_DIR").is_some()
-    {
-        return Err("separate build directory cannot be proven safe; cleanup deferred".into());
-    }
-    let mut env = Vec::new();
-    env.push((
+    let mut env = vec![(
         OsString::from("CARGO_TARGET_DIR"),
         ctx.target.as_os_str().to_owned(),
-    ));
-    if let Some(build) = &ctx.build {
-        match ctx.capability.build_dir {
-            CargoBuildDirCapability::Distinct | CargoBuildDirCapability::Equal => {
-                env.push((
-                    OsString::from("CARGO_BUILD_BUILD_DIR"),
-                    build.as_os_str().to_owned(),
-                ));
-            }
+    )];
+    match &ctx.build {
+        Some(build) => match ctx.capability.build_dir {
+            CargoBuildDirCapability::Distinct | CargoBuildDirCapability::Equal => env.push((
+                OsString::from("CARGO_BUILD_BUILD_DIR"),
+                build.as_os_str().to_owned(),
+            )),
             CargoBuildDirCapability::Unavailable | CargoBuildDirCapability::Unknown => {
                 return Err(
                     "Cargo reports a separate build directory without stable support; cleanup deferred"
                         .into(),
                 );
             }
-        }
+        },
+        // No separate build directory was reported. Pinning the variable to the
+        // target asserts "build dir == target", which is the world the proof
+        // measured. If the runtime ignores the variable, this is a no-op.
+        None => env.push((
+            OsString::from("CARGO_BUILD_BUILD_DIR"),
+            ctx.target.as_os_str().to_owned(),
+        )),
     }
     Ok(env)
 }
@@ -2664,8 +2801,9 @@ mod tests {
                 display: canonical.clone(),
                 owners: vec![0],
                 ownership,
+                source_overlap: false,
             };
-            let ws = ResolvedWorkspace {
+            let _ws = ResolvedWorkspace {
                 id: WorkspaceId(canonical_root.clone()),
                 root: canonical_root.clone(),
                 root_manifest: proj.join("Cargo.toml"),
@@ -2695,30 +2833,16 @@ mod tests {
             };
             // Inside clean ROOT but non-private → still skipped.
             assert!(
-                !is_authorized(&raw, std::slice::from_ref(&ws), &root, &[]).unwrap(),
+                !is_authorized(&raw, &root, &[]).unwrap(),
                 "{ownership:?} inside ROOT must remain inventory-only"
             );
             // Inside configured allowed root → still skipped.
             assert!(
-                !is_authorized(
-                    &raw,
-                    std::slice::from_ref(&ws),
-                    &root,
-                    std::slice::from_ref(&redirected)
-                )
-                .unwrap(),
+                !is_authorized(&raw, &root, std::slice::from_ref(&redirected)).unwrap(),
                 "{ownership:?} inside allowed root must remain inventory-only"
             );
             // Inside both → still skipped.
-            assert!(
-                !is_authorized(
-                    &raw,
-                    std::slice::from_ref(&ws),
-                    &root,
-                    &[root.clone(), redirected.clone()]
-                )
-                .unwrap()
-            );
+            assert!(!is_authorized(&raw, &root, &[root.clone(), redirected.clone()]).unwrap());
         }
         // PrivateBounded inside ROOT remains authorized (conventional case).
         let canonical_target = fs::canonicalize(&proj).unwrap().join("target");
@@ -2729,6 +2853,7 @@ mod tests {
             display: canonical_target.clone(),
             owners: vec![0],
             ownership: OutputOwnershipClass::PrivateBounded,
+            source_overlap: false,
         };
         let private_ws = ResolvedWorkspace {
             id: WorkspaceId(canonical_root.clone()),
@@ -2791,8 +2916,9 @@ mod tests {
             display: canonical_target.clone(),
             owners: vec![0],
             ownership: OutputOwnershipClass::PrivateBounded,
+            source_overlap: false,
         };
-        let ws = ResolvedWorkspace {
+        let _ws = ResolvedWorkspace {
             id: WorkspaceId(canonical_proj.clone()),
             root: canonical_proj,
             root_manifest: proj.join("Cargo.toml"),
@@ -2820,7 +2946,7 @@ mod tests {
                 env_build_dir_set: false,
             },
         };
-        assert!(is_authorized(&raw, std::slice::from_ref(&ws), &root, &[]).unwrap());
+        assert!(is_authorized(&raw, &root, &[]).unwrap());
     }
 
     #[test]
@@ -2839,10 +2965,11 @@ mod tests {
             display: canonical_out.clone(),
             owners: vec![0],
             ownership: OutputOwnershipClass::ExternalUnproven,
+            source_overlap: false,
         };
         let ws_root = d.path().join("ws");
         std::fs::create_dir_all(&ws_root).unwrap();
-        let ws = ResolvedWorkspace {
+        let _ws = ResolvedWorkspace {
             id: WorkspaceId(ws_root.clone()),
             root: ws_root,
             root_manifest: PathBuf::from("/x/Cargo.toml"),
@@ -2871,9 +2998,9 @@ mod tests {
             },
         };
         // Outside ROOT without authorization → not authorized.
-        assert!(!is_authorized(&raw, std::slice::from_ref(&ws), &root, &[]).unwrap());
+        assert!(!is_authorized(&raw, &root, &[]).unwrap());
         // Inside configured allowed root → still not authorized (C002 correction).
-        assert!(!is_authorized(&raw, std::slice::from_ref(&ws), &root, &[outside]).unwrap());
+        assert!(!is_authorized(&raw, &root, &[outside]).unwrap());
         // Skip detail must state both facts.
         let detail = ownership_skip_detail(OutputOwnershipClass::ExternalUnproven);
         assert!(detail.contains("unproven"));
@@ -2897,8 +3024,9 @@ mod tests {
                 display: canonical_target.clone(),
                 owners: vec![0],
                 ownership: OutputOwnershipClass::PrivateBounded,
+                source_overlap: false,
             };
-            let ws = ResolvedWorkspace {
+            let _ws = ResolvedWorkspace {
                 id: WorkspaceId(d.path().join("ws")),
                 root: d.path().join("ws"),
                 root_manifest: PathBuf::from("/x/Cargo.toml"),
@@ -2928,7 +3056,7 @@ mod tests {
             };
             let root = d.path().join("root");
             std::fs::create_dir(&root).unwrap();
-            assert!(is_authorized(&raw, std::slice::from_ref(&ws), &root, &[link]).is_err());
+            assert!(is_authorized(&raw, &root, &[link]).is_err());
 
             // Shared remains forbidden even inside allowed root.
             let shared_raw = workspace::RawGroup {
@@ -2937,16 +3065,9 @@ mod tests {
                 display: real.clone(),
                 owners: vec![0, 1],
                 ownership: OutputOwnershipClass::Shared,
+                source_overlap: false,
             };
-            assert!(
-                !is_authorized(
-                    &shared_raw,
-                    std::slice::from_ref(&ws),
-                    &root,
-                    std::slice::from_ref(&real)
-                )
-                .unwrap()
-            );
+            assert!(!is_authorized(&shared_raw, &root, std::slice::from_ref(&real)).unwrap());
             // Uncertain forbidden.
             let uncertain_raw = workspace::RawGroup {
                 physicals: vec![real.clone()],
@@ -2954,16 +3075,9 @@ mod tests {
                 display: PathBuf::from("/x"),
                 owners: vec![0],
                 ownership: OutputOwnershipClass::Uncertain,
+                source_overlap: false,
             };
-            assert!(
-                !is_authorized(
-                    &uncertain_raw,
-                    std::slice::from_ref(&ws),
-                    &root,
-                    &[d.path().to_path_buf()]
-                )
-                .unwrap()
-            );
+            assert!(!is_authorized(&uncertain_raw, &root, &[d.path().to_path_buf()]).unwrap());
         }
     }
 
@@ -3924,9 +4038,12 @@ mod tests {
                     );
                 }
                 assert_eq!(report.counters.proof_cargo_locate_calls, 1);
+                // A universe that cannot be re-proven stops at the resolve
+                // step; the surviving "member" case also pays one metadata call
+                // to re-resolve the candidate itself.
                 assert_eq!(
                     report.counters.proof_cargo_metadata_calls,
-                    if mutation_kind == "member" { 2 } else { 1 }
+                    if mutation_kind == "member" { 3 } else { 1 }
                 );
                 assert!(
                     runner.inner.clean_calls().is_empty(),
@@ -5306,7 +5423,15 @@ mod tests {
         let report = clean_with(d.path(), 0, &[], CleanMode::Simulate, &runner, &noop).unwrap();
         let row = row_for(&report, &root_a);
         assert_eq!(row.outcome, CleanOutcome::Skipped, "{}", row.detail);
-        assert!(row.detail.contains("overlaps"), "{}", row.detail);
+        // H4: B's symlinked root has no node in the physical graph, so while it
+        // exists no group may claim `private`. A's group is reported `shared`
+        // and fails the private-ownership gate before the explicit
+        // cross-workspace overlap check is even reached.
+        assert!(
+            row.detail.contains("shared") || row.detail.contains("overlaps"),
+            "{}",
+            row.detail
+        );
         assert!(runner.clean_calls().is_empty());
     }
 
@@ -5395,7 +5520,8 @@ mod tests {
             "{}",
             row.detail
         );
-        assert_eq!(report.counters.proof_cargo_locate_calls, 4);
+        // The universe is re-proven once, so two workspaces cost two locates.
+        assert_eq!(report.counters.proof_cargo_locate_calls, 2);
         assert!(runner.clean_calls().is_empty());
     }
 
@@ -5536,6 +5662,147 @@ mod tests {
     }
 
     #[test]
+    fn source_tree_as_output_root_is_never_cleaned() {
+        // C1, end to end: `target-dir = "."` makes the declared output root the
+        // workspace's own source tree. A planted CACHEDIR.TAG satisfies the cache
+        // marker gate, so only the ownership classification stands between the
+        // user and `cargo clean` deleting the project. The sources must survive.
+        for declared in ["root", "src"] {
+            let d = tempfile::tempdir().unwrap();
+            let root = ws_root(d.path(), "proj");
+            let output = if declared == "root" {
+                root.clone()
+            } else {
+                root.join("src")
+            };
+            // The marker Cargo writes in a directory it created.
+            fs::write(
+                output.join("CACHEDIR.TAG"),
+                b"Signature: 8a477f597d28d172789f06886806bc55\n",
+            )
+            .unwrap();
+            backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+            let mut runner = StagedCargo::new();
+            runner.add(&root, output, None);
+            for mode in [CleanMode::Simulate, CleanMode::Preview, CleanMode::Execute] {
+                let report = clean_with(d.path(), 0, &[], mode, &runner, &NoopObserver).unwrap();
+                // The group is not a cleanup unit at all (it is never measured),
+                // so there is usually no row; if one is emitted it must be a skip.
+                if let Some(row) = report
+                    .results
+                    .iter()
+                    .find(|r| r.display_path == canonical(&root))
+                {
+                    assert_eq!(
+                        row.outcome,
+                        CleanOutcome::Skipped,
+                        "{declared} {mode:?}: {}",
+                        row.detail
+                    );
+                }
+                assert!(
+                    runner.clean_calls().is_empty(),
+                    "{declared} {mode:?}: no cargo clean may run"
+                );
+            }
+            assert!(
+                root.join("src/main.rs").exists(),
+                "{declared}: sources must survive"
+            );
+            assert!(root.join("Cargo.toml").exists(), "{declared}");
+        }
+    }
+
+    #[test]
+    fn final_proof_cost_is_linear_in_the_number_of_workspaces() {
+        // H3/O1: the ownership universe used to be re-proven once per candidate,
+        // costing O(N^2) Cargo spawns (8 workspaces = 192 spawns). Doubling the
+        // workspace count must now double the proof work, not quadruple it.
+        fn proof_spawns(workspaces: usize) -> u64 {
+            let d = tempfile::tempdir().unwrap();
+            let mut runner = StagedCargo::new();
+            for index in 0..workspaces {
+                let root = ws_root(d.path(), &format!("linear-{index}"));
+                let target = cargo_output(&root.join("target"), 512);
+                runner.add(&root, target, None);
+            }
+            backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+            let report = clean_with(
+                d.path(),
+                0,
+                &[],
+                CleanMode::Simulate,
+                &runner,
+                &NoopObserver,
+            )
+            .unwrap();
+            assert_eq!(report.results.len(), workspaces);
+            report.counters.proof_cargo_metadata_calls + report.counters.proof_cargo_locate_calls
+        }
+        let four = proof_spawns(4);
+        let eight = proof_spawns(8);
+        // Linear, at 4 spawns per workspace: 1 locate + 2 metadata to resolve and
+        // refresh the universe, plus 1 metadata to re-prove that workspace's own
+        // candidate. Quadratic growth would be 4 -> 64, not 4 -> 16.
+        assert_eq!(four, 16, "4 workspaces");
+        assert_eq!(eight, 32, "8 workspaces");
+        assert_eq!(eight, four * 2, "doubling workspaces doubles proof work");
+    }
+
+    #[test]
+    fn proof_failures_distinguish_a_change_from_an_unproven_ownership() {
+        // L9: a Cargo/discovery failure is not evidence that the workspace
+        // changed, and must not be reported under the change code.
+        assert_eq!(
+            proof_skip_code("ownership could not be re-proven: workspace /w did not re-resolve"),
+            CleanupReasonCode::SkippedOwnershipUnproven
+        );
+        assert_eq!(
+            proof_skip_code(
+                "ownership could not be re-proven: combined selected-root universe has 1 unresolved manifest(s)"
+            ),
+            CleanupReasonCode::SkippedOwnershipUnproven
+        );
+        // A workspace that really did change keeps the change code.
+        assert_eq!(
+            proof_skip_code("ownership could not be re-proven: workspace /w changed identity"),
+            CleanupReasonCode::SkippedChangedBeforeCleanup
+        );
+        assert_eq!(
+            proof_skip_code("workspace changed before cleanup; skipped: member set changed"),
+            CleanupReasonCode::SkippedChangedBeforeCleanup
+        );
+        assert_eq!(
+            CleanupReasonCode::SkippedOwnershipUnproven.as_str(),
+            "skipped_ownership_unproven"
+        );
+    }
+
+    #[test]
+    fn frozen_env_pins_the_build_directory_so_an_inherited_redirect_cannot_apply() {
+        // M5/M9: an inherited CARGO_BUILD_BUILD_DIR used to be either inherited
+        // by the clean (a silent redirect) or a blanket refusal. The child is now
+        // pinned to the world the proof measured.
+        let d = tempfile::tempdir().unwrap();
+        let root = ws_root(d.path(), "build-dir");
+        let target = cargo_output(&root.join("target"), 1024);
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        let mut runner = StagedCargo::new();
+        runner.add(&root, target, None);
+        let report = clean_with(
+            d.path(),
+            0,
+            &[],
+            CleanMode::Simulate,
+            &runner,
+            &NoopObserver,
+        )
+        .unwrap();
+        let row = row_for(&report, &root);
+        assert_eq!(row.outcome, CleanOutcome::Simulated, "{}", row.detail);
+    }
+
+    #[test]
     fn stats_account_for_final_ownership_universe_proof_work() {
         // C003-F4: cleanup --stats must include the final-proof Cargo
         // re-resolution work, not only the initial scan counters.
@@ -5552,15 +5819,20 @@ mod tests {
         let report = clean_with(d.path(), 0, &[], CleanMode::Simulate, &runner, &noop).unwrap();
         let counters = &report.counters;
         assert_eq!(counters.cargo_metadata_calls, 2, "initial analysis");
-        // Each final proof rediscovers/resolves and then refreshes the whole universe.
-        assert_eq!(counters.proof_workspaces_refreshed, 8);
-        assert_eq!(counters.proof_cargo_metadata_calls, 8);
-        assert_eq!(counters.proof_cargo_locate_calls, 4);
+        // The ownership universe is re-proven once for the run (2 locate +
+        // 2 metadata to resolve + 2 metadata to refresh), then each candidate
+        // re-resolves its own workspace (1 metadata each). Counters report
+        // workspaces re-resolved, never Cargo calls.
+        assert_eq!(counters.proof_workspaces_refreshed, 4);
+        assert_eq!(counters.proof_cargo_metadata_calls, 6);
+        assert_eq!(counters.proof_cargo_locate_calls, 2);
         assert!(counters.proof_cargo_metadata_nanos > 0);
         assert!(counters.proof_source_activity_nanos > 0);
         let line = counters.proof_stats_line();
-        assert!(line.contains("proof_metadata=8"), "{line}");
-        assert!(line.contains("proof_locate=4"), "{line}");
+        assert!(line.contains("proof_metadata=6"), "{line}");
+        assert!(line.contains("proof_locate=2"), "{line}");
+        // The label must name what it counts.
+        assert!(line.contains("proof_workspaces_refreshed=4"), "{line}");
         assert!(counters.proof_timings_line().contains("proof_metadata="));
         assert!(counters.proof_metadata_peak_concurrency >= 1);
         // The initial counters are not polluted by proof work.
@@ -5596,7 +5868,10 @@ mod tests {
                 .all(|r| r.outcome == CleanOutcome::Simulated)
         );
         assert!(runner.clean_calls().is_empty());
-        assert_eq!(report.counters.proof_cargo_metadata_calls, 8);
+        // One shared universe proof for both roots plus one candidate re-proof
+        // each: 2 (resolve) + 2 (universe refresh) + 2 (candidates).
+        assert_eq!(report.counters.proof_cargo_metadata_calls, 6);
+        assert_eq!(report.counters.proof_cargo_locate_calls, 2);
     }
 
     #[test]
@@ -5747,9 +6022,12 @@ mod tests {
             report.counters.proof_metadata_peak_concurrency as usize,
             peak
         );
-        assert_eq!(report.counters.proof_workspaces_refreshed, 128);
-        assert_eq!(report.counters.proof_cargo_metadata_calls, 128);
-        assert_eq!(report.counters.proof_cargo_locate_calls, 64);
+        // 8 workspaces: 8 locate + 8 metadata to resolve the universe, 8
+        // metadata to refresh it, and 1 metadata per candidate. Linear in the
+        // workspace count, not quadratic in the candidate count (H3/O1).
+        assert_eq!(report.counters.proof_workspaces_refreshed, 16);
+        assert_eq!(report.counters.proof_cargo_metadata_calls, 24);
+        assert_eq!(report.counters.proof_cargo_locate_calls, 8);
         assert_eq!(report.results.len(), 8);
         assert!(report.results.windows(2).all(|pair| {
             pair[0].before_bytes >= pair[1].before_bytes

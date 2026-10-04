@@ -42,7 +42,8 @@ pub fn resolve(request: ScanRequest, config: &ScanConfig) -> Result<EffectiveSca
         (ScanScope::Explicit(root), DiscoveryFilters::Bypassed)
     } else {
         (
-            ScanScope::Routine(routine_roots(config.learned_root_retention_days)),
+            // `config::load` range-checks retention to 0–3650 days.
+            ScanScope::Routine(routine_roots(config.learned_root_retention_days as u16)),
             DiscoveryFilters::Active {
                 ignore: config.ignore.clone(),
                 unignore: config.unignore.clone(),
@@ -123,7 +124,6 @@ fn routine_roots_from_state(
     (canonical_dedup_roots(roots), warning)
 }
 #[cfg(unix)]
-#[cfg(unix)]
 pub fn global_discovery_policy() -> GlobalDiscoveryPolicy {
     let policy = unix_policy(
         cfg!(target_os = "macos"),
@@ -187,23 +187,56 @@ pub fn global_discovery_policy() -> GlobalDiscoveryPolicy {
     }
 }
 
-fn canonical_dedup_roots(roots: Vec<PathBuf>) -> Vec<PathBuf> {
-    let mut roots: Vec<_> = roots
-        .into_iter()
-        .map(|p| fs::canonicalize(&p).unwrap_or(p))
-        .collect();
-    roots.sort();
-    roots.dedup();
-    let mut collapsed = Vec::new();
-    for root in roots {
-        if !collapsed
-            .iter()
-            .any(|parent: &PathBuf| root.starts_with(parent))
-        {
-            collapsed.push(root);
+/// Lexically normalize an absolute path without touching the filesystem.
+///
+/// Used as the identity of a root that cannot be canonicalized (deleted, or
+/// unreadable). It is only ever compared against other roots, never walked.
+fn lexical_identity(path: &Path) -> PathBuf {
+    if !path.is_absolute() {
+        return path.to_path_buf();
+    }
+    let mut out = PathBuf::from(std::path::MAIN_SEPARATOR_STR);
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
         }
     }
-    collapsed
+    out
+}
+
+fn canonical_dedup_roots(roots: Vec<PathBuf>) -> Vec<PathBuf> {
+    // Dedup and collapse on the best available identity for each root. A root
+    // that cannot be canonicalized previously kept its raw spelling, so it was
+    // neither deduped nor collapsed against a parent root and an overlapping
+    // subtree was scanned twice (L16). Each surviving root keeps its own
+    // spelling, so "scan root is unavailable" still names what the user asked
+    // for.
+    let mut identified: Vec<(PathBuf, PathBuf)> = roots
+        .into_iter()
+        .map(|root| match fs::canonicalize(&root) {
+            // Resolvable roots keep their canonical spelling, as before.
+            Ok(canonical) => (canonical.clone(), canonical),
+            // Unresolvable roots keep their own spelling, but are compared by
+            // their lexical identity so an overlapping parent still collapses.
+            Err(_) => (lexical_identity(&root), root),
+        })
+        .collect();
+    identified.sort();
+    identified.dedup_by(|a, b| a.0 == b.0);
+    let mut collapsed: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for (identity, root) in identified {
+        if !collapsed
+            .iter()
+            .any(|(parent, _): &(PathBuf, PathBuf)| identity.starts_with(parent))
+        {
+            collapsed.push((identity, root));
+        }
+    }
+    collapsed.into_iter().map(|(_, root)| root).collect()
 }
 
 fn managed_rust_prunes() -> Vec<PathBuf> {

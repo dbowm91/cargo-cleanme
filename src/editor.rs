@@ -9,17 +9,20 @@ pub fn resolve_editor() -> Result<(PathBuf, Vec<String>), String> {
         if let Ok(value) = env::var(key)
             && !value.trim().is_empty()
         {
-            let mut words = split_words(&value)?;
+            let mut words = match split_words(&value) {
+                Ok(words) => words,
+                Err(_) => continue,
+            };
             if words.is_empty() {
                 continue;
             }
-            let program = resolve_program(&words.remove(0)).ok_or_else(|| {
-                format!(
-                    "editor executable was not found or is not a file: {}",
-                    value.trim()
-                )
-            })?;
-            return Ok((program, words));
+            // An unusable value in one variable must not hide the next
+            // candidate: fall through to EDITOR, then to the fallback list.
+            let program = words[0].clone();
+            if let Some(resolved) = resolve_program(&program) {
+                words.remove(0);
+                return Ok((resolved, words));
+            }
         }
     }
     for name in ["hx", "vim", "vi", "nano"] {
@@ -27,7 +30,10 @@ pub fn resolve_editor() -> Result<(PathBuf, Vec<String>), String> {
             return Ok((program, Vec::new()));
         }
     }
-    Err("no editor found; set VISUAL or EDITOR, or install hx, vim, vi, or nano".into())
+    Err(
+        "no editor found; set VISUAL or EDITOR to an executable, or install hx, vim, vi, or nano"
+            .into(),
+    )
 }
 
 fn resolve_program(spec: &str) -> Option<PathBuf> {
@@ -96,51 +102,46 @@ fn split_words(spec: &str) -> Result<Vec<String>, String> {
     let mut started = false;
     let mut chars = spec.chars().peekable();
     while let Some(ch) = chars.next() {
-        match quote {
-            Some('\'') => {
-                if ch == '\'' {
-                    quote = None
-                } else {
-                    word.push(ch)
-                }
-            }
-            Some('"') => match ch {
-                '"' => quote = None,
-                '\\' if matches!(chars.peek(), Some('"' | '\\')) => {
+        // Inside a quoted run only the opening quote closes it, and only a
+        // double-quoted run honours backslash escapes.
+        if let Some(open) = quote {
+            match ch {
+                c if c == open => quote = None,
+                '\\' if open == '"' && matches!(chars.peek(), Some('"' | '\\')) => {
                     word.push(chars.next().unwrap())
                 }
-                _ => word.push(ch),
-            },
-            None => match ch {
-                '\'' | '"' => {
-                    quote = Some(ch);
-                    started = true;
-                }
-                '\\' => {
-                    if let Some(next) = chars.next() {
-                        if next.is_whitespace() || next == '\\' || next == '\'' || next == '"' {
-                            word.push(next)
-                        } else {
-                            word.push('\\');
-                            word.push(next)
-                        }
+                c => word.push(c),
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => {
+                quote = Some(ch);
+                started = true;
+            }
+            '\\' => {
+                if let Some(next) = chars.next() {
+                    if next.is_whitespace() || next == '\\' || next == '\'' || next == '"' {
+                        word.push(next)
                     } else {
-                        return Err("VISUAL/EDITOR has an unfinished escape".into());
+                        word.push('\\');
+                        word.push(next)
                     }
-                    started = true;
+                } else {
+                    return Err("VISUAL/EDITOR has an unfinished escape".into());
                 }
-                c if c.is_whitespace() => {
-                    if started {
-                        words.push(std::mem::take(&mut word));
-                        started = false;
-                    }
+                started = true;
+            }
+            c if c.is_whitespace() => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
                 }
-                c => {
-                    word.push(c);
-                    started = true;
-                }
-            },
-            _ => unreachable!(),
+            }
+            c => {
+                word.push(c);
+                started = true;
+            }
         }
     }
     if quote.is_some() {
@@ -155,6 +156,7 @@ fn split_words(spec: &str) -> Result<Vec<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     #[test]
     fn parser_preserves_arguments_and_windows_backslashes() {
         assert_eq!(
@@ -166,5 +168,42 @@ mod tests {
             ["editor", r"C:\Users\Jane\file.toml"]
         );
         assert!(split_words("vim 'unfinished").is_err());
+    }
+
+    #[test]
+    fn unresolvable_visual_falls_through_to_the_next_candidate() {
+        // L19: an unusable VISUAL used to hard-fail the whole command, even when
+        // EDITOR named a perfectly good program.
+        let program = tempfile::tempdir().unwrap();
+        let editor = program.path().join("ed");
+        fs::write(&editor, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&editor, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let dir = program.path();
+        // SAFETY: single-threaded test process; restores the previous values.
+        let previous_visual = std::env::var_os("VISUAL");
+        let previous_editor = std::env::var_os("EDITOR");
+        unsafe {
+            std::env::set_var("VISUAL", "/nonexistent/editor");
+            std::env::set_var("EDITOR", &editor);
+            let (resolved, args) = resolve_editor().unwrap();
+            assert_eq!(resolved, editor, "must fall through to EDITOR");
+            assert!(args.is_empty());
+            std::env::remove_var("VISUAL");
+            let (resolved, _) = resolve_editor().unwrap();
+            assert_eq!(resolved, editor);
+        }
+        match previous_visual {
+            Some(v) => unsafe { std::env::set_var("VISUAL", v) },
+            None => unsafe { std::env::remove_var("VISUAL") },
+        }
+        match previous_editor {
+            Some(v) => unsafe { std::env::set_var("EDITOR", v) },
+            None => unsafe { std::env::remove_var("EDITOR") },
+        }
+        let _ = dir;
     }
 }

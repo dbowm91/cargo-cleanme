@@ -141,6 +141,13 @@ pub fn clean_capabilities_from_version(version: &str) -> CargoCleanCapabilities 
     }
 }
 
+/// True for a filesystem root (`/`, `C:\`), which is never a Cargo artifact
+/// directory.
+fn is_filesystem_root(path: &Path) -> bool {
+    path.parent()
+        .is_none_or(|parent| parent.as_os_str().is_empty())
+}
+
 fn canonical_or_absolute(path: &Path) -> Result<PathBuf, String> {
     if path.exists() {
         fs::canonicalize(path)
@@ -155,7 +162,39 @@ fn canonical_or_absolute(path: &Path) -> Result<PathBuf, String> {
     }
 }
 
-fn output_root(kind: OutputRootKind, logical: PathBuf) -> OutputRoot {
+/// Probe one declared output root.
+///
+/// The path comes from untrusted `cargo metadata`, so a probe can fail for
+/// reasons that are not absence (EACCES, ELOOP, a name too long). Those are
+/// reported instead of being folded into "does not exist", and a root that is a
+/// filesystem root is refused outright: no Cargo project uses `/` as its
+/// artifact directory, and sizing one walks the entire machine.
+fn output_root(
+    kind: OutputRootKind,
+    logical: PathBuf,
+    diagnostics: &mut Vec<ScanDiagnostic>,
+) -> OutputRoot {
+    if is_filesystem_root(&logical) {
+        diagnostics.push(ScanDiagnostic {
+            severity: DiagnosticSeverity::Warning,
+            category: DiagnosticCategory::CandidateUncertain,
+            path: Some(logical.clone()),
+            message: format!(
+                "Cargo declares a filesystem root as its {} directory; it will not be sized or cleaned",
+                match kind {
+                    OutputRootKind::Target => "target",
+                    OutputRootKind::Build => "build",
+                }
+            ),
+        });
+        return OutputRoot {
+            kind,
+            logical_path: logical,
+            physical_path: None,
+            exists: false,
+            is_symlink: false,
+        };
+    }
     match fs::symlink_metadata(&logical) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => OutputRoot {
             kind,
@@ -164,13 +203,29 @@ fn output_root(kind: OutputRootKind, logical: PathBuf) -> OutputRoot {
             exists: false,
             is_symlink: false,
         },
-        Err(_) => OutputRoot {
-            kind,
-            logical_path: logical,
-            physical_path: None,
-            exists: false,
-            is_symlink: false,
-        },
+        Err(e) => {
+            // Unreadable is not absent: say so, and keep the root unusable.
+            diagnostics.push(ScanDiagnostic {
+                severity: DiagnosticSeverity::Warning,
+                category: DiagnosticCategory::CandidateUncertain,
+                path: Some(logical.clone()),
+                message: format!(
+                    "cannot inspect {} output directory {}: {e}",
+                    match kind {
+                        OutputRootKind::Target => "target",
+                        OutputRootKind::Build => "build",
+                    },
+                    logical.display()
+                ),
+            });
+            OutputRoot {
+                kind,
+                logical_path: logical,
+                physical_path: None,
+                exists: false,
+                is_symlink: false,
+            }
+        }
         Ok(meta) if meta.file_type().is_symlink() => OutputRoot {
             kind,
             logical_path: logical,
@@ -204,103 +259,6 @@ fn output_root(kind: OutputRootKind, logical: PathBuf) -> OutputRoot {
     }
 }
 
-fn resolve_one_workspace(
-    manifest: &Path,
-    runner: &dyn CargoRunner,
-    counters: &mut ScanCounters,
-    diagnostics: &mut Vec<ScanDiagnostic>,
-    observer: &dyn ProgressObserver,
-) -> Option<ResolvedWorkspace> {
-    // 1. locate-project
-    let locate_args: Vec<std::ffi::OsString> = ["locate-project", "--workspace", "--manifest-path"]
-        .into_iter()
-        .map(Into::into)
-        .chain(std::iter::once(manifest.as_os_str().to_owned()))
-        .collect();
-    counters.cargo_locate_calls += 1;
-    let locate_start = std::time::Instant::now();
-    let locate_out = match runner.run(manifest.parent().unwrap_or(Path::new("/")), &locate_args) {
-        Ok(o) => {
-            counters.cargo_locate_nanos = counters
-                .cargo_locate_nanos
-                .saturating_add(locate_start.elapsed().as_nanos() as u64);
-            o
-        }
-        Err(e) => {
-            counters.cargo_locate_nanos = counters
-                .cargo_locate_nanos
-                .saturating_add(locate_start.elapsed().as_nanos() as u64);
-            counters.cargo_failures += 1;
-            observer.cargo_failure();
-            diagnostics.push(ScanDiagnostic {
-                severity: DiagnosticSeverity::Warning,
-                category: DiagnosticCategory::CandidateUncertain,
-                path: Some(manifest.to_path_buf()),
-                message: format!("cargo locate-project could not start: {e}"),
-            });
-            return None;
-        }
-    };
-    if !locate_out.success {
-        counters.cargo_failures += 1;
-        observer.cargo_failure();
-        diagnostics.push(ScanDiagnostic {
-            severity: DiagnosticSeverity::Warning,
-            category: DiagnosticCategory::CandidateUncertain,
-            path: Some(manifest.to_path_buf()),
-            message: format!(
-                "cargo locate-project failed: {}",
-                String::from_utf8_lossy(&locate_out.stderr).trim()
-            ),
-        });
-        return None;
-    }
-    let locate: LocateOutput = match serde_json::from_slice(&locate_out.stdout) {
-        Ok(v) => v,
-        Err(e) => {
-            counters.cargo_failures += 1;
-            observer.cargo_failure();
-            diagnostics.push(ScanDiagnostic {
-                severity: DiagnosticSeverity::Warning,
-                category: DiagnosticCategory::CandidateUncertain,
-                path: Some(manifest.to_path_buf()),
-                message: format!("cannot parse cargo locate-project output: {e}"),
-            });
-            return None;
-        }
-    };
-    let root_manifest_path = PathBuf::from(&locate.root);
-    let canonical_root_manifest = match canonical_or_absolute(&root_manifest_path) {
-        Ok(p) => p,
-        Err(msg) => {
-            counters.cargo_failures += 1;
-            observer.cargo_failure();
-            diagnostics.push(ScanDiagnostic {
-                severity: DiagnosticSeverity::Warning,
-                category: DiagnosticCategory::CandidateUncertain,
-                path: Some(manifest.to_path_buf()),
-                message: msg,
-            });
-            return None;
-        }
-    };
-
-    resolve_one_workspace_cached(
-        &root_manifest_path,
-        &canonical_root_manifest,
-        runner,
-        counters,
-        diagnostics,
-        observer,
-        manifest,
-    )
-}
-
-/// Canonicalize a manifest path for member-cache lookup.
-///
-/// Discovered manifests exist; member manifests from Cargo metadata should
-/// also exist. Fall back to the absolute path when canonicalization fails so
-/// cache identity remains deterministic without guessing workspace membership.
 fn canonical_manifest_key(path: &Path) -> PathBuf {
     canonical_or_absolute(path).unwrap_or_else(|_| path.to_path_buf())
 }
@@ -412,8 +370,7 @@ pub fn resolve_workspaces_with_coverage(
         };
         let root_manifest = PathBuf::from(&locate.root);
         let canonical_key = canonical_or_absolute(&root_manifest).unwrap_or(root_manifest.clone());
-        if let Some(cached) = locate_cache.get(&canonical_key) {
-            let _ = cached;
+        if locate_cache.contains_key(&canonical_key) {
             counters.deduped_workspace_hits += 1;
             // Seed this manifest as a known member for future lookups.
             member_to_root.insert(manifest_key, canonical_key);
@@ -640,8 +597,8 @@ fn resolve_one_workspace_cached(
     let build_logical = build_opt
         .map(PathBuf::from)
         .unwrap_or_else(|| target_logical.clone());
-    let target_root = output_root(OutputRootKind::Target, target_logical);
-    let build_root = output_root(OutputRootKind::Build, build_logical);
+    let target_root = output_root(OutputRootKind::Target, target_logical, diagnostics);
+    let build_root = output_root(OutputRootKind::Build, build_logical, diagnostics);
 
     let mut packages: Vec<WorkspacePackage> = raw
         .packages
@@ -671,20 +628,31 @@ fn resolve_one_workspace_cached(
 }
 
 // Silence dead-code for the single-workspace helper used by tests/future reuse.
-#[allow(dead_code)]
-pub fn resolve_single_for_test(
-    manifest: &Path,
-    runner: &dyn CargoRunner,
-    counters: &mut ScanCounters,
-    diagnostics: &mut Vec<ScanDiagnostic>,
-    observer: &dyn ProgressObserver,
-) -> Option<ResolvedWorkspace> {
-    resolve_one_workspace(manifest, runner, counters, diagnostics, observer)
-}
-
 /// Returns true if `maybe_child` equals or is contained in `parent`.
 fn contains(parent: &Path, maybe_child: &Path) -> bool {
     maybe_child == parent || maybe_child.starts_with(parent)
+}
+
+/// Cargo's conventional source directories.
+///
+/// A declared output root with one of these names is a configuration mistake,
+/// not a build artifact: `target-dir = "src"` would make the tool delete the
+/// crate's own sources. This is a name-based guard on top of the structural
+/// `contains` check, and it fails safe - it can only ever *withhold* a cleanup,
+/// never authorize one.
+fn is_conventional_source_dir(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| matches!(name, "src" | "tests" | "benches" | "examples"))
+}
+
+/// Returns true if `maybe_child` is strictly below `parent`.
+///
+/// `contains` is deliberately inclusive because grouping needs it; an *artifact*
+/// must instead sit strictly inside its workspace, so the workspace root itself
+/// can never be an output root.
+fn strictly_below(parent: &Path, maybe_child: &Path) -> bool {
+    maybe_child != parent && maybe_child.starts_with(parent)
 }
 
 /// Compute minimal outermost canonical roots (those not contained in another).
@@ -713,9 +681,15 @@ pub fn outermost(roots: &[PathBuf]) -> Vec<PathBuf> {
 /// Only existing non-symlink canonical roots participate. Symlink roots make
 /// their workspace uncertain. Equal/ancestor-descendant overlaps form connected
 /// groups. Classification:
-/// - Uncertain: symlink, unresolvable, or missing physical identity.
-/// - Shared: multiple workspaces own overlapping physical output.
-/// - PrivateBounded: single owner, output inside workspace root.
+/// - Uncertain: symlink, unresolvable, or missing physical identity, or an
+///   output root that is (or contains) the workspace's own source tree, or one
+///   of Cargo's conventional source directories (`src`, `tests`, `benches`,
+///   `examples`).
+/// - Shared: multiple workspaces own overlapping physical output, or exclusivity
+///   cannot be proven because some root in the universe has no graph node.
+/// - PrivateBounded: single owner, every covering root strictly below the
+///   workspace root, disjoint from every member source root, and every root in
+///   the universe represented in the graph.
 /// - ExternalUnproven: single owner, output outside workspace root.
 pub fn build_groups(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup> {
     // Collect (workspace_idx, physical_path) for existing non-symlink roots.
@@ -776,6 +750,11 @@ pub fn build_groups(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup> {
         groups_map.entry(r).or_default().push(i);
     }
     let mut groups = Vec::new();
+    // A root that contributes no node (symlink, no physical identity) is
+    // invisible to the union-find below, yet it can still point into any group.
+    // Exclusivity is therefore only provable while every root in the universe
+    // is represented; otherwise no group may claim `PrivateBounded`.
+    let exclusivity_unproven = !uncertain_ws.is_empty();
     for (_, idxs) in groups_map {
         let mut physicals: Vec<PathBuf> = idxs.iter().map(|i| nodes[*i].physical.clone()).collect();
         physicals.sort();
@@ -790,21 +769,29 @@ pub fn build_groups(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup> {
             .cloned()
             .unwrap_or_else(|| physicals[0].clone());
         // Classification.
+        let mut source_overlap = false;
         let ownership = if owners.len() > 1 {
             OutputOwnershipClass::Shared
         } else {
             let ws = &workspaces[owners[0]];
-            // If workspace had any uncertain symlink root, mark Uncertain
-            // only if that symlink overlaps this group? Conservative: if the
-            // workspace is uncertain anywhere, groups it owns are Uncertain
-            // when they cannot be proven exclusive. For M005A we mark the
-            // group Uncertain if its sole owner is in uncertain_ws and the
-            // group physicals include no proven exclusive root? Simplify:
-            // if sole owner uncertain, mark Uncertain.
-            if uncertain_ws.contains(&owners[0]) {
+            // A covering root that is the source tree itself, or an ancestor of
+            // a member source root, is not an artifact: cleaning it would
+            // delete the project. `contains` is inclusive, so equality counts.
+            source_overlap = covering.iter().any(|c| {
+                ws.members.iter().any(|m| contains(c, &m.source_root))
+                    || is_conventional_source_dir(c)
+            });
+            let inside_root = covering.iter().all(|c| strictly_below(&ws.root, c));
+            if uncertain_ws.contains(&owners[0]) || source_overlap {
+                // The owning workspace is uncertain, or its own source tree
+                // would be deleted. Never a private artifact.
                 OutputOwnershipClass::Uncertain
-            } else if covering.iter().all(|c| contains(&ws.root, c)) {
+            } else if inside_root && !exclusivity_unproven {
                 OutputOwnershipClass::PrivateBounded
+            } else if inside_root {
+                // Inside the workspace root but not provably exclusive: it may
+                // be the output of a workspace whose roots are unrepresentable.
+                OutputOwnershipClass::Shared
             } else {
                 OutputOwnershipClass::ExternalUnproven
             }
@@ -815,6 +802,7 @@ pub fn build_groups(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup> {
             display,
             owners,
             ownership,
+            source_overlap,
         });
     }
     // Deterministic order by display path.
@@ -829,6 +817,10 @@ pub struct RawGroup {
     pub display: PathBuf,
     pub owners: Vec<usize>,
     pub ownership: OutputOwnershipClass,
+    /// A covering root is (or contains) a workspace member source root, so this
+    /// group is source code rather than an artifact. Surfaced as a diagnostic:
+    /// the group is dropped from the inventory, so silence would be misleading.
+    pub source_overlap: bool,
 }
 
 /// Cheap bounded artifact-presence check: true if the directory contains at
@@ -981,7 +973,7 @@ pub fn analyze_groups_detailed(
         let activity = workspace_source_activity(ws, &all_outputs, clock_start, clock_cutoff);
         counters.source_activity_nanos = counters
             .source_activity_nanos
-            .saturating_add(source_start.elapsed().as_nanos() as u64);
+            .saturating_add(crate::domain::elapsed_nanos(source_start.elapsed()));
         match activity {
             Ok(true) => {
                 ws_source_recent.insert(wi, true);
@@ -1035,6 +1027,20 @@ pub fn analyze_groups_detailed(
         if g.ownership == OutputOwnershipClass::Uncertain {
             counters.uncertain_skipped += 1;
             pre_skip[gi] = Some(GroupSkipReason::UncertainOwnership);
+            if g.source_overlap {
+                // Never silently drop a project whose output root is its own
+                // source tree: the user configured `target-dir` that way and
+                // needs to know why nothing is reported or cleaned.
+                diagnostics.push(ScanDiagnostic {
+                    severity: DiagnosticSeverity::Warning,
+                    category: DiagnosticCategory::CandidateUncertain,
+                    path: Some(g.display.clone()),
+                    message: format!(
+                        "output root {} is the workspace source tree, not a build artifact; it is not sized and not eligible for cleanup",
+                        g.display.display()
+                    ),
+                });
+            }
             continue;
         }
         for c in &g.covering {
@@ -1056,7 +1062,7 @@ pub fn analyze_groups_detailed(
     };
     counters.output_sizing_nanos = counters
         .output_sizing_nanos
-        .saturating_add(sizing_start.elapsed().as_nanos() as u64);
+        .saturating_add(crate::domain::elapsed_nanos(sizing_start.elapsed()));
     let mut bytes_by_survivor: HashMap<usize, traverse::TargetStats> = HashMap::new();
     for (i, stats) in measured {
         bytes_by_survivor.insert(i, stats);
@@ -1156,6 +1162,9 @@ pub fn analyze_groups_detailed(
                 SizeMetric::Apparent
             }
         };
+        // `recency` is deliberately not consulted here: the inactivity window is
+        // applied by the caller through `clock_cutoff`. Accepting a duration and
+        // ignoring it invited the belief that the policy lived here.
         let _ = recency;
         let physical = PhysicalOutputGroup {
             covering_roots: g.covering.clone(),
@@ -2197,6 +2206,279 @@ mod tests {
         let groups = build_groups(&[ws, ws2]);
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].ownership, OutputOwnershipClass::Shared);
+    }
+
+    /// Build a workspace whose declared target directory is `physical`, with an
+    /// explicit member list, so ownership classification can be exercised
+    /// directly.
+    fn workspace_with_output(
+        root: &Path,
+        members: Vec<PathBuf>,
+        target: Option<PathBuf>,
+        symlink_target: bool,
+    ) -> ResolvedWorkspace {
+        let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        // Production canonicalizes member source roots; mirroring that here
+        // keeps the classification comparisons meaningful.
+        let members: Vec<PathBuf> = members
+            .into_iter()
+            .map(|m| std::fs::canonicalize(&m).unwrap_or(m))
+            .collect();
+        let (physical, exists, is_symlink) = match target {
+            Some(p) => (
+                Some(std::fs::canonicalize(&p).unwrap_or(p)),
+                true,
+                symlink_target,
+            ),
+            // An existing root with no physical identity: a symlink, or a
+            // regular file where a directory is expected.
+            None if symlink_target => (None, true, true),
+            None => (None, false, false),
+        };
+        ResolvedWorkspace {
+            id: WorkspaceId(canonical_root.clone()),
+            root: canonical_root,
+            root_manifest: root.join("Cargo.toml"),
+            members: members
+                .into_iter()
+                .map(|m| WorkspaceMember {
+                    manifest_path: m.join("Cargo.toml"),
+                    source_root: m,
+                })
+                .collect(),
+            packages: vec![],
+            output: OutputSet {
+                target: OutputRoot {
+                    kind: OutputRootKind::Target,
+                    logical_path: root.join("target"),
+                    physical_path: physical.clone(),
+                    exists,
+                    is_symlink,
+                },
+                build: OutputRoot {
+                    kind: OutputRootKind::Build,
+                    logical_path: root.join("target"),
+                    physical_path: physical,
+                    exists,
+                    is_symlink,
+                },
+            },
+            capability: CargoCapabilities {
+                build_dir: CargoBuildDirCapability::Equal,
+                metadata_had_build_directory: true,
+                env_build_dir_set: false,
+            },
+        }
+    }
+
+    #[test]
+    fn output_root_equal_to_the_source_tree_is_never_private() {
+        // C1: `target-dir = "."` (or `"src"`) makes the declared output root the
+        // source tree itself. Cleaning it would delete the project, so it must
+        // never be classified as a private artifact.
+        for declared in [".", "src"] {
+            let d = tempfile::tempdir().unwrap();
+            let ws_root = d.path().join("ws");
+            std::fs::create_dir_all(ws_root.join("src")).unwrap();
+            std::fs::write(ws_root.join("src/main.rs"), b"fn main(){}").unwrap();
+            let output = if declared == "." {
+                ws_root.clone()
+            } else {
+                ws_root.join(declared)
+            };
+            let ws = workspace_with_output(&ws_root, vec![ws_root.clone()], Some(output), false);
+            let groups = build_groups(std::slice::from_ref(&ws));
+            assert_eq!(groups.len(), 1, "{declared}");
+            assert_eq!(
+                groups[0].ownership,
+                OutputOwnershipClass::Uncertain,
+                "an output root that is the source tree must not be cleanable: {declared}"
+            );
+            assert!(groups[0].source_overlap, "{declared}");
+            // And it is never authorized for cleanup.
+            assert!(
+                !crate::cleanup::covering_is_authorized(
+                    groups[0].ownership,
+                    &groups[0].covering,
+                    &ws_root,
+                    &[],
+                )
+                .unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn output_root_containing_a_member_source_root_is_never_private() {
+        // A workspace whose members live in subdirectories: an output root that
+        // is an ancestor of a member covers that member's source.
+        let d = tempfile::tempdir().unwrap();
+        let ws_root = d.path().join("ws");
+        let member = ws_root.join("crates/inner");
+        std::fs::create_dir_all(&member).unwrap();
+        let output = ws_root.join("crates");
+        let ws = workspace_with_output(
+            &ws_root,
+            vec![ws_root.clone(), member.clone()],
+            Some(output),
+            false,
+        );
+        let groups = build_groups(std::slice::from_ref(&ws));
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].ownership, OutputOwnershipClass::Uncertain);
+        assert!(groups[0].source_overlap);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn another_workspaces_unrepresentable_root_blocks_a_private_claim() {
+        // H4: workspace B's target is a symlink into A's target. B contributes
+        // no node to the physical graph, so A's group must not claim to be
+        // private while B is in the universe.
+        use std::os::unix::fs::symlink;
+        let d = tempfile::tempdir().unwrap();
+        let root_a = d.path().join("a");
+        let root_b = d.path().join("b");
+        let target_a = root_a.join("target");
+        std::fs::create_dir_all(&target_a).unwrap();
+        std::fs::create_dir_all(&root_b).unwrap();
+        symlink(&target_a, root_b.join("target")).unwrap();
+
+        let a = workspace_with_output(&root_a, vec![root_a.clone()], Some(target_a), false);
+        let b = workspace_with_output(&root_b, vec![root_b.clone()], None, true);
+        let groups = build_groups(&[a.clone(), b]);
+        assert_eq!(groups.len(), 1, "B contributes no graph node");
+        assert_ne!(
+            groups[0].ownership,
+            OutputOwnershipClass::PrivateBounded,
+            "exclusivity is unprovable while another root is unrepresentable"
+        );
+        // Without B in the universe the claim is provable again.
+        let alone = build_groups(std::slice::from_ref(&a));
+        assert_eq!(alone[0].ownership, OutputOwnershipClass::PrivateBounded);
+    }
+
+    #[test]
+    fn source_tree_output_is_reported_as_a_diagnostic_not_silently_dropped() {
+        // The C1 group is dropped from the inventory, so the user has to be told
+        // why their project is missing.
+        let d = tempfile::tempdir().unwrap();
+        let ws_root = d.path().join("ws");
+        std::fs::create_dir_all(ws_root.join("target/inner")).unwrap();
+        let ws = workspace_with_output(
+            &ws_root,
+            vec![ws_root.clone()],
+            Some(ws_root.clone()),
+            false,
+        );
+        let groups = build_groups(std::slice::from_ref(&ws));
+        let mut counters = ScanCounters::default();
+        let mut diagnostics = Vec::new();
+        let start = SystemTime::now();
+        analyze_groups(
+            std::slice::from_ref(&ws),
+            groups,
+            start,
+            start,
+            std::time::Duration::from_secs(300),
+            &mut counters,
+            &mut diagnostics,
+            &crate::progress::NoopObserver,
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("is the workspace source tree")),
+            "{diagnostics:?}"
+        );
+        assert!(counters.uncertain_skipped >= 1);
+    }
+
+    #[test]
+    fn nested_build_inside_target_is_counted_once() {
+        // M3: with `build-dir` nested inside `target-dir` both physicals land in
+        // one group whose covering root is the parent, so the reported size is
+        // the parent's size - never the sum of parent and child.
+        let d = tempfile::tempdir().unwrap();
+        let ws_root = d.path().join("ws");
+        let target = ws_root.join("target");
+        let build = target.join("build");
+        std::fs::create_dir_all(&build).unwrap();
+        std::fs::write(build.join("artifact"), vec![0u8; 4096]).unwrap();
+        let old = SystemTime::now() - std::time::Duration::from_secs(7200);
+        let artifact = build.join("artifact");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&artifact)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        for directory in [&build, &target, &ws_root] {
+            std::fs::File::open(directory)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        }
+        let canonical_target = std::fs::canonicalize(&target).unwrap();
+        let canonical_build = std::fs::canonicalize(&build).unwrap();
+        let ws = ResolvedWorkspace {
+            id: WorkspaceId(ws_root.clone()),
+            root: std::fs::canonicalize(&ws_root).unwrap(),
+            root_manifest: ws_root.join("Cargo.toml"),
+            members: vec![WorkspaceMember {
+                manifest_path: ws_root.join("Cargo.toml"),
+                source_root: ws_root.clone(),
+            }],
+            packages: vec![],
+            output: OutputSet {
+                target: OutputRoot {
+                    kind: OutputRootKind::Target,
+                    logical_path: target.clone(),
+                    physical_path: Some(canonical_target),
+                    exists: true,
+                    is_symlink: false,
+                },
+                build: OutputRoot {
+                    kind: OutputRootKind::Build,
+                    logical_path: build,
+                    physical_path: Some(canonical_build),
+                    exists: true,
+                    is_symlink: false,
+                },
+            },
+            capability: CargoCapabilities {
+                build_dir: CargoBuildDirCapability::Distinct,
+                metadata_had_build_directory: true,
+                env_build_dir_set: false,
+            },
+        };
+        let groups = build_groups(std::slice::from_ref(&ws));
+        assert_eq!(groups.len(), 1, "nested roots form one group");
+        assert_eq!(
+            groups[0].covering,
+            vec![std::fs::canonicalize(&target).unwrap()]
+        );
+        assert_eq!(groups[0].physicals.len(), 2);
+        let mut counters = ScanCounters::default();
+        let mut diagnostics = Vec::new();
+        let start = SystemTime::now() - std::time::Duration::from_secs(7200);
+        let measured = analyze_groups(
+            std::slice::from_ref(&ws),
+            groups,
+            start,
+            start,
+            std::time::Duration::from_secs(300),
+            &mut counters,
+            &mut diagnostics,
+            &crate::progress::NoopObserver,
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(measured.len(), 1);
+        let alone = traverse::measure_single_target(&std::fs::canonicalize(&target).unwrap());
+        assert_eq!(
+            measured[0].bytes, alone.bytes,
+            "the union is measured once, not as parent + child"
+        );
     }
 
     #[test]

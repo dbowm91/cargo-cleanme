@@ -481,11 +481,16 @@ impl ProgressObserver for IndicatifRenderer {
         }
         self.maybe_draw();
     }
-    fn units_total(&self, _phase: ScanPhase, total: u64) {
+    fn units_total(&self, phase: ScanPhase, total: u64) {
+        // Re-scope on the phase carried by the event, not only on an explicit
+        // `phase()` call: scan-analysis counts must never leak into cleanup
+        // counts even if a caller forgets to announce the transition (M8).
+        self.reset_totals_for_phase(phase);
         self.apply_total(total);
         self.maybe_draw();
     }
-    fn unit_completed(&self, _phase: ScanPhase) {
+    fn unit_completed(&self, phase: ScanPhase) {
+        self.reset_totals_for_phase(phase);
         self.apply_completed();
         self.maybe_draw();
     }
@@ -624,15 +629,34 @@ mod tests {
         );
         r.units_total(ScanPhase::Analysis, 7);
         assert_eq!(r.determinate_total_value(), 7);
+        // Re-announcing the phase already in effect is a no-op, not a reset.
         r.phase(ScanPhase::Analysis);
-        // Phase change re-scopes totals so old counts cannot leak.
-        assert_eq!(r.determinate_total_value(), 0);
+        assert_eq!(r.determinate_total_value(), 7);
         r.units_total(ScanPhase::Analysis, 7);
         // Determinate progress advances only via `unit_completed`, never via
         // legacy `group_measured` / `active_skipped` bookkeeping.
         r.group_measured(100);
         assert_eq!(r.determinate_done_value(), 0);
         r.unit_completed(ScanPhase::Analysis);
+        assert_eq!(r.determinate_done_value(), 1);
+    }
+
+    #[test]
+    fn unit_events_rescope_totals_on_a_phase_change_without_an_explicit_phase_call() {
+        // M8: the renderer honours the phase carried by the event itself, so
+        // cleanup totals can never inherit analysis counts even if a caller
+        // forgets to announce the transition.
+        let r = IndicatifRenderer::new(true);
+        r.units_total(ScanPhase::Analysis, 5);
+        r.unit_completed(ScanPhase::Analysis);
+        r.unit_completed(ScanPhase::Analysis);
+        assert_eq!(r.determinate_total_value(), 5);
+        assert_eq!(r.determinate_done_value(), 2);
+        // No `phase()` call: the first cleanup event re-scopes on its own.
+        r.units_total(ScanPhase::CleanupExecute, 2);
+        assert_eq!(r.determinate_total_value(), 2);
+        assert_eq!(r.determinate_done_value(), 0);
+        r.unit_completed(ScanPhase::CleanupExecute);
         assert_eq!(r.determinate_done_value(), 1);
     }
 

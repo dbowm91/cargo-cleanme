@@ -47,24 +47,22 @@ pub enum SizeMetric {
     Allocated,
     Apparent,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ArtifactAnalysis {
-    pub target_path: PathBuf,
-    pub bytes: u64,
-    pub metric: SizeMetric,
-    pub newest_mtime: Option<SystemTime>,
-    pub artifact_entries: u64,
-}
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct EligibleProject {
-    pub project_root: PathBuf,
-    pub artifact: ArtifactAnalysis,
-}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DiagnosticSeverity {
     Info,
     Warning,
     Error,
+}
+
+impl DiagnosticSeverity {
+    /// Stable machine label; the JSON contract must not depend on `Debug`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Warning => "warning",
+            Self::Error => "error",
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DiagnosticCategory {
@@ -84,7 +82,6 @@ pub struct ScanDiagnostic {
 }
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ScanReport {
-    pub eligible: Vec<EligibleProject>,
     pub groups: Vec<EligibleOutputGroup>,
     pub diagnostics: Vec<ScanDiagnostic>,
     pub discovered: u64,
@@ -259,7 +256,6 @@ pub struct ScanCounters {
     pub groups_measured: u64,
     pub bytes_measured: u64,
     pub reportable_groups: u64,
-    pub pruned_no_cargo: u64,
     pub deduped_workspace_hits: u64,
     pub missing_output_skipped: u64,
     pub uncertain_skipped: u64,
@@ -280,11 +276,20 @@ pub struct ScanCounters {
     pub proof_output_sizing_nanos: u64,
 }
 
+/// Elapsed time as a counter value, saturating instead of truncating (L20).
+///
+/// A `Duration` cannot actually reach u64 nanoseconds (~584 years), so this is
+/// defensive; a truncating cast on a user-visible counter is still a
+/// silent-wrong-number bug waiting for a slow machine.
+pub fn elapsed_nanos(elapsed: std::time::Duration) -> u64 {
+    u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
+}
+
 impl ScanCounters {
     /// One-line semantic counters for `--stats` stderr output.
     pub fn stats_line(&self) -> String {
         format!(
-            "visited_entries={} pruned_directories={} platform_prunes={} cargo_home_prunes={} rustup_prunes={} target_vcs_prunes={} user_ignore_prunes={} manifests={} workspaces={} locate={} metadata={} failures={} unresolved_ownership={} empty_skipped={} active_skipped={} groups_measured={} bytes={} reportable={} deduped_hits={} uncertain_skipped={}",
+            "visited_directories={} pruned_directories={} platform_prunes={} cargo_home_prunes={} rustup_prunes={} target_vcs_prunes={} user_ignore_prunes={} manifests={} workspaces={} locate={} metadata={} failures={} unresolved_ownership={} empty_skipped={} active_skipped={} groups_measured={} bytes={} reportable={} deduped_hits={} uncertain_skipped={}",
             self.directories_visited,
             self.directories_pruned,
             self.platform_system_prunes,
@@ -326,6 +331,11 @@ impl ScanCounters {
     /// `--stats` must account for. It is merged into separate `proof_*` fields
     /// (never into the initial-scan counters) so the extra bounded Cargo cost
     /// at the destructive boundary stays visible.
+    ///
+    /// `proof_workspaces_refreshed` counts workspace re-resolutions, never
+    /// Cargo subprocess calls: the universe is refreshed once per run and each
+    /// candidate re-resolves its own workspace, so the number is a count of
+    /// workspaces, not of processes.
     pub fn merge_proof(&mut self, proof: &ScanCounters) {
         self.proof_cargo_locate_calls = self
             .proof_cargo_locate_calls
@@ -350,7 +360,7 @@ impl ScanCounters {
     /// Final-proof counter line for `cleanup --stats` stderr output.
     pub fn proof_stats_line(&self) -> String {
         format!(
-            "proof_universes_refreshed={} proof_locate={} proof_metadata={} proof_metadata_peak={}",
+            "proof_workspaces_refreshed={} proof_locate={} proof_metadata={} proof_metadata_peak={}",
             self.proof_workspaces_refreshed,
             self.proof_cargo_locate_calls,
             self.proof_cargo_metadata_calls,

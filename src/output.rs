@@ -90,7 +90,7 @@ pub struct CleanupUnitV1 {
     pub observed_decrease_bytes: Option<u64>,
     pub detail: String,
 }
-#[derive(Serialize)]
+#[derive(Default, Serialize)]
 pub struct CleanupSummaryV1 {
     pub previewed: usize,
     pub simulated: usize,
@@ -121,7 +121,7 @@ pub fn scan(report: &ScanReport, scope: impl Into<String>) -> EnvelopeV1<ScanV1>
         .diagnostics
         .iter()
         .map(|d| DiagnosticV1 {
-            severity: format!("{:?}", d.severity).to_lowercase(),
+            severity: d.severity.as_str().into(),
             category: match d.category {
                 crate::domain::DiagnosticCategory::PermissionDenied => "permission_denied",
                 crate::domain::DiagnosticCategory::Vanished => "vanished",
@@ -169,7 +169,7 @@ pub fn cleanup(
             output_roots: r.output_roots.iter().map(|p| path(p)).collect(),
             ownership: r.ownership.label(),
             policy_disposition: r.policy_disposition.map(policy_code),
-            outcome: format!("{:?}", r.outcome).to_lowercase(),
+            outcome: r.outcome.as_str().into(),
             reason_code: r.reason_code.as_str().into(),
             before_bytes: if report.selector.is_some() {
                 None
@@ -187,41 +187,27 @@ pub fn cleanup(
             detail: r.detail.clone(),
         })
         .collect::<Vec<_>>();
-    let summary = CleanupSummaryV1 {
-        previewed: report
-            .results
-            .iter()
-            .filter(|r| r.outcome == CleanOutcome::Previewed)
-            .count(),
-        simulated: report
-            .results
-            .iter()
-            .filter(|r| r.outcome == CleanOutcome::Simulated)
-            .count(),
-        cleaned: report
-            .results
-            .iter()
-            .filter(|r| r.outcome == CleanOutcome::Cleaned)
-            .count(),
-        skipped: report
-            .results
-            .iter()
-            .filter(|r| r.outcome == CleanOutcome::Skipped)
-            .count(),
-        failed: report
-            .results
-            .iter()
-            .filter(|r| r.outcome == CleanOutcome::Failed)
-            .count(),
+    let mut summary = CleanupSummaryV1 {
         diagnostics: report.diagnostics,
+        ..Default::default()
     };
-    let mode = format!("{:?}", report.mode).to_lowercase();
+    for result in &report.results {
+        let slot = match result.outcome {
+            CleanOutcome::Previewed => &mut summary.previewed,
+            CleanOutcome::Simulated => &mut summary.simulated,
+            CleanOutcome::Cleaned => &mut summary.cleaned,
+            CleanOutcome::Skipped => &mut summary.skipped,
+            CleanOutcome::Failed => &mut summary.failed,
+        };
+        *slot += 1;
+    }
+    let mode = report.mode.as_str();
     EnvelopeV1 {
         schema_version: 1,
         cargo_cleanme_version: env!("CARGO_PKG_VERSION"),
         operation: "clean",
         scope: scope.into(),
-        mode: Some(mode),
+        mode: Some(mode.into()),
         result: CleanupV1 {
             discovered_manifests: report.discovered_manifests,
             resolved_workspaces: report.resolved_workspaces,

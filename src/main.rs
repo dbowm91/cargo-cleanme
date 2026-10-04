@@ -46,6 +46,14 @@ fn run() -> Result<i32, AppError> {
                         );
                         return Ok(status.code().unwrap_or(1));
                     }
+                    if !path.exists() {
+                        // `load` treats an absent file as "all defaults", so a
+                        // deleted config would silently reset every policy.
+                        return Err(AppError::Config(format!(
+                            "editor removed the config file {}; refusing to treat that as an edit to defaults",
+                            path.display()
+                        )));
+                    }
                     config::load(&path).map_err(|e| {
                         AppError::Config(format!(
                             "edited config {} is invalid: {e}",
@@ -266,7 +274,7 @@ fn run_scan(
     emit_output: bool,
 ) -> Result<i32, AppError> {
     use cargo_cleanme::{domain, progress};
-    use std::time::{Duration, SystemTime};
+    use std::time::SystemTime;
 
     let explicit_scope = root.is_some();
     let scan_start = SystemTime::now();
@@ -298,7 +306,7 @@ fn run_scan(
     let mut counters = discovered.counters.clone();
     counters.discovery_nanos = counters
         .discovery_nanos
-        .saturating_add(discovery_elapsed.as_nanos() as u64);
+        .saturating_add(cargo_cleanme::domain::elapsed_nanos(discovery_elapsed));
     let uncertainty: Vec<std::path::PathBuf> = discovered
         .diagnostics
         .iter()
@@ -365,7 +373,7 @@ fn run_scan(
                 &uncertainty,
                 complete,
                 now,
-                c.scan.learned_root_retention_days,
+                c.scan.learned_root_retention_days as u16,
                 directories::BaseDirs::new()
                     .map(|b| b.home_dir().to_path_buf())
                     .as_deref(),
@@ -444,7 +452,6 @@ fn run_scan(
         });
     // Deterministic final report: every group, deduplicated total, stable order.
     let mut report = domain::ScanReport {
-        eligible: Vec::new(),
         groups: physical
             .into_iter()
             .map(|g| domain::EligibleOutputGroup {
@@ -461,7 +468,7 @@ fn run_scan(
         diagnostics,
         discovered: manifests.len() as u64,
         visited_entries: discovered.visited_entries,
-        counters: counters.clone(),
+        counters,
     };
 
     observer.phase(progress::ScanPhase::Reporting);
@@ -493,6 +500,24 @@ fn run_scan(
             "{} filesystem diagnostics; rerun with a bounded root if needed",
             report.diagnostics.len()
         );
+        // Say what they were: a count alone cannot explain a project that is
+        // deliberately not reported, for example one whose declared output root
+        // turns out to be its own source tree.
+        for diagnostic in report.diagnostics.iter().take(10) {
+            eprintln!(
+                "  {}: {}{}",
+                format!("{:?}", diagnostic.severity).to_lowercase(),
+                diagnostic.message,
+                diagnostic
+                    .path
+                    .as_ref()
+                    .map(|p| format!(" ({})", p.display()))
+                    .unwrap_or_default()
+            );
+        }
+        if report.diagnostics.len() > 10 {
+            eprintln!("  … {} more", report.diagnostics.len() - 10);
+        }
     }
     // C002 §7.8: detailed counters/timings are opt-in via `--stats` on
     // stderr (never stdout). Default scan emits no debug counter line.
@@ -501,8 +526,8 @@ fn run_scan(
         let elapsed = wall_start.elapsed();
         eprintln!(
             "scan stats: {} {} elapsed={:.2}s",
-            counters.stats_line(),
-            counters.timings_line(),
+            report.counters.stats_line(),
+            report.counters.timings_line(),
             elapsed.as_secs_f64(),
         );
         if !discovered.top_level_entries.is_empty() {
@@ -514,7 +539,6 @@ fn run_scan(
                 .join(" ");
             eprintln!("scan top-level entries: {attribution}");
         }
-        let _ = Duration::from_secs(0);
     }
     if full_incomplete || (full && !state_reconciled) {
         return Ok(1);

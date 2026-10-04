@@ -46,7 +46,7 @@ pub struct ScanConfig {
     #[serde(default)]
     pub unignore: Vec<PathBuf>,
     #[serde(default = "default_retention")]
-    pub learned_root_retention_days: u16,
+    pub learned_root_retention_days: u32,
 }
 impl Default for ScanConfig {
     fn default() -> Self {
@@ -62,7 +62,7 @@ impl Default for ScanConfig {
 fn default_recency() -> u64 {
     300
 }
-fn default_retention() -> u16 {
+fn default_retention() -> u32 {
     30
 }
 #[derive(Clone, Debug)]
@@ -86,7 +86,7 @@ impl ConfigPathResolver {
     }
 }
 pub fn load(path: &Path) -> Result<Config, AppError> {
-    let c = if path.exists() {
+    let mut c = if path.exists() {
         let s = fs::read_to_string(path)
             .map_err(|e| AppError::Config(format!("cannot read {}: {e}", path.display())))?;
         toml::from_str(&s)
@@ -94,6 +94,11 @@ pub fn load(path: &Path) -> Result<Config, AppError> {
     } else {
         Config::default()
     };
+    if c.scan.recency_seconds == 0 {
+        return Err(AppError::Config(
+            "scan.recency_seconds must be greater than 0; 0 would disable the inactivity guard that keeps recently used artifacts out of cleanup".into(),
+        ));
+    }
     if c.scan.recency_seconds > u64::MAX / 1_000_000_000 {
         return Err(AppError::Config("scan.recency_seconds is too large".into()));
     }
@@ -125,6 +130,8 @@ pub fn load(path: &Path) -> Result<Config, AppError> {
             "cleanup.policy.min_inactive_seconds is too large".into(),
         ));
     }
+    // Every pattern the scanner and the cleaner compile is validated here, so
+    // `config edit` fails exactly as loudly as the next scan/clean would.
     for pattern in c
         .cleanup
         .policy
@@ -136,7 +143,74 @@ pub fn load(path: &Path) -> Result<Config, AppError> {
             AppError::Config(format!("invalid cleanup policy glob {pattern:?}: {e}"))
         })?;
     }
+    for pattern in &c.scan.ignore {
+        globset::Glob::new(pattern)
+            .map_err(|e| AppError::Config(format!("invalid scan.ignore glob {pattern:?}: {e}")))?;
+    }
+    // Patterns are matched against canonicalized paths, so a pattern spelled the
+    // way the user's own shell shows it (`/tmp/...` where `/tmp` is a symlink)
+    // would silently match nothing. Canonicalize each pattern's literal prefix.
+    c.scan.ignore = c
+        .scan
+        .ignore
+        .iter()
+        .map(|p| canonical_pattern_prefix(p))
+        .collect();
+    c.scan.unignore = c
+        .scan
+        .unignore
+        .iter()
+        .map(|p| PathBuf::from(canonical_pattern_prefix(&p.to_string_lossy())))
+        .collect();
+    c.cleanup.policy.include = c
+        .cleanup
+        .policy
+        .include
+        .iter()
+        .map(|p| canonical_pattern_prefix(p))
+        .collect();
+    c.cleanup.policy.exclude = c
+        .cleanup
+        .policy
+        .exclude
+        .iter()
+        .map(|p| canonical_pattern_prefix(p))
+        .collect();
     Ok(c)
+}
+
+/// Rewrite a glob pattern's glob-free prefix to its canonical spelling.
+///
+/// Only the leading literal run can be canonicalized, so the suffix is copied
+/// verbatim. The pattern is left untouched when the prefix is relative (it could
+/// not be resolved against anything meaningful), when it ends in an escape
+/// (the split would land inside an escape sequence), or when it does not
+/// resolve — a pattern naming a path that does not exist still means exactly
+/// what it says: it matches nothing.
+fn canonical_pattern_prefix(pattern: &str) -> String {
+    let cut = pattern.find(['*', '?', '[', '{']).unwrap_or(pattern.len());
+    let (prefix, tail) = pattern.split_at(cut);
+    if prefix.ends_with('\\') {
+        return pattern.to_owned();
+    }
+    // Trailing separators are structural (`…/x/*` means "children of x"), so
+    // they are preserved around the canonicalized directory name.
+    let bare = prefix.trim_end_matches(['/', '\\']);
+    if bare.is_empty() || !Path::new(bare).is_absolute() {
+        return pattern.to_owned();
+    }
+    let separators = &prefix[bare.len()..];
+    match fs::canonicalize(bare) {
+        Ok(canonical) => {
+            let canonical = canonical.to_string_lossy();
+            if canonical == bare {
+                pattern.to_owned()
+            } else {
+                format!("{canonical}{separators}{tail}")
+            }
+        }
+        Err(_) => pattern.to_owned(),
+    }
 }
 
 pub fn load_or_create(path: &Path) -> Result<Config, AppError> {
@@ -234,6 +308,118 @@ pub fn show(config: &Config) -> Result<String, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn patterns_are_canonicalized_so_exclusions_actually_apply() {
+        // H1/M2/L22: patterns are matched against canonicalized paths, so a
+        // pattern spelled the way the shell shows the path matched nothing - an
+        // exclusion that silently excluded nothing.
+        use std::os::unix::fs::symlink;
+        let d = tempfile::tempdir().unwrap();
+        let real = d.path().join("real");
+        fs::create_dir_all(real.join("workspace")).unwrap();
+        let link_parent = d.path().join("link");
+        fs::create_dir_all(&link_parent).unwrap();
+        let link = link_parent.join("real");
+        symlink(&real, &link).unwrap();
+        assert_ne!(
+            link.display().to_string(),
+            real.display().to_string(),
+            "the fixture needs a non-canonical spelling"
+        );
+
+        let config = d.path().join("config.toml");
+        let shell_spelled = format!("{}/*", link.display());
+        fs::write(
+            &config,
+            format!(
+                "[scan]\nignore = [\"{shell_spelled}\"]\n[cleanup.policy]\nexclude = [\"{shell_spelled}\"]\n"
+            ),
+        )
+        .unwrap();
+        let loaded = load(&config).unwrap();
+        let canonical_prefix = fs::canonicalize(&real).unwrap();
+        assert_eq!(
+            loaded.scan.ignore,
+            vec![format!("{}/*", canonical_prefix.display())]
+        );
+        assert_eq!(
+            loaded.cleanup.policy.exclude,
+            vec![format!("{}/*", canonical_prefix.display())]
+        );
+
+        // A pattern with no glob metacharacter, and one that does not resolve,
+        // keep their spelling (the latter still matches nothing, by definition).
+        fs::write(
+            &config,
+            format!("[cleanup.policy]\nexclude = [\"{}\"]\n", link.display()),
+        )
+        .unwrap();
+        assert_eq!(
+            load(&config).unwrap().cleanup.policy.exclude,
+            vec![canonical_prefix.display().to_string()]
+        );
+        fs::write(
+            &config,
+            format!(
+                "[cleanup.policy]\nexclude = [\"{}/does/not/exist/*\"]\n",
+                link.display()
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            load(&config).unwrap().cleanup.policy.exclude,
+            vec![format!("{}/does/not/exist/*", link.display())]
+        );
+        // A relative pattern is never resolved against the process CWD.
+        assert_eq!(
+            canonical_pattern_prefix("relative/*"),
+            "relative/*",
+            "relative patterns keep their spelling"
+        );
+    }
+
+    #[test]
+    fn recency_seconds_of_zero_is_rejected() {
+        // H5: 0 silently disabled the inactivity guard. The default is 300, so an
+        // explicit 0 is always a mistake and must be reported as one.
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("config.toml");
+        fs::write(&p, "[scan]\nrecency_seconds = 0\n").unwrap();
+        let err = load(&p).unwrap_err().to_string();
+        assert!(err.contains("recency_seconds"), "{err}");
+        assert!(err.contains("inactivity guard"), "{err}");
+        fs::write(&p, "[scan]\nrecency_seconds = 1\n").unwrap();
+        assert_eq!(load(&p).unwrap().scan.recency_seconds, 1);
+    }
+
+    #[test]
+    fn out_of_range_retention_reports_a_range_not_a_parse_error() {
+        // L23: a value beyond the field's integer width used to surface as a TOML
+        // parse error ("invalid type: integer, expected u16").
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("config.toml");
+        fs::write(&p, "[scan]\nlearned_root_retention_days = 99999\n").unwrap();
+        let err = load(&p).unwrap_err().to_string();
+        assert!(
+            err.contains("learned_root_retention_days must be between 0 and 3650"),
+            "{err}"
+        );
+        fs::write(&p, "[scan]\nlearned_root_retention_days = 7\n").unwrap();
+        assert_eq!(load(&p).unwrap().scan.learned_root_retention_days, 7);
+    }
+
+    #[test]
+    fn invalid_scan_ignore_glob_is_reported_at_load() {
+        // M6: an invalid `scan.ignore` glob used to be silently ignored and only
+        // fail later (or never).
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("config.toml");
+        fs::write(&p, "[scan]\nignore = [\"/tmp/[unclosed\"]\n").unwrap();
+        let err = load(&p).unwrap_err().to_string();
+        assert!(err.contains("scan.ignore"), "{err}");
+    }
+
     #[test]
     fn default_recency_and_absent_config() {
         let d = tempfile::tempdir().unwrap();
