@@ -54,4 +54,7 @@ toml = "0.8"
 tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_System_WindowsProgramming"] }
+# `Win32_Security` is required by `CreateFileW`, which the C009 test helper uses
+# to open a directory handle with FILE_FLAG_BACKUP_SEMANTICS so a workspace
+# root's mtime can actually be backdated on Windows.
+windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_Security", "Win32_System_WindowsProgramming"] }

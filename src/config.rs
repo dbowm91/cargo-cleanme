@@ -413,11 +413,18 @@ mod tests {
     fn invalid_scan_ignore_glob_is_reported_at_load() {
         // M6: an invalid `scan.ignore` glob used to be silently ignored and only
         // fail later (or never).
+        //
+        // The pattern must be absolute on *this* platform, otherwise the
+        // absolute-path check fires first and the test would pass/fail for a
+        // reason unrelated to glob compilation. Derive it from the platform
+        // temporary directory instead of hardcoding a POSIX literal.
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("config.toml");
-        fs::write(&p, "[scan]\nignore = [\"/tmp/[unclosed\"]\n").unwrap();
+        let absolute_invalid = d.path().join("[unclosed");
+        let pattern = absolute_invalid.to_string_lossy().replace('\\', "/");
+        fs::write(&p, format!("[scan]\nignore = [\"{pattern}\"]\n")).unwrap();
         let err = load(&p).unwrap_err().to_string();
-        assert!(err.contains("scan.ignore"), "{err}");
+        assert!(err.contains("invalid scan.ignore glob"), "{err}");
     }
 
     #[test]
