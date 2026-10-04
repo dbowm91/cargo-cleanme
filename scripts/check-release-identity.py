@@ -31,6 +31,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -143,6 +144,68 @@ def check_identity(tag: str, expect_revision: str | None = None) -> list[str]:
     return problems
 
 
+def check_clean_tree() -> list[str]:
+    """Publication must run from a clean checkout of the tagged commit.
+
+    A dirty tree means the bytes being published are not the bytes that were
+    reviewed, which is the whole failure this gate exists to prevent. The
+    v0.1.1 deviation was different but related: the tag held the reviewed bytes
+    and the publish ran from a later commit, so the tree being published was not
+    the tree that was tagged.
+    """
+    status = git("status", "--porcelain")
+    if status.returncode != 0:
+        return [f"git status failed: {status.stderr.strip()}"]
+    if status.stdout.strip():
+        entries = [line for line in status.stdout.strip().splitlines()]
+        return [
+            f"working tree is not clean ({len(entries)} entr"
+            f"{'y' if len(entries) == 1 else 'ies'}); the bytes that would be "
+            f"published are not the bytes that were reviewed"
+        ]
+    return []
+
+
+def check_manifest(manifest_path: Path, tag: str, expect_revision: str) -> list[str]:
+    """A staged release manifest must bind `tag` to the revision being released.
+
+    The manifest is the document the release actually ships beside the binaries.
+    If its `release_id` or `source_revision` disagrees with the tag, then the
+    updater's identity check and the installer's version check are reasoning
+    about bytes from a different commit than the one being promoted.
+    """
+    if not manifest_path.is_file():
+        return [f"release manifest not found at {manifest_path}"]
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        return [f"release manifest is not one JSON document: {error}"]
+
+    problems: list[str] = []
+    if manifest.get("release_id") != tag:
+        problems.append(
+            f"release manifest binds {manifest.get('release_id')!r}, not the "
+            f"tag being published ({tag})"
+        )
+    if manifest.get("source_revision") != expect_revision:
+        problems.append(
+            f"release manifest records source revision "
+            f"{str(manifest.get('source_revision'))[:12]}, not the revision being "
+            f"released ({expect_revision[:12]})"
+        )
+    if manifest.get("product_id") != PRODUCT:
+        problems.append(
+            f"release manifest names {manifest.get('product_id')!r}, "
+            f"expected {PRODUCT!r}"
+        )
+    if manifest.get("schema_version") != 1:
+        problems.append(
+            f"release manifest schema_version is {manifest.get('schema_version')!r}, "
+            f"expected 1"
+        )
+    return problems
+
+
 def self_test() -> int:
     """Prove each identity assertion rejects the mismatch it exists for.
 
@@ -175,10 +238,32 @@ def self_test() -> int:
         True,
     )
     expect(
-        f"a correctly versioned tag that does not exist yet is still rejected",
+        "a correctly versioned tag that does not exist yet is still rejected",
         check_identity(good_tag),
         True,
     )
+
+    # The manifest binding is checked against a real staged manifest, because
+    # its field names are the contract and asserting against a made-up document
+    # would prove nothing about the real one.
+    staged = Path("/tmp/relv011/release-manifest.json")
+    if staged.is_file():
+        real = json.loads(staged.read_text(encoding="utf-8"))
+        head = git("rev-parse", "--verify", "HEAD^{commit}").stdout.strip()
+        expect(
+            "a real manifest from another release is rejected for this one",
+            check_manifest(staged, "v0.1.2", head),
+            True,
+        )
+        expect(
+            "a real manifest is accepted for the release it actually belongs to",
+            check_manifest(staged, str(real["release_id"]), str(real["source_revision"])),
+            False,
+        )
+    else:
+        print("  skip manifest cases: no staged manifest available on this host")
+
+    expect("a dirty tree is rejected", check_clean_tree(), True)
 
     if failures:
         print(f"check-release-identity: self test FAILED ({len(failures)} case(s))", file=sys.stderr)
@@ -197,6 +282,16 @@ def main() -> int:
         help="the revision the tag must point at (defaults to HEAD)",
     )
     parser.add_argument(
+        "--manifest",
+        type=Path,
+        help="verify a staged release-manifest.json binds the tag to this revision",
+    )
+    parser.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="skip the clean-tree assertion (for pre-commit use only)",
+    )
+    parser.add_argument(
         "--self-test",
         action="store_true",
         help="prove each identity assertion rejects the mismatch it exists for",
@@ -208,11 +303,15 @@ def main() -> int:
 
     if not args.tag:
         parser.error("--tag is required (or use --self-test)")
-    try:
-        problems = check_identity(args.tag, args.expect_revision)
-    except IdentityError as error:
-        print(f"check-release-identity: FAILED: {error}", file=sys.stderr)
-        return 1
+
+    problems: list[str] = []
+    if not args.allow_dirty:
+        problems.extend(check_clean_tree())
+    problems.extend(check_identity(args.tag, args.expect_revision))
+
+    if args.manifest is not None:
+        revision = args.expect_revision or git("rev-parse", "--verify", "HEAD^{commit}").stdout.strip()
+        problems.extend(check_manifest(args.manifest, args.tag, revision))
 
     if problems:
         print(f"check-release-identity: {args.tag} is not publishable", file=sys.stderr)
@@ -223,6 +322,8 @@ def main() -> int:
         f"check-release-identity: {args.tag} names {crate_version()} at "
         f"{args.expect_revision or git('rev-parse', '--verify', 'HEAD^{commit}').stdout.strip()[:12]}"
     )
+    if args.manifest is not None:
+        print(f"check-release-identity: {args.manifest} binds {args.tag} to that revision")
     return 0
 
 

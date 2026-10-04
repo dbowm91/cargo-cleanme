@@ -6,6 +6,69 @@ All notable changes to cargo-cleanme are documented here. The format follows
 stance: the `0.x` line may make breaking changes in any release, and the
 command-line, JSON, and release-asset contracts are the stable surface.
 
+## [0.1.2] - 2026-10-04
+
+This is a deliberately small qualification release. It changes no product
+behavior: every change is to test evidence, release reproducibility, and the
+release record. It exists so the live self-update path can be rehearsed against
+a real public release, which was impossible while `0.1.1` was both the newest
+publication and the first version containing a working updater.
+
+### Changed
+
+- The release builder is pinned to one exact Rust release, `1.99.0`, on all five
+  contracted targets. It was `stable`, so each rebuild of a tag could have used a
+  different compiler. `1.99.0` is the version that built and qualified `v0.1.1`,
+  so the pin records an already-proven input rather than changing one. This is
+  **not** an MSRV change: the declared MSRV remains `1.89`.
+
+- A release tag is now bound to the source identity in the tree. The tag's
+  version, `Cargo.toml`, `Cargo.lock`, the revision the tag points at, and a
+  changelog entry must all agree before a release is staged. A stale or mistyped
+  tag previously resolved cleanly and would have staged a draft whose tag and
+  asset names disagreed with the version the binary reports.
+
+- `scripts/release-check.sh` accepts the release tag as an argument and runs the
+  identity gate, so the pre-publication gate and the tag are checked together.
+
+### Fixed (test and release evidence only)
+
+- The release-candidate smoke validator accepted a scan that discovered zero
+  manifests and ignored diagnostics, so it reported a healthy candidate while the
+  product's own Cargo integration was failing. It now asserts the exact manifest
+  count, rejects any Cargo diagnostic, and probes the real Cargo first so a
+  broken lane is reported as a lane failure rather than a product failure.
+
+- The installer fixture cases for a missing binary, a missing Cargo, and a Cargo
+  run that produces nothing asserted only a non-zero exit. A dead fixture server
+  or an unrelated failure satisfied them. They now assert the wrapper's own
+  diagnostic, so they prove the branch under test is the branch that ran.
+
+- The two `cargo cleanme` cases no longer assume that Cargo resolves the binary
+  they staged on PATH. The staged binary is resolved and compared before the
+  behaviour assertions, and the resolution probe reads the child's environment
+  rather than the test process's.
+
+- A case that could not run — an unwritable-directory case running as root — is
+  now reported as a skip instead of `ok`, and a host on which no installer block
+  can run exits non-zero rather than reporting a green run that qualified
+  nothing.
+
+- A release validator with no `readelf` available no longer lets the glibc floor
+  pass as "no version info found", and a failed `cargo tree` no longer records a
+  dependency count of zero.
+
+### Known limitations
+
+- A known defect is **not** fixed in this release: an explicitly relative scan
+  root (`cargo-cleanme scan some/dir`) silently resolves zero Cargo workspaces
+  and reports no groups, because the relative manifest path is passed to Cargo
+  with the child's working directory set to that manifest's own parent. The
+  absolute spelling of the same directory is correct. The failure direction is
+  fail-safe — a degraded scan reports *less* reclaimable space, so `clean` deletes
+  less, never more — but the result can read as a false all-clear. Tracked as
+  C015; use an absolute path until it is fixed.
+
 ## [0.1.1] - 2026-10-04
 
 ### Fixed

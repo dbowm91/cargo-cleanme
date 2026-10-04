@@ -137,6 +137,10 @@ Check each of these:
   diagnostics on stderr.
 - `update --dry-run` reports already-current rather than offering a downgrade.
 
+Use an **absolute** path for the bounded scan. An explicitly relative root
+resolves zero Cargo workspaces in 0.1.2 — a known defect tracked as C015 — and
+the scan will report no groups while looking healthy.
+
 Then exercise the public installers on all three platforms against the real
 release, and exercise `cargo cleanme update` from a draft release to the new
 candidate as a rehearsal before you publish.
@@ -149,17 +153,88 @@ candidate as a rehearsal before you publish.
   go through.
 - Do not publish if any required target lacks runtime evidence.
 - Do not publish if `installer` or `updater` tests are failing.
-- Do not publish if the crate version and the release tag disagree.
+- Do not publish if the crate version and the release tag disagree. This is now
+  machine-checked; do not work around a failure from
+  `scripts/check-release-identity.py`.
+- Do not publish the crate from `main`. Publish it from a detached checkout or
+  worktree of the exact tag.
 - Do not self-update a manager-owned installation behind the manager's back.
   `update` already refuses this; do not work around it.
 
-## A warning the 0.1.0 release earned
+## The release builder is pinned
 
-`release/eggpack/pack.toml` pins the Rust toolchain as `stable`, not as a
-specific version. That means re-running a release for the same tag can produce
-different bytes, which is why "do not rebuild after qualification" matters so
-much here: there is no reproducibility guarantee to fall back on. Pin an exact
-toolchain before a release whose bytes must be reproduced.
+`release/eggpack/pack.toml` pins an exact Rust release, `1.99.0`, on all five
+contracted targets. It used to be `stable`, which meant re-running a release for
+the same tag could produce different bytes, so "do not rebuild after
+qualification" had no reproducibility guarantee to fall back on. That is fixed.
+
+Two facts must not be confused:
+
+- `1.99.0` is the **release builder** — the compiler that qualified the shipped
+  bytes. It is pinned in `release/eggpack/pack.toml` and rendered into the
+  generated workflow.
+- `1.89` is the **MSRV** — the oldest compiler cargo-cleanme claims to build
+  with. It is `rust-version` in `Cargo.toml` and it is unchanged.
+
+The pin only holds if it is regenerated. After editing `pack.toml`:
+
+```sh
+python3 scripts/gen-release-workflow-shape.py                       # rewrite the shape
+eggpack ci generate \
+  --github-policy release/eggpack/github-policy.json \
+  --workflow-shape release/eggpack/workflow-shape.json \
+  --contract release/eggpack/distribution.toml \
+  --output .github/workflows/release-binaries.yml
+python3 scripts/gen-release-workflow-shape.py --check               # prove no drift
+```
+
+`scripts/check-release-contract.py` refuses a `stable`/beta/nightly or bare
+`major.minor` pin, a required target that disagrees with the others, and a
+rendered workflow that still says `+stable`. Run it with `--self-test` to see
+those refusals actually fire.
+
+## The tag must name the version in the tree
+
+`v0.1.1` shipped from a tag whose bytes were the reviewed ones, but the
+`cargo publish` ran from a later commit on `main`. The tag and the publication
+disagreed, and nothing machine-checkable noticed.
+
+`scripts/check-release-identity.py` closes that. It binds the tag's form, the
+tag's version, `Cargo.toml`, `Cargo.lock`, the revision the tag points at, and a
+changelog entry, and it can also check a staged `release-manifest.json` against
+the same revision:
+
+```sh
+python3 scripts/check-release-identity.py --tag v0.1.2
+python3 scripts/check-release-identity.py --tag v0.1.2 \
+  --manifest /path/to/staged/release-manifest.json
+```
+
+`bash scripts/release-check.sh v0.1.2` runs it as part of the gate.
+
+The publishing order that makes the deviation impossible:
+
+1. Commit the release content, including the version bump and changelog.
+2. `bash scripts/release-check.sh v0.1.2` on a **clean** tree at the release
+   commit. It refuses a dirty tree.
+3. Tag that exact commit: `git tag v0.1.2`.
+4. Verify the tag: `python3 scripts/check-release-identity.py --tag v0.1.2`.
+5. Dispatch Eggpack at `v0.1.2`, qualify, and stage the draft.
+6. Publish the crate **from a detached checkout of the tag**, not from `main`:
+
+   ```sh
+   git worktree add /tmp/cargo-cleanme-publish v0.1.2
+   cd /tmp/cargo-cleanme-publish
+   python3 scripts/check-release-identity.py --tag v0.1.2
+   cargo publish --locked
+   ```
+
+7. Only after the crate is published, return to `main` and continue planning or
+   closure documentation there.
+
+Publishing from `main` after tagging is the specific deviation to avoid. If the
+tree on `main` has moved on, the crate and the release would describe different
+commits while carrying the same version.
 
 The 0.1.0 release also shipped a defect that no test could catch, because the
 feature depended on a live third-party service and every test was a fixture.
