@@ -1,6 +1,6 @@
 # M008B — Machine-Readable Reporting and Automation Contract
 
-Status: blocked on M008A public policy/disposition interface
+Status: conditionally closed
 
 Repository baseline: `3ee9699a0b0d987287d08e427195284e08d079f7`
 
@@ -396,3 +396,5 @@ The closure record must include:
 - unattended `--yes` integration fixture with fake Cargo;
 - hosted Linux/macOS/Windows CI;
 - Rust 1.89 verification.
+
+Implementation and qualification disposition are recorded in `plans/closure/artifact-discovery-cleanup/008b-status.md`. The schema v1 CLI contract is available; hosted platform qualification and the full cleanup reason/fixture matrix remain outstanding, so M008C remains blocked.

@@ -377,4 +377,4 @@ The closure record must include:
 - Rust 1.89 gates;
 - any observed performance delta for cleanup selection/final proof.
 
-Current disposition and remaining qualification are recorded in `plans/closure/artifact-discovery-cleanup/008a-status.md`. The policy implementation landed, but public typed dispositions and fresh-policy race fixtures remain a hard handoff condition before M008B can begin.
+Current disposition and remaining qualification are recorded in `plans/closure/artifact-discovery-cleanup/008a-status.md`. The typed policy disposition is frozen in the M008B output DTO; M008B may proceed against that interface while M008A's hosted and race-specific qualification remains outstanding.

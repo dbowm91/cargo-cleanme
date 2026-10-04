@@ -1,6 +1,6 @@
 # Artifact Discovery and Cleanup Roadmap
 
-Status: blocked; M008A policy code is conditionally closed pending typed dispositions, focused qualification fixtures, and hosted platform evidence
+Status: blocked; M008A/M008B implementation slices are conditionally closed pending qualification evidence
 
 Repository audit baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 
@@ -156,7 +156,7 @@ C007 discovery-state recovery/planning cleanup [closed]
 M008A workspace selective cleanup policy [conditionally closed; qualification follow-up]
       |
       v
-M008B machine-readable reporting/automation contract [blocked on M008A]
+M008B machine-readable reporting/automation contract [conditionally closed; schema/reason/platform qualification follow-up]
       |
       v
 M008C Cargo package/profile selector qualification [blocked on M008A/M008B]

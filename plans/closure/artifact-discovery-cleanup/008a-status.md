@@ -25,7 +25,8 @@ Date: 2026-10-04
 | Policy CLI accepted for repeated patterns and orchestration modes | `cli::tests::cleanup_policy_options_are_repeatable_and_mode_independent` | Pass |
 | Fresh size/activity data collected by final proof | `cleanup::final_cleanup_proof_roots`; existing final-proof race suite | Implemented; policy-specific race fixtures still required |
 | Excluded workspaces remain in ownership universe | Policy selection occurs after `resolve_cleanup_scope`; no dedicated exclusion/shared-output fixture yet | Implemented by ordering; evidence incomplete |
-| Policy outcomes are typed and machine-projectable | Current `CleanResult` retains policy reasons only in `detail` | **Not met** |
+| Policy outcomes are typed and machine-projectable | `CleanResult.policy_disposition`; `PolicyDisposition` serializes stable snake-case values; `plans/output-schema-v1.md` | Pass; interface frozen for M008B |
+| Policy filter behavior | `cleanup::tests::real_temp_project_preview_and_execute_with_redirected_target` now checks minimum-size, inactivity-age, include/exclude precedence dispositions | Partial; fresh shrink/source-change race, excluded shared-owner, and all-mode zero-spawn fixtures remain |
 | Hosted Linux/macOS/Windows and Rust 1.89 gates | Local Rust 1.89 checks/tests passed; no hosted matrix run in this implementation | Local pass; hosted evidence outstanding |
 
 ## Verification run
@@ -39,8 +40,7 @@ Date: 2026-10-04
 
 ## Qualification required before M008B
 
-1. Add a typed stable policy disposition to cleanup results; rendered `detail` is not an adequate interface dependency.
-2. Add policy-specific fresh-size shrink, source-age change, output-age change, excluded-owner/shared-output, and mode-parity fixtures proving no Cargo process starts when rejected.
-3. Run hosted Linux/macOS/Windows checks and record their results.
+1. Add policy-specific fresh-size shrink, source-age change, output-age change, excluded-owner/shared-output, and all-mode zero-Cargo fixtures.
+2. Run hosted Linux/macOS/Windows checks and record their results.
 
-No unsafe behavior was identified in the implemented path. M008B remains blocked until the typed interface is frozen and the qualification items above are complete. M008C remains blocked on M008A/M008B and its independent real-Cargo selector matrix.
+No unsafe behavior was identified in the implemented path. M008B is unblocked against the frozen typed interface, but M008A's qualification record remains conditional on the fixtures and hosted platform results above. M008C remains blocked on M008A/M008B closure and its independent real-Cargo selector matrix.

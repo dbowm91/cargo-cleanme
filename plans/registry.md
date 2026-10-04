@@ -34,7 +34,7 @@ M008 planning baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | blocked | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M008A policy qualification | M008A implementation is conditionally closed; typed policy dispositions, policy-specific final-proof fixtures, and hosted platform evidence are outstanding. M008B remains blocked on that interface; M008C remains blocked on M008A/M008B and real-Cargo selector qualification. |
+| Artifact discovery and cleanup | blocked | plans/subsystems/artifact-discovery-cleanup-roadmap.md | M008B/M008A qualification | M008A and M008B implementations are conditionally closed. M008A's policy race/ownership fixtures and hosted platform evidence remain; M008B's full typed reason/schema fixture matrix and hosted platform evidence remain. M008C remains blocked on complete M008A/M008B closure plus real-Cargo selector qualification. |
 
 ## Implementation handoffs
 
@@ -62,12 +62,12 @@ M008 planning baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 | Artifact discovery and cleanup | C006 combined-root cleanup ownership universe | **closed** | plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md | Closure: plans/closure/artifact-discovery-cleanup/c006-status.md. Combined discovery/coverage/ownership proof and final per-candidate refresh pass hosted platform/MSRV gates. |
 | Artifact discovery and cleanup | C007 discovery-state recovery + post-M007 planning cleanup | **closed** | plans/implementation/artifact-discovery-cleanup/c007-discovery-state-recovery-and-post-m007-planning-cleanup.md | Closure: plans/closure/artifact-discovery-cleanup/c007-status.md. Hosted platform/MSRV run 37152008602 passed. |
 | Artifact discovery and cleanup | M008A workspace selective cleanup policy | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/008a-workspace-selective-cleanup-policy.md | Closure: plans/closure/artifact-discovery-cleanup/008a-status.md. Policy implementation and local/MSRV checks landed; M008B cannot start until typed dispositions and policy-specific final-proof fixtures are added and hosted platform gates pass. |
-| Artifact discovery and cleanup | M008B machine-readable reporting + automation contract | **blocked** | plans/implementation/artifact-discovery-cleanup/008b-machine-readable-reporting-and-automation-contract.md | Hard dependency: M008A closure or explicit freeze of its typed policy/disposition interface. Adds versioned deterministic JSON, stable reason codes, and exit semantics; no scheduler/daemon. |
+| Artifact discovery and cleanup | M008B machine-readable reporting + automation contract | **conditionally closed** | plans/implementation/artifact-discovery-cleanup/008b-machine-readable-reporting-and-automation-contract.md | Closure: plans/closure/artifact-discovery-cleanup/008b-status.md. JSON v1 and local CLI/exit checks landed; typed subreason matrix, complete schema fixtures, fake-Cargo unattended Execute, and hosted qualification remain. |
 | Artifact discovery and cleanup | M008C Cargo profile/package selective cleanup qualification | **blocked** | plans/implementation/artifact-discovery-cleanup/008c-cargo-profile-package-selective-cleanup-qualification.md | Hard dependencies: M008A and M008B closure. M008C Stage 1 then produces the real-Cargo selector mutation/accounting evidence required before Stage 2 Execute can be enabled. Unsupported/unqualified selectors remain fail-closed. |
 
 ## Current handoff
 
-C007 is closed. M008A implementation is conditionally closed pending typed-policy and hosted qualification evidence. M008B and M008C remain dependency-blocked.
+C007 is closed. M008A and M008B implementation slices are conditionally closed with qualification work recorded in their closure records. M008C remains dependency-blocked.
 
 Milestone sequence:
 
@@ -80,11 +80,11 @@ C006 -> closed
 M007 -> closed by C006
 C007 discovery-state recovery + post-M007 planning cleanup -> closed
 M008A workspace selective cleanup policy -> conditionally closed; typed disposition and qualification follow-up remains
-M008B machine-readable reporting/automation contract -> blocked on M008A
+M008B machine-readable reporting/automation contract -> conditionally closed; full reason/schema/platform qualification remains
 M008C Cargo profile/package selective cleanup -> blocked on M008A/M008B; Stage 2 Execute gated on Stage 1 qualification
 ~~~
 
-Phase 9 planning is registered. No M008 implementation handoff is currently ready: M008A has a qualification follow-up blocking M008B, and M008C also requires its staged Cargo selector evidence. Distribution remains deferred to Phase 10.
+Phase 9 planning is registered. No M008 implementation handoff is currently ready: M008A/M008B qualification follow-ups block M008C, which also requires its staged Cargo selector evidence. Distribution remains deferred to Phase 10.
 
 ### Current destructive safety boundary
 
