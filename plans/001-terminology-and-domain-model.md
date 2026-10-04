@@ -297,31 +297,6 @@ Its output relationship is unknown. Because cargo-cleanme cannot prove it does n
 
 This strict rule does not apply to ordinary read-only scan partial results.
 
-## 44. Cleanup selection policy
-
-A user/config-supplied policy evaluated over an already-resolved complete CleanupUnit. It may reject a unit by minimum complete-output size, minimum inactivity age, or canonical workspace include/exclude policy. It never removes a workspace from the ownership universe. Size and age are rechecked from fresh final-proof observations before Cargo spawn.
-
-## 45. Policy disposition
-
-A typed result stating that a cleanup unit was selected or rejected by user policy. It is distinct from an ownership or safety skip. Stable values include `selected`, `below_minimum_size`, `too_recent_for_policy`, `not_included`, and `excluded`.
-
-## 46. Cleanup selector
-
-A Cargo-mediated mutation selector, currently profile or package. It narrows the request passed to Cargo after complete workspace/output proof; it does not narrow the ownership universe or authorize direct filesystem deletion.
-
-## 47. Selector capability qualification
-
-The fail-closed runtime-Cargo compatibility decision that determines whether a selector may reach Cargo Preview or Execute. Support is an exact qualified-release allowlist, not a version range; unknown and unqualified releases fail before mutation.
-
-## 48. Selector estimate
-
-A selector-specific reclaimable byte estimate. Current profile/package selectors have no trustworthy selector estimate, so machine output reports it as null. Whole output-union measurements are contextual and must not be mislabeled as selector-reclaimable bytes. A nonzero minimum-size policy with a selector fails closed.
-
-## 49. Stable cleanup reason code
-
-A machine-output semantic code that identifies a cleanup disposition independently of human diagnostic detail. Codes are versioned output contract; explanatory strings may change.
-
-
 ## 38. Routine scan
 
 The default no-argument read-only scan over a bounded adaptive root set.
@@ -381,3 +356,27 @@ Retention never narrows Full or Explicit scope.
 The `config edit` operation that opens the effective cargo-cleanme config in a directly launched external editor.
 
 Editor resolution is non-empty `VISUAL`, then non-empty `EDITOR`, then bounded executable fallbacks. Editor arguments are parsed without invoking a shell. Successful editor exit is followed by config validation; invalid edits are reported but not silently discarded or replaced.
+
+## 46. Cleanup selection policy
+
+A user/config-supplied policy evaluated over an already-resolved complete CleanupUnit. It may reject a unit by minimum complete-output size, minimum inactivity age, or canonical workspace include/exclude policy. It never removes a workspace from the ownership universe. Size and age are rechecked from fresh final-proof observations before Cargo spawn.
+
+## 47. Policy disposition
+
+A typed result stating that a cleanup unit was selected or rejected by user policy. It is distinct from an ownership or safety skip. Stable values include `selected`, `below_minimum_size`, `too_recent_for_policy`, `not_included`, and `excluded`.
+
+## 48. Cleanup selector
+
+A Cargo-mediated mutation selector, currently profile or package. It narrows the request passed to Cargo after complete workspace/output proof; it does not narrow the ownership universe or authorize direct filesystem deletion.
+
+## 49. Selector capability qualification
+
+The fail-closed runtime-Cargo compatibility decision that determines whether a selector may reach Cargo Preview or Execute. Support is an exact qualified-release allowlist, not a version range; unknown and unqualified releases fail before mutation.
+
+## 50. Selector estimate
+
+A selector-specific reclaimable byte estimate. Current profile/package selectors have no trustworthy selector estimate, so machine output reports it as null. Whole output-union measurements are contextual and must not be mislabeled as selector-reclaimable bytes. A nonzero minimum-size policy with a selector fails closed.
+
+## 51. Stable cleanup reason code
+
+A machine-output semantic code that identifies a cleanup disposition independently of human diagnostic detail. Codes are versioned output contract; explanatory strings may change.
