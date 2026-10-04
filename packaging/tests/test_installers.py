@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import platform
 import shutil
 import stat
 import subprocess
@@ -47,10 +48,32 @@ INSTALL_PS1 = ROOT / "packaging" / "install.ps1"
 
 PRODUCT = "cargo-cleanme"
 VERSION = "0.1.0"
-# The test host decides which contracted asset the wrappers will request.
-HOST_TARGET = "x86_64-unknown-linux-gnu"
-HOST_ASSET = f"{PRODUCT}-{HOST_TARGET}"
-SIDECAR = f"{HOST_ASSET}.sha256"
+
+
+def host_contract_target() -> str | None:
+    """The contracted triple this host's wrapper will request.
+
+    Mirrors the wrapper's own os/arch mapping. Publishing only the Linux asset
+    would make every macOS case a false 404-to-fallback instead of testing what
+    it claims to test.
+    """
+    machine = platform.machine().lower()
+    arch = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64"}.get(machine)
+    system = platform.system()
+    if system == "Linux" and arch == "x64":
+        return "x86_64-unknown-linux-gnu"
+    if system == "Linux" and arch == "arm64":
+        return "aarch64-unknown-linux-gnu"
+    if system == "Darwin" and arch == "x64":
+        return "x86_64-apple-darwin"
+    if system == "Darwin" and arch == "arm64":
+        return "aarch64-apple-darwin"
+    return None
+
+
+HOST_TARGET = host_contract_target()
+HOST_ASSET = f"{PRODUCT}-{HOST_TARGET}" if HOST_TARGET else ""
+SIDECAR = f"{HOST_ASSET}.sha256" if HOST_ASSET else ""
 
 failures: list[str] = []
 passes = 0
@@ -155,6 +178,10 @@ def posix_shell() -> str | None:
     block runs under `bash` there and the fixture tool directory is resolved
     from whatever the runner actually has.
     """
+    # install.sh maps `uname -s` to a Linux/macOS family and refuses anything
+    # else, so running it under Git Bash on Windows only proves that refusal.
+    if platform.system() not in ("Linux", "Darwin"):
+        return None
     for candidate in ("sh", "bash"):
         if shutil.which(candidate) is not None:
             return candidate
@@ -409,7 +436,7 @@ def case_existing_destination(runner_name: str, runner, release: Path, base_url:
 
 def case_unwritable_destination(runner_name: str, runner, release: Path, base_url: str, work: Path, tools_dir: Path) -> None:
     clear_control(release, HOST_ASSET)
-    if os.geteuid() == 0:
+    if not hasattr(os, "geteuid") or os.geteuid() == 0:
         record(f"[{runner_name}] unwritable destination is rejected", True, "skipped as root")
         return
     dest = work / f"readonly-{runner_name}"
@@ -527,8 +554,9 @@ def main() -> int:
 
         case_contract_projection()
 
-        if posix_shell() is None:
-            print("  skip posix block: neither sh nor bash is available on this host\n")
+        if posix_shell() is None or HOST_TARGET is None:
+            print("  skip posix block: this host has no contracted target for install.sh;")
+            print("  its cases are qualified on the Linux/macOS lanes instead.\n")
             runners = []
         else:
             runners = [("posix", run_sh)]

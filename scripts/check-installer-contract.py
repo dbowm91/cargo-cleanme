@@ -25,6 +25,7 @@ that only exist once M010B lands the wrappers.
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -98,7 +99,22 @@ def main() -> int:
     if not INSTALL_PS1.is_file():
         print("check-installer-contract: packaging/install.ps1 is missing", file=sys.stderr)
         return 1
-    if not INSTALL_SH.stat().st_mode & 0o111:
+    # A Windows checkout has no exec bit, so ask git for the recorded mode and
+    # fall back to the filesystem. The recorded mode is the durable fact: a
+    # `curl | sh` install does not depend on it, but every other consumer does.
+    recorded_mode = ""
+    try:
+        git_mode = subprocess.run(
+            ["git", "ls-files", "-s", "--", str(INSTALL_SH.relative_to(ROOT))],
+            capture_output=True, text=True, check=False, cwd=str(ROOT),
+        ).stdout.split()
+        if git_mode:
+            recorded_mode = git_mode[0]
+    except OSError:
+        recorded_mode = ""
+    if recorded_mode and recorded_mode != "100755":
+        fail(f"packaging/install.sh is recorded in git as mode {recorded_mode}, expected 100755")
+    if not recorded_mode and not INSTALL_SH.stat().st_mode & 0o111:
         fail("packaging/install.sh is not executable")
 
     posix = INSTALL_SH.read_text(encoding="utf-8")
