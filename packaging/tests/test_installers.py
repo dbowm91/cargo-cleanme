@@ -94,8 +94,61 @@ def record(name: str, ok: bool, detail: str = "") -> None:
 
 
 # --------------------------------------------------------------------- fixture
+STUB_CACHE: dict[str, bytes] = {}
+
+
 def make_candidate_stub(version: str = VERSION) -> bytes:
-    """A tiny executable that answers `--version` like the real binary."""
+    """A real compiled executable that answers `--version` like cargo-cleanme.
+
+    A shell script is not a usable stand-in for the release binary on Windows:
+    the PowerShell wrapper must actually execute the candidate to check its
+    identity, and a script named `.exe` cannot. The CI job already installs a
+    Rust toolchain, so the stub is compiled once per version and cached.
+
+    Falling back to a shell script would only be honest where a script *is*
+    executable, so the fallback is allowed solely on POSIX hosts; on Windows a
+    missing `rustc` is a hard failure rather than a silently weaker test.
+    """
+    if version in STUB_CACHE:
+        return STUB_CACHE[version]
+    payload = _compile_candidate_stub(version)
+    STUB_CACHE[version] = payload
+    return payload
+
+
+def _compile_candidate_stub(version: str) -> bytes:
+    import tempfile as _tempfile
+
+    rustc = shutil.which("rustc")
+    if rustc is not None:
+        with _tempfile.TemporaryDirectory(prefix="cargo-cleanme-stub-") as work:
+            work_path = Path(work)
+            source = work_path / "stub.rs"
+            source.write_text(
+                "fn main() {\n"
+                f"    println!(\"{PRODUCT} {version}\");\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            output = work_path / ("stub.exe" if os.name == "nt" else "stub")
+            result = subprocess.run(
+                [rustc, "-O", "-o", str(output), str(source)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0 and output.is_file():
+                return output.read_bytes()
+            if os.name == "nt":
+                raise SystemExit(
+                    "could not compile the fixture candidate stub on Windows: "
+                    f"{result.stderr.strip() or result.stdout.strip()}"
+                )
+    if os.name == "nt":
+        raise SystemExit(
+            "the Windows installer lane needs rustc to build a real fixture "
+            "candidate; install a Rust toolchain or skip this block"
+        )
     return f'#!/bin/sh\necho "{PRODUCT} {version}"\n'.encode()
 
 
@@ -419,8 +472,12 @@ def case_existing_destination(runner_name: str, runner, release: Path, base_url:
     dest = work / f"existing-{runner_name}"
     dest.mkdir(parents=True, exist_ok=True)
     binary = installed_binary(dest)
-    binary.write_text("#!/bin/sh\necho foreign\n")
-    binary.chmod(0o755)
+    # A recognizable non-candidate file, so "was it replaced?" is decidable
+    # by content rather than by the destination merely existing.
+    foreign = b"foreign-binary-not-cargo-cleanme"
+    binary.write_bytes(foreign)
+    if os.name != "nt":
+        binary.chmod(0o755)
 
     args = (["--dir", str(dest)] if runner_name == "posix" else ["-Directory", str(dest)])
     result = runner(args, base_url)
@@ -428,7 +485,7 @@ def case_existing_destination(runner_name: str, runner, release: Path, base_url:
     if result.returncode == 0:
         record(name, False, "overwrote an existing file without an explicit request")
         return
-    if binary.read_text().strip() == "#!/bin/sh\necho foreign":
+    if binary.read_bytes() == foreign:
         record(name, True)
     else:
         record(name, False, "the existing destination was modified despite refusal")
@@ -440,7 +497,7 @@ def case_existing_destination(runner_name: str, runner, release: Path, base_url:
     )
     forced = runner(force, base_url)
     name = f"[{runner_name}] --force replaces an existing destination"
-    if forced.returncode == 0 and binary.is_file() and binary.read_text() != "#!/bin/sh\necho foreign\n":
+    if forced.returncode == 0 and binary.read_bytes() != foreign:
         record(name, True)
     else:
         record(name, False, f"exit {forced.returncode}: {forced.stderr.strip()[:160]}")
