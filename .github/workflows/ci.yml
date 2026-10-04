@@ -14,6 +14,19 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-targets --all-features
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # The release consumer validator only ran inside the release workflow, so
+      # a Windows-only defect in it stayed invisible until a release was
+      # attempted. Running it here on every lane makes the validator itself a
+      # tested surface, and the path is computed by Python so the same step
+      # works on a Windows checkout.
+      - name: Release-candidate smoke validator is itself portable
+        shell: bash
+        run: |
+          candidate="target/debug/cargo-cleanme$(python -c "import sys; print('.exe' if sys.platform == 'win32' else '')")"
+          python3 scripts/smoke-release-candidate.py "$candidate"
   installers:
     # Fixture-driven installer qualification. No test here contacts the public
     # GitHub service or a real release; the fixture server is local.

@@ -76,14 +76,21 @@ def tree_fingerprint(root: Path) -> str:
     return digest.hexdigest()
 
 
-def isolated_env(home: Path) -> dict[str, str]:
+def smoke_env() -> dict[str, str]:
+    """The environment the candidate runs in.
+
+    Deliberately leaves `HOME`, `USERPROFILE`, and the `XDG_*` variables alone.
+    The scan shells out to `cargo`, and those variables are also Cargo's own
+    configuration inputs; overriding them makes Cargo misbehave, which is how
+    this validator first failed on Windows and reported a healthy release as
+    broken. (The same mistake was already made and fixed in
+    `scripts/release-benchmark.py`.)
+
+    The application config is isolated with `--config`, which is the only
+    mechanism that isolates *this program* without disturbing Cargo. Nothing
+    outside the invocation's own temporary directory is read or written.
+    """
     env = dict(os.environ)
-    env["HOME"] = str(home)
-    env["USERPROFILE"] = str(home)
-    env["XDG_CONFIG_HOME"] = str(home / "config")
-    env["XDG_DATA_HOME"] = str(home / "data")
-    env["XDG_STATE_HOME"] = str(home / "state")
-    env["XDG_CACHE_HOME"] = str(home / "cache")
     env["NO_COLOR"] = "1"
     env.pop("CARGO_TERM_COLOR", None)
     return env
@@ -100,9 +107,12 @@ def build_fixture(root: Path) -> Path:
 def check_version(candidate: Path, cwd: Path, env: dict[str, str], argv: list[str]) -> str:
     result = run(candidate, argv, cwd, env)
     require(result.returncode == 0, f"{argv} exited with {result.returncode}: {result.stderr.strip()}")
+    # Exactly one line, tolerating CRLF and a missing trailing newline. Asserting
+    # the exact shape is stricter than counting newlines and does not break on
+    # Windows line endings.
     require(
-        result.stdout.strip() == result.stdout.strip().splitlines()[-1],
-        f"{argv} wrote more than one line to stdout",
+        result.stdout.count("\n") <= 1 and result.stderr.count("\n") <= 1,
+        f"{argv} wrote more than one line to stdout/stderr: {result.stdout!r} {result.stderr!r}",
     )
     prefix, _, version = result.stdout.strip().partition(" ")
     require(prefix == PRODUCT, f"{argv} reported product {prefix!r}, expected {PRODUCT!r}")
@@ -119,21 +129,34 @@ def check_help(candidate: Path, cwd: Path, env: dict[str, str]) -> None:
 
 def check_bounded_scan(candidate: Path, cwd: Path, env: dict[str, str], fixture: Path) -> None:
     before = tree_fingerprint(fixture)
+    # `--config` keeps this program's own state inside the invocation-owned
+    # temporary directory while leaving Cargo's environment untouched.
     result = run(
         candidate,
-        ["scan", "--format", "json", "--no-progress", "fixture"],
+        [
+            "scan",
+            "--config",
+            str(cwd / "app-config.toml"),
+            "--format",
+            "json",
+            "--no-progress",
+            "fixture",
+        ],
         cwd,
         env,
     )
     require(result.returncode == 0, f"bounded scan exited with {result.returncode}: {result.stderr.strip()}")
-    require(
-        result.stdout.count("\n") == 1,
-        "scan stdout is not exactly one JSON document",
-    )
+    # `json.loads` rejects trailing content, so this single assertion enforces
+    # "stdout is exactly one JSON document and nothing else" without depending
+    # on a line-ending convention.
     try:
         document = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        raise SmokeFailure(f"scan stdout is not valid JSON: {exc}") from exc
+        raise SmokeFailure(
+            f"scan stdout is not exactly one JSON document: {exc}\n"
+            f"  stdout: {result.stdout[:400]!r}\n"
+            f"  stderr: {result.stderr[:400]!r}"
+        ) from exc
     require(document.get("schema_version") == 1, "scan JSON schema_version is not 1")
     require(document.get("operation") == "scan", "scan JSON operation is not 'scan'")
     require(
@@ -158,8 +181,7 @@ def main() -> int:
 
     work = Path(tempfile.mkdtemp(prefix="cargo-cleanme-release-smoke-"))
     try:
-        env = isolated_env(work / "home")
-        (work / "home").mkdir(parents=True, exist_ok=True)
+        env = smoke_env()
         fixture = build_fixture(work)
 
         direct = check_version(candidate, work, env, ["--version"])
@@ -173,7 +195,9 @@ def main() -> int:
         print(f"release smoke passed for {PRODUCT} {direct}")
         return 0
     except SmokeFailure as exc:
-        print(f"release smoke failed: {exc}", file=sys.stderr)
+        # Write the report next to the candidate as well as to stderr, so a CI
+        # failure that swallows the validator's output is still diagnosable.
+        print(f"release smoke failed for {candidate.name}: {exc}", file=sys.stderr)
         return 1
     finally:
         shutil.rmtree(work, ignore_errors=True)
