@@ -104,10 +104,50 @@ cargo install cargo-cleanme --locked --version 0.1.0  # pin an exact release
 Installing the package is enough for Cargo to expose the external
 subcommand, so `cargo cleanme ...` works after `cargo install`.
 
-A verified prebuilt-binary release is prepared but not yet published. When it
-is, the release assets and the one-curl installers will be documented here.
-Until then, do not expect `install.sh`, `install.ps1`, or `cargo cleanme update`
-to exist.
+### One-command install from a release
+
+`packaging/install.sh` (Linux, macOS) and `packaging/install.ps1` (Windows)
+install a verified prebuilt binary from a GitHub release:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dbowm91/cargo-cleanme/main/packaging/install.sh | sh
+sh install.sh --version 0.1.0     # pin an exact release
+sh install.sh --dir "$HOME/bin"   # choose the destination
+```
+
+```powershell
+irm https://raw.githubusercontent.com/dbowm91/cargo-cleanme/main/packaging/install.ps1 | iex
+./install.ps1 -Version 0.1.0
+```
+
+The install path is binary-first and fail-closed:
+
+1. resolve latest stable, or the exact `X.Y.Z` you asked for;
+2. map the host to the published target below;
+3. download the asset and its `.sha256` sidecar;
+4. refuse to continue unless the digest matches;
+5. run the candidate and require exactly `cargo-cleanme X.Y.Z`;
+6. place it, then re-verify the placed bytes;
+7. report the path, and print PATH guidance if the directory is not on `PATH`.
+
+Default destinations are `$HOME/.local/bin` when not root and
+`/usr/local/bin` when already root. On Windows it is a per-user
+`%LOCALAPPDATA%\cargo-cleanme\bin`, or `%ProgramFiles%\cargo-cleanme\bin` when
+already elevated. **The wrappers never call `sudo`, `su`, `doas`, or
+`Start-Process -Verb RunAs`.** For a machine-wide install, run the wrapper
+yourself in an elevated shell. The wrappers never modify your `PATH`; they only
+print the command you would need.
+
+Cargo is used only when the host has **no** published binary, or when the
+selected release genuinely does not contain that binary. A checksum mismatch,
+a missing checksum, a wrong product or version, a TLS or transport failure, and
+a destination conflict are all hard failures — they never fall back to Cargo.
+When the fallback does run, it builds into a private temporary Cargo root and
+validates the produced binary with the same `--version` check before placing
+it, and it cleans up only its own temporary state.
+
+`cargo cleanme update` does not exist yet.
+
 
 ## Prebuilt release targets
 

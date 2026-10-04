@@ -125,7 +125,9 @@ function Get-Sha256 {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
-# Download to a file. Any transport, TLS, or timeout failure is a hard error.
+# Download to a file and return the HTTP status code. The caller classifies:
+# only 404 is absence, every other non-2xx and every connection failure is a
+# hard transport error that must never become a Cargo fallback.
 function Get-RemoteFile {
     param([string] $Uri, [string] $OutFile)
 
@@ -135,8 +137,8 @@ function Get-RemoteFile {
         }
     }
 
-    # A fresh service point per invocation keeps a poisoned session or a stale
-    # proxy config from silently changing behavior between runs.
+    # A fresh client per invocation keeps a poisoned session or a stale proxy
+    # config from silently changing behavior between runs.
     $previous = $null
     try { $previous = [System.Net.ServicePointManager]::SecurityProtocol } catch { $previous = $null }
     try {
@@ -145,13 +147,19 @@ function Get-RemoteFile {
         $client.Timeout = [TimeSpan]::FromSeconds(300)
         $client.DefaultRequestHeaders.Add('User-Agent', $UserAgent)
         $response = $client.GetAsync($Uri, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
-        if ($response.StatusCode -eq [System.Net.HttpStatusCode]::NotFound) {
-            return $false
+        $status = [int] $response.StatusCode
+        if ($response.IsSuccessStatusCode) {
+            $bytes = $response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
+            [System.IO.File]::WriteAllBytes($OutFile, $bytes)
         }
-        $response.EnsureSuccessStatusCode() | Out-Null
-        $bytes = $response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
-        [System.IO.File]::WriteAllBytes($OutFile, $bytes)
-        return $true
+        else {
+            $status = if ($status -ge 100 -and $status -lt 600) { $status } else { 599 }
+        }
+        return $status
+    }
+    catch {
+        # A connection, TLS, or timeout failure is not absence.
+        return 0
     }
     finally {
         if ($previous) { [System.Net.ServicePointManager]::SecurityProtocol = $previous }
@@ -197,12 +205,16 @@ try {
         Write-Note "$Product`: downloading $asset for $target..."
         $staged = Join-Path $workDir $binaryName
 
-        if (-not (Get-RemoteFile -Uri $binUrl -OutFile $staged)) {
-            # Absence of the selected binary is the one condition that may
-            # enter the Cargo source fallback. A transport or TLS failure is
-            # not absence.
+        $binStatus = Get-RemoteFile -Uri $binUrl -OutFile $staged
+        if ($binStatus -eq 404) {
+            # Genuine absence: the one condition that may enter the Cargo
+            # source fallback. A 5xx or a transport failure stays fatal so a
+            # release host outage can never silently become a local build.
             Write-Note "$Product`: no published binary for this release; using the Cargo source fallback."
             $cargoFallbackHost = $true
+        }
+        elseif ($binStatus -lt 200 -or $binStatus -ge 300) {
+            Stop-Install "release host returned HTTP $binStatus for $binUrl"
         }
         elseif ((Get-Item -LiteralPath $staged).Length -eq 0) {
             Stop-Install "downloaded artifact is empty: $binUrl"
@@ -213,8 +225,9 @@ try {
         # The digest sidecar is mandatory evidence. Its absence is a hard
         # failure, not a fallback signal.
         $sumPath = Join-Path $workDir $sidecar
-        if (-not (Get-RemoteFile -Uri $sumUrl -OutFile $sumPath)) {
-            Stop-Install "release checksum not found: $sumUrl"
+        $sumStatus = Get-RemoteFile -Uri $sumUrl -OutFile $sumPath
+        if ($sumStatus -lt 200 -or $sumStatus -ge 300) {
+            Stop-Install "release checksum unavailable (HTTP $sumStatus): $sumUrl"
         }
         $expected = ((Get-Content -LiteralPath $sumPath -TotalCount 1) -split '\s+')[0]
         if ($expected -notmatch '^[0-9a-f]{64}$') {

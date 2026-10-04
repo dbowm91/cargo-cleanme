@@ -14,6 +14,26 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-targets --all-features
+  installers:
+    # Fixture-driven installer qualification. No test here contacts the public
+    # GitHub service or a real release; the fixture server is local.
+    #
+    # On Windows the PowerShell wrapper is exercised for real. Elsewhere the
+    # suite skips that block explicitly rather than reporting vacuous passes
+    # from install.ps1's own platform guard.
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Qualify the public installers against a local fixture release
+        shell: bash
+        run: python3 packaging/tests/test_installers.py
   msrv:
     runs-on: ubuntu-latest
     steps:

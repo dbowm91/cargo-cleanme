@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: active planning; M010A is ready. Later Phase 10 milestones are dependency-ordered behind the distribution contract and upstream Eggup curl publication.
+Status: active planning; M010A is closed and M010B is active. Later Phase 10 milestones are dependency-ordered behind the release convention and the upstream Eggup curl publication.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 
@@ -72,15 +72,19 @@ ARMv7, musl, Windows ARM64, package-manager formulae, and additional targets are
 Phase 9 + C008 [closed]
         |
         v
-M010A Eggpack distribution contract + package readiness [READY]
+M010A Eggpack distribution contract + package readiness [CLOSED]
+        |
+        v
+C009 Windows test-fixture portability [CLOSED: restores per-platform evidence]
         |
         +-----------------------------+
         |                             |
         v                             v
 M010B bootstrap installers      Eggup acquisition M009
-+ release artifact             eggup-curl 0.1.2 publication
-qualification                  [external hard dependency for
-        |                       lightweight updater path]
++ release artifact             eggup-curl publication
+qualification                  [external; VERIFIED UNPUBLISHED 2026-10-04,
+        |                       so M010C must select from what is
+        |                       actually published]
         +-------------+---------------+
                       |
                       v
@@ -96,7 +100,11 @@ M010B may proceed while Eggup M009 is implemented. M010C must not vendor/copy Gr
 
 Plan: `plans/implementation/distribution-release-update/010a-eggpack-distribution-contract-and-package-readiness.md`
 
-Status: ready.
+Closure: `plans/closure/distribution-release-update/010a-status.md`
+
+Status: closed at implementation `b4662af`. No publication occurred. Its single
+green-CI acceptance criterion was a pre-existing Windows test-fixture defect,
+discharged by corrective C009.
 
 Primary outcomes:
 
@@ -113,7 +121,8 @@ M010A does not publish anything and does not add a self-updater.
 
 Plan: `plans/implementation/distribution-release-update/010b-bootstrap-installers-and-release-artifact-qualification.md`
 
-Status: blocked on M010A.
+Status: active. M010A is closed, so the release-contract interface dependency
+is satisfied.
 
 Primary outcomes:
 
@@ -130,7 +139,18 @@ Primary outcomes:
 
 Plan: `plans/implementation/distribution-release-update/010c-eggup-self-update-and-install-provenance.md`
 
-Status: blocked on M010A and Eggup acquisition M009; integration closure also needs the M010B release convention.
+Status: blocked on the M010B release convention becoming stable, and on Eggup
+acquisition M009.
+
+Verified external state on 2026-10-04: `eggup-curl` is **not** published on
+crates.io — `https://index.crates.io/eg/gp/eggup-curl` returns `NoSuchKey` and
+the crates.io API reports `crate eggup-curl does not exist`. Published Eggup
+crates are `eggup-core 0.1.2`, `eggup-archive 0.1.2`,
+`eggup-acquisition 0.1.2`, `eggup-eggfetch 0.1.2`, and `eggup-eggpack 0.1.2`.
+Eggup's own registry record states `eggup-curl` and `eggup-transport-footprint`
+remain unpublished by design. The preferred lightweight curl path is therefore
+unavailable, and M010C must select its single production transport from the
+published set using the plan's own measured-selection rule.
 
 Primary outcomes:
 

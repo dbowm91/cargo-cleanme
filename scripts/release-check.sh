@@ -53,6 +53,12 @@ eggpack ci check \
 echo "release-check: release contract is consistent"
 python3 scripts/check-release-contract.py
 
+echo "release-check: installer wrappers match the contract"
+python3 scripts/check-installer-contract.py
+
+echo "release-check: installer fixture qualification"
+python3 packaging/tests/test_installers.py
+
 echo "release-check: package"
 cargo package --locked
 

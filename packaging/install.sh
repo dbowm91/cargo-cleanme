@@ -195,38 +195,45 @@ sha256_of() {
 	fi
 }
 
-# Download to stdout. Any transport, TLS, or timeout failure is a hard error.
+# Download to a file. Any transport, TLS, or timeout failure is a hard error.
 # Curl configuration and option injection from the environment are disabled.
-fetch() {
+#
+# The protocol allowlist is derived from the URL check above, so the test-only
+# insecure override stays internally consistent instead of being rejected by a
+# stricter --proto than the scheme check that just permitted it.
+#
+# Prints the HTTP status code on stdout. A connection-level failure prints 000
+# and is fatal; only 404 is ever treated as absence.
+fetch_to() {
 	_url="$1"
+	_out="$2"
+	_proto='=https'
 	case "$_url" in
 	https://*) ;;
 	http://*)
 		if [ "${CARGO_CLEANME_INSTALL_ALLOW_INSECURE:-0}" != "1" ]; then
 			fail "refusing a non-HTTPS release URL: $_url"
 		fi
+		_proto='=https,http'
 		;;
 	*)
 		fail "refusing an unrecognized release URL scheme: $_url"
 		;;
 	esac
 
-	curl --fail --silent --show-error --location \
-		--proto '=https' --proto-redir '=https' \
+	# `--fail` alone cannot distinguish 404 from 503: both exit 22. Ask curl
+	# for the status and classify here, so a server fault can never be
+	# mistaken for a genuinely absent asset and turned into a Cargo fallback.
+	curl --silent --show-error --location \
+		--proto "$_proto" --proto-redir "$_proto" \
 		--tlsv1.2 \
 		--connect-timeout 15 --max-time 300 \
 		--retry 0 \
 		--user-agent "$USER_AGENT" \
 		--disable \
-		-- "$_url"
-}
-
-# Fetch to a file; returns 1 on 404/absence so the caller can decide whether
-# absence is an allowed fallback signal. Any other failure is fatal.
-fetch_optional() {
-	_url="$1"
-	_out="$2"
-	fetch "$_url" >"$_out" 2>/dev/null
+		--output "$_out" \
+		--write-out '%{http_code}' \
+		-- "$_url" 2>/dev/null || printf '000'
 }
 
 is_version() {
@@ -267,16 +274,28 @@ install_binary() {
 
 	info "$PRODUCT: downloading $ASSET for $TARGET..."
 
-	if ! fetch_optional "$BIN_URL" "$STAGED"; then
-		# Absence of the selected binary is the one condition that may enter
-		# the Cargo source fallback. A transport or TLS failure is not
-		# absence, so distinguish them by message.
-		if [ "$FORCE" = "0" ] && fetch_optional "$BIN_URL" "$TMP_DIR/probe" 2>/dev/null; then
-			:
-		fi
+	BIN_STATUS=$(fetch_to "$BIN_URL" "$STAGED")
+	case "$BIN_STATUS" in
+	404)
+		# Genuine absence: the one condition that may enter the Cargo source
+		# fallback. Anything else is a transport or server fault and must stay
+		# fatal, so a release host outage can never silently become a local
+		# build.
 		printf '%s: release artifact not found: %s\n' "$PRODUCT" "$BIN_URL" >&2
 		return 2
-	fi
+		;;
+	2??)
+		: # success
+		;;
+	000)
+		printf '%s: could not reach %s (transport failure)\n' "$PRODUCT" "$BIN_URL" >&2
+		return 1
+		;;
+	*)
+		printf '%s: release host returned HTTP %s for %s\n' "$PRODUCT" "$BIN_STATUS" "$BIN_URL" >&2
+		return 1
+		;;
+	esac
 
 	if [ ! -s "$STAGED" ]; then
 		printf '%s: downloaded artifact is empty: %s\n' "$PRODUCT" "$BIN_URL" >&2
@@ -285,10 +304,14 @@ install_binary() {
 
 	# The digest sidecar is mandatory evidence. Its absence is a hard
 	# failure, not a fallback signal.
-	if ! fetch_optional "$SUM_URL" "$TMP_DIR/$SIDECAR"; then
-		printf '%s: release checksum not found: %s\n' "$PRODUCT" "$SUM_URL" >&2
+	SUM_STATUS=$(fetch_to "$SUM_URL" "$TMP_DIR/$SIDECAR")
+	case "$SUM_STATUS" in
+	2??) : ;;
+	*)
+		printf '%s: release checksum unavailable (HTTP %s): %s\n' "$PRODUCT" "$SUM_STATUS" "$SUM_URL" >&2
 		return 1
-	fi
+		;;
+	esac
 
 	EXPECTED=$(head -n 1 "$TMP_DIR/$SIDECAR" | cut -d' ' -f1)
 	if ! printf '%s' "$EXPECTED" | grep -Eq '^[0-9a-f]{64}$'; then
@@ -318,7 +341,10 @@ install_binary() {
 		printf '%s: requested %s but the candidate reports %s\n' "$PRODUCT" "$VERSION" "$OBSERVED" >&2
 		return 1
 	fi
-	if [ "$OBSERVED" != "$_resolved_version" ]; then
+	# Only a pinned request has a pre-resolved expectation to agree with. For a
+	# latest install the candidate's own report *is* the version authority, so
+	# there is nothing to compare it against.
+	if [ -n "$_resolved_version" ] && [ "$OBSERVED" != "$_resolved_version" ]; then
 		printf '%s: version authority disagreement (%s vs %s)\n' "$PRODUCT" "$_resolved_version" "$OBSERVED" >&2
 		return 1
 	fi

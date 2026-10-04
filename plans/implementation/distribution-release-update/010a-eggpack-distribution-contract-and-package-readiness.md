@@ -1,8 +1,10 @@
 # M010A — Eggpack Distribution Contract and Package Readiness
 
-Status: ready
+Status: closed
 
-Repository baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
+Repository baseline: `78aac6d` (the plan's stated `85b5d4a` is an earlier planning baseline)
+
+Closure: `plans/closure/distribution-release-update/010a-status.md`
 
 Source roadmap: Phase 10 — Distribution and operational polish
 

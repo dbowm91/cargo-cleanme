@@ -47,10 +47,36 @@ published yet.
   tooling and testability but is **not** a stable third-party API before 1.0.
 - Documented SHA-256 as integrity evidence only, not authenticity.
 
+### Added (M010B)
+
+- `packaging/install.sh` and `packaging/install.ps1`: product-owned,
+  binary-first, fail-closed public installers. Latest or exact `X.Y.Z`
+  selection, mandatory SHA-256 sidecar verification, `--version` identity check
+  before placement, re-verification of the placed bytes, user-local default
+  destinations, and no internal privilege escalation.
+- Cargo source fallback that runs *only* when the host has no published binary
+  or the selected release genuinely lacks it. Verification, identity, and
+  transport failures never fall back. The fallback builds into a private
+  temporary Cargo root, validates the built binary, and cleans up only its own
+  state.
+- `packaging/tests/`: a local fixture release server and 17 deterministic
+  installer cases covering the verified install, exact-version install,
+  documented Cargo fallback, and the negative paths for missing checksum,
+  malformed digest, tampered payload, wrong product, wrong version, transport
+  failure, existing destination, `--force` replacement, unwritable destination,
+  malformed version syntax, absent Cargo, an empty Cargo result, and temporary
+  state cleanup.
+- `scripts/check-installer-contract.py`, which extracts the host-to-target
+  mapping each wrapper actually implements and proves it is a projection of the
+  Eggpack contract rather than a second release schema. Wired into the release
+  drift gate, the release check, and the installer suite.
+
 ### Not in this release
 
-- No crates.io publication and no public GitHub release have occurred.
-- The public one-curl `install.sh` / `install.ps1` wrappers are not available.
+- No crates.io publication and no public GitHub release have occurred, so the
+  installers have no release to install yet.
 - `cargo cleanme update` does not exist yet.
+- No runtime release-artifact qualification has run; the exact release bytes
+  are qualified when the first release workflow is dispatched.
 
 [0.1.0]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.1.0

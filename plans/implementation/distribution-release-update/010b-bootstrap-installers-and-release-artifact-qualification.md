@@ -1,8 +1,8 @@
 # M010B — Bootstrap Installers and Release Artifact Qualification
 
-Status: blocked
+Status: active
 
-Repository baseline: M010A closure commit.
+Repository baseline: `b4662af` (M010A implementation commit; closure `plans/closure/distribution-release-update/010a-status.md`).
 
 Source roadmap: Phase 10 — Distribution and operational polish
 
