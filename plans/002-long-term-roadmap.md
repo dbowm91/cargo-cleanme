@@ -302,7 +302,7 @@ Exit condition:
 
 ## Phase 10 — Distribution and operational polish
 
-Status: active planning; M010A is ready.
+Status: closed. M010A, M010B, M010C, and M010D are closed, and correctives C011 and C012 are closed. `v0.1.0` and `v0.1.1` are published to GitHub and crates.io. Evidence: `plans/closure/distribution-release-update/010a-status.md`, `010b-status.md`, `010c-status.md`, `010d-status.md`, `c011-status.md`, `c012-status.md`. C010 is a bounded upstream request and is `proposed`.
 
 Subsystem roadmap:
 
@@ -327,6 +327,17 @@ Required direction:
 - record release-oriented semantic counters, timings, dependency footprint, and binary-size baselines.
 
 Eggpack needs no upstream feature plan for the initial direct single-binary release. The preferred lightweight self-update path depends on a separately registered Eggup acquisition milestone to publish the already-qualified `eggup-curl` adapter.
+
+Later finding (2026-10-04, during M010C/M010D implementation): the `eggup-curl`
+premise above did not survive contact with the registry. The published
+`eggup-curl` 0.1.2 exposes no User-Agent seam, and crates.io answers
+`curl/x.y` with HTTP 403, so the lightweight curl path could not perform the
+required transaction. The transport was reversed to `eggfetch` and curl was not
+retained as a fallback; a bounded upstream request for the missing
+`CurlConfig::user_agent` seam is recorded as
+`plans/implementation/distribution-release-update/c010-eggup-curl-user-agent-seam.md`
+(`proposed`). The correction is recorded in
+`plans/closure/distribution-release-update/c011-status.md`.
 
 ## Dependency summary
 
@@ -380,7 +391,8 @@ M008C Cargo profile/package selector qualification [closed by M008D evidence;
 M008D Cargo package-selector qualification and enablement [closed]
       |
       v
-Phase 10 distribution and operational polish [M010A ready; M010B-D dependency-ordered]
+Phase 10 distribution and operational polish [closed; M010A-M010D and
+    correctives C011-C012]
 ~~~
 
 Destructive work MUST NOT be pulled forward merely to make the tool feel complete.
