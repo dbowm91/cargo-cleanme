@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: **closed.** M010A, M010B, M010C, and M010D are closed, and correctives C011 and C012 are closed. `v0.1.0` and `v0.1.1` are published to GitHub and crates.io. C010 is an upstream request and is `proposed`; no follow-on plan remains to activate here.
+Status: Phase 10 remains **closed**, with a post-release corrective line now registered. C013 cross-platform fixture-premise audit is **ready**. C014 v0.1.2 live-update/release-reproducibility corrective is **blocked on C013 for publication**; its non-publication toolchain/source-identity preparation may proceed in parallel. C010 remains an upstream request (`proposed`) that nothing here waits on.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 
@@ -193,9 +193,10 @@ corrective **C011** rather than smoothed over: the `v0.1.0` updater could not
 read the version authority at all. See
 `plans/closure/distribution-release-update/c011-status.md`.
 
-One requirement is closed partial: the live updater **commit** path has no
+One requirement was closed partial: the live updater **commit** path has no
 end-to-end rehearsal, because `v0.1.1` is both the newest published version and
-the first containing a working updater. Rehearsing it needs a `v0.1.2`.
+the first containing a working updater. That gap is now explicitly owned by
+post-release corrective C014, with C013 as its publication precondition.
 
 Primary outcomes:
 
@@ -207,6 +208,44 @@ Primary outcomes:
 - release benchmark tracking built from existing `--no-progress --stats` and deterministic fixtures;
 - smoke installation and self-update from externally resolved release artifacts;
 - closure record with source revision, package checksum, release asset inventory, hosted platform runs, known limitations, and rollback/recovery evidence.
+
+## 8A. C013 — Cross-platform fixture premise audit
+
+Plan: `plans/implementation/distribution-release-update/c013-cross-platform-fixture-premise-audit.md`
+
+Status: ready.
+
+C013 closes the low-severity evidence debt left by C012: audit every fixture that substitutes or resolves an external executable, PATH entry, shell/editor command, or platform-specific process and prove that the executable the test intends to exercise is the executable the subject actually resolves. The audit may keep intentionally Unix-only tests platform-scoped; it must not claim cross-platform coverage from a fixture that cannot execute on that platform.
+
+Primary outcomes:
+
+- complete external-process fixture inventory;
+- platform-correct PATH/stub semantics;
+- premise assertions for substituted tools;
+- explicit scoping for deliberately platform-only fixtures;
+- no medium-or-higher fixture-evidence finding remaining.
+
+C013 does not reopen Phase 10 and should not change production behavior. A product defect discovered by the audit gets a separate corrective.
+
+## 8B. C014 — v0.1.2 live update and release reproducibility corrective
+
+Plan: `plans/implementation/distribution-release-update/c014-v0.1.2-live-update-and-release-reproducibility-corrective.md`
+
+Status: blocked on C013 for publication. Toolchain/source-identity preparation may proceed in parallel.
+
+C014 uses v0.1.2 as a deliberately small qualification release. It closes M010D's partial live-updater evidence and the two release-process weaknesses recorded during v0.1.1 publication.
+
+Required outcomes:
+
+- replace floating `rust = "stable"` release inputs with one exact qualified Rust release while preserving Rust 1.89 MSRV;
+- mechanically enforce exact tag/version/source identity for crate publication;
+- publish v0.1.2 only after C013 closure and the normal Eggpack staged-release gates;
+- exercise the released v0.1.1 updater through a real self-managed v0.1.1 -> public v0.1.2 networked commit;
+- require the installed post-update binary digest to equal the public v0.1.2 asset digest;
+- prove a Cargo-managed v0.1.1 install refuses self-update without mutation and emits the correct v0.1.2 manager remediation;
+- make the live smoke repeatable on the supported release platform matrix to the extent claimed.
+
+A failure after immutable publication must be handled by yanking/annotating and a new corrective/version, never by replacing v0.1.2 bytes.
 
 ## 9. Verification strategy
 
