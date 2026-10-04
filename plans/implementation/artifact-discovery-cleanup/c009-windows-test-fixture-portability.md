@@ -57,6 +57,38 @@ Why previous verification missed it: every other fixture in the file ignores
 the `set_modified` error with `let _ =`, so a Windows no-op was invisible; only
 this fixture unwrapped, converting the silent no-op into a visible panic.
 
+### Finding C009-F3 — the same defect in both integration suites
+
+`tests/end_to_end.rs::backdate` and the `cli_contract` fixture both apply the
+identical `fs::File::open(directory).unwrap().set_modified(old).unwrap()`
+pattern to the workspace root, `src`, `target`, and `target/debug`. The
+`cli_contract` fixture already carried a comment stating that the workspace
+directory's mtime is source activity and must be backdated, so the requirement
+was understood; only the platform capability was missing.
+
+This finding was **masked**, not absent. `cargo test --all-targets` stops
+after the first failing test target, so while the `lib` target failed on
+Windows the two integration binaries never ran. Fixing F1 and F2 turned the
+lane far enough to expose F3. Any future Windows-fixture failure in this
+repository should be expected to arrive in batches of one per target.
+
+Why previous verification missed it: fail-fast target ordering hid the
+integration suites behind the library test failure.
+
+## 2a. Scope revision
+
+The original plan scoped the helper to the `src/workspace.rs` unit-test
+module on the grounds that only that call site failed. F3 disproves that:
+integration tests cannot see `#[cfg(test)]` items, so the same platform
+capability is required in a second location.
+
+The helper is therefore provided in exactly two test-scoped copies: one in the
+`src/workspace.rs` unit-test module and one in `tests/common/mod.rs`, included
+by each integration suite with `mod common;`. The invariant is unchanged: no
+production item is added, and the published library surface is not widened. A
+single shared helper would have required a `#[doc(hidden)]` public module,
+which is a worse trade than a contained duplicate.
+
 ## 3. Invariants
 
 - No production behavior changes. Both findings are in test fixtures.
@@ -74,17 +106,23 @@ None. The corrective is confined to test code under `#[cfg(test)]`.
 
 ## 5. Ordered work packages
 
-1. Add a test-local `set_path_modified` helper that sets a path's modification
+1. Add a test-scoped `set_path_modified` helper that sets a path's modification
    time for files *and* directories on every platform. On Windows it must open
-   the path with `FILE_FLAG_BACKUP_SEMANTICS` and call `SetFileTime`; on other
-   platforms it keeps the current `set_modified` behavior.
-2. Route `backdate_tree` and the C009-F2 fixture through that helper, keeping
-   the existing lenient behavior for files where no handle is required.
-3. Make the C009-F1 fixture's invalid glob path absolute on every platform by
+   the path with `FILE_FLAG_BACKUP_SEMANTICS` and `FILE_WRITE_ATTRIBUTES` and
+   call `SetFileTime`; on other platforms it keeps the current `set_modified`
+   behavior.
+2. Provide the helper in the two test scopes that need it: the
+   `src/workspace.rs` unit-test module and a `tests/common/mod.rs` module
+   included by each integration suite.
+3. Route `backdate_tree`, the C009-F2 fixture, and both integration fixtures
+   through the helper, keeping the existing lenient behavior for files where no
+   special handle is required.
+4. Make the C009-F1 fixture's invalid glob path absolute on every platform by
    deriving it from the platform temporary directory instead of hardcoding a
    POSIX literal, and keep asserting the glob-compilation error.
-4. Run the full local gate plus a Windows-target compile check.
-5. Obtain green hosted Windows, Linux, macOS, and Rust 1.89 evidence.
+5. Run the full local gate plus a Windows-target compile check.
+6. Obtain green hosted Windows, Linux, macOS, and Rust 1.89 evidence, allowing
+   for the fail-fast masking described in C009-F3.
 
 ## 6. Compatibility effects
 
@@ -120,8 +158,11 @@ referenced from the M010A closure record.
 - `workspace::tests::nested_build_inside_target_is_counted_once` passes on
   Windows and still proves the nested union is measured once, with the
   backdated-inactive precondition genuinely established.
+- `tests/end_to_end.rs` and `tests/cli_contract.rs` pass on Windows, proving
+  C009-F3 is closed rather than merely un-masked.
 - Hosted `checks (windows-latest)` is green.
-- No production file changed.
+- No production Rust file changed; `Cargo.toml` gains only the `Win32_Security`
+  feature that `CreateFileW` requires.
 
 ## 11. Stop conditions
 

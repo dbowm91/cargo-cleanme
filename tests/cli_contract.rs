@@ -8,6 +8,8 @@
 
 use std::{fs, path::PathBuf, process::Command};
 
+mod common;
+
 fn staged_cargo_cleanme() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("temporary PATH directory");
     let current = PathBuf::from(env!("CARGO_BIN_EXE_cargo-cleanme"));
@@ -219,25 +221,16 @@ fn json_unattended_yes_executes_through_cargo_and_emits_typed_result() {
         target.join("CACHEDIR.TAG"),
         artifact.clone(),
     ] {
-        fs::OpenOptions::new()
-            .write(true)
-            .open(file)
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
+        common::backdate_file(&file, old);
     }
-    fs::File::open(&target).unwrap().set_modified(old).unwrap();
-    fs::File::open(target.join("debug"))
-        .unwrap()
-        .set_modified(old)
-        .unwrap();
+    for directory in [target.clone(), target.join("debug")] {
+        common::backdate_file(&directory, old);
+    }
     // The workspace directory's own mtime is source activity too, so it has to
     // be backdated for the fixture to look inactive under a real recency window.
+    // Directory mtimes need a platform-correct handle on Windows (C009).
     for directory in [root.clone(), root.join("src")] {
-        fs::File::open(directory)
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
+        common::backdate_file(&directory, old);
     }
     let log = temp.path().join("cargo.log");
     let args_log = temp.path().join("cargo-args.log");

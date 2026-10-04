@@ -14,6 +14,8 @@ use std::{
 };
 use tempfile::tempdir;
 
+mod common;
+
 /// One inactive project plus one that was just built.
 fn fixture(temp: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
     let old = temp.join("old-project");
@@ -53,12 +55,7 @@ fn backdate(project: &std::path::Path) {
         project.join("target/CACHEDIR.TAG"),
         project.join("target/debug/app"),
     ] {
-        fs::OpenOptions::new()
-            .write(true)
-            .open(file)
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
+        common::backdate_file(&file, old);
     }
     for directory in [
         project.to_path_buf(),
@@ -66,10 +63,9 @@ fn backdate(project: &std::path::Path) {
         project.join("target"),
         project.join("target/debug"),
     ] {
-        fs::File::open(directory)
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
+        // The workspace directory's own mtime is part of the recency verdict,
+        // so this must genuinely apply on every platform (C009).
+        common::backdate_file(&directory, old);
     }
 }
 
