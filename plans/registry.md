@@ -34,7 +34,7 @@ M008 planning baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | closing | plans/subsystems/artifact-discovery-cleanup-roadmap.md | C008 Phase 9 closure/planning reconciliation | Documentation reconciliation is complete; hosted CI and final closure evidence are being gathered. Phase 10 remains deferred. |
+| Artifact discovery and cleanup | planning | plans/subsystems/artifact-discovery-cleanup-roadmap.md | none / Phase 10 deferred | Phase 9 current objectives are closed by C008. No active or ready implementation handoff exists. Phase 10 awaits a separate planning decision. |
 
 ## Implementation handoffs
 
@@ -65,11 +65,11 @@ M008 planning baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 | Artifact discovery and cleanup | M008B machine-readable reporting + automation contract | **closed** | plans/implementation/artifact-discovery-cleanup/008b-machine-readable-reporting-and-automation-contract.md | Closure: plans/closure/artifact-discovery-cleanup/008b-status.md. Typed subreason codes, selector/report DTOs, unattended fake-Cargo Execute, JSON scope metadata, Rust 1.89, and hosted CI passed. |
 | Artifact discovery and cleanup | M008C Cargo profile/package selective cleanup qualification | **closed by subsequent M008D evidence** | plans/implementation/artifact-discovery-cleanup/008c-cargo-profile-package-selective-cleanup-qualification.md | Historical conditional closure: plans/closure/artifact-discovery-cleanup/008c-status.md. M008D satisfies the deferred package line: plans/closure/artifact-discovery-cleanup/008d-status.md. Exact Cargo release limits remain in force. |
 | Artifact discovery and cleanup | M008D Cargo package-selector qualification and enablement | **closed** | plans/implementation/artifact-discovery-cleanup/008d-cargo-package-selector-qualification-and-enablement.md | Closure: plans/closure/artifact-discovery-cleanup/008d-status.md. Exact Cargo 1.98.1/1.99.0 behavior, package identity validation, unknown-version failure, and hosted platform/MSRV gates pass. |
-| Artifact discovery and cleanup | C008 Phase 9 closure + planning reconciliation | **closing** | plans/implementation/artifact-discovery-cleanup/c008-phase-9-closure-and-planning-reconciliation.md | Hosted CI and closure evidence in progress. Phase 9 reconciliation changes are complete; Phase 10 remains deferred. |
+| Artifact discovery and cleanup | C008 Phase 9 closure + planning reconciliation | **closed** | plans/implementation/artifact-discovery-cleanup/c008-phase-9-closure-and-planning-reconciliation.md | Closure: plans/closure/artifact-discovery-cleanup/c008-status.md. Phase 9 canonical state reconciled. Phase 10 remains deferred; no implementation handoff is ready. |
 
 ## Current handoff
 
-C008 is the only closing handoff. Its Phase 9 planning reconciliation is complete and hosted CI is being gathered. M008C is closed by M008D evidence while its historical conditional closure remains intact; Phase 10 remains deferred.
+No implementation handoff is active or ready. C008 closed Phase 9 planning reconciliation after M008D without changing production behavior or activating Phase 10. M008C is closed by M008D evidence while its historical conditional closure remains intact.
 
 Milestone sequence:
 
@@ -85,7 +85,7 @@ M008A workspace selective cleanup policy -> closed
 M008B machine-readable reporting/automation contract -> closed
 M008C Cargo profile/package selective cleanup -> closed by M008D evidence; historical conditional closure retained
 M008D Cargo package selector -> closed
-C008 Phase 9 closure/planning reconciliation -> closing
+C008 Phase 9 closure/planning reconciliation -> closed
 Phase 10 distribution and operational polish -> deferred
 ~~~
 

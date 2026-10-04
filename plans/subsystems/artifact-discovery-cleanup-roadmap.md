@@ -1,6 +1,6 @@
 # Artifact Discovery and Cleanup Roadmap
 
-Status: closing; C008 planning reconciliation is complete and hosted CI is being gathered. Phase 10 remains deferred pending a separate planning decision.
+Status: planning; Phase 9 current objectives are closed by C008. There is no active or ready implementation handoff. Phase 10 remains deferred pending a separate planning decision.
 
 Repository audit baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 
@@ -165,7 +165,7 @@ M008C Cargo profile/package selector qualification [closed by M008D evidence; hi
 M008D Cargo package-selector qualification and enablement [closed]
       |
       v
-C008 Phase 9 closure/planning reconciliation [closing]
+C008 Phase 9 closure/planning reconciliation [closed]
       |
       v
 Phase 10 distribution and operational polish [deferred]
@@ -563,7 +563,7 @@ M008D owns package-spec identity/ambiguity semantics, runtime Cargo capability g
 
 ### C008 — Phase 9 closure and planning reconciliation
 
-Status: ready. Plan: `plans/implementation/artifact-discovery-cleanup/c008-phase-9-closure-and-planning-reconciliation.md`.
+Status: closed. Closure: `plans/closure/artifact-discovery-cleanup/c008-status.md`. Plan: `plans/implementation/artifact-discovery-cleanup/c008-phase-9-closure-and-planning-reconciliation.md`.
 
 C008 is a documentation/planning-only corrective after M008D closure. It reconciles the canonical Phase 9 roadmap and dependency graph, the durable specification/terminology with implemented cleanup-policy/JSON/selector behavior, the active M008C/M008D terminal status, README/schema wording, and the post-Phase-9 registry/subsystem state.
 

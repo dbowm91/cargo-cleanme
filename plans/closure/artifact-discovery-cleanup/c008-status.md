@@ -2,9 +2,9 @@
 
 Plan: `plans/implementation/artifact-discovery-cleanup/c008-phase-9-closure-and-planning-reconciliation.md`
 
-Disposition: **closing** (documentation reconciliation complete; final hosted CI evidence pending)
+Disposition: **closed**
 
-Implementation commit: pending commit of this reconciliation.
+Implementation commit: `f823798` (`Reconcile and close Phase 9 planning state`).
 
 Repository baseline: `50de189c4720b1049a63d18e22802999e785d592` (`Register C008 in subsystem roadmap`). The plan's stated `418a9876bb243f88e4403191c4ecaf9f5a2f6ef6` is the M008D implementation baseline; subsequent commits registered and prepared C008, so reconciliation was applied to the actual baseline HEAD above.
 
@@ -55,7 +55,7 @@ All local commands passed on baseline `50de189c4720b1049a63d18e22802999e785d592`
 - `rtk git diff --check` — pass.
 - CLI help inspection (`rtk cargo run -- clean --help`) — pass; listed options match the README examples and selector contract.
 
-Hosted Linux/macOS/Windows and Rust 1.89 CI: pending push of the C008 implementation commit; result and run identifier will be recorded before final closure.
+Hosted Linux/macOS/Windows and Rust 1.89 CI: GitHub Actions run `37179572356` passed on implementation commit `f823798` (Ubuntu, macOS, Windows, and MSRV 1.89 jobs).
 
 ## Production behavior and final disposition
 
