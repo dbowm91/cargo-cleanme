@@ -82,6 +82,19 @@ pub enum Command {
         #[arg(long, conflicts_with = "dry_run", conflicts_with = "dryrun")]
         yes: bool,
     },
+    /// Update this cargo-cleanme to the latest stable published release.
+    ///
+    /// The registry is the version authority, the release tag is constructed
+    /// from that version rather than scraped, and the candidate is replaced
+    /// only after its `.sha256` evidence is verified and it identifies itself
+    /// as exactly the target version. A Cargo-managed installation is refused
+    /// with the exact manager command, because Cargo owns that file and its
+    /// bookkeeping.
+    Update {
+        /// Resolve the plan and report it without acquiring or replacing bytes.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 #[derive(Debug, Subcommand)]
 pub enum ConfigCommand {

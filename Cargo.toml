@@ -30,6 +30,7 @@ include = [
     "/LICENSE-APACHE",
 ]
 
+
 [lib]
 name = "cargo_cleanme"
 path = "src/lib.rs"
@@ -49,6 +50,19 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 toml = "0.8"
+# Self-update mechanics. Generic acquisition, transport, integrity, staging,
+# and rollback are owned by the published Eggup crates, not reimplemented
+# here.
+#
+# `eggup-curl` is the production transport: `eggup-acquisition` has zero
+# dependencies, so the curl path adds no embedded HTTP/TLS stack to a CLI
+# whose self-update is infrequent. `eggup-eggfetch` would add `eggfetch-core`
+# plus rustls; that alternative was measured and rejected (see the M010C
+# closure record). The transport is discovered at runtime and degrades to a
+# typed adapter-unavailable result, never to a second production transport.
+eggup-acquisition = "0.1.2"
+eggup-core = "0.1.2"
+eggup-curl = "0.1.2"
 
 [dev-dependencies]
 tempfile = "3"

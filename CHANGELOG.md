@@ -71,11 +71,48 @@ published yet.
   Eggpack contract rather than a second release schema. Wired into the release
   drift gate, the release check, and the installer suite.
 
+### Added (M010C)
+
+- `cargo cleanme update`: bounded self-update built on the published Eggup
+  crates. The registry is the version authority, the release tag is
+  constructed as `vX.Y.Z` rather than scraped, and the candidate is replaced
+  only after its `.sha256` sidecar verifies, the sidecar is confirmed to be
+  evidence for that asset, and the candidate prints exactly `cargo-cleanme
+  X.Y.Z`.
+- Install provenance policy: a Cargo-managed installation is refused with the
+  exact `cargo install cargo-cleanme --locked --force` command, because Cargo
+  owns that file and its bookkeeping. Any other installation must be proven
+  owned by its exact prior SHA-256, re-verified under a mutation lock
+  immediately before replacement. Unprovable ownership fails closed.
+- `eggup-curl` is the single production transport, so the updater adds no
+  embedded HTTP/TLS stack. Its cost is measured: the release binary grows from
+  4,970,912 to 5,420,664 bytes (+449,752, +9.0%) with three new crates and
+  `eggup-acquisition` contributing zero transitive dependencies. The
+  `eggup-eggfetch` alternative would add `eggfetch-core` plus rustls and was
+  rejected on that measurement.
+- 19 fixture-driven updater tests covering the version authority, tag
+  construction, already-current, registry outage, all three provenance
+  states, a successful verified replacement, checksum mismatch, wrong candidate
+  identity, a sidecar naming a different asset, an absent asset, and staging
+  cleanup on both the success and failure paths.
+
+### Fixed
+
+- The candidate was staged with `PermissionsIntent::Preserve`, which carries a
+  freshly downloaded non-executable artifact through as non-executable. Every
+  real update would have failed identity validation with a permission error.
+  The intent is now `Executable`, which Eggup applies at staging time.
+
 ### Not in this release
 
-- No crates.io publication and no public GitHub release have occurred, so the
-  installers have no release to install yet.
-- `cargo cleanme update` does not exist yet.
+- No crates.io publication and no public GitHub release have occurred. Because
+  `cargo-cleanme` is not published, `cargo cleanme update` currently reports
+  that the registry has no stable version, which is the correct fail-closed
+  behavior rather than a defect.
+- Release-manifest projection via `eggup-eggpack` is deferred: every target is
+  a single direct artifact, so the tag plus the asset plus its sidecar digest
+  is the whole update input. A real release workflow run is still required to
+  prove end-to-end agreement with what Eggpack stages.
 - No runtime release-artifact qualification has run; the exact release bytes
   are qualified when the first release workflow is dispatched.
 

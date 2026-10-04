@@ -9,4 +9,8 @@ pub enum AppError {
     Io(#[from] std::io::Error),
     #[error("scanner failed: {0}")]
     Scan(String),
+    #[error("self-update refused: {0}")]
+    Provenance(String),
+    #[error("self-update failed: {0}")]
+    Update(String),
 }

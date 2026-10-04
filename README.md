@@ -146,7 +146,45 @@ When the fallback does run, it builds into a private temporary Cargo root and
 validates the produced binary with the same `--version` check before placing
 it, and it cleans up only its own temporary state.
 
-`cargo cleanme update` does not exist yet.
+### Self-update
+
+```sh
+cargo cleanme update --dry-run   # resolve and report; change nothing
+cargo cleanme update             # update to the latest stable release
+```
+
+`update` is deliberately narrow. It will not guess and it will not clean up
+after itself:
+
+- The **registry is the version authority**. The published stable version is
+  read from crates.io, and the GitHub release tag is *constructed* as
+  `vX.Y.Z` from it — never scraped from a page, a redirect, or a "latest" link.
+  A prerelease is not an update target, because `update` cannot express "I
+  accept that tradeoff" the way an explicit `cargo install` can.
+- **A Cargo-managed install is refused.** If the running executable lives in a
+  Cargo bin root that Cargo's own `.crates.toml` records, `update` prints
+  `cargo install cargo-cleanme --locked --force` and changes nothing. Cargo
+  owns that file and its bookkeeping; replacing it here would make
+  `cargo install --list` and uninstall lie.
+- **Ownership is proven, not inferred.** Anything else is updated only after
+  the live file's exact SHA-256 is observed and then re-verified under a
+  mutation lock immediately before replacement. The file name, the directory,
+  and `PATH` order prove nothing. A file that cannot be positively identified
+  fails closed.
+- **A host with no published binary** is reported as such, with the Cargo
+  command to use instead.
+- Bytes are replaced only after the asset's `.sha256` sidecar verifies, the
+  sidecar is confirmed to be evidence for *that* asset, and the candidate is
+  executed and required to print exactly `cargo-cleanme X.Y.Z`.
+- The transport is the external `curl` executable via the published Eggup
+  crates, so no HTTP/TLS stack is embedded. If `curl` cannot be found, the run
+  ends with a typed error and the manager command; it never silently switches
+  to a second transport.
+- Verified replacement, rollback, and staging are Eggup's, not a second copy
+  here. A commit that is not cleanly `Committed` is reported as such, including
+  when recovery is required.
+- The SHA-256 evidence is **integrity only**. There is no signature check, and
+  `update` makes no authenticity claim.
 
 
 ## Prebuilt release targets

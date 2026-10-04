@@ -1,5 +1,5 @@
 use cargo_cleanme::{
-    cli::{self, Cli, Command, ConfigCommand},
+    cli::{self, Cli, Command, ConfigCommand, OutputFormat},
     config::{self, ConfigPathResolver},
     error::AppError,
 };
@@ -19,6 +19,23 @@ fn run() -> Result<i32, AppError> {
     let stats = cli.stats;
     let format = cli.format;
     match cli.command {
+        Some(Command::Update { dry_run }) => {
+            let plan = cargo_cleanme::update::update(dry_run)?;
+            if format == OutputFormat::Json {
+                println!("{}", update_json(&plan, dry_run));
+            } else if dry_run {
+                println!(
+                    "cargo-cleanme: {} -> {} available for {}",
+                    plan.from_version, plan.to_version, plan.target
+                );
+                println!("  release: {}", plan.tag);
+                println!("  asset:   {}", plan.asset);
+                println!("  install: not changed (--dry-run)");
+            } else {
+                println!("cargo-cleanme: updated to {}", plan.to_version);
+            }
+            Ok(0)
+        }
         Some(Command::Config { command }) => {
             match command {
                 ConfigCommand::Path => println!("{}", path.display()),
@@ -544,4 +561,30 @@ fn run_scan(
         return Ok(1);
     }
     Ok(0)
+}
+
+/// One stable JSON object for `update`, matching the schema_version discipline
+/// every other machine-readable surface in this CLI already follows.
+fn update_json(plan: &cargo_cleanme::update::UpdatePlan, dry_run: bool) -> String {
+    let mut document = serde_json::Map::new();
+    document.insert("schema_version".into(), serde_json::json!(1));
+    document.insert(
+        "cargo_cleanme_version".into(),
+        serde_json::json!(env!("CARGO_PKG_VERSION")),
+    );
+    document.insert("operation".into(), serde_json::json!("update"));
+    document.insert("dry_run".into(), serde_json::json!(dry_run));
+    document.insert(
+        "result".into(),
+        serde_json::json!({
+            "from_version": plan.from_version,
+            "to_version": plan.to_version,
+            "target": plan.target,
+            "asset": plan.asset,
+            "tag": plan.tag,
+            "provenance": plan.provenance.code(),
+            "changed": !dry_run,
+        }),
+    );
+    serde_json::Value::Object(document).to_string()
 }

@@ -11,4 +11,5 @@ pub mod policy;
 pub mod progress;
 pub mod report;
 pub mod traverse;
+pub mod update;
 pub mod workspace;
