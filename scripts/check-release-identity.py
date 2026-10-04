@@ -263,7 +263,35 @@ def self_test() -> int:
     else:
         print("  skip manifest cases: no staged manifest available on this host")
 
-    expect("a dirty tree is rejected", check_clean_tree(), True)
+    # The clean-tree rule is exercised by *making* a tree dirty, not by asking
+    # whether this checkout happens to be dirty. A test whose verdict depends on
+    # ambient state passes in CI and fails on a developer's machine for no
+    # reason, which is the same false-green shape this line exists to remove.
+    #
+    # The claim is therefore the *difference*: adding an untracked file must
+    # change the verdict. Whether the checkout was already dirty is irrelevant
+    # and deliberately not asserted.
+    probe = ROOT / ".identity-gate-selftest.tmp"
+    before = check_clean_tree()
+    probe.write_text("self-test residue\n", encoding="utf-8")
+    try:
+        during = check_clean_tree()
+    finally:
+        probe.unlink(missing_ok=True)
+    expect("a deliberately dirty tree is rejected", during, True)
+    if during == before:
+        failures.append(
+            "adding an untracked file did not change the clean-tree verdict; "
+            "the rule is not reading this repository's status"
+        )
+        print("  FAIL an untracked file must change the clean-tree verdict")
+    else:
+        print("  ok   an untracked file changes the clean-tree verdict")
+    if check_clean_tree() != before:
+        failures.append("removing the probe did not restore the original verdict")
+        print("  FAIL removing the probe must restore the original verdict")
+    else:
+        print("  ok   removing the probe restores the original verdict")
 
     if failures:
         print(f"check-release-identity: self test FAILED ({len(failures)} case(s))", file=sys.stderr)
