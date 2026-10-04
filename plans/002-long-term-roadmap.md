@@ -302,7 +302,7 @@ Exit condition:
 
 ## Phase 10 — Distribution and operational polish
 
-Status: closed. M010A, M010B, M010C, and M010D are closed, and correctives C011 and C012 are closed. `v0.1.0` and `v0.1.1` are published to GitHub and crates.io. Evidence: `plans/closure/distribution-release-update/010a-status.md`, `010b-status.md`, `010c-status.md`, `010d-status.md`, `c011-status.md`, `c012-status.md`. C010 is a bounded upstream request and is `proposed`.
+Status: closed. M010A, M010B, M010C, and M010D are closed, and correctives C011 and C012 are closed. `v0.1.0` and `v0.1.1` are published to GitHub and crates.io. Evidence: `plans/closure/distribution-release-update/010a-status.md`, `010b-status.md`, `010c-status.md`, `010d-status.md`, `c011-status.md`, `c012-status.md`. Phase 10 remains closed while post-release correctives proceed: C013 fixture-premise audit is ready; C014 v0.1.2 live-update/reproducibility corrective is blocked on C013 for publication. C010 is a bounded upstream request and is `proposed`.
 
 Subsystem roadmap:
 
@@ -338,6 +338,13 @@ retained as a fallback; a bounded upstream request for the missing
 `plans/implementation/distribution-release-update/c010-eggup-curl-user-agent-seam.md`
 (`proposed`). The correction is recorded in
 `plans/closure/distribution-release-update/c011-status.md`.
+
+Post-release corrective sequence (does not reopen Phase 10):
+
+1. C013 — audit external-process fixtures and prove their executable-resolution/branch premises on every platform they claim.
+2. C014 — pin an exact release Rust toolchain, enforce exact tag/source publication identity, publish the deliberately small v0.1.2 qualification release, and prove a real released v0.1.1 -> v0.1.2 self-update commit against public authorities.
+
+C014 publication is blocked on C013 closure. Its non-publication release-toolchain/source-identity preparation may proceed in parallel.
 
 ## Dependency summary
 
@@ -393,6 +400,13 @@ M008D Cargo package-selector qualification and enablement [closed]
       v
 Phase 10 distribution and operational polish [closed; M010A-M010D and
     correctives C011-C012]
+      |
+      v
+C013 post-release fixture-premise audit [ready]
+      |
+      v
+C014 v0.1.2 live update/release reproducibility [blocked on C013 for publication]
 ~~~
+
 
 Destructive work MUST NOT be pulled forward merely to make the tool feel complete.
