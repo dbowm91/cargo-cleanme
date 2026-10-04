@@ -1,6 +1,6 @@
 # Artifact Discovery and Cleanup Roadmap
 
-Status: active; M008A/M008B are closed, M008C is conditionally closed, and M008D is closed. Phase 10 distribution remains deferred.
+Status: ready; C008 Phase 9 closure/planning reconciliation is the only active handoff. M008A/M008B and M008D are closed; M008C historical conditional closure is reconciled by C008. Phase 10 remains deferred.
 
 Repository audit baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 
@@ -163,6 +163,9 @@ M008C Cargo profile/package selector qualification [conditionally closed; packag
       |
       v
 M008D Cargo package-selector qualification and enablement [closed]
+      |
+      v
+C008 Phase 9 closure/planning reconciliation [ready]
 ~~~
 
 ## 6. Milestone M001 — Foundation, CLI, config, and domain contracts
@@ -554,6 +557,14 @@ Profile selection is enabled for exact qualified releases 1.89.0, 1.90.0, 1.91.1
 Status: closed. Closure: `plans/closure/artifact-discovery-cleanup/008d-status.md`. Plan: `plans/implementation/artifact-discovery-cleanup/008d-cargo-package-selector-qualification-and-enablement.md`.
 
 M008D owns package-spec identity/ambiguity semantics, runtime Cargo capability gating, minimum-runtime configured-target qualification, shared dependency accounting, and the final package selector Execute decision. It inherits M008A's complete workspace ownership proof and M008B's typed output contract.
+
+### C008 — Phase 9 closure and planning reconciliation
+
+Status: ready. Plan: `plans/implementation/artifact-discovery-cleanup/c008-phase-9-closure-and-planning-reconciliation.md`.
+
+C008 is a documentation/planning-only corrective after M008D closure. It reconciles the canonical Phase 9 roadmap and dependency graph, the durable specification/terminology with implemented cleanup-policy/JSON/selector behavior, the active M008C/M008D terminal status, README/schema wording, and the post-Phase-9 registry/subsystem state.
+
+C008 must preserve period-accurate closure evidence, make no production Rust behavior changes, and leave Phase 10 distribution deferred. After C008 closes, the subsystem should have no active implementation handoff unless separate Phase 10 research/planning is explicitly registered.
 
 ## 11. Cross-cutting reliability concerns
 
