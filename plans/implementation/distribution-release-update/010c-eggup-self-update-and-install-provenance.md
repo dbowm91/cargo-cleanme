@@ -1,6 +1,6 @@
 # M010C — Eggup Self-Update and Install Provenance
 
-Status: blocked
+Status: closed
 
 Repository baseline: M010A closure commit plus the registered Eggup acquisition M009 publication dependency.
 

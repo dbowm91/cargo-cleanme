@@ -1,8 +1,10 @@
 # C009 — Windows Test-Fixture Portability Corrective
 
-Status: ready
+Status: closed
 
 Repository baseline: `b4662afdd02a4fdbb6ac065b372ea43836687df6` (M010A implementation commit)
+
+Closure: `plans/closure/artifact-discovery-cleanup/c009-status.md`
 
 Source roadmap: Phase 10 — Distribution and operational polish
 

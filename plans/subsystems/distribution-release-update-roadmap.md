@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: active planning; M010A is closed and M010B is active. Later Phase 10 milestones are dependency-ordered behind the release convention and the upstream Eggup curl publication.
+Status: M010A, M010B, and M010C are closed. M010D's repository-internal scope is complete; its publication scope is blocked on registry authentication and an explicit human decision to publish. No follow-on plan remains to activate.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 
@@ -121,8 +121,11 @@ M010A does not publish anything and does not add a self-updater.
 
 Plan: `plans/implementation/distribution-release-update/010b-bootstrap-installers-and-release-artifact-qualification.md`
 
-Status: active. M010A is closed, so the release-contract interface dependency
-is satisfied.
+Closure: `plans/closure/distribution-release-update/010b-status.md`
+
+Status: closed. The release contract, both public wrappers, and the per-platform
+fixture qualification are in place. Runtime qualification of the real release
+bytes remains open and is named as M010D step 7.
 
 Primary outcomes:
 
@@ -139,18 +142,17 @@ Primary outcomes:
 
 Plan: `plans/implementation/distribution-release-update/010c-eggup-self-update-and-install-provenance.md`
 
-Status: blocked on the M010B release convention becoming stable, and on Eggup
-acquisition M009.
+Closure: `plans/closure/distribution-release-update/010c-status.md`
 
-Verified external state on 2026-10-04: `eggup-curl` is **not** published on
-crates.io — `https://index.crates.io/eg/gp/eggup-curl` returns `NoSuchKey` and
-the crates.io API reports `crate eggup-curl does not exist`. Published Eggup
-crates are `eggup-core 0.1.2`, `eggup-archive 0.1.2`,
-`eggup-acquisition 0.1.2`, `eggup-eggfetch 0.1.2`, and `eggup-eggpack 0.1.2`.
-Eggup's own registry record states `eggup-curl` and `eggup-transport-footprint`
-remain unpublished by design. The preferred lightweight curl path is therefore
-unavailable, and M010C must select its single production transport from the
-published set using the plan's own measured-selection rule.
+Status: closed.
+
+Dependency discharged. `eggup-curl 0.1.2` **is** published and resolvable; this
+was proven with a `cargo generate-lockfile` probe, not a search result. An
+earlier check in this session reported it unpublished, and that was correct at
+the time — the sparse-index CDN lagged the registry API, so the state genuinely
+changed mid-session. The lesson for any later transport work: confirm a
+publication by resolving it, because both the index CDN and the API can
+disagree with each other and with `cargo search` during propagation.
 
 Primary outcomes:
 
@@ -169,7 +171,19 @@ M010C must measure binary-size/dependency impact against the pre-update baseline
 
 Plan: `plans/implementation/distribution-release-update/010d-publication-operational-polish-and-release-closure.md`
 
-Status: blocked on M010A-M010C.
+Closure: `plans/closure/distribution-release-update/010d-status.md`
+
+Status: blocked on the publication half only. The repository-internal scope —
+generated completions and manpages with a CI drift gate, the benchmark baseline
+with counters gated and timings not, the operator release checklist, the support
+policy, and troubleshooting — is complete at `3e5f3ab`.
+
+Not done, and not doable from a planning session: crates.io publication,
+a staged GitHub draft release, per-target runtime qualification of the real
+release bytes, the external registry-only and release-only smoke, and the
+updater rehearsal across a real draft release. Each is enumerated in order in
+the M010D closure record, and the loop cannot be short-circuited: the release
+run is what produces the evidence that publication requires.
 
 Primary outcomes:
 

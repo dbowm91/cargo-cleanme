@@ -1,8 +1,10 @@
 # M010D — Publication, Operational Polish, and Release Closure
 
-Status: blocked
+Status: blocked (publication half); repository-internal half complete
 
-Repository baseline: M010A-M010C closure commits.
+Repository baseline: M010A `b4662af`, M010B `34a1d23`, M010C `d25beeb`.
+
+Closure: `plans/closure/distribution-release-update/010d-status.md` (blocked, with the residual sequence enumerated)
 
 Source roadmap: Phase 10 — Distribution and operational polish
 

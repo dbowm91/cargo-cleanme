@@ -35,7 +35,7 @@ M008 planning baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
 | Artifact discovery and cleanup | closed/current objectives | plans/subsystems/artifact-discovery-cleanup-roadmap.md | Phase 9 closed; C009 corrective closed | C008 closed the cleanup feature roadmap's current objectives; C009 then restored the green hosted Windows lane. Phase 10 is owned by the separate distribution/release/update subsystem. |
-| Distribution, release, and update | active | plans/subsystems/distribution-release-update-roadmap.md | M010B bootstrap installers + release artifact qualification | M010A is closed. Eggup acquisition M009 (`eggup-curl` registry publication) is the external prerequisite for the lightweight curl-backed updater path. |
+| Distribution, release, and update | M010A-M010C closed; M010D publication half blocked | plans/subsystems/distribution-release-update-roadmap.md | M010D publication + operational polish + release closure | M010A, M010B, and M010C are closed. The Eggup curl dependency is discharged. The only remaining Phase 10 work is the publication sequence in the M010D closure record, which needs registry authentication and an explicit human decision to publish. |
 
 ## Implementation handoffs
 
@@ -69,15 +69,17 @@ M008 planning baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 | Artifact discovery and cleanup | C009 Windows test-fixture portability | **closed** | plans/implementation/artifact-discovery-cleanup/c009-windows-test-fixture-portability.md | Closure: plans/closure/artifact-discovery-cleanup/c009-status.md. Restored the green hosted Windows lane (run `37225697173`) that every Phase 10 milestone needs for evidence. |
 | Artifact discovery and cleanup | C008 Phase 9 closure + planning reconciliation | **closed** | plans/implementation/artifact-discovery-cleanup/c008-phase-9-closure-and-planning-reconciliation.md | Closure: plans/closure/artifact-discovery-cleanup/c008-status.md. Phase 9 canonical state reconciled. |
 | Distribution, release, and update | M010A Eggpack distribution contract + package readiness | **closed** | plans/implementation/distribution-release-update/010a-eggpack-distribution-contract-and-package-readiness.md | Closure: plans/closure/distribution-release-update/010a-status.md. Implementation `b4662af`; no publication occurred. Its one green-CI qualification was discharged by C009. |
-| Distribution, release, and update | M010B bootstrap installers + release artifact qualification | **active** | plans/implementation/distribution-release-update/010b-bootstrap-installers-and-release-artifact-qualification.md | M010A is closed, so the release-contract interface dependency is satisfied. May run in parallel with the external Eggup publication. |
-| Distribution, release, and update | M010C Eggup self-update + install provenance | **blocked** | plans/implementation/distribution-release-update/010c-eggup-self-update-and-install-provenance.md | Blocked on M010A plus Eggup acquisition M009 publication; M010B release convention must be stable before closure. |
-| Distribution, release, and update | M010D publication + operational polish + release closure | **blocked** | plans/implementation/distribution-release-update/010d-publication-operational-polish-and-release-closure.md | Blocked on M010A-M010C closure. Owns first crates.io/GitHub public release evidence, completions/manpage, benchmark baseline, and support docs. |
+| Distribution, release, and update | M010B bootstrap installers + release artifact qualification | **closed** | plans/implementation/distribution-release-update/010b-bootstrap-installers-and-release-artifact-qualification.md | Closure: plans/closure/distribution-release-update/010b-status.md. Wrappers + 17 fixture cases green on hosted Linux/macOS/Windows. Runtime qualification of real release bytes is open and is M010D step 7. |
+| Distribution, release, and update | M010C Eggup self-update + install provenance | **closed** | plans/implementation/distribution-release-update/010c-eggup-self-update-and-install-provenance.md | Closure: plans/closure/distribution-release-update/010c-status.md. `eggup-curl 0.1.2` is published and was proven by resolving it, not by a search result. Measured cost +449,752 bytes (+9.0%) with zero transitive transport dependencies. |
+| Distribution, release, and update | M010D publication + operational polish + release closure | **blocked (publication half)** | plans/implementation/distribution-release-update/010d-publication-operational-polish-and-release-closure.md | Closure: plans/closure/distribution-release-update/010d-status.md. Completions/manpage drift gate, benchmark baseline, release checklist, support policy, and troubleshooting are complete at `3e5f3ab`. Publication needs registry auth plus an explicit human decision; the ordered residual sequence is in the closure record. |
 
 ## Current handoff
 
-M010B is the current active handoff. M010A is closed: it established the Eggpack producer contract and the Cargo package-readiness boundary without publishing anything, and its one unmet acceptance criterion (a green hosted Windows lane) was a pre-existing test-fixture defect discharged by corrective C009.
+Phase 10's engineering scope is complete. M010A established the Eggpack producer contract and the Cargo package-readiness boundary; M010B added the public wrappers and their per-platform fixture qualification; M010C added bounded self-update on the published Eggup crates with a real install-provenance policy. M010D's repository-internal scope — generated completions and manpages with a drift gate, the benchmark baseline, the operator release checklist, the support policy, and troubleshooting — is also complete.
 
-M010C-M010D remain blocked in dependency order. Eggup acquisition M009 is a cross-repository hard dependency for M010C's preferred lightweight external-curl path; `eggup-curl` is still unpublished on crates.io, so M010C must select its transport from what is actually published. Eggpack required no upstream implementation plan because its existing producer contract, manifest, bootstrap, CI-generation, drift, and draft-staging surfaces already cover cargo-cleanme's direct single-binary release.
+The remaining Phase 10 work is publication, and it is not blocked on any repository-side gap. It is blocked on two things a planning session must not decide unilaterally: crates.io registry authentication, and the irreversible public publication of a crate and a GitHub release. The load-bearing dependency is structural rather than informational: the plan forbids publishing a target that lacks runtime evidence, and that evidence only exists once a release workflow run has produced a staged draft. The full ordered sequence is in `plans/closure/distribution-release-update/010d-status.md`.
+
+Nothing was published, no tag was created, and no secret was created or stored. Eggpack required no upstream implementation plan because its existing producer contract, manifest, bootstrap, CI-generation, drift, and draft-staging surfaces already cover cargo-cleanme's direct single-binary release.
 
 Milestone sequence:
 
@@ -96,12 +98,13 @@ M008D Cargo package selector -> closed
 C008 Phase 9 closure/planning reconciliation -> closed
 M010A Eggpack distribution contract/package readiness -> closed
 C009 Windows test-fixture portability -> closed (restores per-platform evidence)
-M010B bootstrap installers/release qualification -> active
-M010C Eggup self-update/install provenance -> blocked on M010A + Eggup acquisition M009
-M010D publication/operational polish/release closure -> blocked on M010A-M010C
+M010B bootstrap installers/release qualification -> closed
+M010C Eggup self-update + install provenance -> closed
+M010D publication + operational polish -> publication half blocked, internal half complete
+M010D publication -> BLOCKED on registry auth + an explicit human decision to publish
 ~~~
 
-Phase 10 distribution is explicitly activated and M010A is closed. This work does not alter the destructive cleanup boundary; M010A is release/package infrastructure only. Corrective C009 touched only test fixtures.
+Phase 10 distribution is explicitly activated, M010A-M010C are closed, and M010D's repository-internal scope is complete. This work does not alter the destructive cleanup boundary: the distribution milestones touch release, packaging, and update paths only, and corrective C009 touched test fixtures alone. No publication, no tag, and no release were created.
 
 ### Current destructive safety boundary
 
