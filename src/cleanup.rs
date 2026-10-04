@@ -82,6 +82,14 @@ pub struct CleanReport {
     pub units_considered: usize,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct CleanupPolicy {
+    pub min_reclaimable_bytes: u64,
+    pub min_inactive_seconds: Option<u64>,
+    pub include: Vec<String>,
+    pub exclude: Vec<String>,
+}
+
 impl CleanReport {
     pub fn render(&self) -> String {
         let mut out = String::new();
@@ -550,6 +558,29 @@ pub fn clean_with_roots(
     runner: &dyn CleanupRunner,
     observer: &dyn ProgressObserver,
 ) -> Result<CleanReport, AppError> {
+    clean_with_roots_policy(
+        roots,
+        recency_seconds,
+        allowed_output_roots,
+        mode,
+        runner,
+        observer,
+        &CleanupPolicy::default(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn clean_with_roots_policy(
+    roots: &[PathBuf],
+    recency_seconds: u64,
+    allowed_output_roots: &[PathBuf],
+    mode: CleanMode,
+    runner: &dyn CleanupRunner,
+    observer: &dyn ProgressObserver,
+    policy: &CleanupPolicy,
+) -> Result<CleanReport, AppError> {
+    let includes = compile_policy_globs(&policy.include)?;
+    let excludes = compile_policy_globs(&policy.exclude)?;
     for root in roots {
         if !root.is_absolute() {
             return Err(AppError::InvalidRoot {
@@ -691,6 +722,33 @@ pub fn clean_with_roots(
                 detail,
             });
         };
+        if !includes.is_empty() && !includes.is_match(&unit.root) {
+            skipped(
+                &mut report,
+                "cleanup policy: workspace root is not included".into(),
+            );
+            observer.unit_completed(cleanup_phase);
+            continue;
+        }
+        if excludes.is_match(&unit.root) {
+            skipped(
+                &mut report,
+                "cleanup policy: workspace root is excluded".into(),
+            );
+            observer.unit_completed(cleanup_phase);
+            continue;
+        }
+        if unit.bytes < policy.min_reclaimable_bytes {
+            skipped(
+                &mut report,
+                format!(
+                    "cleanup policy: {0} bytes is below minimum {1}",
+                    unit.bytes, policy.min_reclaimable_bytes
+                ),
+            );
+            observer.unit_completed(cleanup_phase);
+            continue;
+        }
         // C003 §7.2: unit-wide destructive gate. Every physical group the
         // invocation can affect must be private, authorized, and measured.
         // No Cargo process is spawned for any subset of a unit.
@@ -719,6 +777,40 @@ pub fn clean_with_roots(
                 continue;
             }
         };
+        if proof.pre_bytes < policy.min_reclaimable_bytes {
+            skipped(
+                &mut report,
+                format!(
+                    "cleanup policy: fresh size {} bytes is below minimum {}",
+                    proof.pre_bytes, policy.min_reclaimable_bytes
+                ),
+            );
+            observer.unit_completed(cleanup_phase);
+            continue;
+        }
+        if let Some(seconds) = policy.min_inactive_seconds {
+            let Some(activity) = proof.newest_activity else {
+                skipped(
+                    &mut report,
+                    "cleanup policy: required activity timestamp is unavailable".into(),
+                );
+                observer.unit_completed(cleanup_phase);
+                continue;
+            };
+            let cutoff = SystemTime::now()
+                .checked_sub(Duration::from_secs(seconds))
+                .ok_or_else(|| {
+                    AppError::Config("cleanup inactivity duration exceeds system time range".into())
+                })?;
+            if activity >= cutoff {
+                skipped(
+                    &mut report,
+                    "cleanup policy: workspace is too recent".into(),
+                );
+                observer.unit_completed(cleanup_phase);
+                continue;
+            }
+        }
 
         match mode {
             CleanMode::Simulate => {
@@ -843,6 +935,18 @@ pub fn clean_with_roots(
     // Include diagnostics from discovery/resolution in count (already set).
     report.counters = counters;
     Ok(report)
+}
+
+fn compile_policy_globs(patterns: &[String]) -> Result<globset::GlobSet, AppError> {
+    let mut builder = globset::GlobSetBuilder::new();
+    for pattern in patterns {
+        builder.add(globset::Glob::new(pattern).map_err(|e| {
+            AppError::Config(format!("invalid cleanup policy glob {pattern:?}: {e}"))
+        })?);
+    }
+    builder
+        .build()
+        .map_err(|e| AppError::Config(format!("invalid cleanup policy patterns: {e}")))
 }
 
 /// Ownership class reported for a skipped CleanupUnit (C003 §7.2).
@@ -977,6 +1081,7 @@ pub struct ExecutionProof {
     pub covering: Vec<PathBuf>,
     /// Pre-clean bytes of that same deduplicated union.
     pub pre_bytes: u64,
+    pub newest_activity: Option<SystemTime>,
     pub ownership: OutputOwnershipClass,
     pub frozen_env: Vec<(OsString, OsString)>,
 }
@@ -1498,6 +1603,7 @@ fn final_cleanup_proof_roots(
         }
     }
     let activity_start = std::time::Instant::now();
+    let mut newest_activity: Option<SystemTime> = None;
     for member_root in workspace::workspace_member_roots(fresh_ws) {
         match traverse::workspace_member_activity(&member_root, &all_outputs, start, cutoff) {
             Ok(traverse::SourceActivity::Recent(_)) => {
@@ -1505,7 +1611,11 @@ fn final_cleanup_proof_roots(
                     "workspace changed before cleanup; skipped: source became active".into(),
                 );
             }
-            Ok(traverse::SourceActivity::Quiet(_)) => {}
+            Ok(traverse::SourceActivity::Quiet(t)) => {
+                if let Some(t) = t {
+                    newest_activity = Some(newest_activity.map_or(t, |old| old.max(t)));
+                }
+            }
             Err(()) => return Err("revalidation source activity uncertain".into()),
         }
     }
@@ -1513,6 +1623,7 @@ fn final_cleanup_proof_roots(
         .proof_source_activity_nanos
         .saturating_add(activity_start.elapsed().as_nanos() as u64);
     let sizing_start = std::time::Instant::now();
+    let mut fresh_bytes = 0u64;
     for covering in &unit.covering {
         let stats = traverse::measure_single_target(covering);
         if stats.uncertain {
@@ -1520,6 +1631,10 @@ fn final_cleanup_proof_roots(
         }
         if stats.newest.is_some_and(|t| t >= cutoff || t > start) {
             return Err("workspace changed before cleanup; skipped: output became active".into());
+        }
+        fresh_bytes = fresh_bytes.saturating_add(stats.bytes);
+        if let Some(t) = stats.newest {
+            newest_activity = Some(newest_activity.map_or(t, |old| old.max(t)));
         }
     }
     counters.proof_output_sizing_nanos = counters
@@ -1565,7 +1680,8 @@ fn final_cleanup_proof_roots(
         build,
         capability: fresh_ws.capability,
         covering: unit.covering.clone(),
-        pre_bytes: unit.bytes,
+        pre_bytes: fresh_bytes,
+        newest_activity,
         ownership: OutputOwnershipClass::PrivateBounded,
         frozen_env: Vec::new(),
     };
@@ -2386,6 +2502,7 @@ mod tests {
             },
             covering: vec![PathBuf::from("/cache/target")],
             pre_bytes: 0,
+            newest_activity: None,
             ownership: OutputOwnershipClass::PrivateBounded,
             frozen_env: Vec::new(),
         };

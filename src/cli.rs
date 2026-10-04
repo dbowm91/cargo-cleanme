@@ -42,6 +42,18 @@ pub enum Command {
         /// Complete Full reconciliation before cleaning its learned roots.
         #[arg(long, conflicts_with_all = ["root", "known"])]
         full: bool,
+        /// Require at least this many reclaimable bytes per workspace.
+        #[arg(long)]
+        min_reclaimable_bytes: Option<u64>,
+        /// Require this many seconds of inactivity.
+        #[arg(long)]
+        older_than: Option<u64>,
+        /// Include canonical workspace roots matching this glob (repeatable).
+        #[arg(long = "include")]
+        include: Vec<String>,
+        /// Exclude canonical workspace roots matching this glob (repeatable).
+        #[arg(long = "exclude")]
+        exclude: Vec<String>,
         /// Cargo preview: invoke Cargo's own dry-run (the default mode).
         /// Distinct from `--dryrun` (cargo-cleanme simulation).
         #[arg(long, conflicts_with = "yes", conflicts_with = "dryrun")]
@@ -214,6 +226,30 @@ mod tests {
             let parsed = Cli::try_parse_from(normalize_cargo_argv(normalized)).unwrap();
             assert!(matches!(parsed.command, Some(Command::Clean { .. })));
         }
+    }
+
+    #[test]
+    fn cleanup_policy_options_are_repeatable_and_mode_independent() {
+        let parsed = Cli::try_parse_from([
+            "cargo-cleanme",
+            "clean",
+            "--known",
+            "--min-reclaimable-bytes",
+            "42",
+            "--older-than",
+            "60",
+            "--include",
+            "**/one",
+            "--include",
+            "**/two",
+            "--exclude",
+            "**/tmp",
+            "--dryrun",
+        ])
+        .unwrap();
+        assert!(
+            matches!(parsed.command, Some(Command::Clean { min_reclaimable_bytes: Some(42), older_than: Some(60), include, exclude, .. }) if include.len() == 2 && exclude == ["**/tmp"])
+        );
     }
 
     #[test]

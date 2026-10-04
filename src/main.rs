@@ -60,6 +60,10 @@ fn run() -> Result<i32, AppError> {
             root,
             known,
             full,
+            min_reclaimable_bytes,
+            older_than,
+            include,
+            exclude,
             dry_run,
             dryrun,
             yes,
@@ -127,13 +131,30 @@ fn run() -> Result<i32, AppError> {
             let show = cargo_cleanme::progress::should_show_progress(no_progress);
             let renderer = cargo_cleanme::progress::IndicatifRenderer::new(!show);
             let wall_start = std::time::Instant::now();
-            let report = cargo_cleanme::cleanup::clean_with_roots(
+            let configured = &config.cleanup.policy;
+            let policy = cargo_cleanme::cleanup::CleanupPolicy {
+                min_reclaimable_bytes: min_reclaimable_bytes
+                    .unwrap_or(configured.min_reclaimable_bytes),
+                min_inactive_seconds: older_than.or(configured.min_inactive_seconds),
+                include: if include.is_empty() {
+                    configured.include.clone()
+                } else {
+                    include
+                },
+                exclude: if exclude.is_empty() {
+                    configured.exclude.clone()
+                } else {
+                    exclude
+                },
+            };
+            let report = cargo_cleanme::cleanup::clean_with_roots_policy(
                 &roots,
                 config.scan.recency_seconds,
                 &config.cleanup.allowed_output_roots,
                 mode,
                 &cargo_cleanme::cleanup::SystemCleanupRunner,
                 &renderer,
+                &policy,
             )?;
             renderer.finish_and_clear();
             if let Some(generation) = state_generation {

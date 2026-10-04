@@ -40,6 +40,8 @@ cargo-cleanme config show
 cargo-cleanme config edit
 cargo-cleanme clean --known --dryrun # simulate bounded cleanup of Routine roots
 cargo-cleanme clean --full --dryrun  # reconcile Full inventory, then simulate bounded scopes
+cargo-cleanme clean ./projects --min-reclaimable-bytes 104857600
+cargo-cleanme clean --known --older-than 2592000 --exclude '**/archived/**'
 ```
 
 Global flags: `--no-progress` disables transient UI; `--stats` prints detailed semantic counters and phase/process timings to stderr (never stdout) for `scan` and `clean` (preview/simulate/execute). Default runs emit no debug counter line; stdout reports are byte-equivalent with and without `--stats`.
@@ -61,7 +63,15 @@ The repository ships a canonical `config.toml` template. Operational commands cr
 allowed_output_roots = [
   # "/absolute/cache/root",
 ]
+
+[cleanup.policy]
+min_reclaimable_bytes = 0
+# min_inactive_seconds = 2592000
+include = []
+exclude = []
 ```
+
+Cleanup policy matches canonical workspace roots and runs only after complete ownership resolution. Excluded workspaces remain in the ownership proof and can still make outputs shared. `--min-reclaimable-bytes` filters by the freshly measured complete workspace output union; `--older-than` is an additional quiet-age requirement and never replaces the recency safety guard. CLI policy values replace configured values of the same kind when provided. Include/exclude patterns use glob syntax and exclusion wins over inclusion.
 
 Discovery state is machine-local and normally self-managed. Routine scans use seed/configured roots if the state is missing or unusable. A successful `scan --full` replaces corrupt or obsolete local state after reconciliation completes; an incomplete Full scan leaves it untouched. State written by a newer cargo-cleanme schema is preserved, and that version must be upgraded before it can be reconciled. Manually deleting discovery state is not the normal recovery procedure.
 

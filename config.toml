@@ -34,3 +34,12 @@ unignore = []
 # The field is currently operationally redundant because PrivateBounded output
 # is normally workspace-contained, but is preserved for schema compatibility.
 allowed_output_roots = []
+
+# Optional selection policy, applied after complete ownership resolution.
+# CLI values replace the corresponding configured value when supplied.
+[cleanup.policy]
+min_reclaimable_bytes = 0
+# Optional minimum quiet age in seconds (in addition to the safety recency guard).
+# min_inactive_seconds = 2592000
+include = []
+exclude = []

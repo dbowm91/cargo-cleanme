@@ -21,6 +21,19 @@ pub struct Config {
 pub struct CleanupConfig {
     #[serde(default)]
     pub allowed_output_roots: Vec<PathBuf>,
+    #[serde(default)]
+    pub policy: CleanupPolicyConfig,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct CleanupPolicyConfig {
+    #[serde(default)]
+    pub min_reclaimable_bytes: u64,
+    pub min_inactive_seconds: Option<u64>,
+    #[serde(default)]
+    pub include: Vec<String>,
+    #[serde(default)]
+    pub exclude: Vec<String>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -104,6 +117,24 @@ pub fn load(path: &Path) -> Result<Config, AppError> {
     }
     for p in &c.cleanup.allowed_output_roots {
         require_absolute(p, "cleanup.allowed_output_roots")?;
+    }
+    if let Some(seconds) = c.cleanup.policy.min_inactive_seconds
+        && seconds > u64::MAX / 1_000_000_000
+    {
+        return Err(AppError::Config(
+            "cleanup.policy.min_inactive_seconds is too large".into(),
+        ));
+    }
+    for pattern in c
+        .cleanup
+        .policy
+        .include
+        .iter()
+        .chain(&c.cleanup.policy.exclude)
+    {
+        globset::Glob::new(pattern).map_err(|e| {
+            AppError::Config(format!("invalid cleanup policy glob {pattern:?}: {e}"))
+        })?;
     }
     Ok(c)
 }
@@ -251,6 +282,27 @@ mod tests {
             CONFIG_TEMPLATE, on_disk,
             "bootstrap source must equal the checked-in template"
         );
+    }
+    #[test]
+    fn legacy_cleanup_config_loads_with_neutral_policy() {
+        let config: Config = toml::from_str("[cleanup]\nallowed_output_roots = []\n").unwrap();
+        assert_eq!(config.cleanup.policy.min_reclaimable_bytes, 0);
+        assert_eq!(config.cleanup.policy.min_inactive_seconds, None);
+        assert!(config.cleanup.policy.include.is_empty());
+        assert!(config.cleanup.policy.exclude.is_empty());
+    }
+    #[test]
+    fn cleanup_policy_globs_and_durations_are_validated() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("config.toml");
+        fs::write(&path, "[cleanup.policy]\ninclude = [\"[\"]\n").unwrap();
+        assert!(load(&path).is_err());
+        fs::write(
+            &path,
+            "[cleanup.policy]\nmin_inactive_seconds = 18446744073709551615\n",
+        )
+        .unwrap();
+        assert!(load(&path).is_err());
     }
     #[test]
     fn operational_bootstrap_refuses_overwrite() {
