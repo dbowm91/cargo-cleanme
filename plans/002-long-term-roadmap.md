@@ -247,13 +247,13 @@ Phase 8 has no remaining implementation work. Phase 9 is now decomposed into the
 
 ## Phase 9 — Selective cleanup and policy
 
-Roadmap milestone series: M008A-M008C.
+Roadmap milestone series: M008A-M008D.
 
-Status: planned. M008A is ready; M008B is dependency-gated on M008A, and M008C is dependency-gated on M008A/M008B with its Execute stage gated on its own qualification evidence.
+Status: closed for current objectives. Closure/planning reconciliation: C008; evidence: `plans/closure/artifact-discovery-cleanup/c008-status.md`.
 
 Objective:
 
-Add useful cleanup selection policy and stable automation contracts without allowing policy to weaken the complete Cargo ownership proof. Fine-grained package/profile cleanup is treated as a separate mutation-footprint problem and remains blocked until real-Cargo qualification proves safe behavior.
+Phase 9 added cleanup selection policy, stable automation contracts, and narrowly qualified Cargo profile/package selectors without weakening the complete Cargo ownership proof. This phase is closed for the currently qualified capabilities; future Cargo releases require separate qualification.
 
 Implementation sequence:
 
@@ -268,32 +268,35 @@ Implementation sequence:
    - stable policy/safety/action reason codes;
    - documented process exit semantics;
    - supported non-interactive execution contract without adding a scheduler/daemon.
-3. M008C — Cargo profile/package selective cleanup qualification:
-   - real-Cargo compatibility matrix across relevant runtime capability boundaries;
-   - selector-aware mutation/accounting contract;
-   - guarded package/profile execution only for qualified runtime behavior;
-   - fail-closed unsupported/unknown selector combinations.
+3. M008C — Cargo profile/package selector qualification (historical conditional closure; now closed by subsequent M008D evidence): profile selection was enabled for exact qualified Cargo releases; package selection was deferred at that closure point.
+4. M008D — Cargo package-selector qualification and enablement: package selection is enabled for exact Cargo 1.98.1 and 1.99.0 after identity, shared-dependency, and configured-target qualification.
 
 Hard constraints:
 
 - policy filtering occurs after complete manifest/workspace/output resolution; policy-rejected workspaces remain in the ownership universe;
-- the destructive unit remains the complete workspace CleanupUnit unless M008C qualification proves a narrower Cargo selector can be safely expressed without weakening complete ownership proof;
+- the destructive unit remains the complete workspace CleanupUnit; any qualified narrower Cargo selector cannot weaken complete ownership proof;
 - M008A policy cannot promote Shared, Uncertain, ExternalUnproven, unresolved, unauthorized, active, symlinked, or marker-invalid output;
 - dynamic size/age thresholds are re-evaluated from fresh final-proof observations before Cargo execution;
 - machine-readable consumers never need to parse human detail text to determine disposition;
 - cargo-cleanme remains a command-line tool; scheduling/load policy remains the responsibility of external orchestrators;
 - package/profile cleanup must delegate selection to Cargo and must not parse Cargo-private artifact layout.
+- profile selection is enabled only on exact qualified releases 1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0, 1.98.1, and 1.99.0;
+- package selection is enabled only on exact Cargo 1.98.1 and 1.99.0; unqualified and future versions fail closed;
+- selector-specific reclaimable bytes remain unknown, and any nonzero minimum-size policy with a selector fails closed;
+- package cleanup may remove Cargo-shared dependency artifacts;
+- unattended operation uses an external scheduler; cargo-cleanme has no daemon.
 
 Plans:
 
 - `plans/implementation/artifact-discovery-cleanup/008a-workspace-selective-cleanup-policy.md`
 - `plans/implementation/artifact-discovery-cleanup/008b-machine-readable-reporting-and-automation-contract.md`
 - `plans/implementation/artifact-discovery-cleanup/008c-cargo-profile-package-selective-cleanup-qualification.md`
+- `plans/implementation/artifact-discovery-cleanup/008d-cargo-package-selector-qualification-and-enablement.md`
 
 Exit condition:
 
-- M008A and M008B are closed with hosted platform/MSRV evidence;
-- any enabled M008C selector has real-Cargo qualification evidence and selector-specific accounting that is trustworthy or explicitly unknown;
+- M008A, M008B, M008C, and M008D are closed with hosted platform/MSRV evidence;
+- enabled profile/package selectors have real-Cargo qualification evidence and selector-specific accounting is explicitly unknown;
 - unsupported fine-grained selectors remain fail-closed rather than weakening existing whole-workspace cleanup;
 - existing C003/C004/C006 ownership and freshness regressions remain green.
 
@@ -350,13 +353,20 @@ M007 learned/full cleanup orchestration [closed]
 C007 state recovery/planning cleanup [closed]
       |
       v
-M008A workspace selective cleanup policy [ready]
+M008A workspace selective cleanup policy [closed]
       |
       v
-M008B machine-readable automation contract [blocked on M008A]
+M008B machine-readable automation contract [closed]
       |
       v
-M008C Cargo package/profile selector qualification [blocked on M008A/M008B; Execute gated on Stage 1 evidence]
+M008C Cargo profile/package selector qualification [closed by M008D evidence;
+    historical conditional closure retained]
+      |
+      v
+M008D Cargo package-selector qualification and enablement [closed]
+      |
+      v
+Phase 10 distribution and operational polish [deferred]
 ~~~
 
 Destructive work MUST NOT be pulled forward merely to make the tool feel complete.

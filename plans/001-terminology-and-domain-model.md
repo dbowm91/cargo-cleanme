@@ -2,7 +2,7 @@
 
 Status: canonical terminology
 
-This document defines terms used by the specification, roadmap, implementation plans, tests, and future cleanup reports.
+This document defines terms used by the specification, roadmap, implementation plans, tests, and cleanup reports.
 
 ## 1. Scan
 
@@ -82,7 +82,7 @@ A nested VCS root is treated as an activity-boundary for its parent so independe
 
 A real, non-symlink directory named target directly beneath a Cargo project root.
 
-Redirected target-dir/build-dir output is not a conventional artifact tree in V0.1.
+This is a historical V0.1 term. Current scan and cleanup resolve redirected target-dir/build-dir output through Cargo; whether it is safe to clean depends on the physical ownership classification, authorization, runtime capability, and fresh proof.
 
 ## 10. Artifact-bearing candidate
 
@@ -170,17 +170,17 @@ Diagnostics have severity sufficient to distinguish:
 
 The deterministic collection of eligible results plus totals and diagnostic summary.
 
-Future JSON output should serialize this model rather than re-parsing human text.
+The current JSON schema-v1 output projects this model through dedicated DTOs rather than re-parsing human text. Stable reason codes are machine contract; diagnostic detail strings are not.
 
 ## 22. Cleanup candidate
 
-A future destructive-operation input produced by revalidation, not merely by copying an earlier eligible result.
+A destructive-operation input produced by revalidation, not merely by copying an earlier eligible result.
 
-No V0.1 type named cleanup candidate should imply cleanup is currently available.
+The historical V0.1 boundary had no cleanup candidate; the current product uses fresh cleanup proof before Cargo-mediated mutation.
 
 ## 23. Recovered bytes
 
-A future post-clean measurement of storage no longer occupied after a successful cleanup operation.
+A post-clean measurement of storage no longer occupied after a successful cleanup operation.
 
 Pre-clean artifact size MUST NOT be labeled recovered bytes.
 
@@ -296,6 +296,30 @@ A discovered cleanup-scope Cargo manifest that is not covered by any successfull
 Its output relationship is unknown. Because cargo-cleanme cannot prove it does not share another workspace's target/build output, any unresolved ownership participant makes the destructive ownership universe incomplete and blocks Preview, Simulate, and Execute for the entire clean scope.
 
 This strict rule does not apply to ordinary read-only scan partial results.
+
+## 44. Cleanup selection policy
+
+A user/config-supplied policy evaluated over an already-resolved complete CleanupUnit. It may reject a unit by minimum complete-output size, minimum inactivity age, or canonical workspace include/exclude policy. It never removes a workspace from the ownership universe. Size and age are rechecked from fresh final-proof observations before Cargo spawn.
+
+## 45. Policy disposition
+
+A typed result stating that a cleanup unit was selected or rejected by user policy. It is distinct from an ownership or safety skip. Stable values include `selected`, `below_minimum_size`, `too_recent_for_policy`, `not_included`, and `excluded`.
+
+## 46. Cleanup selector
+
+A Cargo-mediated mutation selector, currently profile or package. It narrows the request passed to Cargo after complete workspace/output proof; it does not narrow the ownership universe or authorize direct filesystem deletion.
+
+## 47. Selector capability qualification
+
+The fail-closed runtime-Cargo compatibility decision that determines whether a selector may reach Cargo Preview or Execute. Support is an exact qualified-release allowlist, not a version range; unknown and unqualified releases fail before mutation.
+
+## 48. Selector estimate
+
+A selector-specific reclaimable byte estimate. Current profile/package selectors have no trustworthy selector estimate, so machine output reports it as null. Whole output-union measurements are contextual and must not be mislabeled as selector-reclaimable bytes. A nonzero minimum-size policy with a selector fails closed.
+
+## 49. Stable cleanup reason code
+
+A machine-output semantic code that identifies a cleanup disposition independently of human diagnostic detail. Codes are versioned output contract; explanatory strings may change.
 
 
 ## 38. Routine scan

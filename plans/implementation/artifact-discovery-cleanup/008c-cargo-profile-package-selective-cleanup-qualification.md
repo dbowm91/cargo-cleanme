@@ -1,6 +1,6 @@
 # M008C — Cargo Profile/Package Selective Cleanup Qualification
 
-Status: conditionally closed; profile selection is qualified and implemented, package selection is deferred to M008D
+Status: closed by subsequent M008D evidence. Historical conditional closure: `plans/closure/artifact-discovery-cleanup/008c-status.md`; package-selector follow-up closure: `plans/closure/artifact-discovery-cleanup/008d-status.md`.
 
 Repository baseline: `3ee9699a0b0d987287d08e427195284e08d079f7`
 

@@ -1,6 +1,6 @@
 # Artifact Discovery and Cleanup Roadmap
 
-Status: ready; C008 Phase 9 closure/planning reconciliation is the only active handoff. M008A/M008B and M008D are closed; M008C historical conditional closure is reconciled by C008. Phase 10 remains deferred.
+Status: closing; C008 planning reconciliation is complete and hosted CI is being gathered. Phase 10 remains deferred pending a separate planning decision.
 
 Repository audit baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 
@@ -36,7 +36,7 @@ It does not own Cargo global cache GC, arbitrary build-system caches, a general 
 
 ## 3. Current-state evidence
 
-At the current audit baseline, M001-M007 and corrective C001-C007 are closed on main; M006A/C/D retain historical conditional evidence but are not active blockers. The repository is Rust 1.89 / edition 2024, uses manifest-first discovery plus Cargo-authoritative workspace/output resolution, supports bounded Routine and explicit exhaustive Full discovery with machine-local learned state, groups physical target/build output, reports deterministic allocated bytes, provides coordinated inline progress/stats, and performs Cargo-mediated workspace CleanupUnit execution only after complete combined-root manifest ownership coverage and fresh full-graph revalidation. Phase 9 selective cleanup is decomposed into M008A-M008D: workspace selection policy, machine-readable automation contracts, Cargo profile qualification, then Cargo package qualification.
+At C008 closure, M001-M008D and corrective C001-C008 are closed on main; M006A/C/D retain historical conditional evidence but are not active blockers. The repository is Rust 1.89 / edition 2024, uses manifest-first discovery plus Cargo-authoritative workspace/output resolution, supports bounded Routine and explicit exhaustive Full discovery with machine-local learned state, groups physical target/build output, reports deterministic allocated bytes, provides coordinated inline progress/stats, and performs Cargo-mediated workspace CleanupUnit execution only after complete combined-root manifest ownership coverage and fresh full-graph revalidation. Phase 9 is closed for current objectives: workspace selection policy, machine-readable automation contracts, and exact-release profile/package selectors. Phase 10 remains deferred.
 
 Relevant current ecosystem evidence:
 
@@ -159,13 +159,16 @@ M008A workspace selective cleanup policy [closed]
 M008B machine-readable reporting/automation contract [closed]
       |
       v
-M008C Cargo profile/package selector qualification [conditionally closed; package selector deferred]
+M008C Cargo profile/package selector qualification [closed by M008D evidence; historical conditional closure retained]
       |
       v
 M008D Cargo package-selector qualification and enablement [closed]
       |
       v
-C008 Phase 9 closure/planning reconciliation [ready]
+C008 Phase 9 closure/planning reconciliation [closing]
+      |
+      v
+Phase 10 distribution and operational polish [deferred]
 ~~~
 
 ## 6. Milestone M001 — Foundation, CLI, config, and domain contracts
@@ -540,7 +543,7 @@ M008B must not serialize internal structs directly as an accidental public compa
 
 ### M008C — Cargo profile/package selective cleanup qualification
 
-Status: conditionally closed by `plans/closure/artifact-discovery-cleanup/008c-status.md`. Plan: `plans/implementation/artifact-discovery-cleanup/008c-cargo-profile-package-selective-cleanup-qualification.md`.
+Status: closed by subsequent M008D evidence. Historical conditional closure: `plans/closure/artifact-discovery-cleanup/008c-status.md`; package-selector closure: `plans/closure/artifact-discovery-cleanup/008d-status.md`. Plan: `plans/implementation/artifact-discovery-cleanup/008c-cargo-profile-package-selective-cleanup-qualification.md`.
 
 Purpose:
 
@@ -626,4 +629,4 @@ The implementation should specifically verify:
 
 ## 14. Completion definition
 
-The initial read-only boundary was reached when M001-M003 closed with evidence that cargo-cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004-M007 and C001-C007 establish Cargo-mediated cleanup, complete ownership/freshness proof, adaptive discovery, and combined-root orchestration while scans remain read-only. Phase 9 now has closed workspace policy/reporting contracts (M008A/B), qualified profile selection (M008C), and package-selector qualification in progress (M008D).
+The initial read-only boundary was reached when M001-M003 closed with evidence that cargo-cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004-M007 and C001-C007 establish Cargo-mediated cleanup, complete ownership/freshness proof, adaptive discovery, and combined-root orchestration while scans remain read-only. Phase 9 is closed for current objectives: M008A/B policy and reporting, profile support from M008C, and package support from M008D. Profile support is limited to exact qualified releases 1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0, 1.98.1, and 1.99.0; package support is limited to exact Cargo 1.98.1 and 1.99.0. Selector estimates remain unknown and unqualified Cargo versions fail closed. Phase 10 remains deferred.

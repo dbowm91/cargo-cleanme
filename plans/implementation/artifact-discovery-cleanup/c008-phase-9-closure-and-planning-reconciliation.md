@@ -1,6 +1,6 @@
 # Corrective C008 — Phase 9 Closure and Planning Reconciliation
 
-Status: ready
+Status: closing
 
 Repository baseline: `418a9876bb243f88e4403191c4ecaf9f5a2f6ef6`
 

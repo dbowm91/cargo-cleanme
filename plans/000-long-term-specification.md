@@ -8,7 +8,7 @@ Companion documents:
 - plans/002-long-term-roadmap.md
 - plans/003-planning-process.md
 
-This document defines the durable product contract for cargo-cleanme. The initial release is intentionally read-only. Destructive cleanup is a later capability and MUST NOT be enabled merely because discovery appears functional.
+This document defines the durable product contract for cargo-cleanme. The initial V0.1 delivery was intentionally read-only; the current product also provides separately invoked, Cargo-mediated destructive cleanup after complete ownership and freshness proof. No-argument invocation and scan remain read-only.
 
 The keywords MUST, MUST NOT, REQUIRED, SHOULD, SHOULD NOT, and MAY are normative.
 
@@ -29,7 +29,7 @@ With no destructive subcommand, the default operation is a read-only scan.
 
 The product MUST:
 
-1. discover Cargo project/workspace roots and, initially, conventional local target/ output; later milestones may resolve redirected target/build output through Cargo itself;
+1. discover Cargo project/workspace roots and resolve target/build output through Cargo itself;
 2. avoid presenting projects that appear to be in active development;
 3. default the activity guard to 300 seconds;
 4. allow the activity guard to be changed in config.toml;
@@ -43,29 +43,34 @@ The product MUST:
 12. treat filesystem permission and transient IO errors as bounded diagnostics rather than whole-scan failures where safe;
 13. keep cleanup execution separate from read-only eligibility analysis.
 
-## 3. Initial non-goals
+## 3. Historical V0.1 boundary and current non-goals
 
-The first release does not:
+The initial V0.1 release did not delete files, invoke `cargo clean`, resolve redirected output for cleanup, or support profile/package selectors. Those were staged-delivery constraints, not the current product boundary. The current product:
 
-- delete files or directories;
-- invoke cargo clean;
+- keeps no-argument invocation and scan read-only;
+- offers cleanup only as a separate explicit command, using Cargo after complete workspace/output ownership, authorization, activity, marker, and freshness proof;
+- resolves target/build output through Cargo and permits cleanup only for completely proven private bounded output;
+- delegates qualified profile/package selection to Cargo and never directly deletes inferred selector paths.
+
+Current non-goals are:
+
 - clean Cargo's global registry/git cache;
-- remove individual profiles or packages from a target tree;
+- directly delete inferred profile/package artifact paths or parse Cargo-private artifact/cache layout;
+- claim selector-specific reclaimable bytes where Cargo does not provide a trustworthy estimate;
 - infer arbitrary historical CARGO_TARGET_DIR environment values;
-- clean shared external target directories;
-- clean Cargo build-dir locations that differ from the conventional local target directory;
+- clean shared, uncertain, or externally unproven output;
 - follow symlinks;
 - use Git commit timestamps as the definition of project activity;
 - require a daemon, index database, filesystem watcher, or background service;
 - require a full-screen/raw-mode TUI. A later milestone may provide a transient inline terminal progress display.
 
-Cargo currently permits build.target-dir and build.build-dir to redirect output. Those paths are deliberately deferred until cleanup ownership and shared-cache semantics can be proven safely.
+Cargo permits `build.target-dir` and `build.build-dir` to redirect output. Current support resolves these paths through Cargo, classifies their physical ownership, and cleans only when the complete output set is `PrivateBounded`, authorized, fresh, and safe. A distinct build-dir is supported only where runtime Cargo capability is known.
 
 ## 4. Architectural principles
 
 ### 4.1 Read-only before destructive
 
-Discovery, activity classification, sizing, and reporting MUST be separately testable and releasable before cleanup execution exists.
+Discovery, activity classification, sizing, and reporting MUST remain separately testable from cleanup execution. No-argument invocation and scan MUST remain read-only.
 
 ### 4.2 Filesystem state is authoritative for activity
 
@@ -95,7 +100,7 @@ The reported size represents the candidate artifact tree, not the entire reposit
 
 ### 4.7 Fail fast before expensive analysis
 
-Later workspace/output-aware scanning MUST order its gates so paths that cannot become reportable are rejected before Cargo metadata, source traversal, or deep output sizing whenever safety permits. Ignore/safety pruning occurs before Cargo subprocesses; absent/empty resolved output is rejected before source/deep-size analysis; recent source activity rejects a workspace before deep output sizing.
+Workspace/output-aware scanning MUST order its gates so paths that cannot become reportable are rejected before Cargo metadata, source traversal, or deep output sizing whenever safety permits. Ignore/safety pruning occurs before Cargo subprocesses; absent/empty resolved output is rejected before source/deep-size analysis; recent source activity rejects a workspace before deep output sizing.
 
 A progress display MUST NOT require a second filesystem traversal merely to compute a percentage.
 
@@ -263,7 +268,7 @@ The primary V0.1 size is allocated/on-disk bytes when available.
 
 The implementation SHOULD use metadata already obtained by traversal when possible. The current filesize crate exposes platform-specific allocated-size measurement and fast metadata-aware paths on Unix; on unsupported platforms an apparent-size fallback is acceptable if reported consistently.
 
-V0.1 is an inventory estimate, not a promise of exact bytes eventually reclaimed. The future cleanup report MUST measure post-clean state rather than treating the pre-clean estimate as recovered bytes.
+Inventory size is an estimate, not a promise of exact bytes reclaimed. Cleanup reports MUST measure post-clean state rather than treating a pre-clean estimate as recovered bytes.
 
 ## 13. Output contract
 
@@ -282,7 +287,7 @@ A successful scan prints one line per eligible Cargo project and a summary, for 
 
 The default path is the project root, not only target/.
 
-V0.1 SHOULD include a machine-readable output mode before destructive automation is added, but human-readable output is the initial required interface.
+The current CLI supports `--format json` using a dedicated schema-v1 DTO, one deterministic newline-terminated document on stdout, and typed policy/safety/action reason codes. Progress and `--stats` remain stderr-only. Diagnostic detail text is not stable API. External schedulers may invoke bounded unattended cleanup with `--yes`; cargo-cleanme does not include an internal scheduler or daemon.
 
 ## 14. Error and partial-result semantics
 
@@ -331,7 +336,7 @@ Source activity in any workspace member and output activity anywhere in a physic
 
 ## 16. Cleanup capability requirements
 
-A later cleanup milestone MAY invoke Cargo only after V0.1 discovery is closed.
+A cleanup command MAY invoke Cargo only after current workspace/output ownership and safety proof succeeds. Phase 9 adds policy and selector behavior within that proof boundary.
 
 Before cleaning a candidate it MUST:
 
@@ -352,13 +357,19 @@ A later `--dryrun` simulation mode MAY exercise discovery, resolution, filtering
 
 The existence of cargo clean --dry-run MAY support later qualification but does not replace ownership validation.
 
+### 16.1 Current cleanup policy and selectors
+
+Workspace minimum-size, minimum-inactivity-age, include, and exclude policy MUST be evaluated only after complete ownership resolution. Policy-rejected workspaces remain in the ownership universe. Size and age inputs MUST be refreshed in the final proof immediately before Cargo spawn. Profile/package selectors narrow the Cargo request only; they MUST NOT narrow workspace, manifest, or output ownership proof. Selector-specific estimates are unknown and MUST be represented as such; whole output-union measurements are context only. Any nonzero minimum-size threshold with a selector MUST fail closed. Unsupported or unqualified runtime Cargo/selector combinations MUST fail before mutation.
+
+Profile selection is enabled only for exact Cargo releases 1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0, 1.98.1, and 1.99.0. Package selection is enabled only for exact Cargo 1.98.1 and 1.99.0. Other and future releases remain fail-closed until separately qualified. Cargo package cleanup may remove shared dependency artifacts; cargo-cleanme does not promise package-unique reclamation.
+
 ## 17. Platform and release direction
 
 The initial implementation target is Rust 1.89+ with Rust 2024 edition unless implementation evidence requires a narrowly justified revision.
 
 Initial supported development platforms are Linux, macOS, and Windows. CI SHOULD cover all three before V0.1 is described as portable.
 
-Distribution, shell installers, self-update, package-manager publishing, and release signing are roadmap concerns after the read-only core closes.
+Distribution, shell installers, self-update, package-manager publishing, and release signing remain deferred Phase 10 roadmap concerns. Phase 9 closure does not activate them.
 
 ## 18. Research basis
 
