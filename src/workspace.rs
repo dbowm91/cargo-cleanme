@@ -87,10 +87,10 @@ struct RawMetadata {
 
 #[derive(Debug, Deserialize)]
 struct RawPackage {
-    #[allow(dead_code)]
     id: String,
-    #[allow(dead_code)]
     name: String,
+    #[serde(default)]
+    version: String,
     manifest_path: String,
 }
 
@@ -115,6 +115,29 @@ pub fn capability_from_metadata(
         build_dir,
         metadata_had_build_directory: had_build_field,
         env_build_dir_set: env_set,
+    }
+}
+
+/// Selector capabilities are qualified against real Cargo behavior, not the
+/// cargo-cleanme crate MSRV. Unknown/future versions are deliberately false.
+pub fn clean_capabilities_from_version(version: &str) -> CargoCleanCapabilities {
+    let profile_selector = matches!(
+        version,
+        "1.89.0"
+            | "1.90.0"
+            | "1.91.1"
+            | "1.92.0"
+            | "1.93.1"
+            | "1.94.1"
+            | "1.95.0"
+            | "1.98.1"
+            | "1.99.0"
+    );
+    CargoCleanCapabilities {
+        profile_selector,
+        // The configured build.target discrepancy is bounded to exact tested
+        // releases where configured and explicit target dry-runs agree.
+        package_selector: matches!(version, "1.98.1" | "1.99.0"),
     }
 }
 
@@ -620,11 +643,25 @@ fn resolve_one_workspace_cached(
     let target_root = output_root(OutputRootKind::Target, target_logical);
     let build_root = output_root(OutputRootKind::Build, build_logical);
 
+    let mut packages: Vec<WorkspacePackage> = raw
+        .packages
+        .iter()
+        .map(|pkg| WorkspacePackage {
+            id: pkg.id.clone(),
+            name: pkg.name.clone(),
+            version: pkg.version.clone(),
+            manifest_path: PathBuf::from(&pkg.manifest_path),
+        })
+        .collect();
+    packages.sort();
+    packages.dedup();
+
     Some(ResolvedWorkspace {
         id: WorkspaceId(workspace_root.clone()),
         root: workspace_root,
         root_manifest: root_manifest_canonical,
         members,
+        packages,
         output: OutputSet {
             target: target_root,
             build: build_root,
@@ -2104,6 +2141,7 @@ mod tests {
                 manifest_path: ws_root.join("Cargo.toml"),
                 source_root: ws_root.clone(),
             }],
+            packages: vec![],
             output: OutputSet {
                 target: OutputRoot {
                     kind: OutputRootKind::Target,
@@ -2137,6 +2175,7 @@ mod tests {
             root: d.path().join("other"),
             root_manifest: d.path().join("other/Cargo.toml"),
             members: vec![],
+            packages: vec![],
             output: OutputSet {
                 target: OutputRoot {
                     kind: OutputRootKind::Target,
@@ -2174,6 +2213,7 @@ mod tests {
             root: std::fs::canonicalize(&ws_root).unwrap(),
             root_manifest: ws_root.join("Cargo.toml"),
             members: vec![],
+            packages: vec![],
             output: OutputSet {
                 target: OutputRoot {
                     kind: OutputRootKind::Target,
@@ -2211,6 +2251,7 @@ mod tests {
             root: ws_root.clone(),
             root_manifest: ws_root.join("Cargo.toml"),
             members: vec![],
+            packages: vec![],
             output: OutputSet {
                 target: OutputRoot {
                     kind: OutputRootKind::Target,
@@ -2315,6 +2356,7 @@ mod tests {
             root: canonical_root,
             root_manifest: root.join("Cargo.toml"),
             members: member_records,
+            packages: vec![],
             output: OutputSet { target, build },
             capability: CargoCapabilities {
                 build_dir: CargoBuildDirCapability::Distinct,
@@ -2752,6 +2794,20 @@ mod tests {
         let ws = resolve_workspaces(&manifests, &runner, &mut counters, &mut diags, &noop);
         assert_eq!(ws.len(), 1, "multi-member must collapse to one workspace");
         assert_eq!(ws[0].members.len(), 2);
+        assert_eq!(
+            ws[0]
+                .packages
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["member-a", "member-b"]
+        );
+        assert!(
+            ws[0]
+                .packages
+                .iter()
+                .all(|p| !p.id.is_empty() && !p.version.is_empty())
+        );
         assert_eq!(counters.cargo_metadata_calls, 1);
     }
 

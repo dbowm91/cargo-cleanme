@@ -1,6 +1,6 @@
 # M008D — Cargo Package-Selector Qualification and Enablement
 
-Status: ready
+Status: closing
 
 Repository baseline: M008C closure commit (see `plans/closure/artifact-discovery-cleanup/008c-status.md`).
 
@@ -14,7 +14,7 @@ Hard dependencies:
 
 ## Objective
 
-Complete Cargo package selection after M008C's real-Cargo evidence exposed two constraints: package cleaning may remove shared dependency artifacts, and configured `build.target` package dry-runs differed from explicit `--target` through Cargo 1.95. M008D must decide and implement an evidence-backed runtime capability window or retain the typed deferred disposition.
+Complete Cargo package selection after M008C's real-Cargo evidence exposed two constraints: package cleaning may remove shared dependency artifacts, and configured `build.target` package dry-runs differed from explicit `--target` through Cargo 1.95. M008D enables only exact qualified runtime releases: Cargo 1.98.1 and 1.99.0. Future versions remain unsupported pending qualification.
 
 ## Required behavior
 
@@ -39,3 +39,7 @@ Complete Cargo package selection after M008C's real-Cargo evidence exposed two c
 Do not enable package Execute if package identity is ambiguous, Cargo may mutate outside the complete proven output union, configured target behavior is not bounded for the enabled runtime range, or reporting/minimum-size behavior would imply a package-specific byte amount that cannot be established.
 
 If those conditions cannot be satisfied, close M008D by retaining package selection as deferred, with the matrix and reason codes recorded. Do not weaken the M008A/M008B contracts.
+
+Cargo package selectors accept a unique workspace package `name`, `name@version`/`name:version` (including abbreviated numeric versions), or an exact package ID emitted by Cargo metadata. Duplicate package names are rejected even when a version is supplied because the qualified `cargo clean` behavior reports duplicate-name ambiguity. cargo-cleanme does not infer Cargo-private package matching.
+
+Cargo references used for qualification: [cargo clean](https://doc.rust-lang.org/cargo/commands/cargo-clean.html) and [Package ID Specifications](https://doc.rust-lang.org/cargo/reference/pkgid-spec.html).

@@ -86,6 +86,7 @@ pub enum CleanupReasonCode {
     CargoFailed,
     MeasurementFailed,
     SelectorUnsupported,
+    SelectorInvalid,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -126,6 +127,7 @@ impl CleanupReasonCode {
             Self::CargoFailed => "cargo_failed",
             Self::MeasurementFailed => "measurement_failed",
             Self::SelectorUnsupported => "selector_unsupported",
+            Self::SelectorInvalid => "selector_invalid",
         }
     }
 }
@@ -710,10 +712,10 @@ pub fn clean_with_roots_policy_selector(
     policy: &CleanupPolicy,
     selector: Option<CleanupSelector>,
 ) -> Result<CleanReport, AppError> {
-    let profile_supported = if matches!(selector, Some(CleanupSelector::Profile(_))) {
-        runtime_supports_profile_clean()
+    let selector_capabilities = if selector.is_some() {
+        runtime_clean_capabilities()
     } else {
-        false
+        CargoCleanCapabilities::default()
     };
     let includes = compile_policy_globs(&policy.include)?;
     let excludes = compile_policy_globs(&policy.exclude)?;
@@ -886,17 +888,21 @@ pub fn clean_with_roots_policy_selector(
             observer.unit_completed(cleanup_phase);
             continue;
         }
-        if matches!(selector.as_ref(), Some(CleanupSelector::Package(_))) {
+        if matches!(selector.as_ref(), Some(CleanupSelector::Package(_)))
+            && !selector_capabilities.package_selector
+        {
             skipped(
                 &mut report,
-                "package selector is not enabled; no Cargo clean was invoked".into(),
+                "runtime Cargo package-clean capability is unknown or unsupported; no Cargo clean was invoked".into(),
                 None,
                 CleanupReasonCode::SelectorUnsupported,
             );
             observer.unit_completed(cleanup_phase);
             continue;
         }
-        if matches!(selector.as_ref(), Some(CleanupSelector::Profile(_))) && !profile_supported {
+        if matches!(selector.as_ref(), Some(CleanupSelector::Profile(_)))
+            && !selector_capabilities.profile_selector
+        {
             skipped(
                 &mut report,
                 "runtime Cargo profile-clean capability is unknown or unsupported; no Cargo clean was invoked".into(),
@@ -905,6 +911,19 @@ pub fn clean_with_roots_policy_selector(
             );
             observer.unit_completed(cleanup_phase);
             continue;
+        }
+        if let Some(CleanupSelector::Package(spec)) = selector.as_ref() {
+            let ws = &workspaces[unit.workspace_idx];
+            if resolve_package_spec(&ws.packages, spec).is_err() {
+                skipped(
+                    &mut report,
+                    format!("package spec {spec:?} is unknown or ambiguous in this workspace"),
+                    None,
+                    CleanupReasonCode::SelectorInvalid,
+                );
+                observer.unit_completed(cleanup_phase);
+                continue;
+            }
         }
         if selector.is_some() && policy.min_reclaimable_bytes != 0 {
             skipped(
@@ -1729,6 +1748,11 @@ fn final_cleanup_proof_roots(
     if old_members != new_members {
         return Err("workspace changed before cleanup; skipped: member set changed".into());
     }
+    if candidate.packages != fresh_ws.packages {
+        return Err(
+            "workspace changed before cleanup; skipped: Cargo package identity set changed".into(),
+        );
+    }
     let old_target_canon = candidate
         .output
         .target
@@ -2032,32 +2056,88 @@ fn clean_args(
         args.push(OsString::from("--profile"));
         args.push(OsString::from(profile));
     }
+    if let Some(CleanupSelector::Package(package)) = selector {
+        args.push(OsString::from("--package"));
+        args.push(OsString::from(package));
+    }
     args
 }
 
-fn runtime_supports_profile_clean() -> bool {
+fn runtime_clean_capabilities() -> CargoCleanCapabilities {
     let Ok(output) = Command::new("cargo").arg("--version").output() else {
-        return false;
+        return CargoCleanCapabilities::default();
     };
     if !output.status.success() {
-        return false;
+        return CargoCleanCapabilities::default();
     }
     let text = String::from_utf8_lossy(&output.stdout);
     let Some(version) = text.split_whitespace().nth(1) else {
-        return false;
+        return CargoCleanCapabilities::default();
     };
-    cargo_profile_supported_version(version)
+    workspace::clean_capabilities_from_version(version)
 }
 
-fn cargo_profile_supported_version(version: &str) -> bool {
-    let mut components = version.split('.');
-    let (Some(major), Some(minor)) = (components.next(), components.next()) else {
-        return false;
+fn resolve_package_spec<'a>(
+    packages: &'a [WorkspacePackage],
+    spec: &str,
+) -> Result<&'a WorkspacePackage, PackageSpecResolutionError> {
+    let matches: Vec<_> = packages
+        .iter()
+        .filter(|package| {
+            package.name == spec
+                || package.id == spec
+                || format!("{}@{}", package.name, package.version) == spec
+                || package_spec_name_version(spec).is_some_and(|(name, version)| {
+                    package.name == name && semver_spec_matches(&package.version, version)
+                })
+        })
+        .collect();
+    let package = match matches.as_slice() {
+        [] => return Err(PackageSpecResolutionError::Unknown),
+        [package] => *package,
+        _ => return Err(PackageSpecResolutionError::Ambiguous),
     };
-    let (Ok(major), Ok(minor)) = (major.parse::<u32>(), minor.parse::<u32>()) else {
-        return false;
-    };
-    major == 1 && (89..=99).contains(&minor)
+    if packages
+        .iter()
+        .filter(|candidate| candidate.name == package.name)
+        .count()
+        != 1
+    {
+        return Err(PackageSpecResolutionError::Ambiguous);
+    }
+    Ok(package)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PackageSpecResolutionError {
+    Unknown,
+    Ambiguous,
+}
+
+fn package_spec_name_version(spec: &str) -> Option<(&str, &str)> {
+    let (name, version) = spec.split_once('@').or_else(|| spec.split_once(':'))?;
+    (!name.is_empty() && !version.is_empty() && !name.contains('+') && !name.contains("://"))
+        .then_some((name, version))
+}
+
+fn semver_spec_matches(actual: &str, requested: &str) -> bool {
+    if actual == requested {
+        return true;
+    }
+    let actual_parts: Vec<_> = actual.split('.').collect();
+    let requested_parts: Vec<_> = requested.split('.').collect();
+    (1..=2).contains(&requested_parts.len())
+        && requested_parts
+            .iter()
+            .all(|part| part.bytes().all(|byte| byte.is_ascii_digit()))
+        && actual_parts.len() == 3
+        && actual_parts
+            .iter()
+            .all(|part| part.bytes().all(|byte| byte.is_ascii_digit()))
+        && actual_parts
+            .iter()
+            .zip(requested_parts)
+            .all(|(actual, requested)| actual == &requested)
 }
 
 fn require_cargo_markers(covering: &[PathBuf]) -> Result<(), String> {
@@ -2385,12 +2465,65 @@ mod tests {
 
     #[test]
     fn profile_selector_capability_is_bounded_to_qualified_runtime_versions() {
-        assert!(cargo_profile_supported_version("1.89.0"));
-        assert!(cargo_profile_supported_version("1.95.0"));
-        assert!(cargo_profile_supported_version("1.99.0"));
-        assert!(!cargo_profile_supported_version("1.88.0"));
-        assert!(!cargo_profile_supported_version("2.0.0"));
-        assert!(!cargo_profile_supported_version("unknown"));
+        assert!(workspace::clean_capabilities_from_version("1.89.0").profile_selector);
+        assert!(workspace::clean_capabilities_from_version("1.90.0").profile_selector);
+        assert!(workspace::clean_capabilities_from_version("1.95.0").profile_selector);
+        assert!(workspace::clean_capabilities_from_version("1.99.0").profile_selector);
+        assert!(!workspace::clean_capabilities_from_version("1.88.0").profile_selector);
+        assert!(!workspace::clean_capabilities_from_version("1.96.0").profile_selector);
+        assert!(!workspace::clean_capabilities_from_version("1.99.1").profile_selector);
+        assert!(!workspace::clean_capabilities_from_version("2.0.0").profile_selector);
+        assert!(!workspace::clean_capabilities_from_version("unknown").profile_selector);
+        assert!(workspace::clean_capabilities_from_version("1.98.1").package_selector);
+        assert!(workspace::clean_capabilities_from_version("1.99.0").package_selector);
+        assert!(!workspace::clean_capabilities_from_version("1.100.0").package_selector);
+        assert!(!workspace::clean_capabilities_from_version("1.99.0-nightly").package_selector);
+    }
+
+    #[test]
+    fn package_specs_require_one_authoritative_workspace_identity() {
+        let packages = vec![
+            WorkspacePackage {
+                id: "path+file:///tmp/ws#alpha@0.1.0".into(),
+                name: "alpha".into(),
+                version: "0.1.0".into(),
+                manifest_path: PathBuf::from("/tmp/ws/alpha/Cargo.toml"),
+            },
+            WorkspacePackage {
+                id: "path+file:///tmp/ws#shared@0.2.0".into(),
+                name: "shared".into(),
+                version: "0.2.0".into(),
+                manifest_path: PathBuf::from("/tmp/ws/shared/Cargo.toml"),
+            },
+        ];
+        assert_eq!(
+            resolve_package_spec(&packages, "alpha").unwrap().name,
+            "alpha"
+        );
+        assert_eq!(
+            resolve_package_spec(&packages, "alpha@0.1").unwrap().name,
+            "alpha"
+        );
+        assert_eq!(
+            resolve_package_spec(&packages, "alpha@0.1.0").unwrap().id,
+            packages[0].id
+        );
+        assert_eq!(
+            resolve_package_spec(&packages, &packages[1].id)
+                .unwrap()
+                .name,
+            "shared"
+        );
+        assert!(resolve_package_spec(&packages, "missing").is_err());
+        let mut duplicate = packages.clone();
+        duplicate.push(WorkspacePackage {
+            id: "registry+https://example.invalid#alpha@0.3.0".into(),
+            name: "alpha".into(),
+            version: "0.3.0".into(),
+            manifest_path: PathBuf::from("/tmp/ws/alpha2/Cargo.toml"),
+        });
+        assert!(resolve_package_spec(&duplicate, "alpha").is_err());
+        assert!(resolve_package_spec(&duplicate, "alpha@0.3.0").is_err());
     }
 
     #[test]
@@ -2537,6 +2670,7 @@ mod tests {
                 root: canonical_root.clone(),
                 root_manifest: proj.join("Cargo.toml"),
                 members: vec![],
+                packages: vec![],
                 output: OutputSet {
                     target: OutputRoot {
                         kind: OutputRootKind::Target,
@@ -2601,6 +2735,7 @@ mod tests {
             root: canonical_root.clone(),
             root_manifest: proj.join("Cargo.toml"),
             members: vec![],
+            packages: vec![],
             output: OutputSet {
                 target: OutputRoot {
                     kind: OutputRootKind::Target,
@@ -2662,6 +2797,7 @@ mod tests {
             root: canonical_proj,
             root_manifest: proj.join("Cargo.toml"),
             members: vec![],
+            packages: vec![],
             output: OutputSet {
                 target: OutputRoot {
                     kind: OutputRootKind::Target,
@@ -2711,6 +2847,7 @@ mod tests {
             root: ws_root,
             root_manifest: PathBuf::from("/x/Cargo.toml"),
             members: vec![],
+            packages: vec![],
             output: OutputSet {
                 target: OutputRoot {
                     kind: OutputRootKind::Target,
@@ -2766,6 +2903,7 @@ mod tests {
                 root: d.path().join("ws"),
                 root_manifest: PathBuf::from("/x/Cargo.toml"),
                 members: vec![],
+                packages: vec![],
                 output: OutputSet {
                     target: OutputRoot {
                         kind: OutputRootKind::Target,
@@ -3225,6 +3363,98 @@ mod tests {
         assert_eq!(exec.results[0].outcome, CleanOutcome::Cleaned);
         assert!(exec.results[0].observed_decrease.unwrap() > 0);
         assert!(!external.join("artifact.bin").exists());
+    }
+
+    #[test]
+    fn real_cargo_package_selector_preserves_sibling_workspace_artifacts() {
+        let version = Command::new("cargo").arg("--version").output().unwrap();
+        let version = String::from_utf8_lossy(&version.stdout);
+        let supported = version.split_whitespace().nth(1).is_some_and(|version| {
+            workspace::clean_capabilities_from_version(version).package_selector
+        });
+        if !supported {
+            return;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        for package in ["app-a", "app-b", "shared"] {
+            fs::create_dir_all(root.join(package).join("src")).unwrap();
+        }
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app-a\", \"app-b\", \"shared\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("shared/Cargo.toml"),
+            "[package]\nname = \"shared\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("shared/src/lib.rs"),
+            "pub fn value() -> u32 { 1 }\n",
+        )
+        .unwrap();
+        for package in ["app-a", "app-b"] {
+            let (dependency, import) = if package == "app-a" {
+                (
+                    "shared_alias = { package = \"shared\", path = \"../shared\" }",
+                    "shared_alias",
+                )
+            } else {
+                ("shared = { path = \"../shared\" }", "shared")
+            };
+            fs::write(
+                root.join(package).join("Cargo.toml"),
+                format!("[package]\nname = \"{package}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[dependencies]\n{dependency}\n"),
+            )
+            .unwrap();
+            fs::write(
+                root.join(package).join("src/main.rs"),
+                format!("fn main() {{ println!(\"{{}}\", {import}::value()); }}\n"),
+            )
+            .unwrap();
+        }
+        for args in [
+            vec!["generate-lockfile", "--offline", "--manifest-path"],
+            vec![
+                "build",
+                "--workspace",
+                "--offline",
+                "--locked",
+                "--manifest-path",
+            ],
+        ] {
+            let mut command = Command::new("cargo");
+            command.args(&args).arg(root.join("Cargo.toml"));
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "cargo {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        backdate(&root, SystemTime::now() - Duration::from_secs(3600));
+        let target = root.join("target/debug");
+        assert!(target.join("app-a").exists());
+        assert!(target.join("app-b").exists());
+
+        let report = clean_with_roots_policy_selector(
+            std::slice::from_ref(&root),
+            0,
+            &[],
+            CleanMode::Execute,
+            &SystemCleanupRunner,
+            &NoopObserver,
+            &CleanupPolicy::default(),
+            Some(CleanupSelector::Package("app-a@0.1.0".into())),
+        )
+        .unwrap();
+        assert_eq!(report.results.len(), 1, "{:?}", report.results);
+        assert_eq!(report.results[0].outcome, CleanOutcome::Cleaned);
+        assert!(!target.join("app-a").exists());
+        assert!(target.join("app-b").exists());
     }
 
     #[test]

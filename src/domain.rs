@@ -102,6 +102,16 @@ pub struct WorkspaceMember {
     pub source_root: PathBuf,
 }
 
+/// Cargo package identity retained for selector validation; package specs are
+/// never resolved by filesystem substring or target-directory inference.
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct WorkspacePackage {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub manifest_path: PathBuf,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CargoBuildDirCapability {
     /// Pre-1.91 metadata without `build_directory` and no env evidence.
@@ -119,6 +129,12 @@ pub struct CargoCapabilities {
     pub build_dir: CargoBuildDirCapability,
     pub metadata_had_build_directory: bool,
     pub env_build_dir_set: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CargoCleanCapabilities {
+    pub profile_selector: bool,
+    pub package_selector: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -148,6 +164,7 @@ pub struct ResolvedWorkspace {
     pub root: PathBuf,
     pub root_manifest: PathBuf,
     pub members: Vec<WorkspaceMember>,
+    pub packages: Vec<WorkspacePackage>,
     pub output: OutputSet,
     pub capability: CargoCapabilities,
 }

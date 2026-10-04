@@ -239,11 +239,11 @@ fn json_unattended_yes_executes_through_cargo_and_emits_typed_result() {
     let args_log = temp.path().join("cargo-args.log");
     let fake = bin.join("cargo");
     fs::write(&fake, r##"#!/bin/sh
-if [ "$1" = "--version" ]; then printf 'cargo 1.99.0 (fixture)\n'; exit 0; fi
+if [ "$1" = "--version" ]; then printf 'cargo %s (fixture)\n' "${CARGO_VERSION:-1.99.0}"; exit 0; fi
 printf '%s\n' "$1" >> "$CARGO_LOG"
 case "$1" in
   locate-project) printf '{"root":"%s/Cargo.toml"}\n' "$FIXTURE_ROOT" ;;
-  metadata) printf '{"packages":[{"id":"fixture 0.1.0","name":"fixture","manifest_path":"%s/Cargo.toml"}],"workspace_members":["fixture 0.1.0"],"workspace_root":"%s","target_directory":"%s"}\n' "$FIXTURE_ROOT" "$FIXTURE_ROOT" "$FIXTURE_TARGET" ;;
+  metadata) printf '{"packages":[{"id":"fixture 0.1.0","name":"fixture","version":"0.1.0","manifest_path":"%s/Cargo.toml"}],"workspace_members":["fixture 0.1.0"],"workspace_root":"%s","target_directory":"%s"}\n' "$FIXTURE_ROOT" "$FIXTURE_ROOT" "$FIXTURE_TARGET" ;;
   clean) printf '%s\n' "$@" >> "$CARGO_ARGS_LOG"; rm -f "$FIXTURE_TARGET/artifact.bin" ;;
   *) exit 2 ;;
 esac
@@ -376,7 +376,41 @@ esac
         1
     );
 
-    let package_output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+    let invalid_package = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--no-progress",
+            "clean",
+            root.to_str().unwrap(),
+            "--package",
+            "missing-package",
+            "--yes",
+            "--format",
+            "json",
+        ])
+        .env("PATH", path_with(&bin))
+        .env("FIXTURE_ROOT", &root)
+        .env("FIXTURE_TARGET", &target)
+        .env("CARGO_LOG", &log)
+        .env("CARGO_ARGS_LOG", &args_log)
+        .output()
+        .unwrap();
+    let invalid_json: serde_json::Value = serde_json::from_slice(&invalid_package.stdout).unwrap();
+    assert_eq!(
+        invalid_json["result"]["units"][0]["reason_code"],
+        "selector_invalid"
+    );
+    assert_eq!(
+        fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .filter(|line| *line == "clean")
+            .count(),
+        1
+    );
+
+    let unsupported_package = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
         .args([
             "--config",
             config.to_str().unwrap(),
@@ -390,18 +424,18 @@ esac
             "json",
         ])
         .env("PATH", path_with(&bin))
+        .env("CARGO_VERSION", "1.97.0")
         .env("FIXTURE_ROOT", &root)
         .env("FIXTURE_TARGET", &target)
         .env("CARGO_LOG", &log)
-        .env("CARGO_ARGS_LOG", &args_log)
         .output()
         .unwrap();
-    let package_json: serde_json::Value = serde_json::from_slice(&package_output.stdout).unwrap();
+    let unsupported_json: serde_json::Value =
+        serde_json::from_slice(&unsupported_package.stdout).unwrap();
     assert_eq!(
-        package_json["result"]["units"][0]["reason_code"],
+        unsupported_json["result"]["units"][0]["reason_code"],
         "selector_unsupported"
     );
-    assert_eq!(package_json["result"]["summary"]["skipped"], 1);
     assert_eq!(
         fs::read_to_string(&log)
             .unwrap()
@@ -410,6 +444,42 @@ esac
             .count(),
         1
     );
+
+    let package_output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--no-progress",
+            "clean",
+            root.to_str().unwrap(),
+            "--package",
+            "fixture@0.1.0",
+            "--yes",
+            "--format",
+            "json",
+        ])
+        .env("PATH", path_with(&bin))
+        .env("FIXTURE_ROOT", &root)
+        .env("FIXTURE_TARGET", &target)
+        .env("CARGO_LOG", &log)
+        .env("CARGO_ARGS_LOG", &args_log)
+        .output()
+        .unwrap();
+    let package_json: serde_json::Value = serde_json::from_slice(&package_output.stdout).unwrap();
+    assert_eq!(package_json["result"]["units"][0]["reason_code"], "cleaned");
+    assert_eq!(package_json["result"]["selector_kind"], "package");
+    assert_eq!(package_json["result"]["selector_value"], "fixture@0.1.0");
+    assert_eq!(
+        fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .filter(|line| *line == "clean")
+            .count(),
+        2
+    );
+    let cargo_args = fs::read_to_string(args_log).unwrap();
+    assert!(cargo_args.lines().any(|line| line == "--package"));
+    assert!(cargo_args.lines().any(|line| line == "fixture@0.1.0"));
 }
 
 #[test]

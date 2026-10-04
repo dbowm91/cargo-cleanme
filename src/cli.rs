@@ -67,7 +67,7 @@ pub enum Command {
         /// Ask Cargo to clean one named profile. Selector byte estimates are unknown.
         #[arg(long, conflicts_with = "package", value_parser = clap::builder::NonEmptyStringValueParser::new())]
         profile: Option<String>,
-        /// Reserved package selector; currently returns a typed deferred result.
+        /// Clean one validated workspace package through qualified Cargo versions.
         #[arg(long, conflicts_with = "profile", value_parser = clap::builder::NonEmptyStringValueParser::new())]
         package: Option<String>,
         /// Cargo preview: invoke Cargo's own dry-run (the default mode).

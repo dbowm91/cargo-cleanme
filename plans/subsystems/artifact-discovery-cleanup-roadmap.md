@@ -162,7 +162,7 @@ M008B machine-readable reporting/automation contract [closed]
 M008C Cargo profile/package selector qualification [conditionally closed; package selector deferred]
       |
       v
-M008D Cargo package-selector qualification and enablement [ready]
+M008D Cargo package-selector qualification and enablement [active]
 ~~~
 
 ## 6. Milestone M001 — Foundation, CLI, config, and domain contracts
@@ -547,11 +547,11 @@ Purpose:
 - fail closed for unsupported/unqualified runtime-selector combinations;
 - avoid all parsing of Cargo-private artifact layout.
 
-Profile selection is enabled for Cargo 1.89–1.99 with unknown selector byte estimates and a zero minimum-size threshold. Package selection remains typed unsupported because matrix evidence found shared dependency deletion and a configured-target behavior discrepancy through Cargo 1.95. M008D is the ready follow-up; it may enable package cleanup only behind an evidence-backed capability gate.
+Profile selection is enabled for exact qualified releases 1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0, 1.98.1, and 1.99.0 with unknown selector byte estimates and a zero minimum-size threshold. Package selection is enabled only on exact qualified Cargo 1.98.1 and 1.99.0; M008D records the identity, shared-dependency, and configured-target evidence.
 
 ### M008D — Cargo package-selector qualification and enablement
 
-Status: ready. Plan: `plans/implementation/artifact-discovery-cleanup/008d-cargo-package-selector-qualification-and-enablement.md`.
+Status: closing. Plan: `plans/implementation/artifact-discovery-cleanup/008d-cargo-package-selector-qualification-and-enablement.md`.
 
 M008D owns package-spec identity/ambiguity semantics, runtime Cargo capability gating, minimum-runtime configured-target qualification, shared dependency accounting, and the final package selector Execute decision. It inherits M008A's complete workspace ownership proof and M008B's typed output contract.
 
@@ -615,4 +615,4 @@ The implementation should specifically verify:
 
 ## 14. Completion definition
 
-The initial read-only boundary was reached when M001-M003 closed with evidence that cargo-cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004-M007 and C001-C007 establish Cargo-mediated cleanup, complete ownership/freshness proof, adaptive discovery, and combined-root orchestration while scans remain read-only. Phase 9 now has closed workspace policy/reporting contracts (M008A/B), qualified profile selection (M008C), and a ready package-selector handoff (M008D).
+The initial read-only boundary was reached when M001-M003 closed with evidence that cargo-cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004-M007 and C001-C007 establish Cargo-mediated cleanup, complete ownership/freshness proof, adaptive discovery, and combined-root orchestration while scans remain read-only. Phase 9 now has closed workspace policy/reporting contracts (M008A/B), qualified profile selection (M008C), and package-selector qualification in progress (M008D).
