@@ -249,7 +249,7 @@ Phase 8 has no remaining implementation work. Phase 9 is now decomposed into the
 
 Roadmap milestone series: M008A-M008C.
 
-Status: planned. M008A is ready; M008B and M008C are dependency-gated.
+Status: planned. M008A is ready; M008B is dependency-gated on M008A, and M008C is dependency-gated on M008A/M008B with its Execute stage gated on its own qualification evidence.
 
 Objective:
 
@@ -356,7 +356,7 @@ M008A workspace selective cleanup policy [ready]
 M008B machine-readable automation contract [blocked on M008A]
       |
       v
-M008C Cargo package/profile selector qualification [blocked on M008A/M008B]
+M008C Cargo package/profile selector qualification [blocked on M008A/M008B; Execute gated on Stage 1 evidence]
 ~~~
 
 Destructive work MUST NOT be pulled forward merely to make the tool feel complete.
