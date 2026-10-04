@@ -1,0 +1,83 @@
+schema_version = 1
+
+# Producer toolchain/build policy for cargo-cleanme, owned by Eggpack since
+# M010A.
+#
+# Targets are canonically ordered by triple. Build strategy (how bytes are
+# produced) and qualification intent (how those exact bytes are proved) are
+# independent axes: both Linux targets are built with CargoZigbuild to hold a
+# glibc 2.17 floor and are qualified natively on the matching native runner.
+#
+# The two Linux targets build on their own native architecture, which is why
+# the exact official Zig archive digest selected for each build host is the
+# one already proven by the predecessor Eggstack direct-release consumer.
+#
+# The glibc 2.17 floor declared here is a *build* fact (it is what the pinned
+# cargo-zigbuild/Zig pair produces), not a published support claim. M010A
+# performs no release run; runtime ABI evidence for these exact bytes is
+# M010B's release-candidate qualification, and M010D may only advertise the
+# floor once that evidence exists.
+
+[[targets]]
+target = "aarch64-apple-darwin"
+strategy = "native_cargo"
+host_os = "macos"
+host_arch = "aarch64"
+floor = { kind = "none" }
+qualification = "native"
+support = "required"
+
+[targets.toolchain]
+rust = "stable"
+
+[[targets]]
+target = "aarch64-unknown-linux-gnu"
+strategy = "cargo_zigbuild"
+host_os = "linux"
+host_arch = "aarch64"
+floor = { kind = "glibc", major = 2, minor = 17 }
+qualification = "native"
+support = "required"
+
+[targets.toolchain]
+rust = "stable"
+cargo_zigbuild = "0.23.3"
+zig = "0.14.1"
+
+[[targets]]
+target = "x86_64-apple-darwin"
+strategy = "native_cargo"
+host_os = "macos"
+host_arch = "x86_64"
+floor = { kind = "none" }
+qualification = "native"
+support = "required"
+
+[targets.toolchain]
+rust = "stable"
+
+[[targets]]
+target = "x86_64-pc-windows-msvc"
+strategy = "native_cargo"
+host_os = "windows"
+host_arch = "x86_64"
+floor = { kind = "none" }
+qualification = "native"
+support = "required"
+
+[targets.toolchain]
+rust = "stable"
+
+[[targets]]
+target = "x86_64-unknown-linux-gnu"
+strategy = "cargo_zigbuild"
+host_os = "linux"
+host_arch = "x86_64"
+floor = { kind = "glibc", major = 2, minor = 17 }
+qualification = "native"
+support = "required"
+
+[targets.toolchain]
+rust = "stable"
+cargo_zigbuild = "0.23.3"
+zig = "0.14.1"

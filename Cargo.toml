@@ -5,6 +5,30 @@ edition = "2024"
 rust-version = "1.89"
 description = "Find inactive Cargo artifacts and safely preview their cleanup"
 license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/dbowm91/cargo-cleanme"
+homepage = "https://github.com/dbowm91/cargo-cleanme"
+documentation = "https://docs.rs/cargo-cleanme"
+keywords = ["cargo", "cleanup", "subcommand", "disk-space", "artifacts"]
+categories = ["command-line-utilities", "development-tools", "development-tools::cargo-plugins"]
+# Explicit package allowlist. Every compile-time input is present and every
+# repository-only surface is absent, so the published crate is a deliberate
+# subset of the checkout rather than whatever Cargo happens to infer.
+#
+# `/config.toml` is a hard requirement, not a nicety: `src/config.rs` embeds
+# this exact file with `include_str!("../config.toml")` and first-use config
+# creation is impossible without it. `scripts/check-release-contract.py`
+# fails the build if it is ever dropped from this list.
+include = [
+    "/src/**",
+    "/config.toml",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE-MIT",
+    "/LICENSE-APACHE",
+]
 
 [lib]
 name = "cargo_cleanme"

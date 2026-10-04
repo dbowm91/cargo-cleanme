@@ -1,0 +1,12 @@
+schema_version = 1
+
+# Empty bootstrap install policy: every cargo-cleanme release target is a
+# direct artifact with no bundle or archive, so there is no per-target install
+# policy to express. Eggpack still generates the exact-release installers
+# from this policy plus the resolved ReleaseManifest.
+#
+# This file is *producer* bootstrap evidence for one exact release. The public
+# latest/exact-version installers are the product-owned wrappers in
+# `packaging/`, composed by `installer-presentation.json`; this policy must
+# never grow per-product install semantics that would fork the public
+# contract.

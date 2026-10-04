@@ -91,6 +91,72 @@ Attended terminals show immediate inline progress on stderr: one coordinated `Mu
 
 `clean ROOT` accepts a relative or absolute explicit existing directory and previews via Cargo by default. A relative root is resolved lexically against the invocation directory into an absolute sandbox root; the boundary still requires a real non-symlink directory and rejects uncertainty. Before output analysis or cleanup qualification, every discovered `Cargo.toml` under `clean ROOT` must be accounted for by direct successful resolution or successful workspace metadata listing it as a member/root. An earlier failed member attempt is cleared only if later authoritative metadata covers it. Any remaining unresolved manifest blocks the entire cleanup scope in Preview, Simulate, and Execute, reports `unresolved_ownership` under `--stats`, and runs no `cargo clean` command, including Cargo preview dry-run. Read-only scans remain partial-result tolerant. The destructive unit is one workspace cleanup unit: exactly one Cargo workspace cleanup invocation, containing one resolved workspace, its complete resolved `OutputSet` (target and build), and every physical output group that one `cargo clean` can affect. Multi-member workspaces are supported. A unit is authorized only when *every* group it can affect is `PrivateBounded`, authorized, inactive, a real non-symlink directory, and marker-qualified, so a private `target` can never carry an `ExternalUnproven`, `Shared`, `Uncertain`, or unauthorized sibling `build` directory into the same invocation; such a unit is skipped whole, with the failing output kind, path, and class in the skip reason. Equal/nested `target`/`build` collapse into one physical group and one deduplicated union, so a distinct private target/build pair produces one Cargo invocation, one result, and one pre/post union measurement. `cleanup` progress totals and final report rows count cleanup units, not physical groups; each row names the workspace and the output roots the single invocation affects. The read-only scan report stays physical-group oriented. Only `PrivateBounded` may reach Cargo cleanup; `ExternalUnproven`, `Shared`, and `Uncertain` remain inventory-only under any authorization configuration. `cleanup.allowed_output_roots` is location authorization only for already-private groups: it MUST NOT convert `ExternalUnproven` into a private group and does not establish exclusivity (a single observed external owner is not exclusivity proof). The field is preserved for schema compatibility but is currently operationally redundant because `PrivateBounded` output is normally workspace-contained; conventional and redirected-inside-workspace private output inside `clean ROOT` remains eligible. A single final cleanup proof (`ExecutionProof`) binds canonical workspace root and root manifest, canonical member set, canonical target, canonical build and capability, the complete deduplicated physical covering union the invocation can affect, pre-clean union bytes, ownership class, authorization decision, cache-marker validity, fresh source and output activity, and frozen environment/arguments immediately before spawn. The proof re-resolves *every* workspace discovered under `clean ROOT` (the bounded cleanup ownership universe) through fresh `cargo metadata --offline --locked --no-deps` calls against each known root manifest, rebuilds the complete fresh physical output graph from those fresh workspaces, rejects any change in workspace identity, member set, target/build identity, group shape, or classification, rejects the unit when any other discovered workspace (including symlink or unresolvable output roots) can reach the affected output, and inspects every affected covering root for existence, directory type, no-symlink state, activity, and cache markers. A universe workspace that cannot be re-resolved fails the candidate closed. `cleanup --stats` reports this final-proof Cargo work separately from the initial scan counters; direct metadata refresh avoids redundant `cargo locate-project` calls, and independent refreshes run with a fixed concurrency cap of four (`proof_metadata_peak`). Preview, simulation, and execution share all non-mutating pre-spawn gates (ownership, authorization, fresh resolution, member/source activity, target/build identity, output activity, group stability, markers, frozen-env, final preflight); on unchanged state they reach the same cleanable/skipped dispositions, and `--dryrun` invokes no `cargo clean` command (including Cargo dry-run). For cleanup, `CARGO_TARGET_DIR` is frozen to the resolved target and, when runtime Cargo supports stable `build-dir`, `CARGO_BUILD_BUILD_DIR` is frozen to the resolved build; inherited conflicting variables never silently redirect the destination, and the command runs from the workspace/root-manifest context using the ordinary whole-workspace request unless a qualified profile/package selector was requested, which is passed through to Cargo; cargo-cleanme never parses Cargo-private cache layout. Output directories are never recursively deleted by cargo-cleanme; cleanup delegates to Cargo sequentially. Transient progress (determinate via the observer contract, at most five current/largest groups with sizes, distinct preview/simulate/execute labels) clears before final results. Execute lists every cleaned workspace unit with its output roots, pre-clean union size, post-clean union size, and observed decrease, plus a deduplicated total observed decrease and skipped/failed reasons; post-clean measurement uncertainty is reported as a diagnostic and never fabricates recovered bytes. Preview lists authorized candidates with pre-clean estimates and Cargo preview text plus a total estimate and `no cleanup executed`. Simulate lists every would-clean unit with estimates plus a total estimated would-clean bytes and `no cargo clean command was invoked`. Preview/simulate totals are estimates, never recovered bytes. No-argument invocation and `scan` remain read-only. No machine-wide destructive command exists, and shared-cache cleanup is not claimed.
 
+## Installing
+
+There is no published release yet. The two supported installation paths today
+are:
+
+```sh
+cargo install cargo-cleanme --locked          # from the crates.io registry
+cargo install cargo-cleanme --locked --version 0.1.0  # pin an exact release
+```
+
+Installing the package is enough for Cargo to expose the external
+subcommand, so `cargo cleanme ...` works after `cargo install`.
+
+A verified prebuilt-binary release is prepared but not yet published. When it
+is, the release assets and the one-curl installers will be documented here.
+Until then, do not expect `install.sh`, `install.ps1`, or `cargo cleanme update`
+to exist.
+
+## Prebuilt release targets
+
+The release contract in [`release/eggpack/distribution.toml`](release/eggpack/distribution.toml)
+is the single authority for the published target matrix and asset names. It is
+compiled from that file; the mapping is not maintained by hand anywhere else.
+
+| Target triple | Release asset | Install name |
+|---|---|---|
+| `x86_64-unknown-linux-gnu` | `cargo-cleanme-x86_64-unknown-linux-gnu` | `cargo-cleanme` |
+| `aarch64-unknown-linux-gnu` | `cargo-cleanme-aarch64-unknown-linux-gnu` | `cargo-cleanme` |
+| `x86_64-apple-darwin` | `cargo-cleanme-x86_64-apple-darwin` | `cargo-cleanme` |
+| `aarch64-apple-darwin` | `cargo-cleanme-aarch64-apple-darwin` | `cargo-cleanme` |
+| `x86_64-pc-windows-msvc` | `cargo-cleanme-x86_64-pc-windows-msvc.exe` | `cargo-cleanme.exe` |
+
+Each asset ships a `.sha256` sidecar.
+
+Two further hosts are recognized but have **no** prebuilt binary and are
+Cargo-install-only:
+
+- `armv7-unknown-linux-gnueabihf` (32-bit ARMv7 Linux)
+- any other unlisted OS or architecture
+
+Musl targets, Windows ARM64, ARMv7 prebuilts, and package-manager formulae are
+follow-up capabilities, not current support. The Linux binaries are built with
+a pinned cross toolchain, but no glibc floor is advertised as support until the
+exact release bytes have been runtime-qualified on every target.
+
+## Support and release policy
+
+- **MSRV:** 1.89.
+- **Release artifacts:** built by Eggpack from an exact source revision,
+  qualified per target, and staged as a GitHub *draft*. Publication is a
+  separate, explicit maintainer action; no automation publishes.
+- **Integrity, not authenticity:** published `.sha256` files prove that
+  downloaded bytes match the bytes the release built. They are not a signature
+  and make no claim about who produced them.
+- **Library API:** the crate publishes a Rust library because the test suite
+  and tooling need one. It is **not** a stable third-party API before 1.0 and
+  may change in any release. Treat the command-line interface, the versioned
+  JSON schema, and the release-asset names as the stable surfaces.
+- **Cargo selector support is exact-version:** `clean --profile` and
+  `clean --package` work only on the exact Cargo releases listed above.
+  Application support for a Cargo version is broader than selector
+  qualification, and an unqualified Cargo release fails closed with a typed
+  result rather than guessing.
+- **Pre-1.0 versioning:** breaking changes to the CLI, JSON schema, or asset
+  names can occur in any `0.x` release. Read `CHANGELOG.md` before upgrading.
+
 ## Planning
 
 The repository starts planning-first. Canonical product direction, roadmap, bounded implementation plans, and active status are maintained under `plans/` using the same long-term/interim/closure separation used by CodeGG.
