@@ -534,7 +534,7 @@ M008B must not serialize internal structs directly as an accidental public compa
 
 ### M008C — Cargo profile/package selective cleanup qualification
 
-Status: blocked on M008A/M008B closure and real-Cargo selector evidence. Plan: `plans/implementation/artifact-discovery-cleanup/008c-cargo-profile-package-selective-cleanup-qualification.md`.
+Status: blocked on M008A/M008B closure. Plan: `plans/implementation/artifact-discovery-cleanup/008c-cargo-profile-package-selective-cleanup-qualification.md`. M008C Stage 1 produces the real-Cargo qualification evidence required before Stage 2 Execute can be enabled.
 
 Purpose:
 
