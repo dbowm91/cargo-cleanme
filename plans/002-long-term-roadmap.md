@@ -243,7 +243,7 @@ Plans:
 - `plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md`
 - post-closure corrective: `plans/implementation/artifact-discovery-cleanup/c007-discovery-state-recovery-and-post-m007-planning-cleanup.md`
 
-Phase 8 has no remaining implementation work. Phase 9 is now decomposed into the dependency-ordered M008A-M008C implementation series.
+Phase 8 has no remaining implementation work. Phase 9 is now decomposed into the dependency-ordered M008A-M008D implementation series.
 
 ## Phase 9 — Selective cleanup and policy
 
