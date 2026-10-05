@@ -34,6 +34,14 @@ jobs:
         run: python3 scripts/check-fixture-portability.py --self-test
       - name: Fixture portability guard
         run: python3 scripts/check-fixture-portability.py
+      # The deep dives cite source by line, so they drift silently whenever a
+      # fix adds or removes lines above the citation. Same reasoning as the
+      # fixture guard above: prove the guard can still fail before trusting it
+      # to pass.
+      - name: Architecture citation guard is itself a real guard
+        run: python3 scripts/check-doc-citations.py --self-test
+      - name: Architecture citations resolve
+        run: python3 scripts/check-doc-citations.py
   installers:
     # Fixture-driven installer qualification. No test here contacts the public
     # GitHub service or a real release; the fixture server is local.

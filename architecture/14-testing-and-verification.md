@@ -8,7 +8,7 @@
 
 The verification apparatus does three distinct jobs. The third is what makes it unusual.
 
-**(a) Product behaviour.** 236 inline `#[test]` functions in `src/`, plus two integration suites that drive the compiled binary as a subprocess: ownership proof, cleanup authorization, the three clean modes, workspace resolution, the versioned JSON contract.
+**(a) Product behaviour.** 237 inline `#[test]` functions in `src/`, plus two integration suites that drive the compiled binary as a subprocess: ownership proof, cleanup authorization, the three clean modes, workspace resolution, the versioned JSON contract.
 
 **(b) Structural contracts invisible at runtime.** 12 scripts in `scripts/` and 4 GitHub workflows. No product code path can detect a file left out of the published crate's `include` allowlist, completions drifted from `cli.rs`, a tag pointing at the wrong commit, or release bytes differing from qualified bytes. These are properties of the repository *as an artifact* — see [Distribution & release](15-distribution-and-release.md).
 
@@ -23,8 +23,8 @@ were the premises, and is any of them unchecked?*
 
 | Layer | Location | Count | What it can catch | What it cannot catch |
 |---|---|---:|---|---|
-| Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 236 `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
-| Integration — CLI contract | `tests/cli_contract.rs` (658 lines) | 8 `#[test]` | The subprocess boundary end to end: argv normalization, exit codes, JSON shape, `--stats` stream discipline | Internals of `run()`; the `update` command; anything on a real machine |
+| Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 237 `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
+| Integration — CLI contract | `tests/cli_contract.rs` (708 lines) | 9 `#[test]` | The subprocess boundary end to end: argv normalization, exit codes, JSON shape, `--stats` stream discipline | Internals of `run()`; the `update` command; anything on a real machine |
 | Integration — end to end | `tests/end_to_end.rs` (211 lines) | 1 `#[test]` | One full scan against a synthetic tree with real mtimes | Cleanup, update, config editing |
 | Shared harness | `tests/common/mod.rs` (102 lines) | 0 tests | `set_path_modified` / `backdate_file` (per-platform mtime control) | — |
 | Contract checkers | `scripts/` | **12** (not 13 — see note) | Published-crate contents, fixture portability, installer/shape/smoke contracts, release identity, benchmark regression | That a fixture case proves its intended branch (explicitly disclaimed) |
@@ -46,16 +46,25 @@ were the premises, and is any of them unchecked?*
 | `src/discovery_state.rs` | 11 | 403 | 656 | 254 |
 | `src/report.rs` | 7 | 73 | 195 | 123 |
 | `src/policy.rs` | 5 | 249 | 349 | 101 |
-| `src/traverse.rs` | 5 | 457 | 544 | 88 |
+| `src/traverse.rs` | 6 | 470 | 599 | 129 |
 | `src/editor.rs` | 2 | 157 | 215 | 59 |
 | `src/domain.rs` | 0 | — | 381 | — |
 | `src/error.rs` | 0 | — | 16 | — |
 | `src/lib.rs` | 0 | — | 15 | — |
-| `src/main.rs` | 0 | — | 590 | — |
+| `src/main.rs` | 0 | — | 606 | — |
 | `src/output.rs` | 0 | — | 265 | — |
-| **Total** | **236** | | | |
+| **Total** | **237** | | | |
 
-`cleanup.rs` (71) + `workspace.rs` (44) = 115 of 236 = **48.7%**. The two largest and most
+**The count is declared, not executed.** 237 `#[test]` functions exist in `src/`; **236
+compile and run on Linux**, because exactly one is gated to other platforms
+(`discovery.rs:1092`, `#[cfg(any(target_os = "macos", windows))]`). A further 18 carry
+`#[cfg(unix)]` or `#[cfg(target_os = "linux")]`, so on Windows the inline suite is 1 of
+237. A green local run therefore does not mean a green run elsewhere — which is the
+whole reason the OS matrix exists, and the reason
+`check-fixture-portability.py` exists to catch a *new* ungated fixture before a lane
+disagrees about it.
+
+`cleanup.rs` (71) + `workspace.rs` (44) = 115 of 237 = **48.5%**. The two largest and most
 safety-critical modules — authorization, ownership proof, pre-spawn decision, and the `cargo
 metadata` resolution everything depends on — hold essentially half the unit tests. That
 allocation is correct, and it is the one place the pyramid is emphatically *not* inverted.
@@ -81,7 +90,7 @@ lives.
 
 ### The test-double architecture
 
-Two process seams keep the ~236 tests from spawning a real `cargo`:
+Two process seams keep the 237 declared tests from spawning a real `cargo`:
 
 - **`CargoRunner`** — `src/workspace.rs:29`. `fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput>`.
 - **`CleanupRunner`** — declared in `src/cleanup.rs` for the destructive step, so cleanup is exercised while `cargo clean` is a no-op returning recorded bytes.
@@ -147,8 +156,8 @@ that walks the entire filesystem — parallel size and recency measurement, syml
 parallel-probe machinery has a dedicated counting fake in `cleanup.rs`
 (`ParallelProbeRunner`, `cleanup.rs:4766`); `traverse.rs` has nothing comparable.
 
-`source_activity` is declared at `src/traverse.rs:254` and has exactly one call site in the
-crate: `src/traverse.rs:539`, inside the test module opening at 457. **There is no
+`source_activity` is declared at `src/traverse.rs:268` and has exactly one call site in the
+crate: `src/traverse.rs:593`, inside the test module opening at 470. **There is no
 production caller** — production uses `workspace_source_activity` (`src/workspace.rs:1428`)
 instead. So `traverse::source_activity` is a `pub` function with no production consumer
 whose sole exercise is its own test. That test proves the function works and nothing about
@@ -277,7 +286,7 @@ Three notes:
 
 `.github/workflows/ci.yml` defines five jobs.
 
-**`checks`** — the bulk of the gate. OS matrix of `ubuntu-latest`, `macos-latest`, `windows-latest`, plus a **toolchain matrix**, so the 236 unit tests and 9 integration cases execute on the MSRV toolchain and on stable. Runs `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings` (a real lint gate — warnings are errors), `cargo test --all-targets --all-features`, and both `check-release-contract.py` and `check-fixture-portability.py` directly. A red build catches: any behavioural regression on any of the three platforms; any new warning; formatting drift; an `include` edit that breaks the published crate; a new ungated POSIX-shaped fixture. `--all-features` is what makes the matrix meaningful for the update path.
+**`checks`** — the bulk of the gate. OS matrix of `ubuntu-latest`, `macos-latest`, `windows-latest`, plus a **toolchain matrix**, so the 236 unit tests that compile on this platform and 9 integration cases execute on the MSRV toolchain and on stable. Runs `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings` (a real lint gate — warnings are errors), `cargo test --all-targets --all-features`, and both `check-release-contract.py` and `check-fixture-portability.py` directly. A red build catches: any behavioural regression on any of the three platforms; any new warning; formatting drift; an `include` edit that breaks the published crate; a new ungated POSIX-shaped fixture. `--all-features` is what makes the matrix meaningful for the update path.
 
 **`installers`** — runs `check-installer-contract.py` and the installer fixture suite `packaging/tests/test_installers.py` across the same three OSes. Catches a wrapper that stopped being executable, lost its shebang, or diverged on one platform. This is also where the C012/C013 class of Windows-fixture defect would surface.
 
@@ -428,8 +437,10 @@ crate (`tests/`). Add a field to `EnvelopeV1` and nothing inside the crate fails
 
 ### Behaviours a reviewer should treat as under-verified
 
-1. **`main.rs` composition and the exit-code table.** `run()` stitches the two scan pipelines together and maps outcomes to codes. Two are pinned (`1` at `cli_contract.rs:268`, `17` at `:630`); the rest are not. `main.rs:560-562` shows the `full_incomplete || (full && !state_reconciled)` → 1 path, untested through a subprocess.
-2. **`update_json` output shape** (`main.rs:568-589`). Bypasses `EnvelopeV1`, has its own `schema_version` literal at `main.rs:571`, no test. See R3.
+1. **`main.rs` composition and the exit-code table.** `run()` stitches the two scan pipelines together and maps outcomes to codes. Three are pinned (`1` asserted at `cli_contract.rs:318`, `17` at `:680`, and the resolved-scope label test at `:215`); the rest are not. `main.rs:576-578` shows the `full_incomplete` → 1 path, untested through a subprocess. (It used to read
+   `full_incomplete || (full && !state_reconciled)`; that second clause is gone, and removing it is
+   the fix recorded in [overview §7 item 8](overview.md).)
+2. **`update_json` output shape** (`main.rs:584-606`). Bypasses `EnvelopeV1`, has its own `schema_version` literal at `main.rs:586`, no test. See R3.
 3. **`output.rs` DTO field completeness.** `scan()` (`:103`) and `cleanup()` (`:158`): adding, removing, or renaming a field breaks no in-crate test.
 4. **`report.rs` rendering is covered, but not end to end.** The 7 inline tests are strong; the default `--format text` path is never asserted through the binary.
 5. **`domain.rs` semantics.** Zero tests is defensible for the data shapes, but any *meaningful* method on those types is untested by construction — nothing would catch one being added.
@@ -446,10 +457,10 @@ crate (`tests/`). Add a field to `EnvelopeV1` and nothing inside the crate fails
 3. **Is a new external-process fixture actually exercised — not just present?** The premise is untested by default. Confirm the stub is *reached*: assert on what the subject passed to it (the `RecordingRunner` pattern, `workspace.rs:3224`), not only on what came back. C012 was green because an unrelated failure satisfied the assertion.
 4. **Is a new `scripts/` file wired into a workflow?** Two of the current 12 are not (`validate-staged-release.py`, `qualify-cargo-selectors.sh`) — see [§6](#6-ci-as-the-enforcement-point). A new checker no lane runs repeats that gap. Wire it, or document why not, in the same change.
 5. **Changing a field in `output.rs`?** There is no in-crate test. The only assertions are external: `cli_contract.rs:200-202`, `238-241`, `270`, `379-381`, `383-395`, `426`, `459-465`, `497`, `532`, `565-567`. Update them in the same commit; nothing inside the crate will remind you.
-6. **Changing `update_json` (`main.rs:568`)?** Nothing will fail. It has no test and is not covered by the checklist invariants. Add a case, and consider routing it through `EnvelopeV1` so it stops being the one unversioned surface.
+6. **Changing `update_json` (`main.rs:584`)?** Nothing will fail. It has no test and is not covered by the checklist invariants. Add a case, and consider routing it through `EnvelopeV1` so it stops being the one unversioned surface.
 7. **Touching `output.rs:140` or `:206` (`schema_version` literals)?** Confirm the trailing-newline invariant (`cli_contract.rs:204`, `:242`) and stderr-separation invariant (`:203`) still hold for the surface you touched. They are the reason the JSON is safe to parse unattended.
-8. **New exit codes in `main.rs`** — add a subprocess assertion in `cli_contract.rs` beside the existing two (`:268` for `1`, `:630` for `17`). The exit-code table is otherwise unpinned.
-9. **Touching `traverse.rs`?** 5 tests (module opens at `:457`), and `source_activity` (`:254`) has no production caller — its only call site is `traverse.rs:539`, inside its own test module. If you are adding a caller, say so; if not, its test proves nothing about the system.
+8. **New exit codes in `main.rs`** — add a subprocess assertion in `cli_contract.rs` beside the existing three (`:318` for `1`, `:680` for `17`, `:215` for the scope label). The exit-code table is otherwise unpinned.
+9. **Touching `traverse.rs`?** 6 tests (module opens at `:470`), and `source_activity` (`:268`) has no production caller — its only call site is `traverse.rs:593`, inside its own test module. If you are adding a caller, say so; if not, its test proves nothing about the system.
 10. **New behaviour in `policy.rs`** — only 5 tests, and this module decides the Routine/Full scope boundary, a documented invariant. Cheap to cover, currently under-covered.
 11. **Reactivating or adding a `.crates.toml` provenance path** — C017 was exactly this: a schema no current Cargo writes, misread as self-managed, which *replaced a binary Cargo owned*. The classification lives in `src/update.rs`, and its tests run against `FixtureEnvironment` (`update.rs:1031`), which cannot reproduce real Cargo's on-disk state.
 12. **Any change to the two manual-only scripts** (`validate-staged-release.py`, `qualify-cargo-selectors.sh`) — the repository's largest remaining false-green exposure. They are R1 and R2 in [§7](#7-the-false-green-problem); nothing records whether they were ever run, and the C013 lesson is that verifiers fail exactly when they start being useful.

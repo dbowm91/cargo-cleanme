@@ -93,12 +93,12 @@ Attended terminals show immediate inline progress on stderr: one coordinated `Mu
 
 ## Installing
 
-There is no published release yet. The two supported installation paths today
-are:
+Releases are published to GitHub and crates.io, with no version yanked. The two
+supported installation paths are:
 
 ```sh
-cargo install cargo-cleanme --locked          # from the crates.io registry
-cargo install cargo-cleanme --locked --version 0.1.1  # pin an exact release
+cargo install cargo-cleanme --locked                    # from the crates.io registry
+cargo install cargo-cleanme --locked --version 0.1.6    # pin an exact release
 ```
 
 Installing the package is enough for Cargo to expose the external
@@ -111,13 +111,13 @@ install a verified prebuilt binary from a GitHub release:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/dbowm91/cargo-cleanme/main/packaging/install.sh | sh
-sh install.sh --version 0.1.0     # pin an exact release
+sh install.sh --version 0.1.6     # pin an exact release
 sh install.sh --dir "$HOME/bin"   # choose the destination
 ```
 
 ```powershell
 irm https://raw.githubusercontent.com/dbowm91/cargo-cleanme/main/packaging/install.ps1 | iex
-./install.ps1 -Version 0.1.0
+./install.ps1 -Version 0.1.6
 ```
 
 The install path is binary-first and fail-closed:
@@ -305,14 +305,29 @@ the `cargo cleanme` spelling, which is what works after a registry install.
 
 ## Documentation
 
+- [AGENTS.md](AGENTS.md) — the entry point for coding agents: repository shape,
+  verification commands, and an index into the architecture deep dives.
+- [architecture/overview.md](architecture/overview.md) — how the crate fits
+  together, the cross-cutting safety invariants, and an index of 15 per-module
+  deep dives.
 - [docs/RELEASING.md](docs/RELEASING.md) — the operator release checklist.
 - [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) — installer and updater
-  failure modes, and the limits of the integrity evidence.
+  failure modes, version-specific defects, and the limits of the integrity
+  evidence.
 - [CHANGELOG.md](CHANGELOG.md) — what changed, and what deliberately does not
   exist yet.
 
 ## Planning
 
-The repository starts planning-first. Canonical product direction, roadmap, bounded implementation plans, and active status are maintained under `plans/` using the same long-term/interim/closure separation used by CodeGG.
+The repository plans first. Canonical product direction, accepted ADRs, bounded
+implementation plans, closure evidence, and the active control surface are
+maintained under `plans/`, following the long-term / interim / closure
+separation defined in [`plans/003-planning-process.md`](plans/003-planning-process.md).
+[`plans/registry.md`](plans/registry.md) is the compact status surface; the
+per-requirement evidence lives in the individual closure records.
 
-Cleanup is opt-in and Cargo-managed. Its current destructive boundary is defined by M004 plus ADR 001 and the C002-C004 ownership/revalidation corrections; M006 performance work must not weaken those checks.
+Cleanup is opt-in and Cargo-mediated. Its current destructive boundary is
+summarised in [`plans/registry.md`](plans/registry.md) under *Current
+destructive safety boundary*, and defined in ADR 001 plus the M004, C002–C004,
+M007, C005, C006, and M008A milestones. Performance work (M006 and its
+correctives) must never weaken those checks.

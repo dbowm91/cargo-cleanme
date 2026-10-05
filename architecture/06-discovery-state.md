@@ -597,19 +597,26 @@ failure as a warning, never as a scan failure:
 (`main.rs:413-415`), and a `None` prior prints the `StateLoad::diagnostic()`
 message plus "; Full state reconciliation was skipped" (`main.rs:417-422`).
 
-**One correction to the usual framing.** A failed save *does* change the exit
-code for a Full scan. `state_reconciled` is initialised to `!full`
-(`main.rs:358`), set to `true` only on a successful publish (`main.rs:401`), and
-consumed at `main.rs:560-562`:
+**One correction to the usual framing — and the correction has since been
+applied.** A failed save *used to* change the exit code for a Full scan. The
+block was
 
 ```rust
 if full_incomplete || (full && !state_reconciled) { return Ok(1); }
 ```
 
-So `cargo-cleanme scan --full` exits **1** when state could not be persisted,
-even though the scan report itself is complete and correct. The asymmetry is
-deliberate in one direction and worth knowing in the other: the Routine branch
-never clears `state_reconciled`, so a Routine save failure exits **0**.
+so `cargo-cleanme scan --full` exited **1** when state could not be persisted,
+even though the scan report was complete and correct — and the Routine branch,
+which never cleared the same flag, exited **0** for the byte-identical warning.
+That contradicted the module's own stated invariant, *"State is an optimization
+only"*, which sits directly above `publish` in this file.
+
+The `state_reconciled` flag has been **removed**. The exit decision is now
+`if full_incomplete { return Ok(1); }` (`main.rs:576-578`) and nothing else, so
+both branches leave the exit code alone and a failed save is a stderr notice
+only. A genuinely incomplete Full scan still exits 1, through `full_incomplete`
+— which is computed from the same `PlatformRoot`+`Error` predicate as
+`complete`, not from the save result.
 
 ### The degradation property, confirmed
 
@@ -661,8 +668,8 @@ divergence is intentional:
   empty. `run_scan` has already returned 0 (it did not reconcile), so execution
   reaches `main.rs:174-195` and prints "no bounded cleanup roots are known; no
   cleanup commands were run", exit 0. **Fails safe: nothing is deleted.**
-- **`run_scan` Full branch** (`main.rs:360`, `:417-422`): skipped entirely with a
-  warning; `state_reconciled` stays false, so the exit code is 1.
+- **`run_scan` Full branch** (`main.rs:375`, `:432-437`): skipped entirely with a
+  warning. The exit code stays 0 unless the scan was independently incomplete.
 - **Routine touch** (`main.rs:423`): the `if let StateLoad::Loaded(prior)`
   pattern simply does not match, so no write occurs. Silent, and correctly so.
 
@@ -724,10 +731,9 @@ Two further qualifications, both load-bearing:
 ### Can a Full scan with `complete == false` publish at all?
 
 **No.** `:122-124` returns before any mutation, and it is the sole
-`NoPublication` site. `main.rs:413-415` prints the reason, `state_reconciled`
-stays false, and `main.rs:560-562` returns exit 1 (as does the independently
-computed `full_incomplete`). The existing file is untouched — asserted directly
-at `:471`.
+`NoPublication` site. `main.rs:428-430` prints the reason, and the exit code is
+carried by the independently computed `full_incomplete` at `main.rs:576-578`.
+The existing file is untouched — asserted directly at `:471`.
 
 ### What happens on the very first run?
 
@@ -961,10 +967,12 @@ against the code, not against its test count.
 9. **Did a change to `discovery.rs` diagnostic `path` values alter what reaches
    `uncertain`?** `discovery.rs:519-528` and `discovery.rs:770-775` currently
    carry a **walk root**, which on unix means `/` and retains everything
-   (`main.rs:327-339`, `discovery_state.rs:108`). A `None` path is silently
-   dropped at `main.rs:338` and cannot retain anything — check this whenever
+   (`main.rs:344-356`, `discovery_state.rs:108`). A `None` path is silently
+   dropped at `main.rs:355` and cannot retain anything — check this whenever
    diagnostics are refactored.
-10. **Is a Full scan's save failure still visible in the exit code?** The
-    `state_reconciled` initialisation at `main.rs:358`, the set at `:401`, and
-    the gate at `main.rs:560-562` are spread across 200 lines; a change to any
-    of the three can silently turn a persist failure into exit 0.
+10. **Has the save-failure exit-code coupling come back?** It is now
+    structurally absent: the exit decision reads only `full_incomplete`
+    (`main.rs:576-578`) and there is no flag to set. The regression to watch
+    for is someone reintroducing a save-result branch into that `if` — the
+    module's own doc comment at `discovery_state.rs:338` is the authority to
+    cite when arguing against it.

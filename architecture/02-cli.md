@@ -27,7 +27,7 @@ What it deliberately does **not** do:
 
 - **No policy interpretation.** `clean` carries `known`/`full`/
   `min_reclaimable_bytes`/… as raw fields; the Routine-vs-Full decision lives
-  in `policy::resolve`, called from `main.rs:300` and `main.rs:133`.
+  in `policy::resolve`, called from `main.rs:317` and `main.rs:133`.
 - **No filesystem discovery.** The only filesystem call is
   `std::env::current_dir()` (`src/cli.rs:157`); there is no `exists`, `is_dir`,
   or `read_dir`. Root existence/directory/symlink checks are later layers' job
@@ -57,9 +57,9 @@ subcommand name.
 | Flag | Short | Type | Default | Maps to |
 |---|---|---|---|---|
 | `--config <CONFIG>` | — | `Option<PathBuf>` | `None` | `ConfigPathResolver::new` → `main.rs:17` |
-| `--no-progress` | — | `bool` | `false` | `progress::should_show_progress(..)` → `main.rs:197`, `main.rs:311` |
-| `--stats` | — | `bool` | `false` | `discover_manifests_with_attribution(.., stats)` `main.rs:321`; the `eprintln!` blocks at `main.rs:542`, `main.rs:243` |
-| `--format <FORMAT>` | — | `OutputFormat` (value enum) | `human` | selects `output::scan` / `output::cleanup` / `report::render` → `main.rs:496`, `main.rs:216`, `main.rs:512` |
+| `--no-progress` | — | `bool` | `false` | `progress::should_show_progress(..)` → `main.rs:197`, `main.rs:328` |
+| `--stats` | — | `bool` | `false` | `discover_manifests_with_attribution(.., stats)` `main.rs:338`; the `eprintln!` blocks at `main.rs:551`, `main.rs:243` |
+| `--format <FORMAT>` | — | `OutputFormat` (value enum) | `human` | selects `output::scan` / `output::cleanup` / `report::render` → `main.rs:511`, `main.rs:216`, `main.rs:521` |
 | `--help` / `-h` | `-h` | clap built-in | — | clap help path |
 | `--version` / `-V` | `-V` | clap built-in (from `version`, `src/cli.rs:14`) | — | `cargo-cleanme 0.1.6` |
 
@@ -79,7 +79,7 @@ load-bearing: a bare invocation parses successfully and means *Routine scan*
 
 | Token | Kind | Notes |
 |---|---|---|
-| `[ROOT]` | optional positional `Option<PathBuf>` | No doc comment, so it is undocumented in the manpage. Passed **raw** (not absolutized) to `policy::resolve` as `ScanRequest.cli_root` → `main.rs:300-306` |
+| `[ROOT]` | optional positional `Option<PathBuf>` | No doc comment, so it is undocumented in the manpage. Passed **raw** (not absolutized) to `policy::resolve` as `ScanRequest.cli_root` → `main.rs:317-323` |
 | `--full` | `bool` | `conflicts_with = "root"` (`src/cli.rs:38`) — `scan /x --full` is a parse error. No doc comment either |
 
 `scan` has no `--known`; the Routine scope is simply the no-argument case.
@@ -173,11 +173,11 @@ generated documentation.
 
 | Variant | Spelling | Downstream effect |
 |---|---|---|
-| `Human` (default) | `human` | `report::render` / `CleanReport::render` on stdout (`main.rs:512`, `main.rs:240`); inline progress also permitted (`main.rs:311`, `main.rs:196`); the `state generation last_full_at=…` line prints (`main.rs:211-215`) |
-| `Json` | `json` | exactly one line of `output::scan` / `output::cleanup`, or the hand-built `update_json` object (`main.rs:568`); inline progress suppressed by the `format == Human` guard |
+| `Human` (default) | `human` | `report::render` / `CleanReport::render` on stdout (`main.rs:521`, `main.rs:240`); inline progress also permitted (`main.rs:328`, `main.rs:196`); the `state generation last_full_at=…` line prints (`main.rs:211-215`) |
+| `Json` | `json` | exactly one line of `output::scan` / `output::cleanup`, or the hand-built `update_json` object (`main.rs:584`); inline progress suppressed by the `format == Human` guard |
 
 `--format` is orthogonal to `--stats`: `--stats` always writes to stderr
-(`main.rs:544`, `main.rs:247`) and never changes stdout. Pinned end to end by
+(`main.rs:562`, `main.rs:247`) and never changes stdout. Pinned end to end by
 `json_scan_is_one_versioned_document_and_stats_stay_on_stderr`
 (`tests/cli_contract.rs:177`), which asserts `plain.stdout == with_stats.stdout`.
 
@@ -331,7 +331,7 @@ current directory"* — correct, because `set_current_dir` is process-global and
 races any parallel test. It is `#[doc(hidden)]` and, in the current tree, has
 **no call sites**: the inline tests reach `absolutize_relative` directly for
 the `..` cases (`src/cli.rs:449-454`) and call `absolutize_root` for the
-cwd-based ones (`src/cli.rs:440`, `:446`).
+cwd-based ones (`src/cli.rs:440`, `:461`).
 
 ### 4.2 `absolutize_relative` — the lexical algorithm
 
@@ -379,7 +379,7 @@ let (roots, state_generation) = if let Some(root) = root {
     (vec![cli::absolutize_root(&root)], None)
 ```
 
-The asymmetry is real: **`scan ROOT` is not absolutized.** `main.rs:300-306`
+The asymmetry is real: **`scan ROOT` is not absolutized.** `main.rs:317-323`
 passes the parsed `PathBuf` straight into
 `policy::resolve(ScanRequest { cli_root: root, full })`. Only the `clean` path
 calls `absolutize_root`. That is defensible — scan is read-only and

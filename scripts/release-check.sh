@@ -96,6 +96,10 @@ echo "release-check: fixture portability guard"
 python3 scripts/check-fixture-portability.py --self-test
 python3 scripts/check-fixture-portability.py
 
+echo "release-check: architecture citations resolve"
+python3 scripts/check-doc-citations.py --self-test
+python3 scripts/check-doc-citations.py
+
 echo "release-check: release candidate smoke validator"
 python3 scripts/smoke-release-candidate.py target/debug/cargo-cleanme
 

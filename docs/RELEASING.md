@@ -38,7 +38,13 @@ scripts/release-check.sh
 the semantic-counter benchmark, the completions/manpage drift gate, the derived
 workflow-shape check, the Eggpack `ci check` workflow drift check, the release
 contract check, the installer-contract check, the installer fixture suite,
-`cargo package --locked`, and `cargo publish --locked --dry-run`.
+the fixture-portability and architecture-citation guards, `cargo package
+--locked`, and `cargo publish --locked --dry-run`.
+
+Each static guard runs its own `--self-test` first. That ordering is
+deliberate: a guard that has quietly stopped detecting its defect shape is
+worse than no guard, so the gate proves each one can still fail before trusting
+it to pass.
 
 The Eggpack revision is pinned in `release/eggpack/github-policy.json`. Install
 that exact revision; a different one may render a different workflow.
@@ -149,10 +155,12 @@ cargo install cargo-cleanme --version <published> --locked --root /tmp/root
 cargo install --list --root /tmp/root       # must still report <published>
 ```
 
-Through v0.1.4 this check fails: the refusal names no version in its remediation
-(`cargo install cargo-cleanme --locked --force` resolves to the newest release
-by itself), so assert the *command*, not a version string. `scripts/post-release-smoke.sh`
-covers this and fails the release if the binary's bytes change.
+From 0.1.5 onward the refusal is correct and this check passes as written. It
+failed on every release through v0.1.4, where the refusal named no version in
+its remediation (`cargo install cargo-cleanme --locked --force` resolves to the
+newest release by itself), so assert the *command*, not a version string.
+`scripts/post-release-smoke.sh` covers this and fails the release if the
+binary's bytes change.
 
 Use an **absolute** path for the bounded scan. An explicitly relative root
 resolved zero Cargo workspaces through 0.1.2 — tracked as C015, fixed in 0.1.3 —
@@ -262,9 +270,15 @@ something a fixture can model.
 
 ## Post-release
 
-Record in the Phase 10 closure record: the exact source revision, the tag, the
-crates.io package checksum, the workflow run id, the draft and public release
-ids, the full asset inventory with every SHA-256, per-platform installer smoke
-results, the updater rehearsal result, the completions/manpage drift result,
-the benchmark and binary-size table, and every unresolved finding with its
-disposition.
+Record the exact source revision, the tag, the crates.io package checksum, the
+workflow run id, the draft and public release ids, the full asset inventory with
+every SHA-256, per-platform installer smoke results, the updater rehearsal
+result, the completions/manpage drift result, the benchmark and binary-size
+table, and every unresolved finding with its disposition.
+
+Write it to `plans/closure/<subsystem>/<NNN>-status.md` and reference it from
+`plans/registry.md`. A corrective that is fixed but not yet carried by a
+published release stays **open**, not closed: `v0.1.2` was held open precisely
+because publication alone is not evidence that the live updater works, and
+closing it on publication would have hidden a real defect. Closure needs a
+published release *and* a rehearsal of the previous release into it.

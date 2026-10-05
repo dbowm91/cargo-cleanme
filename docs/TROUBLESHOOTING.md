@@ -1,5 +1,53 @@
 # cargo-cleanme troubleshooting
 
+## Check this first: known defects by version
+
+Two defects in the `0.1.x` line affected the updater. Both were found by the
+project's own release rehearsals, not by a test, and both are fixed. They are
+listed first because they are the only cases where a correct-looking run did
+the wrong thing.
+
+### If you are on 0.1.1 through 0.1.4: check whether `update` replaced a Cargo-managed binary
+
+**This is the one defect in the `0.1.x` line that could change a file it did
+not own.** A binary installed with `cargo install --root DIR` — the form every
+hermetic install script, CI job, and container image uses — was not recognised
+as Cargo-managed, because detection only ever looked at `$CARGO_HOME/bin`. The
+file was treated as a self-managed installation and **overwritten in place**,
+with no warning and exit status `0`. Afterwards `cargo install --list` reported
+the old version for a file that no longer had it, so `cargo upgrade` and
+`cargo uninstall` could no longer do their jobs.
+
+Nothing else about those releases is affected: scanning, sizing, reporting, and
+cleanup are correct. To check whether you were hit:
+
+```sh
+cargo cleanme --version                      # the version the file reports now
+cargo install --list | grep cargo-cleanme     # the version Cargo believes it owns
+```
+
+If those disagree, you are in the affected state. Repair it with:
+
+```sh
+cargo install cargo-cleanme --locked --force
+```
+
+Fixed in **0.1.5**. Versions 0.1.1 through 0.1.4 carry it; 0.1.5 and later
+refuse a Cargo-managed installation, and also parse the `.crates.toml` schema
+that current Cargo actually writes. None of these versions were yanked, because
+their other behaviour is correct and yanking would misdescribe them.
+
+### If you are on 0.1.1 or 0.1.2: `update` could not complete
+
+The identity check ran the downloaded candidate with **no arguments**, so its
+stdout could never equal a version string — and before failing, it scanned the
+whole machine. The transaction then aborted safely every time, so nothing was
+corrupted and no file was replaced. The advertised feature simply never once
+worked in any published version.
+
+Fixed in **0.1.3**. If you are on 0.1.1 or 0.1.2, upgrade with `cargo install
+cargo-cleanme --locked --force` rather than `cargo cleanme update`.
+
 ## Installation
 
 ### `install.sh` says the host has no prebuilt binary
@@ -77,7 +125,9 @@ graph, which a single-binary replacement does not.
 Current releases identify themselves to the registry with a descriptive
 User-Agent, which crates.io requires. In `0.1.0` the updater used your system's
 `curl` executable, which has no way to set one, so crates.io answered HTTP 403
-and `update` always failed. `0.1.1` replaces it with a transport that can.
+and `update` always failed. `0.1.1` replaced it with a transport that can, and
+every release since then uses that transport — so this failure mode is a
+network or proxy problem on your side, not a known defect here.
 
 If you see a transport failure, check outbound HTTPS and any proxy
 configuration, then retry. It will not silently switch to a different transport,
@@ -103,7 +153,7 @@ an explicit `cargo install` can.
 
 ### `update` says this build is newer than the published release
 
-Also correct, and also new behavior. If you are running a build from `main` or
+Also correct. If you are running a build from `main` or
 `cargo install --git`, its version is ahead of the latest published release.
 The registry is the version authority for *releases*, not for a build that was
 never published, so `update` refuses to replace it with the older one instead of

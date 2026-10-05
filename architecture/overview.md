@@ -5,9 +5,10 @@ per-component deep dives that follow.
 
 - **What it is:** a Cargo subcommand (`cargo cleanme`) that finds inactive Cargo
   build artifacts on a machine and either reports or safely reclaims them.
-- **Shape:** one binary (`src/main.rs`) over one library (`src/lib.rs`), 15
-  modules, ~18.3k lines of Rust in `src/`, no async runtime of its own, and
-  exactly one binary dependency that matters for safety (`cargo metadata`).
+- **Shape:** one binary (`src/main.rs`) over one library (`src/lib.rs`) of 15
+  modules, 17 source files, 18,327 lines of Rust in `src/`, no async runtime
+  of its own, and exactly one binary dependency that matters for safety
+  (`cargo metadata`).
 - **Version:** 0.1.6 · **Edition:** 2024 · **MSRV:** 1.89
 - **Deep dives:** 15 documents, one per component, linked from §3 and §9.
 
@@ -91,21 +92,30 @@ it.**
 ## 3. Module index
 
 Line counts are `total`; where a module carries an inline `#[cfg(test)]`
-module, the `prod / test` split is given. The crate has **236 inline `#[test]`
-functions**, and **48.7% of them live in the two largest modules**
+module, the `prod / test` split is given. The crate has **237 inline `#[test]`
+functions**, and **48.5% of them live in the two largest modules**
 (`cleanup.rs` 71 + `workspace.rs` 44). Five modules have **zero** tests:
 `main.rs`, `output.rs`, `domain.rs`, `error.rs`, `lib.rs`.
 
+Test counts in this table are **declared**, not "how many ran on my machine".
+237 are declared; **236 compile and run on Linux**, because exactly one is
+gated to other platforms
+(`discovery.rs:1092`, `#[cfg(any(target_os = "macos", windows))]`). A further
+18 are `#[cfg(unix)]` or `#[cfg(target_os = "linux")]`, so on Windows the
+inline suite is 1 of 237. Read the total as coverage concentrated in two
+modules, not as a balance — see
+[14-testing-and-verification](14-testing-and-verification.md) §2.
+
 | Module | Lines | Role | Deep dive |
 |---|---:|---|---|
-| [`main.rs`](13-orchestration.md) | 590 | Binary entry: argv → command dispatch → exit code. The only place the two scan pipelines are stitched together. | [Orchestration](13-orchestration.md) |
-| [`cli.rs`](02-cli.md) | 506 / 201 | Clap surface, `cargo`-subcommand argv normalization, scan-root absolutization. | [CLI](02-cli.md) |
-| [`config.rs`](03-config-and-editor.md) | 548 / 309 | Load/create/validate `config.toml`; embedded template; path resolution. | [Config & editor](03-config-and-editor.md) |
+| [`main.rs`](13-orchestration.md) | 606 | Binary entry: argv → command dispatch → exit code. The only place the two scan pipelines are stitched together. | [Orchestration](13-orchestration.md) |
+| [`cli.rs`](02-cli.md) | 506 / 200 | Clap surface, `cargo`-subcommand argv normalization, scan-root absolutization. | [CLI](02-cli.md) |
+| [`config.rs`](03-config-and-editor.md) | 548 / 308 | Load/create/validate `config.toml`; embedded template; path resolution. | [Config & editor](03-config-and-editor.md) |
 | [`policy.rs`](04-policy-and-scope.md) | 349 / 248 | Turns a `ScanRequest` + config into an `EffectiveScanPolicy` — the Routine/Full scope decision. | [Policy & scope](04-policy-and-scope.md) |
 | [`discovery.rs`](05-discovery.md) | 1370 / 826 | Finds `Cargo.toml` manifests across a bounded walk, with attribution for what was pruned. | [Discovery](05-discovery.md) |
 | [`discovery_state.rs`](06-discovery-state.md) | 656 / 402 | Persisted "learned roots", uncertainty-aware reconciliation, atomic publish. | [Discovery state](06-discovery-state.md) |
 | [`workspace.rs`](07-workspace.md) | 3771 / 1446 | `cargo metadata` resolution, capability probing, physical grouping, cleanup-unit construction. | [Workspace](07-workspace.md) |
-| [`traverse.rs`](08-traverse.md) | 544 / 456 | Parallel size/recency measurement and source-activity classification. | [Traverse](08-traverse.md) |
+| [`traverse.rs`](08-traverse.md) | 599 / 470 | Parallel size/recency measurement and source-activity classification. | [Traverse](08-traverse.md) |
 | [`cleanup.rs`](09-cleanup.md) | 6161 / 2323 | Authorization, ownership proof, pre-spawn decision, three clean modes. The heart of the safety story. | [Cleanup](09-cleanup.md) |
 | [`report.rs`](10-reporting.md) | 195 / 72 | Human-readable rendering of a `ScanReport`; byte formatting. | [Reporting](10-reporting.md) |
 | [`output.rs`](10-reporting.md) | 265 | Versioned machine-readable DTOs (`EnvelopeV1`); the stable JSON contract. **No tests.** | [Reporting](10-reporting.md) |
@@ -120,7 +130,7 @@ Supporting surfaces, outside `src/`:
 
 | Surface | Deep dive |
 |---|---|
-| `tests/` (2 suites + shared harness), `scripts/` (12 contract checkers), `.github/workflows/ci.yml` | [Testing & verification](14-testing-and-verification.md) |
+| `tests/` (2 suites + shared harness), `scripts/` (13 contract checkers), `.github/workflows/ci.yml` | [Testing & verification](14-testing-and-verification.md) |
 | `packaging/`, `completions/`, `man/`, `release/`, `xtask/`, the 3 release workflows | [Distribution & release](15-distribution-and-release.md) |
 | `plans/`, `examples/`, `docs/` — decision records, qualification harness, user docs | referenced from the relevant deep dives |
 
@@ -131,27 +141,28 @@ allowlist, so none of this documentation ships in the published crate.
 
 ## 4. The scan pipeline
 
-`run_scan` in `main.rs:284` is the read-only pipeline. Nine steps, in order:
+`run_scan` in `main.rs:302` is the read-only pipeline. Nine steps, in order:
 
-1. **Resolve config** — `config::load_or_create` (`main.rs:299`).
+1. **Resolve config** — `config::load_or_create` (`main.rs:316`).
 2. **Resolve scope** — `policy::resolve` turns `{cli_root, full}` into concrete
-   roots + a recency window (`main.rs:300`).
+   roots + a recency window (`main.rs:317`).
 3. **Discover manifests** — `discovery::discover_manifests_with_attribution`
    walks the scope for `Cargo.toml`, recording *why* anything was skipped
-   (`main.rs:320`).
+   (`main.rs:338`).
 4. **Partition uncertainty** — permission-denied / metadata / vanished
-   diagnostics are pulled out as `uncertainty` (`main.rs:327`). This vector
+   diagnostics are pulled out as `uncertainty` (`main.rs:344`). This vector
    later decides whether learned state may be trusted.
 5. **Resolve workspaces** — `workspace::resolve_workspaces` shells out to
-   `cargo metadata` once per unique canonical workspace root (`main.rs:347`).
+   `cargo metadata` once per unique canonical workspace root (`main.rs:364`).
 6. **Reconcile state** — for a Full scan, `discovery_state::reconcile_full`
    folds observations into the learned-root set and publishes atomically
-   (`main.rs:387`).
+   (`main.rs:403`).
 7. **Build physical groups** — `workspace::build_groups`; nested/duplicate
-   output roots collapse to one group so bytes are counted once (`main.rs:446`).
+   output roots collapse to one group so bytes are counted once (`main.rs:461`).
 8. **Analyze** — `workspace::analyze_groups` measures each group in parallel
-   via `traverse` and classifies activity (`main.rs:454`).
-9. **Render** — human (`report::render`) or JSON (`output::scan`) (`main.rs:470`+).
+   via `traverse` and classifies activity (`main.rs:469`).
+9. **Render** — human (`report::render`, `main.rs:521`) or JSON
+   (`output::scan`, `main.rs:514`).
 
 Steps 3–5 and 7–8 are the expensive parts; step 6 is the part that makes the
 next run cheap.

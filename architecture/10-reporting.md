@@ -25,7 +25,7 @@ ownership, decides a policy disposition, nor performs I/O.
 | I/O | none | none |
 
 `output.rs` derives `Serialize` but never calls `serde_json`. Serialization and
-the trailing newline are owned by `main.rs:499` (scan), `main.rs:217` (cleanup),
+the trailing newline are owned by `main.rs:521` (scan), `main.rs:217` (cleanup),
 `main.rs:184` (empty-roots cleanup). Keeping encoding out of the DTO module means
 a caller can serialise the same envelope to JSON, or anything else, without
 touching the contract.
@@ -172,7 +172,7 @@ for the *other* consumer in a way that is easy to miss:
 `tests/end_to_end.rs:193` calls `report::render(&mut report)` and then serialises
 **the same report** at `end_to_end.rs:202`, so the human renderer's sort
 determines the JSON group order in that test. In the binary the two paths are
-mutually exclusive (`main.rs:496`, `main.rs:511`), so shipped output is
+mutually exclusive (`main.rs:520`, `main.rs:530`), so shipped output is
 unaffected. A `&[EligibleOutputGroup]` parameter plus a local sorted index would
 fix it at zero cost.
 
@@ -195,7 +195,7 @@ before `bytes` was measured. That is the "deduplicated total" checked at
 `report.rs:184-194`.
 
 **Diagnostics are not rendered at all** — `render` uses only `report.groups`.
-Diagnostics reach the user from `main.rs:515-538` on **stderr**: a count, the
+Diagnostics reach the user from `main.rs:533-556` on **stderr**: a count, the
 first 10, and `… N more`. So JSON carries the complete diagnostic list while the
 human stream truncates at 10. The human `stdout` document is not the whole
 human-visible story.
@@ -283,14 +283,14 @@ path allocates for one of three constants (`output.rs:210`).
 
 | Call site | Value |
 |---|---|
-| `main.rs:501-507` (scan) | `"full"`, `"explicit"`, or `"routine"` |
+| `main.rs:311-317` (scan, via `scope_label`) | `"full"`, `"explicit"`, or `"routine"` |
 | `main.rs:186` (empty-roots cleanup) | `"full"` or `"known"` |
 | `main.rs:221-227` (cleanup) | `"full"`, `"known"`, or `"explicit"` |
 
 The set is *not* uniform: scan has `routine`, cleanup has `known`, neither has the
 other's. A consumer must treat `scope` as an open string, not a closed enum.
 
-**One more envelope that is not an envelope.** `update_json` (`main.rs:568-590`)
+**One more envelope that is not an envelope.** `update_json` (`main.rs:582-606`)
 builds a hand-rolled `serde_json::Map` with `schema_version: 1` and
 `operation: "update"` — but **no `scope`, no `mode`, and a different `result`
 shape**. It shares the version number without sharing the envelope (§7 D8).
@@ -469,7 +469,7 @@ The source type is **`EligibleOutputGroup` (`domain.rs:222-231`)**, not
 `PhysicalOutputGroup`. `PhysicalOutputGroup` (`domain.rs:205-219`) is the
 *measurement-stage* type and never reaches either output module — it is confined
 to `workspace.rs` (906, 1196, 1232-1233, 1298) plus one `cleanup.rs` test fixture.
-`main.rs:471-483` and `tests/end_to_end.rs:174-187` both perform the narrowing
+`main.rs:486-498` and `tests/end_to_end.rs:174-187` both perform the narrowing
 conversion, dropping `covering_roots`, `owners`, and `uncertain`, and lowering
 `owners: Vec<WorkspaceId>` to `workspace_roots: Vec<PathBuf>` by taking `.0` of
 each id. `report.rs` and `output.rs` never see the richer type and could not emit
@@ -610,9 +610,9 @@ divergence in the contract (§7 D1).
 | Dropped | Where | Why correct |
 |---|---|---|
 | `ScanReport.visited_entries` | `domain.rs:87` | Internal walk accounting; no consumer decision depends on it |
-| `ScanReport.counters` | `domain.rs:89`, 35 fields | Prune tallies and nanosecond timings are `--stats` stderr material (`main.rs:542-549`); the schema keeps them off the contract |
+| `ScanReport.counters` | `domain.rs:89`, 35 fields | Prune tallies and nanosecond timings are `--stats` stderr material (`main.rs:560-584`); the schema keeps them off the contract |
 | `EligibleOutputGroup.artifact_entries` | `domain.rs:229` | Count of walked entries; diagnostic, not a reclaim-decision input |
-| `PhysicalOutputGroup.covering_roots` / `owners` / `uncertain` | `domain.rs:207,212,218` | Never reach these modules — dropped upstream at `main.rs:471-483` |
+| `PhysicalOutputGroup.covering_roots` / `owners` / `uncertain` | `domain.rs:207,212,218` | Never reach these modules — dropped upstream at `main.rs:502-514` |
 | `CleanReport.counters` | `cleanup.rs:182` | Same as `ScanReport.counters`; cleanup `--stats` is stderr (`main.rs:247-255`) |
 | `CleanReport.failed` | `cleanup.rs:180` | Recomputed from results (`output.rs:194-203`); the domain field remains an exit-code input |
 | `CleanResult.workspace_roots` | `cleanup.rs:81` | Redundant with `workspace_root` + `output_roots` |
@@ -656,10 +656,10 @@ itemised below; the table is the coverage map.
 | `units[].outcome` value set | **no** | never enumerated → **D9** |
 | `summary` (6 keys) | yes | `failed` source differs → **D10** |
 | Policy disposition stable values (5 listed) | **partial** | code emits 6 → **D2** |
-| "one UTF-8 JSON document + newline" | yes | `println!` `main.rs:497,217,182`; asserted `cli_contract.rs:204,242` |
+| "one UTF-8 JSON document + newline" | yes | `println!` `main.rs:521,217,182`; asserted `cli_contract.rs:204,242` |
 | Path encoding rule (line 25) | yes | `output.rs:256-260` |
-| "`--stats` is stderr-only" | yes | `main.rs:247,545`; asserted `cli_contract.rs:198` |
-| "Progress is disabled for JSON output" | yes | `main.rs:196,311` gate on `Human` |
+| "`--stats` is stderr-only" | yes | `main.rs:247,553`; asserted `cli_contract.rs:198` |
+| "Progress is disabled for JSON output" | yes | `main.rs:196,328` gate on `Human` |
 | Exit codes 0 / 1 / 2 | **partial** | right for cleanup; scan has an extra 1 → **D7** |
 | Success/failure indicator | **absent** | no such field anywhere → **D8** |
 
@@ -731,10 +731,11 @@ fatal invocation/configuration errors."* Cleanup matches: `main.rs:257-261` retu
 1 when `report.failed > 0 || report.scope_blocked.is_some()`; `main.rs:9-12`
 returns 2 for any `AppError`. Two uncovered cases:
 
-- The **scan** path also returns 1, for `full_incomplete || (full &&
-  !state_reconciled)` (`main.rs:560-561`) — conditions unrelated to cleanup scope
-  or unit failure. A `scan --full` on a machine with a `PlatformRoot` error, or an
-  unreconcilable state file, exits 1 with a structurally normal JSON document.
+- The **scan** path also returns 1, for `full_incomplete` (`main.rs:592-594`) —
+  a condition unrelated to cleanup scope or unit failure. A `scan --full` on a
+  machine with a `PlatformRoot` error exits 1 with a structurally normal JSON
+  document. (An unreconcilable *state* file no longer does this: that exit-code
+  coupling was removed, because state is an optimization only.)
 - A scan with permission-denied, metadata, or vanished diagnostics exits **0**. A
   consumer treating exit 0 as "nothing was wrong" is misled; it must read
   `result.diagnostics`.
@@ -745,7 +746,7 @@ returns 2 for any `AppError`. Two uncovered cases:
 document nor `EnvelopeV1` carries `status`, `success`, or `exit_code`. Failure is
 signalled only by `scope_blocked`/`scope_reason` and `summary.failed` *content*,
 plus the process exit status. Worse, every `Err` return from `run()` — including
-`serde_json::to_string` failures at `main.rs:509` and `main.rs:230` — prints to
+`serde_json::to_string` failures at `main.rs:518` and `main.rs:230` — prints to
 **stderr** and exits 2 with **stdout empty** (`main.rs:9-12`). A consumer reading
 stdout cannot distinguish "never got that far" from "found nothing".
 
@@ -787,7 +788,7 @@ Two qualifications. First, **D1 and D2 are live contract ambiguities, not just
 doc rot**: a consumer written from lines 16 and 25 would implement
 `selector_estimate_bytes` handling and disposition enums that do not match the
 tool. The code has not broken its promise; the document has not been kept in step.
-Second, **`update_json` (`main.rs:568-590`) reuses `schema_version: 1` without the
+Second, **`update_json` (`main.rs:582-606`) reuses `schema_version: 1` without the
 envelope** — no `scope`, no `mode`, different `result` shape. The document scopes
 itself to the scan/cleanup surfaces, so this is not a violation as written, but a
 consumer treating `schema_version == 1` as "the envelope in this document" will
@@ -869,7 +870,7 @@ no float conversion — the ladder is `u128` integer arithmetic
 (`report.rs:29-41`) and the comment at `report.rs:28-29` names the hazard
 explicitly. `report.rs:152` pins `u64::MAX → "16.00 EiB"`, representable only in
 integer form. In the machine projection bytes stay `u64` and are never formatted.
-(The `f64` conversions that do exist — `domain.rs:320-325` `timings_line`,
+(The `f64` conversions that do exist — `domain.rs:337-342` `timings_line`,
 `main.rs:254` `as_secs_f64` — are all `--stats` stderr output, and
 `ScanCounters` never reaches JSON.)
 
@@ -902,7 +903,7 @@ integer form. In the machine projection bytes stay `u64` and are never formatted
 3. **Byte representation** — human prints `"  1.50 MiB"`, JSON prints `1572864`.
    One number, two representations; a textual diff will not match them.
 4. **Diagnostic completeness** — JSON has all of them, human stderr shows 10 plus a
-   count (`main.rs:523-537`).
+   count (`main.rs:532-546`).
 
 `end_to_end.rs:193-210` is the one place the project actively checks the two
 projections agree, and it checks the three things that matter: same group
@@ -916,7 +917,7 @@ vector. Two observations. `clean --full` that falls back to zero learned roots
 reports `scope: "full"`, which is accurate. And `scope` is a bare caller-supplied
 `String` with no validation — nothing in `output.rs` would reject a wrong value,
 so the guarantee is entirely the caller's. `scan` with an explicit root *and*
-`--full` reports `"full"` (`main.rs:501-503` checks `full` first), losing the fact
+`--full` reports `"full"` (`main.rs:516-518` checks `full` first), losing the fact
 that the user also bounded the root. Not wrong, but lossy.
 
 **Exit-code contract, and is success in the JSON?** Exit codes are stable and
@@ -956,7 +957,7 @@ selector path end to end.
 **`main.rs` — 0 tests.** The task brief anticipated an inline test module here and
 suggested `update_json` was covered by one. **It is not.** `main.rs` has no
 `#[cfg(test)]` and no `mod tests`; `grep -c "#\[test\]" src/main.rs` returns `0`.
-`update_json` (`main.rs:568-590`) is called from one place (`main.rs:25`) and
+`update_json` (`main.rs:582-606`) is called from one place (`main.rs:25`) and
 referenced nowhere in `tests/`. `UpdatePlan` is defined at `update.rs:247` and
 tested inside `update.rs`'s own module, but the JSON *document* is untested. It
 is also the only machine-readable surface that bypasses `EnvelopeV1`, so the
@@ -1045,11 +1046,11 @@ a real document.
    document and `detail` is `""` rather than absent. Any consumer written from the
    document's "optional" wording will mis-branch.
 9. **No success field, and exit 2 emits no JSON, `main.rs:9-12` and
-   `main.rs:509`** — a consumer reading stdout cannot distinguish "never ran" from
+   `main.rs:518`** — a consumer reading stdout cannot distinguish "never ran" from
    "ran and found nothing". Consider whether a status field belongs in a future
    schema version rather than v1.
 10. **`update_json` reuses `schema_version: 1` without the envelope,
-    `main.rs:568-590`** — no `scope`, no `mode`, different `result` shape, zero
+    `main.rs:582-606`** — no `scope`, no `mode`, different `result` shape, zero
     tests. Confirm consumers of `schema_version == 1` are scoped per `operation`,
     and that the `update` document should be documented alongside the others.
 11. **Keep byte formatting float-free, `report.rs:29-32`** — any change
