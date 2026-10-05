@@ -18,7 +18,7 @@ Intents:
 
 - **Routine** — bounded adaptive developer roots used by canonical bare maintenance and by explicit `scan --known` read-only inspection;
 - **Full** — exhaustive machine reconciliation requested by rootless `scan` (with historical `scan --full` optionally retained as a compatibility alias);
-- **Explicit** — a CLI scan root or an explicitly selected configured bounded root.
+- **Explicit** — a CLI scan root, or the legacy configured `scan.root` when the non-Full maintenance-scope resolver is used.
 
 A scan scope is the concrete set of filesystem roots produced by that intent.
 
@@ -26,7 +26,7 @@ A scan scope is the concrete set of filesystem roots produced by that intent.
 
 A user-supplied root that limits the entire scan to one tree.
 
-Read-only scan intent is selected explicitly: ROOT means Explicit, `--known` means Routine, and rootless `scan` means Full. ROOT conflicts with `--known` and with any retained compatibility `--full` alias. A configured legacy `scan.root` must not silently turn canonical rootless Full `scan` into an Explicit scan. When an explicit scope is active, user ignore/unignore search filters are bypassed. Internal safety pruning still applies.
+Read-only scan intent is selected explicitly: ROOT means Explicit; `--known` selects the non-Full maintenance-scope resolver (legacy configured `scan.root` => Explicit, otherwise Routine); rootless `scan` means Full and ignores configured `scan.root`. ROOT conflicts with `--known` and with any retained compatibility `--full` alias. When an explicit scope is active, user ignore/unignore search filters are bypassed. Internal safety pruning still applies.
 
 ## 4. Discovery filter
 
@@ -239,7 +239,7 @@ It is not a report and has no effect on eligibility. It is written to stderr, ra
 
 ## 31. Cargo preview
 
-A non-mutating cleanup mode that may invoke `cargo clean --dry-run --verbose` for an otherwise authorized candidate.
+A non-mutating cleanup mode, canonically selected as `--cargo-preview` under ADR 003, that may invoke `cargo clean --dry-run --verbose` for an otherwise authorized candidate.
 
 ## 32. Simulation / --dry-run
 
