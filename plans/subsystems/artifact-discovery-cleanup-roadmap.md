@@ -726,6 +726,50 @@ Dependency: M012B has an interface dependency on M012A's resolved operation/scop
 
 Exit: both plans close with the normal verification ladder, generated-doc drift checks, and premise-negative tests. No scheduler, daemon, load sampler, persistent history, direct deletion, or weakened ownership proof is introduced.
 
+## 10I. C021 — Pre-release test and verification-evidence reconciliation
+
+Status: **ready**.
+
+Plan:
+
+- `plans/implementation/artifact-discovery-cleanup/c021-pre-release-test-and-verification-evidence-reconciliation.md`
+
+C021 is a post-Phase-12 release-readiness corrective. It does not reopen M012A
+or M012B and does not change the destructive proof boundary.
+
+It owns three findings that should be closed before 0.2.0 staging:
+
+1. **Updater staging-cleanup test premise.**
+   `src/update.rs::tests::staging_is_cleaned_up_on_success_and_on_failure`
+   currently detects leftovers by scanning the whole process temp directory for
+   a prefix shared by every updater fixture. Under parallel tests, another
+   fixture's legitimate in-flight staging directory can therefore look like
+   this transaction's leak. C021 must prove that premise deterministically,
+   replace it with fixture-owned path evidence, and keep an intentional-own-leak
+   negative control. No sleeps, retries, or global test serialization qualify.
+
+2. **Verification-inventory drift.**
+   `architecture/14-testing-and-verification.md` says 17 scripts but omits
+   `check-doc-citations.py` from its primary table and later retains stale
+   pre-M011B/M011D claims that staged validation and real-Cargo selector
+   qualification are unwired. C021 reconciles the complete current inventory
+   and extends an already-wired documentation guard with exact script-set
+   parity/self-test premises.
+
+3. **0.2.0 changelog completeness.**
+   The Unreleased section already covers M012A, M012B, and C019, but must also
+   describe C018's fail-closed provenance correction and C020's Windows
+   concurrent first-use config race before publication. Release-process notes
+   must not claim attestation/staged/published evidence before those events
+   occur.
+
+The baseline hosted runs at `f3dfd7a` are not closure evidence: CI #250,
+Release drift #78, and selector qualification #5 ended non-green with cancelled
+jobs/lanes. C021 requires fresh complete hosted evidence from its final head.
+If that evidence exposes a new product defect outside this plan's harness/docs
+scope, implementation stops and opens a separate corrective rather than
+absorbing it.
+
 ## 11. Cross-cutting reliability concerns
 
 ### Races
