@@ -8,7 +8,7 @@ Companion documents:
 - plans/002-long-term-roadmap.md
 - plans/003-planning-process.md
 
-This document defines the durable product contract for cargo-cleanme. The initial V0.1 delivery was intentionally read-only; the current product also provides separately invoked, Cargo-mediated destructive cleanup after complete ownership and freshness proof. No-argument invocation and scan remain read-only.
+This document defines the durable product contract for cargo-cleanme. The initial V0.1 delivery was intentionally read-only; the current product provides Cargo-mediated destructive cleanup after complete ownership and freshness proof. ADR 003 intentionally changes the canonical front door for the next breaking pre-1.0 boundary: bare invocation is Routine cleanup, while `scan` remains read-only and becomes the Full-reconciliation front door.
 
 The keywords MUST, MUST NOT, REQUIRED, SHOULD, SHOULD NOT, and MAY are normative.
 
@@ -23,7 +23,7 @@ cargo-cleanme
 cargo cleanme
 ~~~
 
-With no destructive subcommand, the default operation is a read-only scan.
+Bare `cargo-cleanme` / `cargo cleanme` is the canonical Routine maintenance operation and executes eligible Cargo cleanup units through the existing fail-closed ownership/freshness proof. `cargo cleanme --dry-run` runs the same decision path with zero `cargo clean` subprocesses. Read-only discovery is requested with `scan`.
 
 ## 2. Primary goals
 
@@ -47,7 +47,7 @@ The product MUST:
 
 The initial V0.1 release did not delete files, invoke `cargo clean`, resolve redirected output for cleanup, or support profile/package selectors. Those were staged-delivery constraints, not the current product boundary. The current product:
 
-- keeps no-argument invocation and scan read-only;
+- keeps every `scan` operation read-only while making bare invocation the canonical Routine Cargo-mediated cleanup operation under ADR 003;
 - offers cleanup only as a separate explicit command, using Cargo after complete workspace/output ownership, authorization, activity, marker, and freshness proof;
 - resolves target/build output through Cargo and permits cleanup only for completely proven private bounded output;
 - delegates qualified profile/package selection to Cargo and never directly deletes inferred selector paths.
@@ -70,7 +70,7 @@ Cargo permits `build.target-dir` and `build.build-dir` to redirect output. Curre
 
 ### 4.1 Read-only before destructive
 
-Discovery, activity classification, sizing, and reporting MUST remain separately testable from cleanup execution. No-argument invocation and scan MUST remain read-only.
+Discovery, activity classification, sizing, and reporting MUST remain separately testable from cleanup execution. Every `scan` operation MUST remain read-only. Bare invocation MAY execute cleanup only by composing the same separately testable cleanup engine and complete final-proof boundary used by advanced cleanup; the simpler front door does not create a weaker destructive path.
 
 ### 4.2 Filesystem state is authoritative for activity
 
@@ -231,11 +231,11 @@ Internal safety pruning such as no symlink traversal, VCS metadata exclusion, an
 
 ## 10. Routine and Full scan semantics
 
-A no-argument scan is a **Routine** scan over a bounded adaptive root set. It is shallow in scope but recursively complete beneath each selected root.
+Routine discovery is the bounded adaptive root set used by canonical bare maintenance and by explicit `scan --known` read-only inspection. It is shallow in scope but recursively complete beneath each selected root.
 
 Routine roots consist of conservative existing platform/user seed directories plus active learned developer roots from machine-local discovery state. Broad roots such as the filesystem root, a drive root, the user's home directory itself, /Users, or /home MUST NOT become routine roots merely because they contain a Rust project.
 
-`scan --full` is the explicit **Full** reconciliation operation. Full discovery retains the exhaustive platform reachability established by M006A-M006D:
+`scan` with no ROOT is the canonical **Full** reconciliation operation under ADR 003. The historical `scan --full` spelling may remain as a pre-1.0 compatibility alias. Full discovery retains the exhaustive platform reachability established by M006A-M006D:
 
 - Unix-like systems may begin from the filesystem root, with tested safety/performance exclusions for OS-managed trees that cannot represent ordinary user project locations.
 - A platform policy MAY split a writable exception such as macOS /usr/local into a separate Full root when its protected parent is pruned.
@@ -287,7 +287,7 @@ A successful scan prints one line per eligible Cargo project and a summary, for 
 
 The default path is the project root, not only target/.
 
-The current CLI supports `--format json` using a dedicated schema-v1 DTO, one deterministic newline-terminated document on stdout, and typed policy/safety/action reason codes. Progress and `--stats` remain stderr-only. Diagnostic detail text is not stable API. External schedulers may invoke bounded unattended cleanup with `--yes`; cargo-cleanme does not include an internal scheduler or daemon.
+The CLI supports `--format json` using a dedicated schema-v1 DTO, one deterministic newline-terminated document on stdout, and typed policy/safety/action reason codes. ADR 003 additionally requires an explicit bounded `--format log` operational summary for scheduler history; JSON remains the complete machine contract. Progress and `--stats` remain stderr-only. Diagnostic detail text is not stable API. External schedulers may invoke canonical Routine maintenance directly; cargo-cleanme does not include an internal scheduler or daemon.
 
 ## 14. Error and partial-result semantics
 
@@ -353,9 +353,9 @@ Before cleaning a candidate it MUST:
 11. produce one cleanup result and one deduplicated pre/post union measurement per Cargo workspace cleanup invocation;
 12. establish complete cleanup-scope ownership coverage: every Cargo manifest discovered under the explicit clean root MUST either be authoritatively covered by a successfully resolved Cargo workspace or remain an unresolved ownership participant, and any unresolved participant MUST block all Cargo cleanup commands for that scope.
 
-A later `--dryrun` simulation mode MAY exercise discovery, resolution, filtering, sizing, authorization, revalidation, progress, and final reporting while prohibiting every `cargo clean` subprocess. Such simulation output is estimated/would-clean space, not recovered bytes.
+Canonical `--dry-run` simulation MUST exercise discovery, resolution, filtering, sizing, authorization, revalidation, progress/reporting, and final proof while prohibiting every `cargo clean` subprocess. The historical `--dryrun` spelling may remain only as a compatibility alias. Simulation output is estimated/would-clean space, not recovered bytes.
 
-The existence of cargo clean --dry-run MAY support later qualification but does not replace ownership validation.
+Cargo's own `cargo clean --dry-run --verbose` MAY remain available through an explicitly named Cargo-preview mode, but it does not replace ownership validation and it is not the canonical meaning of cargo-cleanme `--dry-run`.
 
 ### 16.1 Current cleanup policy and selectors
 
