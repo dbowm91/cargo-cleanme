@@ -6,6 +6,23 @@ All notable changes to cargo-cleanme are documented here. The format follows
 stance: the `0.x` line may make breaking changes in any release, and the
 command-line, JSON, and release-asset contracts are the stable surface.
 
+## [0.1.4] - 2026-10-05
+
+This release changes no product behavior. It exists so that the self-update
+**commit** path can be exercised against two real published releases.
+
+`0.1.3` fixed the updater, but proving a fix requires a released binary that
+carries it *and* a newer published version to update to. Until 0.1.3 there was
+no such pair, which is why the defect survived: the live commit path had never
+succeeded in any published version, and no fixture could see it. 0.1.4 supplies
+the missing half of that pair.
+
+If you are on 0.1.3 or later, you can now reach this release with:
+
+```sh
+cargo cleanme update
+```
+
 ## [0.1.3] - 2026-10-05
 
 This release carries two defect fixes found after v0.1.2 was published. Both were
