@@ -1,6 +1,12 @@
 # Orchestration — argument dispatch and the two pipelines
 
 > Component deep dive · part of the [architecture overview](overview.md)
+> **Status:** two findings in §7 and §8 have been **fixed** — the JSON `scope`
+> label is now derived from the resolved `policy.scope` (with a regression test),
+> and a failed discovery-state save no longer changes the exit code. Note that
+> §8's claim that `tests/end_to_end.rs:202` "encodes the bug as expected" is
+> **incorrect**: that test supplies its own scope label to exercise the DTO
+> projection and never reaches this derivation. See [overview §7.2](overview.md).
 
 `src/main.rs`, 590 lines, zero inline tests. The only module that reaches every
 other one, and the only place the two pipelines are stitched together.

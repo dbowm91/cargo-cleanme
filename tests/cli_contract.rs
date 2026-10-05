@@ -204,6 +204,56 @@ fn json_scan_is_one_versioned_document_and_stats_stay_on_stderr() {
     assert_eq!(plain.stdout.iter().filter(|b| **b == b'\n').count(), 1);
 }
 
+/// The JSON `scope` label must describe the scope that was resolved, not the
+/// flags that were passed.
+///
+/// A configured `scan.root` with no CLI root resolves to `ScanScope::Explicit`,
+/// so the label has to be derived from the resolved policy. Deriving it from
+/// `root.is_some()` reported `"routine"` for a scan that was in fact pinned to
+/// one explicit root — the label a consumer uses to tell what was scanned.
+#[test]
+fn json_scope_label_follows_the_resolved_scope_not_the_cli_flags() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    // `root` pins the scan to this directory with no CLI argument, which is the
+    // case that previously mislabelled itself as a Routine scan.
+    fs::write(
+        &config,
+        format!(
+            "[scan]\nrecency_seconds = 300\nroot = {}\n",
+            toml::Value::String(dir.path().to_str().unwrap().replace('\\', "\\\\"))
+        ),
+    )
+    .unwrap();
+
+    let run = |args: &[&str]| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args(["--config", config.to_str().unwrap(), "--no-progress"]);
+        command.args(["--format", "json", "scan"]);
+        command.args(args);
+        command.output().unwrap()
+    };
+
+    // Configured root, no CLI root: resolved Explicit, so reported "explicit".
+    let from_config = run(&[]);
+    assert!(
+        from_config.status.success(),
+        "{}",
+        String::from_utf8_lossy(&from_config.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&from_config.stdout).unwrap();
+    assert_eq!(
+        json["scope"], "explicit",
+        "a configured scan.root resolves to an explicit scope: {json}"
+    );
+
+    // The CLI root still reports "explicit" — the existing contract, unchanged.
+    let from_cli = run(&[dir.path().to_str().unwrap()]);
+    assert!(from_cli.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&from_cli.stdout).unwrap();
+    assert_eq!(json["scope"], "explicit");
+}
+
 #[test]
 fn json_cleanup_emits_the_requested_mode_and_machine_summary() {
     let dir = tempfile::tempdir().unwrap();

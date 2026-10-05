@@ -1,6 +1,11 @@
 # Traverse — parallel measurement and activity classification
 
 > Component deep dive · part of the [architecture overview](overview.md)
+> **Status:** the reachable panic described in §8 has been **fixed**. A repeated
+> `candidate_index` is now measured once and every occurrence of that index
+> reports the same measurement, covered by a new unit test. The dead
+> `source_activity` noted in §6 was reviewed and **kept** (see
+> [overview §7.1](overview.md)).
 
 `src/traverse.rs` — 544 lines, 88 of them inline tests (`traverse.rs:456-543`).
 

@@ -1,6 +1,10 @@
 # CLI — argument parsing and the cargo subcommand shim
 
 > Component deep dive · part of the [architecture overview](overview.md)
+> **Status:** the dead public API noted in §5 (`Cli::scan_root`,
+> `absolutize_root_for_test`) was reviewed and **kept** — removing `pub` from a
+> crates.io-published crate is a semver-visible change. See
+> [overview §7.1](overview.md).
 
 `src/cli.rs` is 506 lines: 201 production, 305 inside an inline `#[cfg(test)]`
 module beginning at `src/cli.rs:200`. It is the entire user-facing contract of

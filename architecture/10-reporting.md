@@ -1,6 +1,10 @@
 # Reporting — human text and the versioned machine contract
 
 > Component deep dive · part of the [architecture overview](overview.md)
+> **Status:** the ten schema divergences catalogued in §7 (D1-D10) have been
+> **resolved** by treating the implementation as authoritative and correcting
+> `plans/output-schema-v1.md` to match. The analysis below is retained as the
+> record of what diverged and why.
 
 Covers `src/report.rs` (195 lines) and `src/output.rs` (265 lines) together. They
 are two projections of the same data, and the contrast is the point: the human

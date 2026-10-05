@@ -281,6 +281,24 @@ fn collapse_roots(roots: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
     }
     collapsed
 }
+
+/// The JSON `scope` label must describe the scope that was actually resolved,
+/// not the flags that were passed.
+///
+/// Deriving it from `full` / `root.is_some()` was wrong for a configured
+/// `scan.root`: `policy::resolve` turns that into `ScanScope::Explicit`, so a
+/// scan pinned to one root reported `"routine"`. The label is a machine
+/// contract (`plans/output-schema-v1.md`), so it is derived from the resolved
+/// policy — the single source of truth for what was scanned.
+fn scope_label(scope: &cargo_cleanme::domain::ScanScope) -> &'static str {
+    use cargo_cleanme::domain::ScanScope;
+    match scope {
+        ScanScope::Global(_) => "full",
+        ScanScope::Explicit(_) | ScanScope::ExplicitRoots(_) => "explicit",
+        ScanScope::Routine(_) => "routine",
+    }
+}
+
 fn run_scan(
     root: Option<std::path::PathBuf>,
     full: bool,
@@ -293,7 +311,6 @@ fn run_scan(
     use cargo_cleanme::{domain, progress};
     use std::time::SystemTime;
 
-    let explicit_scope = root.is_some();
     let scan_start = SystemTime::now();
     let wall_start = std::time::Instant::now();
     let c = config::load_or_create(config_path)?;
@@ -355,7 +372,6 @@ fn run_scan(
 
     use cargo_cleanme::discovery_state::StateLoad;
     let loaded_state = cargo_cleanme::discovery_state::load_default();
-    let mut state_reconciled = !full;
     if full {
         let selected = cargo_cleanme::discovery_state::full_reconciliation_prior(&loaded_state);
         if let Some((prior, replacing_invalid)) = selected {
@@ -398,7 +414,6 @@ fn run_scan(
                 cargo_cleanme::discovery_state::Reconciliation::Publish(next) => {
                     match cargo_cleanme::discovery_state::publish(&next) {
                         Ok(()) => {
-                            state_reconciled = true;
                             if replacing_invalid {
                                 eprintln!(
                                     "cargo-cleanme: replaced unusable discovery state after successful Full reconciliation"
@@ -498,13 +513,7 @@ fn run_scan(
                 "{}",
                 serde_json::to_string(&cargo_cleanme::output::scan(
                     &report,
-                    if full {
-                        "full"
-                    } else if explicit_scope {
-                        "explicit"
-                    } else {
-                        "routine"
-                    }
+                    scope_label(&policy.scope),
                 ))
                 .map_err(|e| AppError::Config(format!("cannot serialize JSON report: {e}")))?
             );
@@ -557,7 +566,14 @@ fn run_scan(
             eprintln!("scan top-level entries: {attribution}");
         }
     }
-    if full_incomplete || (full && !state_reconciled) {
+    // Exit 1 means "the requested scan did not fully complete": either a Full
+    // scan hit an unreadable platform root, or the caller asked for cleanup
+    // and cleanup was blocked. It deliberately does NOT cover a failed
+    // discovery-state save: `discovery_state` states that state is an
+    // optimization only, the warning is already on stderr, and the Routine
+    // branch has always ignored the identical failure. Failing the exit code
+    // here made the two branches disagree about the same event.
+    if full_incomplete {
         return Ok(1);
     }
     Ok(0)

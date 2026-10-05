@@ -134,16 +134,27 @@ pub fn measure_single_target(target: &Path) -> TargetStats {
 /// Measure many target trees with one bounded worker pool.
 ///
 /// Each input is `(candidate_index, target_path)`. Results are returned in
-/// input order. Any per-root failure marks only that root uncertain; other
-/// roots still complete. The pool size is [`worker_threads`], independent of
-/// candidate count.
+/// input order. If the same `candidate_index` appears more than once it is
+/// measured once, from the first path given, and every occurrence of that index
+/// reports that measurement. Any per-root failure marks only that root
+/// uncertain; other roots still complete. The pool size is [`worker_threads`],
+/// independent of candidate count.
 pub fn measure_many_targets(targets: &[(usize, PathBuf)]) -> Vec<(usize, TargetStats)> {
     let mut ordered: Vec<(usize, PathBuf)> = targets.iter().map(|(i, p)| (*i, p.clone())).collect();
     ordered.sort_by_key(|(i, _)| *i);
     let mut stats_by_index: std::collections::HashMap<usize, TargetStats> =
         std::collections::HashMap::new();
     let mut roots: Vec<(usize, PathBuf)> = Vec::new();
+    let mut seen_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
     for (index, path) in &ordered {
+        // `dua_core::walk_roots` asserts that root indices are unique, so a
+        // repeated index would panic inside the engine. The first occurrence
+        // wins; later duplicates are dropped rather than measured twice, which
+        // also stops one target's bytes being accumulated into another's stats
+        // through the shared `stats_by_index` entry.
+        if !seen_indices.insert(*index) {
+            continue;
+        }
         let mut stats = TargetStats::default();
         match fs::symlink_metadata(path) {
             Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => {
@@ -159,7 +170,7 @@ pub fn measure_many_targets(targets: &[(usize, PathBuf)]) -> Vec<(usize, TargetS
     if roots.is_empty() {
         return ordered
             .iter()
-            .map(|(i, _)| (*i, stats_by_index.remove(i).unwrap_or_default()))
+            .map(|(i, _)| (*i, stats_by_index.get(i).cloned().unwrap_or_default()))
             .collect();
     }
     let root_paths: std::collections::HashMap<usize, PathBuf> = roots.iter().cloned().collect();
@@ -227,9 +238,12 @@ pub fn measure_many_targets(targets: &[(usize, PathBuf)]) -> Vec<(usize, TargetS
             dua_core::RootEvent::Finished => {}
         }
     }
+    // One result per input, in input order. A repeated `candidate_index` gets
+    // the same measurement as its first occurrence: stats are a function of the
+    // index, so every occurrence of that index must agree.
     ordered
         .iter()
-        .map(|(i, _)| (*i, stats_by_index.remove(i).unwrap_or_default()))
+        .map(|(i, _)| (*i, stats_by_index.get(i).cloned().unwrap_or_default()))
         .collect()
 }
 
@@ -484,6 +498,47 @@ mod tests {
             assert_eq!(batch.entries, single.entries);
             assert_eq!(batch.bytes, single.bytes);
         }
+    }
+
+    #[test]
+    fn duplicate_candidate_indices_do_not_panic_and_are_measured_once() {
+        // `dua_core::walk_roots` asserts that root indices are unique, so a
+        // repeated index used to panic inside the engine. The first occurrence
+        // wins and later duplicates are dropped, which also keeps one target's
+        // bytes from accumulating into another's shared stats entry.
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first");
+        let second = dir.path().join("second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        fs::write(first.join("artifact.bin"), vec![9u8; 4096]).unwrap();
+        fs::write(second.join("artifact.bin"), vec![9u8; 8192]).unwrap();
+
+        let targets = vec![
+            (7usize, first.clone()),
+            (7usize, second.clone()),
+            (9usize, second.clone()),
+        ];
+        let measured = measure_many_targets(&targets);
+        assert_eq!(measured.len(), 3, "one result per input, in input order");
+
+        // Index 7 is reported twice, measured from the first path only.
+        let seven: Vec<&TargetStats> = measured
+            .iter()
+            .filter(|(i, _)| *i == 7)
+            .map(|(_, s)| s)
+            .collect();
+        assert_eq!(seven.len(), 2);
+        assert!(seven.iter().all(|s| !s.uncertain && s.entries == 1));
+        assert!(
+            seven.windows(2).all(|w| w[0].bytes == w[1].bytes),
+            "the duplicated index must not accumulate bytes twice"
+        );
+        assert_eq!(seven[0].bytes, measure_single_target(&first).bytes);
+
+        // The distinct index is unaffected.
+        let nine = measured.iter().find(|(i, _)| *i == 9).unwrap();
+        assert_eq!(nine.1.bytes, measure_single_target(&second).bytes);
     }
 
     #[test]

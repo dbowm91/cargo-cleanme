@@ -210,32 +210,59 @@ things a reviewer should check first in any change.
 
 ---
 
-## 7. Findings from the deep dives
+## 7. Findings from the deep dives, and their disposition
 
-The deep dives surfaced the items below. They are **observations from reading
-the code, not confirmed defects** — several are judgement calls a maintainer
-should resolve — and each links to the deep dive that establishes it with
-`file:line` evidence. Nothing here has been fixed; this section exists so the
-next reviewer does not have to rediscover them.
+The deep dives surfaced the items below. Each was then **verified against the
+source before any change was made** — three did not survive that check, and one
+was materially misdescribed. Status is current as of the commit that fixed
+items 1, 7, 8, 10 and 11.
 
-| # | Finding | Where |
+| # | Finding | Status |
 |---|---|---|
-| 1 | **JSON `scope` label is derived from CLI flags, not the resolved policy.** A scan configured with `scan.root` resolves to `ScanScope::Explicit` but reports `"routine"`. `tests/end_to_end.rs:202` hardcodes `"routine"` while its own fixture sets `ScanConfig::root`, so the test encodes the behaviour rather than catching it. | [Orchestration §8](13-orchestration.md) |
-| 2 | **An incomplete ownership universe at *proof* time fails closed but reports success.** Every candidate becomes `Skipped`, yet `scope_blocked` stays `None` and `failed` stays `0`, so the process exits `0`. At *scan* time the same condition does abort. Safety is fail-closed; the signal is not. | [Cleanup §9](09-cleanup.md) |
-| 3 | **Self-update provenance classification fails *open* in four paths** — unreadable/unparseable `.crates.toml`, a root deeper than `CARGO_ROOT_SEARCH_DEPTH = 4`, a non-UTF-8 filename, and malformed records — each defaulting to "self-managed, replaceable". This is the narrowed form of the shipped C017 defect. | [Self-update §3](12-self-update.md) |
-| 4 | **Release integrity rests on HTTPS plus a self-published checksum.** Installers enforce a mandatory SHA-256 sidecar, but there is no signature verification anywhere — no GPG, sigstore, minisign, or notarisation. A compromised publish step yields a self-consistent artefact every check accepts. | [Distribution §3](15-distribution-and-release.md) |
-| 5 | **The live self-update rehearsal is manual.** `post-release-smoke.yml` is `workflow_dispatch`-only. A C016- or C017-class defect can ship again, because a live rehearsal is the only thing that has ever caught one. | [Distribution §8](15-distribution-and-release.md), [Testing §7](14-testing-and-verification.md) |
-| 6 | **Two `scripts/` files are wired into nothing.** `validate-staged-release.py` — the sole "published bytes == qualified bytes" proof — is invoked by no workflow and not even chained by `release-check.sh`; `qualify-cargo-selectors.sh` likewise. No record states whether this is by design. | [Testing §6](14-testing-and-verification.md) |
-| 7 | **Ten divergences between `plans/output-schema-v1.md` and the code**, in both directions. Most significant: `selector_estimate_bytes` is null on exactly the runs where a selector is active (inverted vs the doc), and the code emits a 19th `reason_code` the doc does not list. | [Reporting §7](10-reporting.md) |
-| 8 | **Exit codes respond to only 3 of 10 stderr warnings.** The Full-branch state warnings change the exit code; the Routine branch's byte-identical "state was not saved" warning is ignored, as are the diagnostics summary and policy's Routine warning. A failed state save also contradicts the module's own stated "state is an optimization only" invariant. | [Orchestration §7](13-orchestration.md) |
-| 9 | **Dead public API.** `cleanup::execute_pre_spawn_decision` and `cleanup::final_cleanup_proof` have no production callers (the private `final_cleanup_proof_roots` is the real authority); `cli::Cli::scan_root` and `cli::absolutize_root_for_test` have no production callers; `traverse::source_activity` is test-only. | [Cleanup §7](09-cleanup.md), [CLI §5](02-cli.md), [Traverse §6](08-traverse.md) |
-| 10 | **A reachable panic in `traverse::measure_many_targets`**: duplicate `usize` indices are forwarded into `dua_core::walk_roots`, which asserts uniqueness. Latent today because the only production caller uses `.enumerate()`. | [Traverse §8](08-traverse.md) |
-| 11 | **`config.toml` says the ignore/unignore filters apply "only to global discovery"; the code applies them to Routine too.** | [Policy §4](04-policy-and-scope.md) |
-| 12 | **ADR 001 describes symlinked output roots as producing an "inventory diagnostic"; the code makes them fully inert — no group and no diagnostic.** | [Workspace §9](07-workspace.md) |
-| 13 | **The uncertainty contract is enforced by two different thresholds.** `main.rs` extracts three diagnostic categories into `uncertainty`, but `cleanup.rs` treats *any* non-empty diagnostic vector from discovery as a hard block. Stricter in one place, looser in another, on the same signal. | [Discovery §6](05-discovery.md), [Cleanup §9](09-cleanup.md) |
-| 14 | **`discovery_state` uncertainty is a per-root retention veto, not a publication gate.** A root that is both an ancestor of a fresh observation *and* intersecting uncertainty is dropped by the `covered` skip before the uncertainty test is reached. | [Discovery state §5](06-discovery-state.md) |
+| 1 | **JSON `scope` label was derived from CLI flags, not the resolved policy.** A scan configured with `scan.root` resolves to `ScanScope::Explicit` but reported `"routine"`. | **Fixed.** Now derived from `policy.scope` via `main::scope_label`, with a regression test that fails against the old code. |
+| 2 | **A failed ownership proof at cleanup time is recorded as a per-candidate skip, so the process can exit `0`.** | **Kept deliberately.** Per-candidate ineligibility is a legitimate skip with a typed reason code; the scan-time path at `cleanup.rs:795` still blocks. See the correction below. |
+| 3 | **Self-update provenance classification fails *open* in four paths.** | **Kept deliberately.** `update.rs:466-471` documents the trade-off: under-detection replaces a Cargo-owned file, over-detection only costs a refusal. |
+| 4 | **Release integrity rests on HTTPS plus a self-published checksum — no signature verification anywhere.** | **Open.** Adding sigstore/GPG is a supply-chain change, out of scope for a code fix. |
+| 5 | **The live self-update rehearsal is manual** (`workflow_dispatch`-only), and it is the only thing that has ever caught a self-update defect. | **Open.** Automating it needs published-release coordination. |
+| 6 | **Two `scripts/` files are wired into nothing** — `validate-staged-release.py` (the sole "published bytes == qualified bytes" proof) and `qualify-cargo-selectors.sh`. | **Open.** Wiring the first may be wrong: it validates a *staged* release, which does not exist during a normal PR. Intent is unrecorded either way. |
+| 7 | **Ten divergences between `plans/output-schema-v1.md` and the code, in both directions.** | **Fixed.** The code is authoritative; the schema document was corrected — `selector_estimate_bytes` nullity, the 19th `reason_code`, the 6th policy disposition, `effective_policy`'s four fields, `units[].detail` always-present, the `outcome` value set, `mode` always emitted, and the scan exit-code case. |
+| 8 | **Exit codes responded to only some stderr warnings**, and a failed discovery-state save contradicted the module's own "state is an optimization only" invariant. | **Fixed** for the state-save case: it no longer changes the exit code, which also makes the Full and Routine branches agree. The remaining warning/exit-code asymmetry is documented, not changed. |
+| 9 | **Dead public API** in a published crate. | **Kept, documented** in §7.1 below. |
+| 10 | **A reachable panic in `traverse::measure_many_targets`**: duplicate indices are forwarded into `dua_core::walk_roots`, whose `assert_eq!` is not a debug assert. | **Fixed.** A repeated index is now measured once and every occurrence of that index reports the same measurement, with a unit test. |
+| 11 | **`config.toml` said the ignore/unignore filters apply "only to global discovery"; the code applies them to Routine too.** | **Fixed.** The template comment now states the real rule: filters apply to global and Routine, and an explicit root bypasses them. |
+| 12 | **ADR 001 describes symlinked output roots as producing an "inventory diagnostic"; the code makes them inert — no group and no diagnostic.** | **Open.** Adding a diagnostic is not a free change: `cleanup.rs:795` blocks on *any* non-empty discovery diagnostic, so a new one here widens the block condition. |
+| 13 | **The uncertainty contract is enforced at two different thresholds** — `main.rs` extracts three diagnostic categories, `cleanup.rs` blocks on any diagnostic. | **Open, and arguably intentional:** the cleanup path being stricter is fail-closed. Recorded because the asymmetry is invisible from either module alone. |
+| 14 | **`discovery_state`'s `covered` skip can drop a root that also intersects uncertainty, before the uncertainty veto is reached.** | **Not a bug — checked and dismissed.** The collapse always replaces an ancestor with a *descendant*, so the remembered set only ever narrows. Narrowing means less cleanup on the next run, which is fail-safe. |
 
----
+### 7.1 Dead public API, recorded not removed
+
+`cargo_cleanme` is published on crates.io, so dropping `pub` is a semver-visible
+change. These items have no production callers and are kept deliberately:
+
+| Item | State |
+|---|---|
+| `cleanup::execute_pre_spawn_decision` (~200 lines) | Zero callers, including tests. The real pre-spawn authority is the private `cleanup::final_cleanup_proof_roots`, which refreshes more strictly. |
+| `cleanup::final_cleanup_proof` | Reached only by the dead function above and one test. Correct in its own right — it builds its own universe. |
+| `cli::absolutize_root_for_test` | Zero call sites anywhere, despite the name promising otherwise. |
+| `cli::Cli::scan_root` | Test-only; `main.rs` destructures `Command::Scan` directly. |
+| `traverse::source_activity` | Test-only; production uses `workspace_member_activity`. |
+
+### 7.2 Corrections verification made to the original findings
+
+Recorded because the original wording was wrong and would mislead a future
+reviewer:
+
+- **Item 1 was misdescribed.** The claim that `tests/end_to_end.rs:202` "encodes
+  the bug as expected" is false: that test calls `output::scan(&report, "routine")`
+  with a hand-supplied label to exercise the DTO projection. It never touches
+  `main.rs`'s derivation, so the label logic was simply **untested** — which is
+  why it was wrong, and why the fix adds a test rather than correcting one.
+- **Item 2's mechanism was unreachable.** The reported cause — a shared hoisted
+  universe failing via `hoisted.get()?` — cannot occur: `cleanup.rs:976`
+  initialises the universe immediately before the call at `:979`. The real path
+  is the per-candidate skip at `cleanup.rs:991-995`.
+- **Item 3 is a documented decision, not an oversight**, and the doc comment
+  states the reasoning explicitly.
 
 ## 8. How the code got this way
 

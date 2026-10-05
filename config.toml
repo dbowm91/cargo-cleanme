@@ -18,7 +18,10 @@ learned_root_retention_days = 30
 # Optional exclusive scope. A CLI scan root takes precedence.
 # root = "/path/to/projects"
 
-# These absolute glob-style filters apply only to global discovery.
+# These absolute glob-style filters apply to global discovery and to the Routine
+# scope. An explicit scan root (CLI argument or this file's `root`) bypasses
+# them: a caller who names one directory means it, so its contents are always
+# in scope.
 ignore = []
 
 # Exact absolute directories re-included beneath ignored trees.
