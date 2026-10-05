@@ -1,6 +1,6 @@
 # Artifact Discovery and Cleanup Roadmap
 
-Status: closed for current feature objectives; Phase 9 is closed by C008. Phase 10 distribution/release/update work is now owned by `plans/subsystems/distribution-release-update-roadmap.md`.
+Status: Phase 9 remains closed for feature objectives. Phase 11 evidence hardening is active with M011D Cargo selector qualification lifecycle **ready**; it does not broaden selector capability. Distribution/release hardening remains owned by `plans/subsystems/distribution-release-update-roadmap.md`.
 
 Repository audit baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 
@@ -569,6 +569,32 @@ C008 is a documentation/planning-only corrective after M008D closure. It reconci
 
 C008 must preserve period-accurate closure evidence, make no production Rust behavior changes, and leave Phase 10 distribution deferred. After C008 closes, the subsystem should have no active implementation handoff unless separate Phase 10 research/planning is explicitly registered.
 
+## 10F. M011D — Cargo selector qualification lifecycle
+
+Status: **ready**.
+
+Plan:
+
+- `plans/implementation/artifact-discovery-cleanup/011d-cargo-selector-qualification-lifecycle.md`
+
+Purpose:
+
+- bind every exact runtime-enabled profile/package selector version to one
+  guarded real-Cargo qualification matrix;
+- make `scripts/qualify-cargo-selectors.sh` assertion-oriented rather than an
+  unwired characterization script;
+- add a dedicated hosted compatibility workflow for the complete supported
+  matrix plus a separate exploratory current-stable lane;
+- fail ordinary CI on policy/matrix/runtime-table drift;
+- preserve exact-version fail-closed support: an exploratory Cargo version is
+  never promoted automatically.
+
+M011D is evidence-lifecycle hardening over the closed M008C/M008D capability.
+It does not change cleanup ownership proof, selector accounting, minimum-size
+policy, or the currently enabled version set merely to make qualification pass.
+A semantic change in an already-supported Cargo release triggers a separate
+capability/corrective plan.
+
 ## 11. Cross-cutting reliability concerns
 
 ### Races
@@ -629,4 +655,4 @@ The implementation should specifically verify:
 
 ## 14. Completion definition
 
-The initial read-only boundary was reached when M001-M003 closed with evidence that cargo-cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004-M007 and C001-C007 establish Cargo-mediated cleanup, complete ownership/freshness proof, adaptive discovery, and combined-root orchestration while scans remain read-only. Phase 9 is closed for current objectives: M008A/B policy and reporting, profile support from M008C, and package support from M008D. Profile support is limited to exact qualified releases 1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0, 1.98.1, and 1.99.0; package support is limited to exact Cargo 1.98.1 and 1.99.0. Selector estimates remain unknown and unqualified Cargo versions fail closed. Phase 10 is tracked by `plans/subsystems/distribution-release-update-roadmap.md`.
+The initial read-only boundary was reached when M001-M003 closed with evidence that cargo-cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004-M007 and C001-C007 establish Cargo-mediated cleanup, complete ownership/freshness proof, adaptive discovery, and combined-root orchestration while scans remain read-only. Phase 9 remains closed for current objectives: M008A/B policy and reporting, profile support from M008C, and package support from M008D. Profile support is limited to exact qualified releases 1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0, 1.98.1, and 1.99.0; package support is limited to exact Cargo 1.98.1 and 1.99.0. Selector estimates remain unknown and unqualified Cargo versions fail closed. M011D is the current evidence-hardening handoff and must prove/guard that exact support matrix without widening it. Distribution/release Phase 11 work is tracked by `plans/subsystems/distribution-release-update-roadmap.md`.
