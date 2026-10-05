@@ -7,7 +7,7 @@ the one architecture deep dive your change touches.
 
 A single Rust crate that finds Cargo build output and cleans it **through
 Cargo**, never by deleting directories. One binary over one library of 15
-modules, 17 source files, 18,327 lines in `src/`. No async runtime of its own.
+modules, 17 source files, 20,906 lines in `src/`. No async runtime of its own.
 `cargo metadata` is the only binary dependency that matters for safety.
 
 Seven releases are published (v0.1.0 through v0.1.6), none yanked.
@@ -174,7 +174,7 @@ closure records.
 | `docs/` | `RELEASING.md` (operator checklist), `TROUBLESHOOTING.md` (includes known defects by version) |
 | `plans/` | decision records — see §6 |
 | `.skills/` | the six skills — see §2 |
-| `scripts/` | 13 scripts; the static contract checkers take `--self-test` |
+| `scripts/` | 17 scripts; `check-doc-citations.py` also gates that `architecture/14-testing-and-verification.md` §5 table is exactly these 17, so a new checker cannot ship undocumented. Most take `--self-test`; `check-installer-contract.py` is the one that does not |
 | `completions/`, `man/` | **generated** — do not hand-edit; run `generate-docs` |
 | `xtask/` | `generate-docs` source (feature `dev-tools`); excluded from the published crate |
 | `release/eggpack/` | `distribution.toml` is the authority for the release target matrix |

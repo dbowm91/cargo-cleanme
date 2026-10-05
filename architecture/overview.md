@@ -92,18 +92,18 @@ it.**
 ## 3. Module index
 
 Line counts are `total`; where a module carries an inline `#[cfg(test)]`
-module, the `prod` half of the split is given. The crate has **286 inline
-`#[test]` functions**, and **41.3% of them live in the two largest modules**
+module, the `prod` half of the split is given. The crate has **288 inline
+`#[test]` functions**, and **41.0% of them live in the two largest modules**
 (`cleanup.rs` 71 + `workspace.rs` 47). Four modules have **zero** tests:
 `main.rs`, `domain.rs`, `error.rs`, `lib.rs`.
 
 Test counts in this table are **declared**, not "how many ran on my machine".
-286 are declared; **285 compile and run on Linux**, because exactly one is
+288 are declared; **287 compile and run on Linux**, because exactly one is
 gated to other platforms
 (`discovery.rs:1181`, `#[cfg(any(target_os = "macos", windows))]`). A further
-19 are `#[cfg(unix)]` (17) or `#[cfg(target_os = "linux")]` (2), so on Windows
-the inline suite is 1 of 286. Read the total as coverage concentrated in two
-modules, not as a balance — see
+20 are `#[cfg(unix)]` (18) or `#[cfg(target_os = "linux")]` (2), so on Windows
+and macOS the inline suite is 267 of 288. Read the total as coverage
+concentrated in two modules, not as a balance — see
 [14-testing-and-verification](14-testing-and-verification.md) §2.
 
 | Module | Lines | Role | Deep dive |
@@ -120,7 +120,7 @@ modules, not as a balance — see
 | [`report.rs`](10-reporting.md) | 195 / 71 | Human-readable rendering of a `ScanReport`; byte formatting. | [Reporting](10-reporting.md) |
 | [`output.rs`](10-reporting.md) | 671 | Versioned machine-readable DTOs (`EnvelopeV1`); the stable JSON contract; the bounded `--format log` line renderer. | [Reporting](10-reporting.md) |
 | [`progress.rs`](11-progress.md) | 703 / 498 | `ProgressObserver` trait + indicatif renderer; terminal capability detection. | [Progress](11-progress.md) |
-| [`update.rs`](12-self-update.md) | 2474 / 1210 | Eggup-based self-update: provenance classification, version authority, staged replace. | [Self-update](12-self-update.md) |
+| [`update.rs`](12-self-update.md) | 2635 / 1210 | Eggup-based self-update: provenance classification, version authority, staged replace. | [Self-update](12-self-update.md) |
 | [`domain.rs`](01-domain-and-errors.md) | 381 | The shared vocabulary: reports, ownership classes, counters, diagnostics. Pure data. | [Domain & errors](01-domain-and-errors.md) |
 | [`error.rs`](01-domain-and-errors.md) | 16 | `AppError` — the six variants the binary can fail with. | [Domain & errors](01-domain-and-errors.md) |
 | [`lib.rs`](01-domain-and-errors.md) | 15 | Module manifest. | [Domain & errors](01-domain-and-errors.md) |

@@ -8,9 +8,9 @@
 
 The verification apparatus does three distinct jobs. The third is what makes it unusual.
 
-**(a) Product behaviour.** 286 inline `#[test]` functions in `src/`, plus two integration suites that drive the compiled binary as a subprocess: ownership proof, cleanup authorization, the three clean modes, workspace resolution, the versioned JSON contract.
+**(a) Product behaviour.** 288 inline `#[test]` functions in `src/`, plus two integration suites that drive the compiled binary as a subprocess: ownership proof, cleanup authorization, the three clean modes, workspace resolution, the versioned JSON contract.
 
-**(b) Structural contracts invisible at runtime.** 17 scripts in `scripts/` and 6 GitHub workflows. No product code path can detect a file left out of the published crate's `include` allowlist, completions drifted from `cli.rs`, a tag pointing at the wrong commit, or release bytes differing from qualified bytes. These are properties of the repository *as an artifact* — see [Distribution & release](15-distribution-and-release.md).
+**(b) Structural contracts invisible at runtime.** 17 scripts in `scripts/` and 6 GitHub workflows. No product code path can detect a file left out of the published crate's `include` allowlist, completions drifted from `cli.rs`, a tag pointing at the wrong commit, or release bytes differing from qualified bytes. These are properties of the repository *as an artifact* — see [Distribution & release](15-distribution-and-release.md). **The inventory of those 17 scripts is itself machine-checked**: `check-doc-citations.py` requires the [§5](#5-the-contract-checkers) table to be exactly the set of scripts on disk, in both directions and without duplicates, so a new checker cannot ship while the table keeps describing an older repository.
 
 **(c) Properties of the test fixtures themselves.** The category this project invented. A test that stubs a tool the subject cannot invoke is indistinguishable from one that does not stub it; a test whose pass condition is an unrelated failure reports coverage that does not exist. Both classes shipped here ([§7](#7-the-false-green-problem)). The response was not more tests but *premise guards*: assertions inside the fixture, before the behaviour under test runs, that fail loudly when the fixture can no longer prove what it claims to. `check-fixture-portability.py` generalises the idea into a static checker.
 
@@ -23,14 +23,18 @@ were the premises, and is any of them unchecked?*
 
 | Layer | Location | Count | What it can catch | What it cannot catch |
 |---|---|---:|---|---|
-| Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 286 `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
-| Integration — CLI contract | `tests/cli_contract.rs` (1,761 lines) | 30 `#[test]` | The subprocess boundary end to end: argv normalization, exit codes, JSON shape, log-line shape, `--stats` stream discipline, selector behaviour, usage conflicts | Internals of `run()`; anything on a real machine; 18 of the 30 on Windows |
+| Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 288 `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
+| Integration — CLI contract | `tests/cli_contract.rs` (1,761 lines) | 30 `#[test]` | The subprocess boundary end to end: argv normalization, exit codes, JSON shape, log-line shape, `--stats` stream discipline, selector behaviour, usage conflicts | Internals of `run()`; anything on a real machine; 18 of the 30 are `#[cfg(unix)]` |
 | Integration — end to end | `tests/end_to_end.rs` (347 lines) | 2 `#[test]` | Full production-pipeline scans against synthetic trees with real mtimes, under both a filtered Routine scope and an explicit scope | Cleanup, update, config editing |
 | Shared harness | `tests/common/mod.rs` (229 lines) | 0 tests | `set_path_modified` / `backdate_file` (per-platform mtime control), `inactive_project` tree construction, `write_fake_cargo` / `cargo_calls` (unix only) | — |
-| Contract checkers | `scripts/` | **17** (see note) | Published-crate contents, fixture portability, installer/shape/smoke contracts, release identity, benchmark regression | That a fixture case proves its intended branch (explicitly disclaimed) |
+| Contract checkers | `scripts/` | **17** (see note) | Published-crate contents, fixture portability, installer/shape/smoke contracts, release identity, benchmark regression, and the completeness of this inventory | That a fixture case proves its intended branch (explicitly disclaimed) |
 | CI | `.github/workflows/` | 6 | Cross-platform, cross-toolchain, MSRV, generated-doc freshness, release drift | Doctests (`cargo test --all-targets` skips them) |
 
-**Note on the script count.** The directory contains **17** scripts; `find scripts/ -type f` returns exactly seventeen. The count grew during Phase 11 as the selector-qualification, staged-validation, smoke-transition, and release-attestation checks were added. **The table in [§5](#5-the-contract-checkers) does not yet list all seventeen, and its `check-release-contract.py` row predates M010A** (when Eggpack became producer authority and the script became a comparison against `release/eggpack/distribution.toml` rather than a list of required files). That drift is recorded as an open finding against this document, not silently repaired: the checkers themselves are wired into CI, and the premise-bearing ones take a `--self-test` — CI runs seven of them from `scripts/` (`.github/workflows/ci.yml:34`, `:42`, `:91`, `:100`, `:103`, `:111`, `:118`) plus `test_installers.py --self-test` at `:71`, so the tree is guarded even though this table under-describes it. Every static checker is a claim somebody has to keep true, which is why the `--self-test` — not this table — is the thing that has to hold.
+**Note on the script count.** `scripts/` contains **17** regular files — 14 `*.py` and 3 `*.sh`, no subdirectories. The count grew during Phase 11 as the selector-qualification, staged-validation, smoke-transition, and release-attestation checks were added.
+
+**This table is now gated, and that is the substantive change.** It previously carried 16 rows against 17 files: `check-doc-citations.py` was missing, and nothing noticed, because a prose table is nobody's obligation. `check-doc-citations.py` now enumerates `scripts/*.py` and `scripts/*.sh` on disk, extracts the basenames from this table, and requires exact set parity plus uniqueness — failing on a script absent from the table, a row naming a script that no longer exists, and a script listed twice. Its `--self-test` proves all three directions fail when they should and asserts each mutation **actually changed the subject**, because a guard whose mutation silently became a no-op reports "rejected" for a tree containing no defect at all. The guard was found to be correct the moment it was written: on first run against the pre-corrective tree it failed with `` `scripts/check-doc-citations.py` exists but is absent from the inventory ``.
+
+The guard deliberately stops at set parity. *Which workflow invokes a script* is natural language, and automating it means parsing English for "wired into" — encoding one reviewer's phrasing as a release contract and failing on a correct reword. Wiring is a reviewer's job, and the table is shaped so it can be reviewed.
 
 ### Per-file inline test distribution
 
@@ -42,7 +46,7 @@ from `src/`, never copied between documents.
 |---|---:|---:|---:|---:|
 | `src/cleanup.rs` | 71 | 2393 | 6347 | 3955 |
 | `src/workspace.rs` | 47 | 1446 | 3918 | 2473 |
-| `src/update.rs` | 42 | 1211 | 2474 | 1264 |
+| `src/update.rs` | 44 | 1211 | 2635 | 1425 |
 | `src/discovery.rs` | 32 | 902 | 1866 | 965 |
 | `src/cli.rs` | 24 | 381 | 901 | 521 |
 | `src/config.rs` | 14 | 374 | 632 | 259 |
@@ -56,19 +60,19 @@ from `src/`, never copied between documents.
 | `src/domain.rs` | 0 | — | 381 | — |
 | `src/error.rs` | 0 | — | 16 | — |
 | `src/lib.rs` | 0 | — | 15 | — |
-| `src/main.rs` | 0 | — | 737 | — |
-| **Total** | **286** | | | |
+| `src/main.rs` | 0 | — | 760 | — |
+| **Total** | **288** | | | |
 
-**The count is declared, not executed.** 286 `#[test]` functions exist in `src/`;
-**285 compile and run on Linux**, because exactly one is gated to the other
+**The count is declared, not executed.** 288 `#[test]` functions exist in `src/`;
+**287 compile and run on Linux**, because exactly one is gated to the other
 platforms (`discovery.rs:1181`, `#[cfg(any(target_os = "macos", windows))]`). A
-further 19 carry `#[cfg(unix)]` or `#[cfg(target_os = "linux")]`, so on Windows
-and on macOS the inline suite is 266 of 286. A green local run therefore does not
-mean a green run elsewhere — which is the whole reason the OS matrix exists, and
-the reason `check-fixture-portability.py` exists to catch a *new* ungated fixture
-before a lane disagrees about it.
+further 20 carry `#[cfg(unix)]` (18) or `#[cfg(target_os = "linux")]` (2), so on
+Windows and on macOS the inline suite is 267 of 288. A green local run therefore
+does not mean a green run elsewhere — which is the whole reason the OS matrix
+exists, and the reason `check-fixture-portability.py` exists to catch a *new*
+ungated fixture before a lane disagrees about it.
 
-`cleanup.rs` (71) + `workspace.rs` (47) = 118 of 286 = **41.3%**. The two largest and most
+`cleanup.rs` (71) + `workspace.rs` (47) = 118 of 288 = **41.0%**. The two largest and most
 safety-critical modules — authorization, ownership proof, pre-spawn decision, and the `cargo
 metadata` resolution everything depends on — hold essentially half the unit tests. That
 allocation is correct, and it is the one place the pyramid is emphatically *not* inverted.
@@ -94,7 +98,7 @@ lives.
 
 ### The test-double architecture
 
-Two process seams keep the 286 declared tests from spawning a real `cargo`:
+Two process seams keep the 288 declared tests from spawning a real `cargo`:
 
 - **`CargoRunner`** — `src/workspace.rs:29`. `fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput>`.
 - **`CleanupRunner`** — declared in `src/cleanup.rs` for the destructive step, so cleanup is exercised while `cargo clean` is a no-op returning recorded bytes.
@@ -120,7 +124,7 @@ Production impls, for contrast: `SystemCargoRunner` (`workspace.rs:78`),
 | `TwoWsRunner` | `workspace.rs:2150` (impl 2156) | Two independent workspaces; pins *two locates, two metadatas* — no cross-workspace reuse |
 | `FailFirstRunner` | `workspace.rs:2219` (impl 2223) | One workspace's locate fails; proves the failure does not poison an unrelated one |
 | `RecordingRunner` | `workspace.rs:3371` (impl 3375) | Records `(cwd, args)` so a test asserts argument *construction*, not the fake's result |
-| `FixtureEnvironment` | `update.rs:1222` (impl 1279) | Replaces network, `curl` discovery, process globals; drives `staging` and a fixed `version` |
+| `FixtureEnvironment` | `update.rs:1222` (impl 1357) | Replaces network, `curl` discovery, process globals; drives `staging` and a fixed `version`. Records **its own** staging paths (`created_staging`, `:1310`) so leak evidence is invocation-scoped rather than a scan of the temp directory — see [§7](#7-the-false-green-problem) |
 | `TestObserver` | `progress.rs:64` (impl 105) | Records semantic events (`phases`, `visited`, `pruned`, `manifests`, `workspaces`, `cargo_failures`) — deliberately not refresh counts, which are renderer-side |
 | `FakeCleanupRunner` | `cleanup.rs:2403` (impls 2436 / 2519) | The workhorse. Records every call; `remove_on_execute` and `unresolved_manifest` toggle Execute's delete and the unresolved-manifest block |
 | `ChangingTargetRunner` | `cleanup.rs:3252` (impls 3258/3278) | `target` changes between calls — the first-generation race |
@@ -311,26 +315,27 @@ any two would misstate what a cleanup reclaims — or claim a bound the proof ne
 when the subject misbehaves; **premise checkers** fail when the *evidence* is no longer
 valid. Premise checkers are the distinctive category.
 
-| Script | Enforces | Fails when | Wired into |
+| Script | Class | Enforces | Wired into |
 |---|---|---|---|
-| `check-release-contract.py` | Published-crate contract: `Cargo.toml` `include` allowlist covers every runtime-input file; `/config.toml` present; the embedded template's content matches; `docs/reference.md`, `README.md`, `CHANGELOG.md` present; no `/target` leakage; required workflow/script files exist; `Cargo.toml` `version` is a plain semver triple | A file `src/config.rs` needs at runtime is absent from `include`, the embedded template drifted from `config.toml`, a required release surface is missing, or the version is unpublishable | `ci.yml` `checks`; `release-check.sh` |
-| `check-fixture-portability.py` | Every external-process fixture in `src/**/*.rs` uses `#[cfg(unix)]`/`#[cfg(windows)]` gating, avoids unconditional `/bin/sh`, `sh -c`, `.sh` scripts, hardcoded `/tmp`, `:`-separated `PATH`, and a fixed fake binary name that collides across gates | A fixture is POSIX-shaped but ungated, or a gated fixture can be skipped on some lane and still pass | `ci.yml` `checks`; `release-check.sh` |
-| `check-installer-contract.py` | The wrappers under `packaging/installers/` exist, are executable, carry the expected shebang, and the release manifest lists the expected per-platform entries | A wrapper is missing, not executable, or manifest and wrappers disagree | `ci.yml` `installers`; `release-check.sh` |
-| `check-release-identity.py` | Tag/source identity: the release tag matches the source commit, version and tag agree, and the provenance identity machine is internally consistent | Tag and source disagree — the class that made a release irreproducible | `release-binaries.yml`; `release-check.sh` |
-| `check-post-release-smoke-contract.py` | The post-release smoke workflow is itself well-formed: required steps, lanes, and assertions present and in order | The smoke workflow is edited down to a shape that cannot fail | `post-release-smoke.yml`; `release-check.sh` |
-| `gen-release-workflow-shape.py` | Generates the *expected* shape of `release-binaries.yml` from the release contract, so the workflow is a checked-in generated artifact rather than hand-edited prose | The committed workflow drifts from the generated shape | `release-check.sh`; output compared in `release-binaries.yml` |
-| `validate-staged-release.py` | Six-step staged-release proof: exact artifact inventory, sidecar integrity (checksums), manifest agreement, contract agreement, static ABI, real-installer qualification — i.e. published bytes are the qualified bytes | Any step cannot be satisfied against the staged tree | `validate-staged-release.yml` (hosted, M011B); `release-check.sh` |
-| `check-staged-validation-contract.py` | The hosted validation workflow is upstream-bound and read-only: exact upstream workflow name, `completed` only, no push/pull/schedule, `contents: read` only, no publication command, checkout bound to the upstream `head_sha`, upstream event *and* conclusion compared (not merely mentioned), identity and validator both invoked, no inlined reimplementation | A validation job is edited into a shape that runs on the wrong input or can publish — the quietest version of which is a default-branch checkout that genuinely passes | `ci.yml` `checks`; `release-check.sh` |
-| `check-selector-qualification.py` | The Cargo selector support claim is a projection of one policy: runtime allowlist == `release/selector-qualification.json` == hosted matrix == the script's own inputs, all exact `X.Y.Z`, package ⊆ profile, exploratory disjoint, workflow read-only and promotion-proof | The claim drifts from the evidence, or an exploratory toolchain reaches the runtime allowlist | `ci.yml` `checks`; `release-check.sh` |
-| `verify-release-attestation.py` | A published release is immutable, carries a valid GitHub attestation for *that* repository and tag, and every contracted local asset hashes to the attested digest | Policy off, release mutable, attestation missing or unparseable, wrong repository/tag, an asset the attestation does not name, digest mismatch, inventory drift, or a missing/old `gh` | `release-check.sh` (settings + `--self-test`) |
-| `resolve-smoke-transition.py` | An exact `from`→`to` transition is resolved numerically, a predecessor is never silently skipped, and crates.io is polled within a finite deadline with backoff | A floating or pre-release version is used, `0.1.9`/`0.1.10` order is wrong, a yanked/wrong/non-stable target satisfies the wait, or the deadline silently becomes a skip | `ci.yml` `checks`; `release-check.sh`; `post-release-smoke.yml` |
-| `release-check.sh` | The local pre-push gate: full crate test suite, `cargo test --doc` (which CI does not run), all the Python checkers, the generated-shape comparison, `fmt`/`clippy` hygiene | Anything the local gate covers fails | `ci.yml` `checks`; also the documented manual path |
-| `qualify-cargo-selectors.sh` | Real-Cargo selector characterization: what `--profile`/`--package` actually do on genuine Cargo, and where the support boundary is | Real behaviour does not match what the fakes assume | `qualify-cargo-selectors.yml` (hosted matrix) and `qualify-cargo-selectors.sh --self-test` (CI); the full real-Cargo run is weekly/dispatch (M011D) |
-| `release-benchmark.py` | Compares current scan performance against `release/baseline-benchmark.json`, fails on a configurable regression percentage | The scan is materially slower than the recorded baseline | `ci.yml` `benchmark` |
-| `smoke-release-candidate.py` | Release-candidate smoke: the built binaries respond correctly before publication | A candidate binary misbehaves | `release-binaries.yml`; also manual |
-| `post-release-smoke.sh` | Post-publication verification against the *actual published bytes* — the external `update` check that first exposed C011 | The published release does not behave as qualified | `post-release-smoke.yml` |
+| `check-release-contract.py` | premise | Compares product surfaces against Eggpack producer authority: every contracted target reachable through the wrappers, the generated workflow, the packaging payload and the README support matrix; wrapper target mapping is a projection of the contract rather than a second schema; the packaging payload ships the wrappers the release needs; the package metadata the contract implies is in `Cargo.toml`; every required target builds under one **exact** Rust release, not a channel; the candidate workflow may stage a draft but never publish. Retains the cargo-cleanme-owned invariants: the `include` allowlist is explicit and contains `/config.toml`, the repository URL matches the release origin, the `xtask` generator stays out of the published crate, license files exist when SPDX claims them | `ci.yml` `generated-docs` `:86`, `:91`; `release-drift.yml` `:49`, `:55`; `release-check.sh` `:71`, `:72` |
+| `check-fixture-portability.py` | premise | Every external-process fixture in `src/**/*.rs` uses `#[cfg(unix)]`/`#[cfg(windows)]` gating, avoids unconditional `/bin/sh`, `sh -c`, `.sh` scripts, hardcoded `/tmp`, `:`-separated `PATH`, and a fixed fake binary name that collides across gates | `ci.yml` `checks` `:34`, `:36`; `release-check.sh` `:125`, `:126` |
+| `check-doc-citations.py` | premise | `file.rs:N` citations in `architecture/` resolve to an existing file and an in-range, correctly ordered line; **and** the [§5](#5-the-contract-checkers) inventory is exactly the set of scripts in `scripts/`, in both directions, without duplicates | `ci.yml` `checks` `:42`, `:44`; `release-check.sh` `:129`, `:130` |
+| `check-installer-contract.py` | premise | The wrappers under `packaging/installers/` exist, are executable, carry the expected shebang, and the release manifest lists the expected per-platform entries | `ci.yml` `generated-docs` `:113`; `release-drift.yml` `:61`; `release-check.sh` `:83` |
+| `check-release-identity.py` | premise | Tag/source identity: the release tag matches the source commit, version and tag agree, and the provenance identity machine is internally consistent | `release-drift.yml` `:58`; `validate-staged-release.yml` `:131`; `release-check.sh` `:76`, `:79` |
+| `check-post-release-smoke-contract.py` | premise | The post-release smoke workflow is itself well-formed: required steps, lanes, and assertions present and in order | `post-release-smoke.yml` `:155`; `release-drift.yml` `:65`, `:66`; `release-check.sh` `:86`, `:87` |
+| `check-staged-validation-contract.py` | premise | The hosted validation workflow is upstream-bound and read-only: exact upstream workflow name, `completed` only, no push/pull/schedule, `contents: read` only, no publication command, checkout bound to the upstream `head_sha`, upstream event *and* conclusion compared (not merely mentioned), identity and validator both invoked, no inlined reimplementation | `ci.yml` `generated-docs` `:109`, `:111`; `release-check.sh` `:99`, `:100` |
+| `check-selector-qualification.py` | premise | The Cargo selector support claim is a projection of one policy: runtime allowlist == `release/selector-qualification.json` == hosted matrix == the script's own inputs, all exact `X.Y.Z`, package ⊆ profile, exploratory disjoint, workflow read-only and promotion-proof | `ci.yml` `generated-docs` `:98`, `:100`; `qualify-cargo-selectors.yml` `:65`, `:66`; `release-check.sh` `:106`, `:107` |
+| `verify-release-attestation.py` | premise | A published release is immutable, carries a valid GitHub attestation for *that* repository and tag, and every contracted local asset hashes to the attested digest | **`release-check.sh` `:115`, `:116` only** — no workflow. Event-specific: needs a published, immutable release and a live `gh` |
+| `resolve-smoke-transition.py` | premise | An exact `from`→`to` transition is resolved numerically, a predecessor is never silently skipped, and crates.io is polled within a finite deadline with backoff | `post-release-smoke.yml` `:95`, `:100`, `:103`; `ci.yml` `generated-docs` `:118`; `release-check.sh` `:93` |
+| `gen-release-workflow-shape.py` | generator | Generates the *expected* shape of `release-binaries.yml` from the release contract, so the workflow is a checked-in generated artifact rather than hand-edited prose | `release-drift.yml` `:38`; `release-check.sh` `:61` |
+| `validate-staged-release.py` | outcome | Six-step staged-release proof: exact artifact inventory, sidecar integrity (checksums), manifest agreement, contract agreement, static ABI, real-installer qualification — i.e. published bytes are the qualified bytes | **`validate-staged-release.yml` `:141` only** (M011B). Not in `release-check.sh` and not in any other workflow |
+| `release-benchmark.py` | outcome | Compares current scan performance against `release/baseline-benchmark.json`; semantic counters are a hard gate and wall-clock timings are recorded but never fail | `ci.yml` `benchmark` `:130`; `release-check.sh` `:55` |
+| `smoke-release-candidate.py` | outcome | Release-candidate smoke: the built binaries respond correctly before publication | `ci.yml` `checks` `:29`; `release-check.sh` `:133`; and indirectly on every release target, because `release/eggpack/consumer-validators.json` names it as the per-target validator invoked by the `qualify_build_*` jobs |
+| `post-release-smoke.sh` | qualification | Post-publication verification against the *actual published bytes* — the external `update` check that first exposed C011 | **`post-release-smoke.yml` `:156` only.** Event-specific by construction: it can only run once a version exists on crates.io |
+| `qualify-cargo-selectors.sh` | qualification | Real-Cargo selector characterization: what `--profile`/`--package` actually do on genuine Cargo, and where the support boundary is (M011D) | `qualify-cargo-selectors.yml` `:112`, `:146`; `ci.yml` `generated-docs` `:103`; `release-check.sh` `:108` |
+| `release-check.sh` | composite gate | The local pre-push gate: full crate test suite, `cargo test --doc` (which CI does not run), all the Python checkers, the generated-shape comparison, `fmt`/`clippy` hygiene | **No workflow, by design.** Run by an operator; it refuses a dirty tree and requires `eggpack` and toolchain 1.89 |
 
-Three notes:
+Five notes:
 
 1. **`/config.toml` in the allowlist is load-bearing.** `src/config.rs` embeds the template with `include_str!` at compile time, so a published crate without `/config.toml` in `include` builds fine and fails at runtime the first time it needs to create a config. `check-release-contract.py` asserts the entry specifically because no test and no runtime check can catch it — a pure packaging invariant, and a clear case of category (b).
 
@@ -345,63 +350,92 @@ Three notes:
    control is not decoration: during implementation, a self-test case reported "rejected"
    for a tree that contained no defect at all, because its mutation had silently become a
    no-op after an unrelated reformat. A guard with a no-op mutation is the worst outcome,
-   because it converts a broken tree into a passing check.
+   because it converts a broken tree into a passing check. `check-doc-citations.py`'s
+   inventory self-test follows the same rule for the same reason.
 
 4. **`release-check.sh` closes a CI gap of its own making.** `ci.yml` runs `cargo test --all-targets --all-features`, which does not execute doctests; the local gate runs `cargo test --doc` separately. Doc examples are verified by a human with a shell script, not by CI.
+
+5. **`check-installer-contract.py` is the one contract checker with no `--self-test`.**
+   It has no argument parsing at all, so it cannot be required to reject a broken setup in
+   CI. Every other checker in this table can prove its own detection in the failing
+   direction; this one is trusted on inspection. That is a real asymmetry and the honest
+   way to read its green.
 
 ---
 
 ## 6. CI as the enforcement point
 
-`.github/workflows/ci.yml` defines five jobs.
+`.github/workflows/ci.yml` defines five jobs, and they divide along lines worth
+naming: **`checks` and `installers` run the product**, while `generated-docs`,
+`benchmark` and `msrv` run the properties of the repository as an artifact. Six
+of the ten Python guards CI invokes live in `generated-docs`, not `checks` — the
+separation is easy to misremember, and an earlier version of this document did.
 
-**`checks`** — the bulk of the gate. OS matrix of `ubuntu-latest`, `macos-latest`, `windows-latest`, so the unit tests that compile on this platform and the 30 integration cases (12 of them on a Windows lane) execute across all three, and on stable. Runs `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings` (a real lint gate — warnings are errors), `cargo test --all-targets --all-features`, then a dozen Python guards. Seven of them run their own `--self-test` first: `check-fixture-portability.py` (`:34`, then the checker at `:36`), `check-doc-citations.py` (`:42`, then `:44`), `check-release-contract.py` (`:86`, self-test `:91`), `check-selector-qualification.py` (`:98`, self-test `:100`), `qualify-cargo-selectors.sh` (self-test `:103`), `check-staged-validation-contract.py` (`:109`, self-test `:111`), and `resolve-smoke-transition.py` (self-test `:118`). `smoke-release-candidate.py` runs first at `:25-27`, and `check-installer-contract.py` at `:113`. A red build catches: any behavioural regression on any of the three platforms; any new warning; formatting drift; an `include` edit that breaks the published crate; a new ungated POSIX-shaped fixture; a deep-dive citation whose line no longer resolves. `--all-features` is what makes the matrix meaningful for the update path.
+**`checks`** (`:4`) — the bulk of the gate. OS matrix of `ubuntu-latest`, `macos-latest`, `windows-latest`, so the unit tests that compile on this platform and the 30 integration cases (12 of them on a Windows lane) execute across all three, and on stable. Runs `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings` (a real lint gate — warnings are errors), `cargo test --all-targets --all-features`, then **four** Python guards: `smoke-release-candidate.py` (`:29`), and two premise guards that each run their own `--self-test` first — `check-fixture-portability.py` (`--self-test` at `:34`, the checker at `:36`) and `check-doc-citations.py` (`--self-test` at `:42`, the checker at `:44`). A red build catches: any behavioural regression on any of the three platforms; any new warning; formatting drift; a new ungated POSIX-shaped fixture; a deep-dive citation whose line no longer resolves; **and, since C021, a verification script that exists but is missing from the inventory that documents it**. `--all-features` is what makes the matrix meaningful for the update path.
 
-**`installers`** — runs the installer fixture suite `packaging/tests/test_installers.py` across the same three OSes (`:64`), with its own `--self-test` at `:71` on the Windows lane specifically, because that is where the C012 defect lived. The static wrapper check, `check-installer-contract.py`, lives in `checks` (`ci.yml:113`) and in `release-drift.yml:61` rather than here. Catches a wrapper that stopped being executable, lost its shebang, or diverged on one platform.
+**`installers`** (`:45`) — runs the installer fixture suite `packaging/tests/test_installers.py` across the same three OSes (`:64`), with its own `--self-test` at `:71` on the Windows lane specifically, because that is where the C012 defect lived. The static wrapper check, `check-installer-contract.py`, is **not** here despite its name: it lives in `generated-docs` (`ci.yml:113`) and in `release-drift.yml:61`. Catches a wrapper that stopped being executable, lost its shebang, or diverged on one platform.
 
-**`generated-docs`** — regenerates completions and manpages via `xtask` and fails if the committed files differ. A *freshness* contract: it catches a `cli.rs` change never fed through the generator. It is also the one place a script's output is compared to a committed artifact — the same pattern as `gen-release-workflow-shape.py`.
+**`generated-docs`** (`:72`) — regenerates completions and manpages via `xtask` and fails if the committed files differ, then runs the other **six** Python guards: `check-release-contract.py` (`:86`, `--self-test` `:91`), `check-selector-qualification.py` (`:98`, `--self-test` `:100`), `qualify-cargo-selectors.sh --self-test` (`:103`), `check-staged-validation-contract.py` (`:109`, `--self-test` `:111`), `check-installer-contract.py` (`:113`), and `resolve-smoke-transition.py --self-test` (`:118`). Five of the seven per-commit `--self-test` invocations in CI live here. A *freshness* contract plus the repository's structural contracts; it is also the one place a script's output is compared to a committed artifact — the same pattern as `gen-release-workflow-shape.py`.
 
-**`benchmark`** — runs `release-benchmark.py` against `release/baseline-benchmark.json`, failing on a configured threshold. Catches a scan that has become materially slower in a way no correctness test notices.
+**`benchmark`** (`:119`) — runs `release-benchmark.py` against `release/baseline-benchmark.json` (`:130`). Semantic counters are a hard gate; wall-clock timings are recorded and printed but never fail, because shared-runner timing is noise. Catches a scan that has become materially slower in a way no correctness test notices.
 
-**`msrv`** — a dedicated job pinned to Rust **1.89**, matching `rust-version = "1.89"` in `Cargo.toml`, against a crate on **edition 2024**. A red build means the code has started using a feature stabilized after 1.89. Because edition 2024 requires a comparatively recent toolchain, the two settings are coupled and cannot drift apart silently.
+**`msrv`** (`:131`) — a dedicated job pinned to Rust **1.89** via `dtolnay/rust-toolchain@master`, matching `rust-version = "1.89"` in `Cargo.toml`, against a crate on **edition 2024**. It runs `cargo +1.89 check --locked --all-targets` and `cargo +1.89 test --locked --all-targets`. A red build means the code has started using a feature stabilized after 1.89. Because edition 2024 requires a comparatively recent toolchain, the two settings are coupled and cannot drift apart silently.
+
+Across `ci.yml`, **seven** guards run a `--self-test` on every push — `check-fixture-portability.py`, `check-doc-citations.py`, `check-release-contract.py`, `check-selector-qualification.py`, `qualify-cargo-selectors.sh`, `check-staged-validation-contract.py`, `resolve-smoke-transition.py` — plus `test_installers.py --self-test` at `:71`. The three not covered there are `check-post-release-smoke-contract.py`, `check-release-identity.py`, and `verify-release-attestation.py`, whose self-tests run from `release-drift.yml`, `validate-staged-release.yml`, and the operator gate respectively.
 
 ### Is every script wired into CI?
 
-**No. Two scripts are invoked by no workflow.** Verified by searching every file in `.github/` and `packaging/` for each script's filename, and separately searching `scripts/release-check.sh` for each.
+**Every one of the 17 is reachable from an automated surface, and 15 of them
+from a workflow.** This was not true when this document was last written, and
+the claim that it was — that `validate-staged-release.py` and
+`qualify-cargo-selectors.sh` were invoked by nothing — was the single most
+misleading sentence in the file. M011B and M011D wired both.
 
 | Script | In a workflow? | In `release-check.sh`? |
 |---|---|---|
-| `check-release-contract.py` | yes (`checks`) | yes |
-| `check-fixture-portability.py` | yes (`checks`) | yes |
-| `check-installer-contract.py` | yes (`checks`, and `release-drift.yml`) | yes |
-| `check-release-identity.py` | yes (`release-binaries.yml`) | yes |
-| `check-post-release-smoke-contract.py` | yes (`post-release-smoke.yml`) | yes |
-| `gen-release-workflow-shape.py` | yes (`release-binaries.yml`, output compared) | yes |
-| `release-benchmark.py` | yes (`benchmark`) | yes |
-| `smoke-release-candidate.py` | yes (`release-binaries.yml`) | yes |
-| `post-release-smoke.sh` | yes (`post-release-smoke.yml`) | yes |
-| `release-check.sh` | yes (`checks`) | n/a — it is the gate |
-| **`validate-staged-release.py`** | **no** | **no** |
-| **`qualify-cargo-selectors.sh`** | **no** | **no** |
+| `check-release-contract.py` | yes (`ci.yml` `generated-docs`, `release-drift.yml`) | yes |
+| `check-fixture-portability.py` | yes (`ci.yml` `checks`) | yes |
+| `check-doc-citations.py` | yes (`ci.yml` `checks`) | yes |
+| `check-installer-contract.py` | yes (`ci.yml` `generated-docs`, `release-drift.yml`) | yes |
+| `check-release-identity.py` | yes (`release-drift.yml`, `validate-staged-release.yml`) | yes |
+| `check-post-release-smoke-contract.py` | yes (`post-release-smoke.yml`, `release-drift.yml`) | yes |
+| `check-staged-validation-contract.py` | yes (`ci.yml` `generated-docs`) | yes |
+| `check-selector-qualification.py` | yes (`ci.yml` `generated-docs`, `qualify-cargo-selectors.yml`) | yes |
+| `resolve-smoke-transition.py` | yes (`post-release-smoke.yml`, `ci.yml` `generated-docs`) | yes (`--self-test` only) |
+| `gen-release-workflow-shape.py` | yes (`release-drift.yml`, output compared) | yes |
+| `release-benchmark.py` | yes (`ci.yml` `benchmark`) | yes |
+| `smoke-release-candidate.py` | yes (`ci.yml` `checks`; and per-target on every release via `release/eggpack/consumer-validators.json`) | yes |
+| `qualify-cargo-selectors.sh` | yes (`qualify-cargo-selectors.yml`, `ci.yml` `--self-test`) | yes (`--self-test` only) |
+| **`validate-staged-release.py`** | yes — `validate-staged-release.yml:141`, under M011B | **no** |
+| **`post-release-smoke.sh`** | yes — `post-release-smoke.yml:156` | **no** |
+| **`verify-release-attestation.py`** | **no** | yes |
+| **`release-check.sh`** | **no** | n/a — it is the gate |
 
-This is the significant finding of this section, and it is exactly the class the project has
-been bitten by before. `validate-staged-release.py` is the only thing that proves the
-published artifact is the artifact that was qualified — the six-step inventory / sidecar /
-manifest / contract / ABI / installer proof. It runs solely when a maintainer remembers to
-run it. It is also the *only* script `release-check.sh` does not reference, so "I ran the
-local gate" and "I proved the release bytes" are unrelated statements. By contrast
-`check-release-contract.py` asserts that `scripts/release-check.sh` exists as a file — but
-nothing asserts that `validate-staged-release.py` was ever *run*.
+The three "no" entries are all explicable rather than accidental, and each is
+event-specific by construction rather than merely unwired:
 
-`qualify-cargo-selectors.sh` is the same shape, narrower blast radius: the only
-characterisation of real-Cargo selector behaviour, POSIX-only, run by no lane. The
-`selector_unsupported` path asserted at `cli_contract.rs:626` is driven by a *stubbed*
-version string, so the stub is the only thing that version gate has ever read in an
-automated run.
+- **`validate-staged-release.py`** runs only from `validate-staged-release.yml`,
+  and that workflow is `workflow_run`-bound to the upstream `stage` job: it
+  exists to validate a staged draft, so before any release is staged there is
+  nothing for it to do. It is the one script `release-check.sh` does not chain,
+  which is correct — "I ran the local gate" and "I proved the release bytes"
+  are different statements about different subjects, and merging them would make
+  the local gate look stronger than it is.
+- **`post-release-smoke.sh`** verifies the *actual published bytes* against
+  crates.io. It cannot run before a version is published, and it is guarded for
+  that reason by `check-post-release-smoke-contract.py` and
+  `check-staged-validation-contract.py`.
+- **`verify-release-attestation.py`** and **`release-check.sh`** are operator
+  surfaces. The first needs a published immutable release and a live `gh`; the
+  second refuses a dirty tree and requires `eggpack` and toolchain 1.89, which
+  hosted runners are not guaranteed to provide.
 
-Neither is necessarily wrong — both are plausibly manual by design — but the honest
-statement is that they are unguarded, and nothing in the repository distinguishes "was run
-and passed" from "was never run".
+The honest remaining gap is not "a script nobody runs". It is that **no artifact
+in the repository records that any of these event-specific scripts actually
+executed for a particular tag.** The wiring exists; the receipt does not. That is
+why M011A/M011B/M011C closure records still list real-release evidence as
+outstanding, and it is why `verify-release-attestation.py` is deliberately
+reachable from the operator gate rather than only from a workflow.
 
 ---
 
@@ -419,6 +453,10 @@ from `plans/registry.md:92-107`, cross-checked against the code.
 **C013 — the sweep, and its most serious finding.** A repository-wide sweep of external-process fixtures produced a 25-row inventory and corrected **nine** evidence defects, each new premise guard proven to fail in the failing direction (`plans/registry.md:77`). The most serious finding was **not a test**: the release-candidate smoke validator was green on all three hosted lanes *while the subject under test was failing*. Tightening it exposed a real product defect, registered as C015. `plans/registry.md:107` notes C013 closed without repairing any production defect, by its own failure semantics — which is what a verification milestone is for.
 
 **C014 / C016 / C017 — two shipped product defects.** C016 (`plans/registry.md:80`, `:107`): the self-update identity check ran the downloaded candidate **with no arguments**, so its stdout could never equal a version string — and before failing, it performed a filesystem scan of the whole machine. The transaction aborted safely every time, so nothing shipped is corrupt, but the advertised feature had never once worked in any published version. C017 (`plans/registry.md:81`): a `cargo install --root` binary was misread as self-managed and **replaced**, silently, leaving `cargo install --list` reporting a version the file no longer had; it also parsed a `.crates.toml` schema no current Cargo writes — the only defect in the line that mutated on-disk state owned by another tool. Both were found by C014's live rehearsal against a published release, not by any test. `plans/registry.md:144` records the cost: the corrective line needed **seven published versions**, and three product defects (C015, C016, C017) were found by the line's own evidence work.
+
+**C021 — a staging-cleanup test whose observation surface was wider than its subject.** Recorded here as a near-miss rather than a shipped defect: no product behaviour was wrong, and the test was green or flaky rather than confidently false. `staging_is_cleaned_up_on_success_and_on_failure` called a helper that enumerated the **process-wide** temp directory and reported every path whose basename began `cargo-cleanme-update-test-` — the same prefix every fixture in the module mints through `unique("cargo-cleanme-update-test")`. Because Rust runs tests in parallel, a sibling test's live staging directory could satisfy that scan and fail the assertion for a transaction that had removed its own directory correctly.
+
+The two failures of premise are worth naming, because they are the same shape as the incidents above. First, the assertion's subject was ambiguous: *whose* staging directory? Second, and more reusable, **the test could not fail for its own reason and could not pass for its own reason either** — it was not a weak check, it was a check about the wrong thing. C021 proved the mechanism deterministically before changing anything (a foreign same-prefix directory makes the old scan fail on a subject that leaked nothing), then rebuilt the evidence on the paths each fixture itself created, and added two controls: a fixture that deliberately leaves *its own* staging directory behind, which the new check must reject, and a live foreign same-prefix directory, which the new check must ignore. Neither control is optional — without the first the check could not fail, and without the second it could not be distinguished from the old one.
 
 ### The generalised lesson
 
@@ -442,20 +480,27 @@ Now guarded:
 | POSIX-only fixture, ungated | `check-fixture-portability.py`, static, in `ci.yml` `checks` |
 | Pass condition is an unrelated failure | C012's premise check; `packaging/tests/test_installers.py --self-test` (`self_test()` at line 785), which asserts each guard *rejects* a broken setup — "self test passed: every premise guard rejects a broken setup" (line 880) |
 | Published crate missing a runtime file | `check-release-contract.py`, including the `include_str!`-embedded `/config.toml` |
-| Tag/source identity drift | `check-release-identity.py` in `release-binaries.yml` |
+| Tag/source identity drift | `check-release-identity.py` in `release-drift.yml` and `validate-staged-release.yml` |
 | Smoke workflow edited into meaninglessness | `check-post-release-smoke-contract.py` |
 | Docs/completions drift | `generated-docs` job |
+| Documentation citing lines that no longer exist | `check-doc-citations.py`, in `ci.yml` `checks` |
+| **Documentation inventory that silently lost a script** | `check-doc-citations.py` §5 parity rule — added by C021 |
+| **A test whose observation surface is wider than its subject** | C021's fixture-owned staging evidence (`leaked_staging`, `src/update.rs:1310`) plus the foreign-path concurrency control at `:2451` |
 | Performance regression | `benchmark` job vs `release/baseline-benchmark.json` |
 
-**Residual risks in the present tree.** The first two are the ones I would put in a review.
+**Residual risks in the present tree.**
 
-**R1 — The published-bytes proof is manual-only, and the local gate does not even chain it.** `scripts/validate-staged-release.py` is the sole mechanism establishing "the public bytes are the qualified bytes". It is invoked by no workflow and by no other script. No artifact, receipt, or log in the repository records that it ran for any particular tag, and `check-release-contract.py` asserts only that the *file* exists. A regression that changes which bytes get published would be caught by nothing automated — and per the C013 lesson, the validator that would catch it is exactly the thing most likely to be edited down at the moment it starts failing.
+**R1 — Event-specific verification has wiring but no receipts.** Three surfaces run only when a real release event occurs: `validate-staged-release.py` (a staged draft), `post-release-smoke.sh` (a published version), and `verify-release-attestation.py` (an immutable release plus a live `gh`). All three are now genuinely wired — the first two to workflows, the third to the operator gate — so the earlier claim that they were invoked by nothing is false and has been removed. What remains true is narrower and worth stating precisely: **no artifact in the repository records that any of them ran for a particular tag.** Nothing distinguishes "was run and passed" from "was never run", so a regression in which bytes get published would be caught only by the validator, and per the C013 lesson the validator is exactly the thing most likely to be edited down at the moment it starts failing. This is why C018, M011A, M011B, and M011C all still carry outstanding publication evidence rather than claiming closure.
 
-**R2 — Real-Cargo selector behaviour is characterised only by a script no lane runs.** `scripts/qualify-cargo-selectors.sh` is the only place genuine Cargo's `--profile`/`--package` semantics and the support boundary are measured. It is unwired and POSIX-only. The automated coverage of selector behaviour (`cli_contract.rs:659-661`, `:591-626`) runs against a *stub* whose version string the guard itself reads — the guard is tested against its own input assumption, which is the precise C011 shape: a fake standing in for an authority that could have disagreed with the subject. If Cargo changed what `--profile dev` selects, or moved the version floor, nothing in the tree would notice.
+**R2 — Real-Cargo selector behaviour is characterised by an event-specific harness.** `scripts/qualify-cargo-selectors.sh` is the only place genuine Cargo's `--profile`/`--package` semantics and the support boundary are measured, it is POSIX-only, and the full real-Cargo run is a weekly/dispatch lane rather than a per-commit one — CI runs its `--self-test` on every push. The automated coverage of selector behaviour (`cli_contract.rs:659-661`, `:591-626`) runs against a *stub* whose version string the guard itself reads. If Cargo changed what `--profile dev` selects, or moved the version floor, nothing in the per-commit gates would notice; the hosted matrix would, but not immediately.
 
 **R3 — The `update` machine-output path has no test of any kind.** `update_json` (`main.rs:755`) is the only machine-readable surface bypassing `EnvelopeV1`, pinned by nothing: no `schema_version` assertion, no trailing-newline invariant, no exit code, no integration case. The two invariants that make the other JSON surfaces safe to automate against (`cli_contract.rs:204` single trailing newline, `:203` stream separation) do not extend to it — and M012B added a *fourth* JSON-shaped surface, `log`, whose shared helper `assert_bounded_log_line` (`cli_contract.rs:1218`) does encode those invariants in 18 cases. C016 and C017 both lived on the self-update path, whose automated output-shape evidence is nil.
 
 **R4 — `traverse::source_activity` is test-only, and `traverse.rs` is thin.** `source_activity` (`src/traverse.rs:268`) has one call site, in its own test module (`traverse.rs:594`). A `pub` function with no production consumer whose only exercise is its own assertion is a coverage entry reporting capability the system does not use — a mild instance of a formally registered class. `traverse.rs` has 6 tests for the module that walks the whole filesystem.
+
+**R5 — One checker cannot prove it can fail.** `check-installer-contract.py` is the only contract checker without a `--self-test`. Its green is an assertion about the tree that the repository never demonstrates in the failing direction, which is the C013 shape one step removed from the guards that do self-test.
+
+**R6 — A test premise was process-global rather than invocation-scoped.** `staging_is_cleaned_up_on_success_and_on_failure` asserted that *no* `cargo-cleanme-update-test-` path existed anywhere in the temp directory, while every fixture in the module mints staging names from that same prefix and Rust runs tests in parallel. A concurrent test's live staging directory could therefore fail the assertion for a transaction that leaked nothing — the test could not pass for its own reason, and could not fail for its own reason either. C021 proved the mechanism deterministically and rebuilt the evidence on paths the fixture itself created. It is written up in [§7](#7-the-false-green-problem) history below because the class is not specific to staging directories: **a test whose observation surface is wider than the subject it claims to test can report another actor's behaviour as its own.**
 
 ---
 
@@ -470,7 +515,7 @@ testing can see, because the subject is bytes on a registry and a CDN.
 
 **`release-drift.yml`** verifies the release did not drift from the tag: that the commit a tag points at, the version in `Cargo.toml`, and the built artifacts still agree, and that regeneration is stable. It is the post-hoc detector for the class where someone amends or re-points a release after the fact.
 
-**Relationship to `validate-staged-release.py` and Eggpack.** The Eggpack producer contract (`release/eggpack`, `packaging/`) supplies the generators and manifests these workflows consume. `validate-staged-release.py` is the offline six-step proof over a staged tree, and it is the one verification step in this document with no automated caller — see R1. Its six steps map onto the questions each workflow asks, but only the live workflows ask them automatically.
+**Relationship to `validate-staged-release.py` and Eggpack.** The Eggpack producer contract (`release/eggpack`, `packaging/`) supplies the generators and manifests these workflows consume. `validate-staged-release.py` is the offline six-step proof over a staged tree, invoked by `validate-staged-release.yml` under M011B, whose own premises are gated by `check-staged-validation-contract.py`. Its six steps map onto the questions each workflow asks, and the hosted workflow is what asks them automatically. It is still the one script `release-check.sh` does not chain, which is correct rather than an oversight — see R1 in [§7](#7-the-false-green-problem) for the narrower claim that survives.
 
 **The benchmark.** `release/baseline-benchmark.json` records measured scan performance for a reference tree; `release-benchmark.py` re-measures and fails on a configurable regression percentage, run by the `benchmark` job. The regression it catches is the class no correctness test notices: a change that keeps every answer right but makes the scan substantially slower. With `cleanup.rs` at 6347 lines and the parallel probe fan-out a live optimisation surface (`ParallelProbeRunner` exists precisely to assert the fan-out), that is a realistic and otherwise invisible failure mode. The trade-off is inherent: a wall-clock threshold is flaky on shared runners, so this gate is the one most likely to be loosened — itself a thing to watch in review.
 
@@ -482,7 +527,7 @@ testing can see, because the subject is bytes on a registry and a CDN.
 |---|---:|---:|---:|---|
 | `cleanup.rs` | 6347 | 71 | 71 / 2392 | Appropriate. Most safety-critical module has the most tests; the race fakes show the hard cases were found and pinned |
 | `workspace.rs` | 3918 | 47 | 47 / 1445 | Appropriate, and the fakes are argument-focused rather than result-focused — the right instinct |
-| `update.rs` | 2474 | 42 | 42 / 1210 | Reasonable unit coverage, but this is the module whose defects (C011, C016, C017) escaped to production. Unit tests cannot see a transport that cannot reach its authority |
+| `update.rs` | 2635 | 44 | 44 / 1210 | Reasonable unit coverage, but this is the module whose defects (C011, C016, C017) escaped to production. Unit tests cannot see a transport that cannot reach its authority. Its transaction-hygiene evidence was briefly a false green too — see R6 |
 | `discovery.rs` | 1866 | 32 | 32 / 901 | Adequate for a filesystem walk with attribution; the attribution logic is pure and testable |
 | `cli.rs` | 901 | 24 | 24 / 380 | Good |
 | `config.rs` | 632 | 14 | 14 / 373 | Good for its surface |
@@ -527,7 +572,7 @@ sees a covered module where the versioned DTOs are exactly as unpinned as before
 1. **Does a new external-process fixture prove its own premise?** Add a guard that fails when the fake cannot be reached, before the behaviour assertion. References: C012's premise check; `packaging/tests/test_installers.py::self_test` (line 785), which proves each guard rejects a broken setup. Without failing-direction proof, it is a C012 waiting to happen.
 2. **Is a new fixture platform-gated?** Any `#[cfg(test)]` block spawning a process, writing a shell script, or using `os.pathsep` needs `#[cfg(unix)]` / `#[cfg(windows)]` discipline or a portable implementation. `scripts/check-fixture-portability.py` catches the static shape, in `ci.yml` `checks`.
 3. **Is a new external-process fixture actually exercised — not just present?** The premise is untested by default. Confirm the stub is *reached*: assert on what the subject passed to it (the `RecordingRunner` pattern, `workspace.rs:3371`), not only on what came back. C012 was green because an unrelated failure satisfied the assertion.
-4. **Is a new `scripts/` file wired into a workflow?** Two of the current 17 are not (`validate-staged-release.py`, `qualify-cargo-selectors.sh`) — see [§6](#6-ci-as-the-enforcement-point). A new checker no lane runs repeats that gap. Wire it, or document why not, in the same change.
+4. **Is a new `scripts/` file wired into a workflow or the operator gate?** All 17 are reachable from an automated surface; the three exceptions (`validate-staged-release.py`, `post-release-smoke.sh`, `verify-release-attestation.py`) are event-specific by construction and say so in the [§5](#5-the-contract-checkers) table — see [§6](#6-ci-as-the-enforcement-point). A new checker reachable from neither repeats that gap. Wire it, or document why not, **in the same change**: `check-doc-citations.py` will fail if the new script is not in the §5 table, so the omission cannot ship.
 5. **Changing a field in `output.rs`?** There is no in-crate test below `pub mod log`. The only assertions are external: `cli_contract.rs:200-202`, `331-335`, `363`, `472-488`, `520`, `553-557`, `591`, `626`, `659-661`. Update them in the same commit; nothing inside the crate will remind you.
 6. **Changing `update_json` (`main.rs:755`)?** Nothing will fail. It has no test and is not covered by the checklist invariants. Add a case, and consider routing it through `EnvelopeV1` so it stops being the one unversioned surface.
 7. **Touching `output.rs:140` or `:206` (`schema_version` literals)?** Confirm the trailing-newline invariant (`cli_contract.rs:204`, `:335`) and stderr-separation invariant (`:203`) still hold for the surface you touched. They are the reason the JSON is safe to parse unattended. The log surface has its own, stronger invariant — `assert_bounded_log_line` (`cli_contract.rs:1218`) — so a log-mode edit should run those 11 cases rather than the JSON ones.
@@ -535,7 +580,9 @@ sees a covered module where the versioned DTOs are exactly as unpinned as before
 9. **Touching `traverse.rs`?** 6 tests (module opens at `:470`), and `source_activity` (`:268`) has no production caller — its only call site is `traverse.rs:594`, inside its own test module. If you are adding a caller, say so; if not, its test proves nothing about the system.
 10. **New behaviour in `policy.rs`** — only 7 tests, and this module decides the Routine/Full scope boundary, a documented invariant. Cheap to cover, still under-covered.
 11. **Reactivating or adding a `.crates.toml` provenance path** — C017 was exactly this: a schema no current Cargo writes, misread as self-managed, which *replaced a binary Cargo owned*. The classification lives in `src/update.rs`, and its tests run against `FixtureEnvironment` (`update.rs:1222`), which cannot reproduce real Cargo's on-disk state.
-12. **Any change to the two manual-only scripts** (`validate-staged-release.py`, `qualify-cargo-selectors.sh`) — the repository's largest remaining false-green exposure. They are R1 and R2 in [§7](#7-the-false-green-problem); nothing records whether they were ever run, and the C013 lesson is that verifiers fail exactly when they start being useful.
+12. **Any change to the three event-specific scripts** (`validate-staged-release.py`, `post-release-smoke.sh`, `verify-release-attestation.py`) — they have wiring but no receipts, so nothing records whether they ever ran. That is R1 in [§7](#7-the-false-green-problem), and the C013 lesson is that verifiers fail exactly when they start being useful.
+13. **Does a new or edited test observe wider than its subject?** If an assertion inspects a shared surface — the process-wide temp directory, a global registry, one lock file — ask whose state it can see. `staging_is_cleaned_up_on_success_and_on_failure` scanned every `cargo-cleanme-update-test-*` path in `/tmp` while sibling tests minted names from the same prefix; the subject's own state was never actually checked. Bind the evidence to the fixture or transaction, and add the two controls C021 did: one that makes the check **fail** on a deliberate leak of its own state, and one that makes it **pass** while a foreign same-prefix path is live.
+14. **Adding a checker without a `--self-test`?** `check-installer-contract.py` is the one existing exception, and §5 note 5 records it as an asymmetry rather than a precedent.
 
 ---
 

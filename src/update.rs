@@ -1224,6 +1224,28 @@ mod tests {
         cargo_home: Option<PathBuf>,
         version: String,
         staging: RefCell<Option<PathBuf>>,
+        /// Every staging path this fixture handed to production, in order.
+        ///
+        /// This is the fixture's ownership record, and it is what the leak
+        /// check is built on. It is deliberately *not* a scan of the temp
+        /// directory: the historical detector asked "does any
+        /// `cargo-cleanme-update-test-` path exist anywhere", and because every
+        /// test in this module mints staging names from the same prefix, a
+        /// parallel test's live directory answered that question for us. The
+        /// subject could not fail for its own reason and could not pass for its
+        /// own reason.
+        created_staging: RefCell<Vec<PathBuf>>,
+        /// How many times production reached the cleanup callback.
+        ///
+        /// Tracked separately from the filesystem state because the two are
+        /// different claims. "The callback ran" is satisfied by setting
+        /// `staging` to `None`; "the transaction left no bytes behind" is only
+        /// satisfied by the path being absent. A test that asserted the first
+        /// and called it cleanup evidence was asserting a memory write.
+        cleanup_calls: RefCell<usize>,
+        /// Leave this fixture's own staging directory on disk, so the leak
+        /// check can be required to reject a genuinely leaked transaction.
+        suppress_cleanup: bool,
         responses: Map<String, Vec<u8>>,
         /// URLs that must fail with a transport error rather than 404.
         transport_failures: Vec<String>,
@@ -1239,6 +1261,9 @@ mod tests {
                 cargo_home: None,
                 version: version.to_owned(),
                 staging: RefCell::new(None),
+                created_staging: RefCell::new(Vec::new()),
+                cleanup_calls: RefCell::new(0),
+                suppress_cleanup: false,
                 responses: Map::new(),
                 transport_failures: Vec::new(),
                 absent: Vec::new(),
@@ -1259,6 +1284,59 @@ mod tests {
         fn fail_transport(mut self, url: &str) -> Self {
             self.transport_failures.push(url.to_owned());
             self
+        }
+
+        /// Reach the cleanup callback but leave the staging directory behind.
+        ///
+        /// The negative control for `leaked_staging`: without a fixture that
+        /// can produce a real leftover, "no leftovers" is an assertion that
+        /// cannot fail, and this repository does not close tests on those.
+        fn leaking_staging(mut self) -> Self {
+            self.suppress_cleanup = true;
+            self
+        }
+
+        /// How many times production reached `cleanup` for this fixture.
+        fn cleanup_calls(&self) -> usize {
+            *self.cleanup_calls.borrow()
+        }
+
+        /// Staging paths **this fixture created** that still exist on disk.
+        ///
+        /// Scoped to the fixture's own recorded paths, so a concurrent test's
+        /// live staging directory is invisible here — which is the property
+        /// `a_foreign_staging_directory_is_not_evidence_of_a_leak` pins, and
+        /// the property the historical process-wide scan did not have.
+        fn leaked_staging(&self) -> Vec<PathBuf> {
+            self.created_staging
+                .borrow()
+                .iter()
+                .filter(|path| path.exists())
+                .cloned()
+                .collect()
+        }
+
+        /// Assert this fixture's own staging transaction left nothing behind.
+        ///
+        /// Two independent claims, deliberately not collapsed into one:
+        /// production reached the cleanup callback, *and* the directory it
+        /// owned no longer exists on disk.
+        fn assert_no_staging_leak(&self, what: &str) {
+            assert_eq!(
+                self.created_staging.borrow().len(),
+                1,
+                "{what}: expected exactly one staging transaction, saw {:?}",
+                self.created_staging.borrow()
+            );
+            assert!(
+                self.cleanup_calls() > 0,
+                "{what}: production never reached the staging cleanup callback"
+            );
+            assert!(
+                self.leaked_staging().is_empty(),
+                "{what}: staging left behind: {:?}",
+                self.leaked_staging()
+            );
         }
 
         #[cfg_attr(not(unix), allow(dead_code))]
@@ -1293,6 +1371,7 @@ mod tests {
                 detail: e.to_string(),
             })?;
             *self.staging.borrow_mut() = Some(path.clone());
+            self.created_staging.borrow_mut().push(path.clone());
             Ok(path)
         }
         fn fetch(&self, url: &str, destination: &Path) -> Result<u64, UpdateError> {
@@ -1336,6 +1415,12 @@ mod tests {
                 })
         }
         fn cleanup(&self, staging: &Path) {
+            *self.cleanup_calls.borrow_mut() += 1;
+            if self.suppress_cleanup {
+                // Deliberately leave the directory in place so
+                // `leaked_staging` has something real to report.
+                return;
+            }
             let _ = std::fs::remove_dir_all(staging);
             *self.staging.borrow_mut() = None;
         }
@@ -2271,9 +2356,22 @@ mod tests {
         assert_eq!(std::fs::read(&fx.live).unwrap(), before);
     }
 
-    /// Any staging directory this test module created and did not clean up.
+    /// Every process-wide temp path whose basename carries the
+    /// `cargo-cleanme-update-test-` prefix.
+    ///
+    /// This is the **historical** detector, retained only as the premise-negative
+    /// in `a_foreign_staging_directory_is_not_evidence_of_a_leak`. It is not a
+    /// leak check and must never be used as one.
+    ///
+    /// Every fixture in this module mints staging names through
+    /// `unique("cargo-cleanme-update-test")`, so this prefix is shared by all
+    /// of them, and Rust runs test functions in parallel. The question it
+    /// answers — "does any matching path exist right now?" — is therefore
+    /// answered partly by whichever other test happens to be mid-transaction.
+    /// It could fail for a transaction that leaked nothing, and it could pass
+    /// for a transaction that leaked everything.
     #[cfg_attr(not(unix), allow(dead_code))]
-    fn staging_leftovers() -> Vec<PathBuf> {
+    fn process_wide_staging_paths() -> Vec<PathBuf> {
         let mut found = Vec::new();
         if let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) {
             for entry in entries.flatten() {
@@ -2290,27 +2388,90 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn staging_is_cleaned_up_on_success_and_on_failure() {
-        // Failure path.
+        // Failure path: the candidate reports the wrong version, so the
+        // transaction aborts after staging. Its staging directory must be gone
+        // all the same.
         let fx = fixture(&live_stub());
         let base = FixtureEnvironment::new(fx.live.clone(), "0.1.0");
         let environment = release(base, "0.2.0", candidate_bytes("6.6.6"), None);
         let _ = run(&environment, false);
-        assert!(
-            staging_leftovers().is_empty(),
-            "staging left behind: {:?}",
-            staging_leftovers()
-        );
+        environment.assert_no_staging_leak("failed transaction");
 
         // Success path.
         let fx = fixture(&live_stub());
         let base = FixtureEnvironment::new(fx.live.clone(), "0.1.0");
         let environment = release(base, "0.2.0", candidate_bytes("0.2.0"), None);
         run(&environment, false).expect("update commits");
+        environment.assert_no_staging_leak("successful transaction");
+    }
+
+    /// The negative control for the corrected check.
+    ///
+    /// A leak detector that has never seen a leak is not a detector. This
+    /// fixture reaches the production cleanup callback and deliberately leaves
+    /// its own staging directory behind, and the fixture-owned check must
+    /// report it.
+    ///
+    /// It also pins the distinction the old test blurred: `cleanup_calls` is
+    /// greater than zero *and* the path still exists. Clearing an in-memory
+    /// `Option` is not filesystem cleanup evidence, and a test that accepted
+    /// the former in place of the latter would pass here.
+    #[test]
+    fn a_deliberately_leaked_staging_path_is_still_reported() {
+        let fx = fixture(&live_stub());
+        let base = FixtureEnvironment::new(fx.live.clone(), "0.1.0");
+        let environment = release(base, "0.2.0", candidate_bytes("6.6.6"), None).leaking_staging();
+        let _ = run(&environment, false);
+
         assert!(
-            staging_leftovers().is_empty(),
-            "staging left behind: {:?}",
-            staging_leftovers()
+            environment.cleanup_calls() > 0,
+            "premise: production must still have reached the cleanup callback, \
+             otherwise this case proves nothing about a leaked path"
         );
+        let leaked = environment.leaked_staging();
+        assert_eq!(
+            leaked,
+            environment.created_staging.borrow().clone(),
+            "the leak check must report exactly the paths this fixture created"
+        );
+        for path in leaked {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    /// The concurrency control, and the proof of the historical diagnosis.
+    ///
+    /// A second fixture-owned staging directory with the *same* prefix is held
+    /// live across the subject's transaction. The subject must pass, which
+    /// proves the corrected check consumes only its own state. In the same
+    /// breath, the historical process-wide scan must report that foreign path —
+    /// which is precisely the input that made the old assertion fail.
+    #[cfg(unix)]
+    #[test]
+    fn a_foreign_staging_directory_is_not_evidence_of_a_leak() {
+        let foreign = unique("cargo-cleanme-update-test");
+        std::fs::create_dir_all(&foreign).unwrap();
+        assert!(
+            process_wide_staging_paths().contains(&foreign),
+            "premise: the historical process-wide scan must see the foreign \
+             directory, or this case proves nothing about the old detector"
+        );
+
+        let fx = fixture(&live_stub());
+        let base = FixtureEnvironment::new(fx.live.clone(), "0.1.0");
+        let environment = release(base, "0.2.0", candidate_bytes("0.2.0"), None);
+        run(&environment, false).expect("update commits");
+
+        // The subject completed correctly and left nothing of its own behind,
+        // even though a same-prefix foreign path was live the whole time.
+        environment.assert_no_staging_leak("subject beside a foreign staging path");
+        assert!(
+            process_wide_staging_paths().contains(&foreign),
+            "premise: the foreign directory must still be live, or the \
+             concurrency control did not test anything"
+        );
+
+        let _ = std::fs::remove_dir_all(&foreign);
     }
 
     #[test]

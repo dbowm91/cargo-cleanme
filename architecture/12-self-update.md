@@ -2,10 +2,35 @@
 
 > Component deep dive · part of the [architecture overview](overview.md)
 
-`src/update.rs` (1971 lines: 1021 production, 950 inline tests, 30 `#[test]`
+`src/update.rs` (2635 lines: 1210 production, 1425 inline tests, 44 `#[test]`
 functions) implements `cargo cleanme update`. It is architecturally distinct from
 the other 16 modules in `src/`: the only module with a network dependency, and
 the only one that writes to its own executable path.
+
+> **Citation health, read this before trusting a line number in this file.**
+> Two citation forms appear here and only one of them is machine-checked.
+>
+> 1. `src/update.rs:N` — gated by `scripts/check-doc-citations.py`. CI runs it,
+>    so a citation here cannot point past EOF.
+> 2. Bare `` `:N` `` and `` `name` (`:N`) `` — **not gated by anything.**
+>    `check-doc-citations.py` matches `file.rs:N`, so a bare number carries no
+>    filename and is invisible to it.
+>
+> C021 re-derived every **test-name** citation in this file from the source (44 of
+> them, by resolving each `fn` and reading the line it lands on) and corrected the
+> test-module structural references. It measured the remainder rather than
+> guessing: **257 opaque bare `` `:N` `` references remain, and at C021's baseline
+> the file's cited numbers were already 191–503 lines behind the source** — the
+> drift predates C021 and is not uniform, so shifting them arithmetically would
+> have made them wrong in a new way. Several are also genuinely ambiguous: `` `cleanup` (`:N`) ``
+> may mean the trait method, the impl, or the call site inside `execute`, and
+> those are three different lines.
+>
+> So: the line numbers in the prose below are **indicative, not authoritative**.
+> Use `grep` on the symbol name. This is recorded as an open finding in
+> `plans/closure/artifact-discovery-cleanup/c021-status.md` with the measurements,
+> and it is the strongest remaining argument for extending the citation guard to
+> symbol-anchored references.
 
 Three questions are answered definitively below; each is load-bearing elsewhere
 in this document.
@@ -272,9 +297,9 @@ The whole document is the authority; `published_stable_version` (`:554-576`) the
 reads exactly one field, `crate.max_stable_version`, with three failure layers
 and distinct `detail` text: not UTF-8 (`:556-558`), not valid JSON (`:559-562`),
 no such string (`:567-569`). Narrowness is pinned by
-`version_authority_reads_exactly_one_field` (`:1309`); an outage is a distinct
+`version_authority_reads_exactly_one_field` (`:1585`); an outage is a distinct
 tested outcome, not a guess — `a_registry_outage_is_reported_not_guessed`
-(`:1358`).
+(`:1634`).
 
 ### `is_release_version` (`:598-607`)
 
@@ -303,7 +328,7 @@ Some(parse(left)?.cmp(&parse(right)?))          // src/update.rs:583-594
 Each side parses into a `[u64; 3]`, compared as a tuple. This is
 **semver-aware for the plain `X.Y.Z` subset, not lexicographic** — the comparison
 never sees a string, so the classic `0.1.10 < 0.1.9` bug is impossible.
-`versions_order_numerically_not_lexically` (`:1862-1883`) asserts `0.1.10 >
+`versions_order_numerically_not_lexically` (`:2526-2547`) asserts `0.1.10 >
 0.1.9`, `0.10.0 > 0.9.9`, equality, ordering, and `None` for `("1.2","1.2.3")`,
 `("1.2.3-rc.1","1.2.3")`, `("x","1.2.3")`.
 
@@ -329,9 +354,9 @@ This is the C011 addition (`plans/registry.md:75`: "Reversed the transport to
 `eggup-eggfetch` and added the missing no-downgrade guard"). It prevents a
 locally bumped or development build — exactly what a developer has after
 `cargo install --path .` — being replaced by the older published release.
-`a_newer_local_build_is_never_downgraded` (`:1886-1899`) is the guard, and its
+`a_newer_local_build_is_never_downgraded` (`:2550-2563`) is the guard, and its
 comment records the defect was found by the live release smoke, "not by a
-fixture." `an_older_published_version_is_not_offered_to_a_matching_build` (`:1902`)
+fixture." `an_older_published_version_is_not_offered_to_a_matching_build` (`:2566`)
 pins `Equal → AlreadyCurrent`.
 
 ---
@@ -376,7 +401,7 @@ eggup_eggfetch::EggfetchConfig::strict()
 
 ### The testability point, honestly
 
-`FixtureEnvironment` (`:1031-1151`) lets all 30 tests run with no network, no
+`FixtureEnvironment` (`:1222-1356`) lets all 44 tests run with no network, no
 `curl` discovery, no process globals. That is necessary — and it is not evidence
 the feature works. A fixture that always answers successfully cannot prove the
 real transport reaches the authority, which is exactly the C011 lesson:
@@ -387,7 +412,7 @@ found by the first live release smoke, not by the fixture suite, because the
 fixture suite never talks to the registry" (`:41-42`).
 
 The suite's best defence is partial.
-`the_production_transport_identifies_itself_descriptively` (`:1912-1944`) does
+`the_production_transport_identifies_itself_descriptively` (`:2577-2609`) does
 construct a real `HttpEnvironment` (`:1927`) and reads the agent off the real
 transport's config, asserting it equals `USER_AGENT`, names the product, is
 non-empty, does not start with `curl/`, and contains both `/` and a space. It
@@ -411,7 +436,7 @@ to change."
 | 5 | Fetch metadata, 1 MiB bound (`:787`) | `Acquisition` / `NoPublishedStableVersion`; no writes |
 | 6 | Extract `to_version` (`:788`) | `NoPublishedStableVersion` |
 | 7 | Compare (`:790-816`) | `Equal` → `AlreadyCurrent`; `Less` → `NewerThanPublished` (**no-downgrade**); `None` → `NoPublishedStableVersion`; `Greater` → continue |
-| 8 | Build plan; tag **constructed** as `v{to_version}` (`:818-826`) | no scrape, no redirect follow; asserted at `:1333` |
+| 8 | Build plan; tag **constructed** as `v{to_version}` (`:818-826`) | no scrape, no redirect follow; asserted at `:1609` |
 | 9 | `check_only` → return (`:828-830`) | **No filesystem write on this path** — see below |
 | 10 | Provenance gate: only `VerifiableSelfManaged` proceeds (`:835-840`) | `Provenance` refusal before any download |
 
@@ -433,7 +458,7 @@ overstates.
 14. Fetch the asset (`:878-879`). Zero bytes → `ReleaseEvidence` (`:880-884`).
 15. **Sidecar cross-check** (`:888-897`): if the sidecar names a file other than
     `plan.asset`, refuse — "so a sidecar copied from another release cannot
-    silently authorize these bytes." Covered at `:1727`.
+    silently authorize these bytes." Covered at `:2315`.
 16. Build the `InstallPlan` (`:899-946`): install root is the executable's parent
     (`:899-904`); member declared `.with_permissions(PermissionsIntent::Executable)`
     (`:928`) and `.with_integrity(IntegrityRequirement::Sha256(*manifest.digest()))`
@@ -552,7 +577,7 @@ inspection.
 `execute`. Guaranteed: no staging directory, nothing downloaded beyond the
 metadata document, no file written, no candidate executed, no lock taken. The
 plan is fully resolved, so a dry run still proves version comparison and target
-resolution. `a_dry_run_downloads_nothing` (`:1814`) asserts no release-asset URL
+resolution. `a_dry_run_downloads_nothing` (`:2478`) asserts no release-asset URL
 was requested; `scripts/post-release-smoke.sh:213-221` rehearses it live.
 
 Consequence worth stating: a dry run on a **Cargo-managed** installation
@@ -688,8 +713,8 @@ from a file served by the same host as the artifact it describes
 digest channel. Integrity against corruption, truncation, and a mismatched
 sidecar is solid; integrity against a *compromised release host* is delegated
 entirely to TLS — a bound to state rather than imply. Pinned by
-`a_checksum_mismatch_leaves_the_live_binary_untouched` (`:1684`) and
-`a_verified_candidate_replaces_the_live_binary` (`:1672`).
+`a_checksum_mismatch_leaves_the_live_binary_untouched` (`:2272`) and
+`a_verified_candidate_replaces_the_live_binary` (`:2260`).
 
 ### A read-only or unwritable install location
 
@@ -714,7 +739,7 @@ destination to be a regular file
 symlinked *parent* (`transaction.rs:802-806`). One residual: `current_exe` uses
 `std::env::current_exe()` (`:680`), which on Linux already returns a resolved
 path, so the hazard is handled before it arrives.
-`ownership_is_never_inferred_from_the_file_name` (`:1636`) covers the
+`ownership_is_never_inferred_from_the_file_name` (`:2224`) covers the
 classifier's half. **No path here follows a symlink to replace a file the user
 did not intend.**
 
@@ -733,7 +758,7 @@ only the lock path construction, not its implementation.
 The module's own temp directory is removed unconditionally at `:996` on both
 paths, because the transaction body is a closure (`:860-994`) whose result is
 bound before `cleanup`. Covered by
-`staging_is_cleaned_up_on_success_and_on_failure` (`:1789`) and, live,
+`staging_is_cleaned_up_on_success_and_on_failure` (`:2390`) and, live,
 `scripts/post-release-smoke.sh:209`. Eggup's `.eggup-stage-*` /
 `.eggup-backup-*` directories are removed on success and after a verified
 rollback, but a hard crash mid-commit leaves them in the install root's parent.
@@ -810,34 +835,49 @@ came from" (`:433-436`). It does not fail open in the common case.
 
 | Metric | Value | Method |
 |---|---|---|
-| Test module starts | line 1021 (`#[cfg(test)]` at `:1020`) | direct read |
-| `#[test]` functions | **30** | `grep -nE '^\s*#\[test\]' src/update.rs` |
-| Inline test lines | 950 (1021–1971) | 1971 − 1021 |
+| Test module starts | line 1212 (`#[cfg(test)]` at `:1211`) | direct read |
+| `#[test]` functions | **44** | `grep -nE '^\s*#\[test\]' src/update.rs` |
+| Inline test lines | 1425 (1211–2635) | 2635 − 1211 + 1 |
 | `tests/` integration tests referencing `update` | **0** | `grep -rniE 'update\|provenance\|self.?update' tests/` → no matches |
 
 `tests/cli_contract.rs` has 8 `#[test]` functions, `tests/end_to_end.rs` has 1, and
 **not one mentions `update`**. The update path has no integration coverage.
 
-### The 30 tests, grouped by what they protect
+### The 44 tests, grouped by what they protect
 
 | Group | Tests (line) | Protects |
 |---|---|---|
-| **Provenance** (9) | `the_crates_toml_we_parse_is_the_one_cargo_writes` (1417), `a_cargo_root_install_is_refused_even_when_it_is_not_the_cargo_home` (1441), `cargo_managed_installation_is_refused_with_the_manager_command` (1465), `an_unrecorded_file_in_a_cargo_root_is_not_ours_to_replace` (1501), `the_published_installer_layout_is_not_mistaken_for_a_cargo_root` (1528), `a_cargo_record_that_omits_this_binary_does_not_claim_this_file` (1564), `a_malformed_crates_toml_entry_does_not_hide_the_entry_after_it` (1589), `a_self_managed_installation_is_proven_by_its_digest` (1626), `ownership_is_never_inferred_from_the_file_name` (1636) | The C017 fix from both directions. Most carefully written: `:1528`, whose comment explains a lenient fixture would prove nothing — with an irrelevant record both the correct and the broken answer are "self-managed" — so it plants the one near miss that could cause a wrongful claim (1533-1541). |
-| **Version selection & comparison** (8) | `version_authority_accepts_only_plain_releases` (1289), `version_authority_reads_exactly_one_field` (1309), `version_authority_rejects_prerelease_and_junk` (1316), `already_current_is_not_an_error_to_hide` (1345), `a_registry_outage_is_reported_not_guessed` (1358), `the_release_tag_is_constructed_not_scraped` (1333), `versions_order_numerically_not_lexically` (1862), `an_older_published_version_is_not_offered_to_a_matching_build` (1902) | Narrow authority, numeric comparison, constructed tags, outage as error not guess. |
-| **No-downgrade** (1) | `a_newer_local_build_is_never_downgraded` (1886) | The C011 guard; comment records the defect was found by live smoke, not a fixture. |
-| **Integrity** (5) | `a_verified_candidate_replaces_the_live_binary` (1672), `a_checksum_mismatch_leaves_the_live_binary_untouched` (1684), `a_candidate_reporting_the_wrong_version_is_rejected_before_commit` (1712), `a_sidecar_naming_a_different_asset_is_rejected` (1727), `an_absent_release_asset_is_not_replaced_with_anything` (1749) | `:1684` is the most significant test in the module: it is the one proving a bad candidate cannot become the installed binary. |
-| **Transaction hygiene** (2) | `staging_is_cleaned_up_on_success_and_on_failure` (1789), `a_dry_run_downloads_nothing` (1814) | No residue; check-only writes nothing. |
-| **Transport & release contract** (5) | `the_production_transport_identifies_itself_descriptively` (1913), `the_published_target_table_matches_the_eggpack_contract` (1831), `the_version_authority_url_is_https_and_product_scoped` (1947), `release_urls_are_constructed_from_the_tag_and_contracted_asset` (1954), `the_host_target_has_a_contracted_asset` (1964) | `:1913` is the C011 guard and the only test touching real transport construction. |
+| **Provenance** (9) | `the_crates_toml_we_parse_is_the_one_cargo_writes` (1693), `a_cargo_root_install_is_refused_even_when_it_is_not_the_cargo_home` (1719), `cargo_managed_installation_is_refused_with_the_manager_command` (1743), `an_unrecorded_file_in_a_cargo_root_is_not_ours_to_replace` (1779), `the_published_installer_layout_is_not_mistaken_for_a_cargo_root` (2116), `a_cargo_record_that_omits_this_binary_does_not_claim_this_file` (2152), `a_malformed_crates_toml_entry_does_not_hide_the_entry_after_it` (2177), `a_self_managed_installation_is_proven_by_its_digest` (2214), `ownership_is_never_inferred_from_the_file_name` (2224) | The C017 fix from both directions. Most carefully written: `:2116`, whose comment explains a lenient fixture would prove nothing — with an irrelevant record both the correct and the broken answer are "self-managed" — so it plants the one near miss that could cause a wrongful claim (2122-2129). |
+| **Version selection & comparison** (8) | `version_authority_accepts_only_plain_releases` (1565), `version_authority_reads_exactly_one_field` (1585), `version_authority_rejects_prerelease_and_junk` (1592), `already_current_is_not_an_error_to_hide` (1621), `a_registry_outage_is_reported_not_guessed` (1634), `the_release_tag_is_constructed_not_scraped` (1609), `versions_order_numerically_not_lexically` (2526), `an_older_published_version_is_not_offered_to_a_matching_build` (2566) | Narrow authority, numeric comparison, constructed tags, outage as error not guess. |
+| **No-downgrade** (1) | `a_newer_local_build_is_never_downgraded` (2550) | The C011 guard; comment records the defect was found by live smoke, not a fixture. |
+| **Integrity** (5) | `a_verified_candidate_replaces_the_live_binary` (2260), `a_checksum_mismatch_leaves_the_live_binary_untouched` (2272), `a_candidate_reporting_the_wrong_version_is_rejected_before_commit` (2300), `a_sidecar_naming_a_different_asset_is_rejected` (2315), `an_absent_release_asset_is_not_replaced_with_anything` (2337) | `:2272` is the most significant test in the module: it is the one proving a bad candidate cannot become the installed binary. |
+| **Transaction hygiene** (4) | `staging_is_cleaned_up_on_success_and_on_failure` (2390), `a_dry_run_downloads_nothing` (2478), `a_deliberately_leaked_staging_path_is_still_reported` (2420), `a_foreign_staging_directory_is_not_evidence_of_a_leak` (2451) | No residue, on evidence bound to the fixture's **own** staging path rather than a scan of the temp directory. The last two are C021's controls: the first proves the check can still fail, the second proves it ignores a concurrent sibling's live path. Without both, the check is indistinguishable from the process-global scan it replaced. |
+| **Transport & release contract** (5) | `the_production_transport_identifies_itself_descriptively` (2577), `the_published_target_table_matches_the_eggpack_contract` (2495), `the_version_authority_url_is_https_and_product_scoped` (2611), `release_urls_are_constructed_from_the_tag_and_contracted_asset` (2618), `the_host_target_has_a_contracted_asset` (2628) | `:2577` is the C011 guard and the only test touching real transport construction. |
 
-9 + 8 + 1 + 5 + 2 + 5 = 30.
+9 + 8 + 1 + 5 + 4 + 5 = **32 named below, of 44 in the file.** The gap is not
+random: it is **C018's provenance-uncertainty group**, eleven tests added after
+this table was written and never folded into it —
+`unreadable_cargo_metadata_can_never_become_self_managed` (1838),
+`a_malformed_cargo_cleanme_record_is_not_skipped_into_self_managed` (1853),
+`an_unrelated_malformed_entry_does_not_hide_a_valid_record` (1870),
+`a_cargo_record_in_an_unsupported_shape_is_uncertain_not_absent` (1892),
+`an_explicit_cargo_home_bin_with_a_missing_record_is_unprovable` (1903),
+`an_ancestor_cargo_root_with_unreadable_metadata_is_unprovable` (1919),
+`a_non_utf8_executable_name_in_a_cargo_root_is_unprovable` (1933),
+`a_genuinely_self_managed_installer_layout_stays_self_managed` (1965),
+`the_cargo_root_search_cannot_miss_a_supported_layout` (1983),
+`a_recorded_cargo_root_beyond_the_cargo_home_is_still_refused_before_the_registry` (2092),
+and `a_mutating_run_on_forbidden_provenance_makes_zero_registry_requests` (2030).
+They are the automated evidence behind the C018 changelog entry, and they are
+recorded here so the count discrepancy is a stated fact rather than a silent gap.
 
-### `FixtureEnvironment` (`:1031-1151`)
+### `FixtureEnvironment` (`:1222-1356`)
 
 **What it fakes:** executable path, Cargo home, current version, the staging
-directory (real on disk, via `unique()` at `:1157`), `fetch` (writes canned bytes
+directory (real on disk, via `unique()` at `:1433`), `fetch` (writes canned bytes
 to the destination, returns the byte count), and `fetch_metadata` (canned bytes).
-Three response modes — `respond` (`:1058`), `fail_transport` (`:1068`), `absent`
-(`:1074`) — plus `requested` (`:1041`), asserted at `:1814`.
+Three response modes — `respond` (`:1274`), `fail_transport` (`:1284`), `absent`
+(`:1343`) — plus `requested` (`:1254`), asserted at `:2478`.
 
 **What it cannot fake:**
 
@@ -845,9 +885,9 @@ Three response modes — `respond` (`:1058`), `fail_transport` (`:1068`), `absen
    crates.io 403 policy. This is the C011 gap exactly
    (`plans/registry.md:95-103`).
 2. **`env!("CARGO_PKG_VERSION")`.** `current_version` returns whatever the test
-   declares (`:1095-1097`), so a test can claim to be any version without the
-   binary being that version — the no-downgrade tests depend on this (`:1890`).
-3. **argv.** The candidate stub at `:1183` printed the identity for *any*
+   declares (`:1225`), so a test can claim to be any version without the
+   binary being that version — the no-downgrade tests depend on this (`:2554`).
+3. **argv.** The candidate stub at `:1459` printed the identity for *any*
    invocation, which is precisely why C016 survived. I verified that from the
    comments at `:966-971` and `:1916-1921`; I did not read `:1183-1215` line by
    line.

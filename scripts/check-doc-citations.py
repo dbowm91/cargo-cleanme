@@ -17,6 +17,13 @@ This check enforces the mechanically decidable half:
    enough apart.
 3. **A range is ordered** (`start <= end`). An inverted range is always a
    hand-editing error, never a real reference.
+4. **The `scripts/` inventory in the testing deep dive is exactly the scripts
+   that exist.** The canonical contract-checker table is the only inventory of
+   this repository's verification surfaces, and it has already drifted once
+   while still reading confidently: a 17th script shipped and the table
+   described 16. A prose table that is nobody's obligation stays true for as
+   long as nobody adds a row. This check makes the set mechanically equal in
+   both directions, plus unique, so the next script cannot be added quietly.
 
 What this deliberately does **not** check, because it cannot be decided
 statically without false positives:
@@ -27,10 +34,20 @@ statically without false positives:
   precedent for recording when such a check was misdesigned.
 - prose that cites a file by bare name (`cleanup.rs` with no line), or the
   `dua-core` / `filesize` upstream sources, which are not vendored here.
+- **which workflow invokes a script.** That is the other half of the inventory
+  and it is natural language. Automating it means parsing English for
+  "wired into", which is exactly the brittle-parser trap: it would encode one
+  reviewer's phrasing as a release contract and then fail on a correct
+  reword. Set parity is the mechanical floor; wiring semantics stay a
+  reviewer's job, and the table is written so a reviewer can check them.
 
-Rules 1 and 2 are what turn "the doc is probably fine" into a gate. Both are
+Rules 1, 2 and 4 are what turn "the doc is probably fine" into a gate. All are
 self-tested in `--self-test` mode against built-in samples in the failing
-direction: a guard that cannot fail on bad input is worse than no guard.
+direction: a guard that cannot fail on bad input is worse than no guard. The
+inventory self-tests additionally assert that each mutation **actually changed
+the subject**, because a guard whose mutation silently became a no-op reports
+"rejected" for a tree containing no defect at all — the failure this repository
+has already hit once.
 
 Usage:
     python3 scripts/check-doc-citations.py
@@ -45,6 +62,20 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+
+# The one document holding the canonical contract-checker inventory, and the
+# heading its §5 table lives under.
+INVENTORY_DOC = "architecture/14-testing-and-verification.md"
+INVENTORY_HEADING = "## 5. The contract checkers"
+
+# The only file types the inventory claims to cover.
+INVENTORY_SUFFIXES = (".py", ".sh")
+
+# A table row, and the first `` `name.py` `` / `` `name.sh` `` inside it.
+# Only leading-`|` lines are considered, so a script named in the prose notes
+# below the table is not mistaken for an inventory row.
+ROW = re.compile(r"^\s*\|")
+CELL_SCRIPT = re.compile(r"`(?P<name>[A-Za-z0-9._-]+\.(?:py|sh))`")
 
 # `main.rs:302`, `src/main.rs:302-308`, `cli_contract.rs:680`.
 # The leading `src/` or `tests/` is optional; a bare `foo.rs` resolves against
@@ -139,17 +170,95 @@ def check_text(
     return problems
 
 
-def check_file(path: Path, index: dict[str, Path], counts: dict[str, int]) -> list[str]:
-    return check_text(
-        path.read_text(encoding="utf-8", errors="replace"),
-        path.relative_to(REPO).as_posix(),
-        index,
-        counts,
+def default_docs() -> list[Path]:
+    return sorted((REPO / "architecture").glob("*.md"))
+
+
+# ------------------------------------------------------------ script inventory
+
+
+def disk_scripts() -> list[str]:
+    """Every regular `*.py` / `*.sh` directly under `scripts/`."""
+    directory = REPO / "scripts"
+    if not directory.is_dir():
+        return []
+    return sorted(
+        path.name
+        for path in directory.iterdir()
+        if path.is_file() and path.suffix in INVENTORY_SUFFIXES
     )
 
 
-def default_docs() -> list[Path]:
-    return sorted((REPO / "architecture").glob("*.md"))
+def inventory_section(text: str) -> str:
+    """The body of the §5 contract-checker section, heading excluded."""
+    lines = text.splitlines()
+    start = None
+    for number, line in enumerate(lines):
+        if line.strip() == INVENTORY_HEADING:
+            start = number + 1
+            break
+    if start is None:
+        return ""
+    body = []
+    for line in lines[start:]:
+        if line.startswith("## "):
+            break
+        body.append(line)
+    return "\n".join(body)
+
+
+def table_scripts(text: str) -> list[str]:
+    """Script basenames named by rows of the canonical §5 inventory table.
+
+    Order is preserved and duplicates are kept: this is what lets the caller
+    distinguish "listed twice" from "listed once". A table with no rows at all
+    yields an empty list, which then fails set parity against a non-empty
+    `scripts/` — a deleted table cannot pass silently.
+    """
+    found: list[str] = []
+    for line in inventory_section(text).splitlines():
+        if not ROW.match(line):
+            continue
+        match = CELL_SCRIPT.search(line)
+        if match:
+            found.append(match.group("name"))
+    return found
+
+
+def check_inventory(disk: list[str], table: list[str], where: str) -> list[str]:
+    """Exact set parity plus uniqueness between `scripts/` and the §5 table."""
+    problems: list[str] = []
+    seen: set[str] = set()
+    for name in table:
+        if name in seen:
+            problems.append(
+                f"{where}: `{name}` is listed more than once in the "
+                f"{INVENTORY_HEADING} inventory"
+            )
+        seen.add(name)
+
+    on_disk = set(disk)
+    in_table = set(table)
+    for name in sorted(on_disk - in_table):
+        problems.append(
+            f"{where}: `scripts/{name}` exists but is absent from the "
+            f"{INVENTORY_HEADING} inventory"
+        )
+    for name in sorted(in_table - on_disk):
+        problems.append(
+            f"{where}: the {INVENTORY_HEADING} inventory lists `{name}`, which "
+            f"does not exist in `scripts/`"
+        )
+    return problems
+
+
+def check_file(path: Path, index: dict[str, Path], counts: dict[str, int]) -> list[str]:
+    relative = path.relative_to(REPO).as_posix()
+    text = path.read_text(encoding="utf-8", errors="replace")
+    problems = check_text(text, relative, index, counts)
+    if relative == INVENTORY_DOC:
+        problems.extend(check_inventory(disk_scripts(), table_scripts(text), relative))
+    return problems
 
 
 def self_test(index: dict[str, Path], counts: dict[str, int]) -> int:
@@ -180,6 +289,8 @@ def self_test(index: dict[str, Path], counts: dict[str, int]) -> int:
     expect("explicit dir prefix", "see `src/traverse.rs:29`.", False)
     expect("no extension", "see docs/RELEASING.md:10.", False)
 
+    failures.extend(inventory_self_test())
+
     if failures:
         print("check-doc-citations: self test FAILED", file=sys.stderr)
         for failure in failures:
@@ -190,6 +301,87 @@ def self_test(index: dict[str, Path], counts: dict[str, int]) -> int:
         "directions"
     )
     return 0
+
+
+def inventory_self_test() -> list[str]:
+    """Every inventory rule must fire on bad input and stay quiet on good input.
+
+    Each negative also asserts that its mutation **changed the subject**. A
+    mutation that silently becomes a no-op makes the guard report "rejected"
+    for a tree containing no defect, which is the specific way this repository
+    has been misled before: a self-test case that can no longer alter what it
+    inspects is not a test.
+    """
+    failures: list[str] = []
+    disk = ["alpha.py", "beta.sh", "gamma.py"]
+
+    def rows(*names: str) -> str:
+        return "\n".join(f"| `{name}` | enforces | fails when | wired into |" for name in names)
+
+    def sample(body: str) -> str:
+        return f"# Title\n\npreamble\n\n{INVENTORY_HEADING}\n\n{body}\n\n## 6. Next\n\nafter\n"
+
+    control_table = rows(*disk)
+    control = sample(control_table)
+
+    # The extraction path itself, so a broken section parser cannot pass by
+    # returning an empty list that happens to match an empty disk.
+    extracted = table_scripts(control)
+    if extracted != disk:
+        failures.append(
+            f"inventory control: expected the table to yield {disk}, got {extracted}"
+        )
+    if inventory_section(control).find("## 6. Next") != -1:
+        failures.append("inventory control: the section body must stop at the next heading")
+    if table_scripts(sample("")) != []:
+        failures.append("inventory control: an empty table must yield no rows")
+
+    def expect(label: str, text: str, should_fail: bool) -> None:
+        got = check_inventory(disk, table_scripts(text), "sample.md")
+        if should_fail and not got:
+            failures.append(f"{label}: expected a failure, got none")
+        elif not should_fail and got:
+            failures.append(f"{label}: expected clean, got {got}")
+
+    # Unchanged exact inventory: the only passing case.
+    expect("exact inventory", control, False)
+
+    # A script on disk with no row. This is the exact defect the guard exists
+    # for: the 17th script shipped and the 16-row table kept reading true.
+    missing = sample(rows(*disk[:2]))
+    if table_scripts(missing) == disk:
+        failures.append("disk-only: the mutation did not change the subject")
+    expect("disk script absent from table", missing, True)
+
+    # A row for a script that no longer exists.
+    stale = sample(rows(*disk, "retired.py"))
+    if table_scripts(stale) == disk:
+        failures.append("table-only: the mutation did not change the subject")
+    expect("stale table-only script", stale, True)
+
+    # The same script listed twice.
+    duplicate = sample(rows(*disk, "alpha.py"))
+    if table_scripts(duplicate) == disk:
+        failures.append("duplicate: the mutation did not change the subject")
+    expect("duplicate script row", duplicate, True)
+
+    # The whole table deleted: must not pass as vacuously clean.
+    expect("no table at all", sample("there is no table here"), True)
+
+    # A script named in the prose notes below the table is not an inventory
+    # row. This case stays clean *because* the extractor ignores it: if the
+    # extractor were loosened to scan every backticked name, the phantom entry
+    # would be read as a stale row and this would fail.
+    prose_only = sample(
+        control_table
+        + "\nThree notes:\n\n"
+        + "1. A later script `mentioned-in-prose.py` is described here.\n"
+    )
+    if "mentioned-in-prose.py" in table_scripts(prose_only):
+        failures.append("prose: a backticked name outside a table row leaked in")
+    expect("prose mention is not a row", prose_only, False)
+
+    return failures
 
 
 def main() -> int:

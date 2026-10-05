@@ -115,6 +115,46 @@ command-line, JSON, and release-asset contracts are the stable surface.
   authorization, activity, marker, and final cleanup proof are untouched, and an
   explicit scan root still bypasses `ignore`/`unignore` entirely.
 
+- **`cargo cleanme update` could replace a binary that Cargo owns, because an
+  unreadable Cargo record read as "no record".** The updater asked its Cargo-home
+  bookkeeping for the installed version and got back `None`, which meant four
+  different things at once: no record, unreadable record, malformed record, and a
+  good record that simply does not mention this package. It could not tell "Cargo
+  says nothing here" from "I could not read what Cargo would have said" — so a
+  record that failed to parse fell through to hashing the binary, and the
+  installation was classified **self-managed**, which is the classification that
+  authorizes replacement. `cargo install --list` and uninstall bookkeeping were
+  then left describing a version the file no longer had.
+
+  A state that means *I could not find out* is never read as a state that means
+  *there is nothing there*. Unreadable, malformed, unsupported, and
+  non-UTF-8 evidence is now reported as **uncertain** and refuses the update,
+  naming the reason. A mutating run on forbidden provenance now refuses **before**
+  any registry request is made, so a refused update contacts crates.io zero times.
+  Positive self-managed evidence — exact SHA-256 of the current bytes, revalidated
+  under Eggup's mutation lock immediately before replacement — is unchanged.
+
+  **0.1.6 and earlier are affected**; C017 is the same defect reached by a
+  different route (a `.crates.toml` schema no current Cargo writes), disclosed
+  there and in `docs/TROUBLESHOOTING.md`. If your binary was replaced
+  unexpectedly, reinstall it with `cargo install cargo-cleanme --locked`.
+
+- **Concurrent first use could fail on Windows with "Access is denied."** On the
+  first run that creates `config.toml`, the file is staged under a temporary name
+  and published with a single hard link, so exactly one racer should win. The
+  retry logic tolerated exactly one spelling of "somebody already has that name":
+  `AlreadyExists`. POSIX always reports that. **Windows reports `PermissionDenied`
+  for a file another thread is still creating** — the name is reserved before its
+  metadata is committed — so the losing threads never advanced to their next
+  attempt and the first run returned a hard error. One racer failing is enough to
+  fail the caller, so `scan` could exit non-zero because an editor, a shell
+  prompt, and a CI step reached the config at the same instant.
+
+  The staging name is now unique **within the process**, so the collision is
+  removed rather than tolerated: production code no longer has to treat an
+  ambiguous `PermissionDenied` as "try again". Every racer succeeds and the
+  published bytes are one complete template.
+
 ## [0.1.6] - 2026-10-05
 
 This release changes no product behavior. It exists so that the fix shipped in
