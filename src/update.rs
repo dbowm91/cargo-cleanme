@@ -883,8 +883,18 @@ fn execute(
         // The candidate must identify itself as exactly the version the
         // registry named. This runs the acquired bytes, so it is the only
         // check that the thing about to replace this process is really us.
+        //
+        // `--version` is not optional. With no arguments the binary runs its
+        // default routine scan, which prints a scan report to stdout and
+        // filesystem diagnostics to stderr -- so an argv-less check compares
+        // stdout against a version string that can never match, and it scans
+        // the whole machine on the way to failing. This is C016: the live
+        // commit path had never succeeded, and the fixture could not see it
+        // because its candidate stub ignored argv and printed the identity
+        // for any invocation.
         let validator =
-            ExactIdentityValidator::new(member_id.clone(), expected_identity(&plan.to_version));
+            ExactIdentityValidator::new(member_id.clone(), expected_identity(&plan.to_version))
+                .args(["--version"]);
         let validated =
             verified
                 .validate(&validator)
@@ -1082,12 +1092,35 @@ mod tests {
     }
 
     /// A candidate executable that prints the identity a real release would.
+    ///
+    /// It answers **only** for `--version`, and refuses anything else on
+    /// stderr, exactly as the real binary does: `cargo-cleanme` with no
+    /// arguments performs a routine scan and writes a report to stdout.
+    ///
+    /// The earlier version of this stub printed the identity unconditionally,
+    /// ignoring argv. That made it blind to C016: production invoked the
+    /// candidate with no arguments, the real binary produced a scan report
+    /// instead of an identity, and every commit-path test stayed green because
+    /// the stub could not distinguish the two invocations. A fixture that
+    /// accepts any input cannot detect an input that was never supplied.
     fn candidate_bytes(version: &str) -> Vec<u8> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let path = unique(&format!("cargo-cleanme-candidate-{version}"));
-            std::fs::write(&path, format!("#!/bin/sh\necho '{PRODUCT} {version}'\n")).unwrap();
+            std::fs::write(
+                &path,
+                format!(
+                    "#!/bin/sh\n\
+                     if [ \"$1\" = \"--version\" ]; then\n\
+                     \x20 printf '{PRODUCT} {version}\\n'\n\
+                     \x20 exit 0\n\
+                     fi\n\
+                     printf 'fixture candidate: unexpected argv\\n' >&2\n\
+                     exit 2\n"
+                ),
+            )
+            .unwrap();
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
             let bytes = std::fs::read(&path).unwrap();
             let _ = std::fs::remove_file(&path);

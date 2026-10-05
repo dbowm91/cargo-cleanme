@@ -237,11 +237,20 @@ def self_test() -> int:
         check_identity(f"v0.0.{int(source_version.split('.')[-1]) + 7}"),
         True,
     )
+    # A version-derived tag that cannot exist, rather than "the tag we have not
+    # created yet". Once v0.1.2 was tagged, a case phrased as "v{source_version}
+    # does not exist yet" silently became a case asserting the opposite, which
+    # is the same ambient-state dependence this self test was just corrected
+    # for. The patch component is pushed far past anything real.
+    major, minor, patch = (int(part) for part in source_version.split("."))
+    impossible = f"v{major}.{minor}.{patch + 4000}"
     expect(
-        "a correctly versioned tag that does not exist yet is still rejected",
-        check_identity(good_tag),
+        f"a correctly versioned tag that cannot exist is rejected ({impossible})",
+        check_identity(impossible),
         True,
     )
+    if check_identity(good_tag) and git("rev-parse", "--verify", f"refs/tags/{good_tag}^{{commit}}").returncode == 0:
+        print(f"  ok   the real tag {good_tag} is accepted for this revision")
 
     # The manifest binding is checked against a real staged manifest, because
     # its field names are the contract and asserting against a made-up document

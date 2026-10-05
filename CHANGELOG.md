@@ -6,6 +6,34 @@ All notable changes to cargo-cleanme are documented here. The format follows
 stance: the `0.x` line may make breaking changes in any release, and the
 command-line, JSON, and release-asset contracts are the stable surface.
 
+## [Unreleased]
+
+### Fixed
+
+- **`cargo cleanme update` could never complete a real commit.** The identity
+  check ran the downloaded candidate with no arguments, so it compared the
+  binary's default routine-scan report against a version string that can never
+  match. The check therefore always failed — and, before failing, performed a
+  filesystem scan of the whole machine. The transaction aborted safely every
+  time: the live binary was left untouched and the error named the reason, so
+  nothing was ever corrupted. But the feature had never worked in any published
+  version, including `0.1.2`.
+
+  Fixed by invoking the candidate with `--version`, which is bounded and
+  produces exactly the identity the validator requires.
+
+  The commit-path test fixture could not detect this, and the reason is worth
+  recording: its candidate stub printed the identity for *any* invocation, so it
+  could not tell a correct `--version` call from the argv-less one production
+  actually made. The stub now answers only for `--version` and writes to stderr
+  otherwise, exactly as the real binary does, so dropping the argument again
+  turns the commit-path tests red. A fixture that accepts every input asserts
+  nothing about the input.
+
+  Tracked as C016. The live rehearsal that proves the fix requires a published
+  release carrying it; see §8 of that plan for why a `0.1.2` -> `0.1.3`
+  rehearsal is expected to fail by design.
+
 ## [0.1.2] - 2026-10-04
 
 This is a deliberately small qualification release. It changes no product

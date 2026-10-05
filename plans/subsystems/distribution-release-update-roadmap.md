@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: Phase 10 remains **closed**, with a post-release corrective line in progress. C013 cross-platform fixture-premise audit is **closed**; its sweep registered C015 for a product defect it found. C014 v0.1.2 live-update/release-reproducibility corrective is **ready** and now owns v0.1.2 publication. C015 is a separate product corrective that does not gate publication. C010 remains an upstream request (`proposed`) that nothing here waits on.
+Status: Phase 10 remains **closed**, with a post-release corrective line in progress. C013 cross-platform fixture-premise audit is **closed**; its sweep registered C015. C014 **published v0.1.2** and met every reproducibility requirement, but its live self-update rehearsal failed, so it stays **open** and handed **C016** the defect. C015 and C016 are the two production defects this line found. C010 remains an upstream request (`proposed`) that nothing here waits on.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 
@@ -193,11 +193,16 @@ corrective **C011** rather than smoothed over: the `v0.1.0` updater could not
 read the version authority at all. See
 `plans/closure/distribution-release-update/c011-status.md`.
 
-One requirement was closed partial: the live updater **commit** path has no
-end-to-end rehearsal, because `v0.1.1` is both the newest published version and
-the first containing a working updater. That gap is now explicitly owned by
-post-release corrective C014, whose publication precondition (C013) is now
-satisfied.
+One requirement was closed partial: the live updater **commit** path had no
+end-to-end rehearsal, because `v0.1.1` was both the newest published version and
+the first containing a working updater.
+
+That gap is now closed as *evidence*, and the rehearsal it produced is why the
+commit path is not closed as *behavior*. C014 published v0.1.2 and then ran the
+real `v0.1.1` -> `v0.1.2` commit rehearsal, which failed: the identity check ran
+the downloaded candidate with no arguments, so its output could never equal a
+version string, and before failing it scanned the user's whole filesystem. The
+defect is C016.
 
 Primary outcomes:
 
@@ -240,9 +245,9 @@ by C013's own failure semantics became a separate corrective — see §8C.
 
 Plan: `plans/implementation/distribution-release-update/c014-v0.1.2-live-update-and-release-reproducibility-corrective.md`
 
-Status: **ready**. C013 is closed, so publication is authorized.
+Status: **open**. Publication is complete; the live rehearsal is not.
 
-C014 uses v0.1.2 as a deliberately small qualification release. It closes M010D's partial live-updater evidence and the two release-process weaknesses recorded during v0.1.1 publication.
+C014 used v0.1.2 as a deliberately small qualification release. It closes M010D's partial live-updater evidence and the two release-process weaknesses recorded during v0.1.1 publication.
 
 Required outcomes:
 
@@ -255,6 +260,12 @@ Required outcomes:
 - make the live smoke repeatable on the supported release platform matrix to the extent claimed.
 
 A failure after immutable publication must be handled by yanking/annotating and a new corrective/version, never by replacing v0.1.2 bytes.
+
+This is the case C014's own rehearsal produced. `v0.1.1` and `v0.1.2` are
+immutable and both ship an updater that cannot complete a commit, so the fix
+ships as `v0.1.3` under C016. Neither release is yanked: the transaction aborts
+safely and loudly without mutating the live binary, so yanking would
+misdescribe a release that is otherwise safe to install.
 
 ## 8C. C015 — Relative scan root Cargo resolution
 
@@ -277,6 +288,35 @@ the machine-readable channel.
 C015 does not block v0.1.2 publication for that reason. It is the one production
 defect the post-release corrective line has produced, and it is tracked as a
 product corrective rather than folded into test-evidence work.
+
+## 8D. C016 — Live self-update identity invocation
+
+Plan: `plans/implementation/distribution-release-update/c016-live-self-update-identity-invocation-corrective.md`
+
+Status: ready. Discovered by C014's live rehearsal.
+
+`cargo cleanme update` has never completed a commit in any published version.
+Eggup's `ExactIdentityValidator` executes the staged candidate with no arguments
+and requires its stdout to be exactly `cargo-cleanme <version>\n` with empty
+stderr. With no arguments the candidate performs its default routine scan, so
+the comparison could never match — and the identity check performed a filesystem
+scan of the whole machine before failing.
+
+The transaction aborted safely every time: the live binary was untouched, the
+error named the reason, and nothing was corrupted. Severity is high because a
+shipped, documented feature does not work at all, and not critical because
+nothing is damaged and the failure is loud.
+
+The fixture could not see it, and the reason generalises: the commit-path
+candidate stub printed the identity for *any* invocation, so it could not
+distinguish a correct `--version` call from the argv-less one production made.
+The stub now answers only for `--version` and writes to stderr otherwise, so
+dropping the argument turns the commit-path tests red. A fixture that accepts
+every input asserts nothing about the input.
+
+The fix is applied and gated locally. Closing C016 requires a published release
+carrying it: a `v0.1.2` -> `v0.1.3` rehearsal is expected to fail by design,
+because the installing binary is the broken published 0.1.2.
 
 ## 9. Verification strategy
 
