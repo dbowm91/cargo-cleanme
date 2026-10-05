@@ -183,6 +183,9 @@ Run `37347758658` at `4e2e3f6` (the nonce fix) — all nine lanes green. Run
 `37347945989` at `fcc9eee` (the documentation rewrite; identical code) — all
 nine lanes green.
 
+Merged to `main` as `3594f8d`, where `CI` (`37351204472`) and the release drift
+guard (`37351204472`'s sibling `37351204418`) are both green.
+
 | Lane | Result |
 |---|---|
 | `checks (ubuntu-latest)` | success |
