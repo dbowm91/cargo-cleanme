@@ -1,6 +1,6 @@
 # Artifact Discovery and Cleanup Roadmap
 
-Status: Phase 9 remains closed for feature objectives. Phase 11 evidence hardening is active with M011D Cargo selector qualification lifecycle **ready**; it does not broaden selector capability. Distribution/release hardening remains owned by `plans/subsystems/distribution-release-update-roadmap.md`.
+Status: Phase 9 remains closed for feature objectives. Phase 11 hardening has C019 exact-unignore sibling containment **ready** as the immediate corrective; M011D Cargo selector qualification lifecycle remains **ready** in parallel and does not broaden selector capability. Distribution/release hardening remains owned by `plans/subsystems/distribution-release-update-roadmap.md`.
 
 Repository audit baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 
@@ -595,6 +595,55 @@ policy, or the currently enabled version set merely to make qualification pass.
 A semantic change in an already-supported Cargo release triggers a separate
 capability/corrective plan.
 
+## 10G. C019 — Exact unignore sibling-containment corrective
+
+Status: **ready**.
+
+Plan:
+
+- `plans/implementation/artifact-discovery-cleanup/c019-exact-unignore-sibling-containment-corrective.md`
+
+Corrects:
+
+- M002 plan: `plans/implementation/artifact-discovery-cleanup/002-fast-project-discovery-and-scope-filters.md`
+- M002 closure: `plans/closure/artifact-discovery-cleanup/002-status.md`
+
+Finding:
+
+M002 specified exact unignore paths, ancestry-preserving exception traversal,
+and ignored-sibling pruning. Its surviving regression fixture uses
+`archive/*`, so the sibling directly matches the ignore glob and is pruned.
+That fixture never covered a **literal ignored ancestor** such as
+`ignore = ["/archive"]` with
+`unignore = ["/archive/keep"]`.
+
+On 0.1.6 the exception keeps `/archive` traversable, but the stateless child
+test forgets inherited exclusion. `/archive/other` therefore becomes visible
+even though it is not the exception. This violates the canonical exact
+re-inclusion contract.
+
+Required correction:
+
+- carry enough filter state to distinguish ignored/prunable,
+  ignored-pass-through-to-exception, and exact re-included subtree;
+- traverse an ignored ancestor only along ancestry required to reach exact
+  exception paths;
+- retain exclusion for unrelated siblings;
+- preserve the existing `/*` and `/**` configurations and exact re-included
+  subtree behavior;
+- preserve explicit-root filter bypass and every internal safety prune;
+- keep user-ignore prune counters truthful;
+- add a premise-negative literal-ancestor fixture that fails on the old code;
+- update the 0.1.6 workaround documentation after corrected behavior ships.
+
+C019 changes discovery scope only by making it narrower where the existing
+contract already required narrowing. It does not alter cleanup ownership,
+authorization, activity, markers, selectors, or final-proof semantics.
+
+The current planning baseline also has unrelated README/release-contract CI
+drift from the documentation split. That does not block implementation design,
+but C019 cannot close on an already-red hosted baseline.
+
 ## 11. Cross-cutting reliability concerns
 
 ### Races
@@ -655,4 +704,4 @@ The implementation should specifically verify:
 
 ## 14. Completion definition
 
-The initial read-only boundary was reached when M001-M003 closed with evidence that cargo-cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004-M007 and C001-C007 establish Cargo-mediated cleanup, complete ownership/freshness proof, adaptive discovery, and combined-root orchestration while scans remain read-only. Phase 9 remains closed for current objectives: M008A/B policy and reporting, profile support from M008C, and package support from M008D. Profile support is limited to exact qualified releases 1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0, 1.98.1, and 1.99.0; package support is limited to exact Cargo 1.98.1 and 1.99.0. Selector estimates remain unknown and unqualified Cargo versions fail closed. M011D is the current evidence-hardening handoff and must prove/guard that exact support matrix without widening it. Distribution/release Phase 11 work is tracked by `plans/subsystems/distribution-release-update-roadmap.md`.
+The initial read-only boundary was reached when M001-M003 closed with evidence that cargo-cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004-M007 and C001-C007 establish Cargo-mediated cleanup, complete ownership/freshness proof, adaptive discovery, and combined-root orchestration while scans remain read-only. Phase 9 remains closed for current objectives: M008A/B policy and reporting, profile support from M008C, and package support from M008D. Profile support is limited to exact qualified releases 1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0, 1.98.1, and 1.99.0; package support is limited to exact Cargo 1.98.1 and 1.99.0. Selector estimates remain unknown and unqualified Cargo versions fail closed. C019 is the immediate discovery-correctness handoff and restores M002 exact-unignore sibling containment without changing the destructive safety boundary. M011D remains the selector evidence-hardening handoff and may proceed independently. Distribution/release Phase 11 work is tracked by `plans/subsystems/distribution-release-update-roadmap.md`.
