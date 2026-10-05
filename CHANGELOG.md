@@ -6,6 +6,57 @@ All notable changes to cargo-cleanme are documented here. The format follows
 stance: the `0.x` line may make breaking changes in any release, and the
 command-line, JSON, and release-asset contracts are the stable surface.
 
+## [0.1.5] - 2026-10-05
+
+This release fixes the only defect in the 0.1.x line that could **change a file
+it did not own**.
+
+### Fixed
+
+- **`cargo cleanme update` could replace a binary that Cargo owns.** A binary
+  installed with `cargo install --root DIR` — the form every hermetic install
+  script, CI job, and container image uses — was not recognised as
+  Cargo-managed, because detection only ever looked at `$CARGO_HOME/bin`. The
+  binary was therefore treated as a self-managed installation and **overwritten
+  in place**, with no warning and exit status `0`. Afterwards `cargo install
+  --list` reported the old version for a file that no longer had it, so
+  `cargo upgrade` and `cargo uninstall` could no longer do their jobs.
+
+  Reproduced against published v0.1.3:
+
+  ```sh
+  cargo install cargo-cleanme --version 0.1.3 --locked --root /tmp/root
+  /tmp/root/bin/cargo-cleanme update --no-progress
+  # cargo-cleanme: updated to 0.1.4      (exit 0; the file is now the release asset)
+  # /tmp/root/.crates.toml still records 0.1.3
+  ```
+
+  `cargo cleanme update` on such an installation now refuses, leaves the bytes
+  untouched, and prints the command that is actually correct:
+
+  ```sh
+  cargo install cargo-cleanme --locked --force
+  ```
+
+- **Cargo-managed installations were refused for the wrong reason.** The
+  `.crates.toml` parser read a `[packages.<name>].vers` schema that no current
+  cargo emits; cargo writes a flat `[v1]` table keyed by the full spec string. The
+  parse therefore always failed, and a genuinely Cargo-managed binary was told to
+  "reinstall with the published installer" — the exact provenance confusion this
+  check exists to prevent.
+
+  In this release a current Cargo-managed binary that is already up to date still
+  reports "already at the latest stable version" instead of a refusal. Nothing is
+  downloaded or written in that case, so it is safe; it is noted rather than
+  changed.
+
+### Known issue in earlier releases
+
+v0.1.0 through v0.1.4 all carry both defects above. A Cargo-managed installation
+on those versions can be silently replaced by `cargo cleanme update`. Upgrading
+to 0.1.5 fixes it; `cargo install cargo-cleanme --locked` is the safe way to
+move, since that route never overwrites a file it does not own.
+
 ## [0.1.4] - 2026-10-05
 
 This release changes no product behavior. It exists so that the self-update
