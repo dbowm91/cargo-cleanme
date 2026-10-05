@@ -1,6 +1,9 @@
 # Artifact Discovery and Cleanup Roadmap
 
-Status: Phase 9 remains closed for feature objectives. Phase 11's two threads are both **closed**: C019 exact-unignore sibling containment (`plans/closure/artifact-discovery-cleanup/c019-status.md`) and M011D Cargo selector qualification lifecycle (`plans/closure/artifact-discovery-cleanup/m011d-status.md`, addendum: the hosted gate had never run and was fixed). Neither broadened selector capability or the destructive safety boundary. C019's correction is **unreleased** — 0.1.6 and earlier keep the over-broad unignore behavior. Distribution/release hardening remains owned by `plans/subsystems/distribution-release-update-roadmap.md`.
+Status: **C020 is the current handoff** — a Windows-only race in
+`config::create_initial`, found in C019's hosted evidence, not a scope or policy
+question. Phase 9 remains closed for feature objectives. Phase 11's two threads
+are both **closed**: C019 exact-unignore sibling containment (`plans/closure/artifact-discovery-cleanup/c019-status.md`) and M011D Cargo selector qualification lifecycle (`plans/closure/artifact-discovery-cleanup/m011d-status.md`, addendum: the hosted gate had never run and was fixed). Neither broadened selector capability or the destructive safety boundary. C019's correction is **unreleased** — 0.1.6 and earlier keep the over-broad unignore behavior. Distribution/release hardening remains owned by `plans/subsystems/distribution-release-update-roadmap.md`.
 
 Repository audit baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 
