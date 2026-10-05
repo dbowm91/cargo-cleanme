@@ -271,7 +271,8 @@ misdescribe a release that is otherwise safe to install.
 
 Plan: `plans/implementation/distribution-release-update/c015-relative-scan-root-cargo-resolution-corrective.md`
 
-Status: ready. Discovered by C013.
+Status: **closed**. Implementation `1316e81`; closure record
+`plans/closure/distribution-release-update/c015-status.md`. Discovered by C013.
 
 An explicitly relative scan root — `cargo-cleanme scan fixture` — silently
 resolves **zero** Cargo workspaces. Discovery preserves the caller's spelling, and
@@ -285,9 +286,19 @@ Severity is medium. The failure direction is fail-safe: a degraded scan reports
 read "nothing to clean" as a false all-clear, and the difference is invisible in
 the machine-readable channel.
 
-C015 does not block v0.1.2 publication for that reason. It is the one production
-defect the post-release corrective line has produced, and it is tracked as a
-product corrective rather than folded into test-evidence work.
+C015 did not block v0.1.2 publication for that reason. It is **closed**: the
+manifest path is anchored for Cargo lexically against the process working
+directory, the two spellings now produce identical counters, groups, and bytes,
+and both required tests fail against the unfixed code. It ships in v0.1.3, so
+the 0.1.2 release-note instruction to use an absolute scan root becomes
+unnecessary from 0.1.3 onward.
+
+Both C015 tests had to be written twice before they proved anything: the first
+relative spelling used `..` components, which compose back to the right file and
+so hide the defect, and the first real-Cargo case gated on the cargo *patch*
+component, so `1.99.0` read as patch 0 and the case skipped into a pass. A test
+that skips into a pass is the same false green as a fixture that accepts any
+input.
 
 ## 8D. C016 — Live self-update identity invocation
 
