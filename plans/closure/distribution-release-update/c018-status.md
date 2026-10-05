@@ -266,3 +266,46 @@ first thing to be checked when the next release is staged.
 **Downstream effect:** M011A's immutability work makes the next release
 irreplaceable, which raises rather than lowers the value of this fix shipping in
 it. No plan was blocked on C018.
+
+## Addendum (2026-10-05, after the first hosted macOS run of C018's work)
+
+**One of the eleven tests this record counts never ran on macOS, and reported a
+product failure for a premise the product never touched.**
+
+`a_non_utf8_executable_name_in_a_cargo_root_is_unprovable` is gated
+`#[cfg(unix)]`. Its premise is that a file name which is not valid UTF-8 can
+exist on disk. APFS rejects such a name, so the test failed on
+`macos-latest` at `std::fs::write(&live, live_stub())` — before
+`classify_provenance_in` was called and before any assertion about provenance
+ran. The hosted log is unambiguous:
+
+```text
+thread 'update::tests::a_non_utf8_executable_name_in_a_cargo_root_is_unprovable'
+  panicked at src/update.rs:1859:48:
+test result: FAILED. 263 passed; 1 failed
+```
+
+`#[cfg(unix)]` was the wrong gate, and it was wrong in a way that looked right:
+the fixture *is* POSIX-shaped in every other respect, and `discovery.rs` has the
+identical fixture correctly narrowed to `#[cfg(target_os = "linux")]` with a
+comment saying APFS and NTFS reject raw-byte names. The convention existed in
+this repository; this test did not follow it.
+
+The gate is now `#[cfg(target_os = "linux")]`. No production code changed, no
+assertion was weakened, and the test still runs on the lane that can support its
+premise.
+
+This defect was found while closing C019, whose own plan makes a green hosted
+baseline a closure precondition. It is recorded here rather than folded into
+C019 because the test and the evidence are C018's.
+
+**Why nothing caught it.** `check-fixture-portability.py` exists to catch
+exactly this — a fixture whose premise does not hold on a lane — and it did not,
+because it only knew about literal path separators and POSIX shebangs. It now has
+a third rule, verified in both directions by four self-test cases: a function
+that builds a raw-byte name **and writes it** must be gated to Linux rather than
+to `unix`. The rule requires a filesystem write in the same function on purpose —
+`report.rs::report_escapes_non_utf8_paths` builds a raw-byte `PathBuf` in memory
+and formats it, which is portable, and the first version of the rule flagged it
+as a false positive. The rule fires on the reverted `update.rs` gate and stays
+quiet on the fixed tree, which is the only evidence that matters.

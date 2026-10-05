@@ -1849,7 +1849,13 @@ mod tests {
         // `.crates.toml` values are UTF-8, so a non-UTF-8 file name can never
         // be claimed by a record. The baseline turned it into `""` and then
         // read the resulting non-match as "Cargo records nothing here".
-        #[cfg(unix)]
+        //
+        // Linux only, and narrower than `#[cfg(unix)]`: the premise is that a
+        // raw-byte file name can exist on disk at all. APFS rejects one, so
+        // this test failed on macOS at the `write` below — a fixture whose
+        // premise does not hold on the lane, not a product failure. This is the
+        // same narrowing `discovery.rs` applies to its own non-UTF-8 fixture.
+        #[cfg(target_os = "linux")]
         {
             use std::os::unix::ffi::OsStrExt;
             let dir = tempfile::tempdir().unwrap();

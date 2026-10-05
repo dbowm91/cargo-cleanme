@@ -202,12 +202,104 @@ def rule_unjustified_shebang_fixture(path: Path, lines: list[str]) -> list[str]:
     return problems
 
 
+RAW_BYTE_MARKERS = ("from_bytes(", "from_vec(")
+
+# A filesystem write is what makes the premise real. Constructing a raw-byte
+# `PathBuf` in memory and handing it to a formatter is portable: the name never
+# has to survive a filesystem.
+WRITE_MARKERS = (
+    "fs::write",
+    "std::fs::write",
+    "File::create",
+    "fs::create_dir",
+    "OpenOptions",
+    "fs::hard_link",
+    "fs::symlink",
+)
+
+
+def function_blocks(lines: list[str]) -> list[tuple[int, int]]:
+    """`(attribute_start, body_end)` for every `fn`, by brace matching.
+
+    Rust test bodies nest, so counting braces is the only reliable way to tell
+    that a write belongs to the same function as a raw-byte name.
+    """
+    blocks: list[tuple[int, int]] = []
+    for index, line in enumerate(lines):
+        match = re.search(r"\bfn\s+[A-Za-z0-9_]+", line)
+        if not match or not line.rstrip().endswith("{"):
+            continue
+        depth = 0
+        end = index
+        for cursor in range(index, len(lines)):
+            depth += lines[cursor].count("{") - lines[cursor].count("}")
+            if depth <= 0 and cursor > index:
+                end = cursor
+                break
+            if depth == 0 and cursor == index and "{" in lines[cursor] and "}" in lines[cursor]:
+                end = cursor
+                break
+        else:
+            end = len(lines) - 1
+        # The attribute block directly above `fn` is the gate.
+        start = index
+        while start > 0 and lines[start - 1].strip().startswith("#["):
+            start -= 1
+        blocks.append((start, end))
+    return blocks
+
+
+def rule_raw_byte_name_needs_linux(path: Path, lines: list[str]) -> list[str]:
+    """A raw-byte file name written to disk must be gated to Linux, not `unix`.
+
+    APFS and NTFS reject a name that is not valid UTF-8, so a test that writes
+    one fails on macOS and Windows *at the write*, before the behaviour under
+    test runs. That is the worst shape of lane disagreement: the lane reports a
+    product failure for a premise the product never touched.
+
+    This shipped in `update.rs`, where `#[cfg(unix)]` looked correct because the
+    fixture is genuinely POSIX-shaped in every other respect. Linux is the
+    honest gate: it is the filesystem family that can actually hold the name.
+
+    The rule deliberately requires a **write** in the same function. Building a
+    raw-byte `PathBuf` in memory and formatting it is portable, and
+    `report.rs::report_escapes_non_utf8_paths` is correctly `#[cfg(unix)]`
+    because nothing ever puts that name on disk.
+    """
+    problems: list[str] = []
+    for start, end in function_blocks(lines):
+        body = lines[start : end + 1]
+        raw = [i for i, line in enumerate(body) if any(m in line for m in RAW_BYTE_MARKERS)]
+        if not raw:
+            continue
+        if not any(any(m in line for m in WRITE_MARKERS) for line in body):
+            continue
+        # The gate can sit in the attribute block above `fn` or on an inner
+        # block, which is how `update.rs` writes it. Both are searched, because
+        # a rule that understands only one of them misses the real file — and a
+        # rule that misses the real file guards nothing.
+        head = " ".join(line for line in lines[start : start + 12] if "cfg(" in line)
+        if 'cfg(target_os = "linux")' in head:
+            continue
+        if not re.search(r"cfg\(unix\)", head):
+            continue
+        for offset in raw:
+            problems.append(
+                f"{start + offset + 1}: a raw-byte file name is written to disk here, which "
+                'only Linux can hold; gate the test with #[cfg(target_os = "linux")] instead '
+                f"of #[cfg(unix)] ({body[offset].strip()[:80]})"
+            )
+    return problems
+
+
 def check_lines(path: Path, lines: list[str]) -> list[str]:
     relative = path.relative_to(ROOT)
     problems = []
     for problem in rule_literal_path_separator(path, lines):
         problems.append(f"{relative}:{problem}")
     for problem in rule_unjustified_shebang_fixture(path, lines):
+        problems.append(f"{relative}:{problem}")
+    for problem in rule_raw_byte_name_needs_linux(path, lines):
         problems.append(f"{relative}:{problem}")
     return problems
 
@@ -237,6 +329,51 @@ def self_test() -> list[str]:
                 f"got {problems or 'none'}"
             )
 
+    case(
+        "a raw-byte name that never reaches the filesystem is accepted",
+        "target/fixture-portability-selftest/in_memory.rs",
+        "#[cfg(unix)]\n"
+        "#[test]\n"
+        "fn formats_a_raw_byte_path_without_writing_it() {\n"
+        "    use std::os::unix::ffi::OsStringExt;\n"
+        "    let p = std::path::PathBuf::from(std::ffi::OsString::from_vec(b\"/ws/bad-\\xff\".to_vec()));\n"
+        "    assert!(render(&p).contains(\"bad\"));\n"
+        "}\n",
+        False,
+    )
+    case(
+        "a raw-byte file name gated to unix instead of Linux is flagged",
+        "target/fixture-portability-selftest/bad_unix_gate.rs",
+        "#[test]\n"
+        "#[cfg(unix)]\n"
+        "fn writes_a_raw_byte_name() {\n"
+        "    use std::os::unix::ffi::OsStrExt;\n"
+        "    let name = std::ffi::OsStr::from_bytes(b\"weird-\\xff\");\n"
+        "    std::fs::write(name, b\"\").unwrap();\n"
+        "}\n",
+        True,
+    )
+    case(
+        "the same fixture gated to Linux is accepted",
+        "target/fixture-portability-selftest/good_linux_gate.rs",
+        "#[test]\n"
+        '#[cfg(target_os = "linux")]\n'
+        "fn writes_a_raw_byte_name() {\n"
+        "    use std::os::unix::ffi::OsStrExt;\n"
+        "    let name = std::ffi::OsStr::from_bytes(b\"weird-\\xff\");\n"
+        "    std::fs::write(name, b\"\").unwrap();\n"
+        "}\n",
+        False,
+    )
+    case(
+        "a raw-byte name with no platform gate at all is accepted (it cannot run anywhere)",
+        "target/fixture-portability-selftest/ungated.rs",
+        "fn writes_a_raw_byte_name() {\n"
+        "    use std::os::unix::ffi::OsStrExt;\n"
+        "    std::fs::write(std::ffi::OsStr::from_bytes(b\"x\"), b\"\").unwrap();\n"
+        "}\n",
+        False,
+    )
     case(
         "literal POSIX separator in a Python PATH is flagged",
         "target/fixture-portability-selftest/bad_sep.py",
@@ -335,7 +472,7 @@ def main() -> int:
                 print(f"  - {failure}", file=sys.stderr)
             return 1
         print(
-            "check-fixture-portability: self test passed; both rules verified "
+            "check-fixture-portability: self test passed; all three rules verified "
             "in both directions"
         )
         return 0
