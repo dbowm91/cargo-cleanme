@@ -338,7 +338,7 @@ them without rewriting immutable history.
 
 ## Phase 11 — Hardening, release trust, and qualification automation
 
-Status: **ready.** This phase hardens the already-shipped product before new
+Status: **closed for implementation.** C018, C019, and M011A-M011D are implemented/closed; M011A-M011C and C018 still require the already-recorded future published-release operational evidence. This phase hardens the already-shipped product before new
 feature expansion. It does not reopen Phase 10 and does not widen the destructive
 cleanup boundary.
 
@@ -412,6 +412,59 @@ Exit condition:
   real-Cargo qualification evidence;
 - no medium-or-higher finding remains in these five hardening scopes.
 
+## Phase 12 — Canonical maintenance UX and unattended operation
+
+Status: **ready.** This phase intentionally changes the public front door under
+ADR 003 while preserving the existing destructive ownership/freshness boundary.
+
+Decision:
+
+- `plans/adr/003-canonical-maintenance-invocation-and-unattended-output.md`
+
+Implementation sequence:
+
+1. **M012A — canonical maintenance CLI and dry-run semantics**
+   - bare `cargo cleanme` becomes Routine Execute through the existing combined-root cleanup engine;
+   - bare/cleanup `--dry-run` becomes zero-`cargo clean` application simulation;
+   - Cargo's own preview moves to explicit `--cargo-preview`;
+   - advanced `clean ROOT|--known|--full` remains available and executes by default;
+   - rootless `cargo cleanme scan` becomes Full read-only reconciliation;
+   - `scan ROOT` remains Explicit and `scan --known` preserves Routine read-only inventory;
+   - historical `--yes`, `--dryrun`, and `scan --full` may remain hidden compatibility aliases if they do not create ambiguous parser/safety behavior;
+   - the first release carrying the bare destructive default must cross a pre-1.0 minor boundary rather than ship as a `0.1.x` patch.
+
+2. **M012B — bounded unattended log output and greggd integration**
+   - add explicit `--format log`;
+   - emit one deterministic ASCII summary line, bounded to 384 bytes, for scan/cleanup reports;
+   - disable progress and ordinary diagnostic fan-out in log mode while preserving exit status;
+   - retain JSON as the complete machine-readable contract;
+   - document daily Routine cleanup and weekly Full reconciliation under greggd load gating;
+   - recommend a user-owned/rootless greggd instance for developer-home maintenance and absolute argv paths;
+   - record the downstream Gregg stale `scan --deep` documentation correction without making cargo-cleanme closure depend on another repository.
+
+Plans:
+
+- `plans/implementation/artifact-discovery-cleanup/012a-canonical-maintenance-cli-and-dry-run-semantics.md`
+- `plans/implementation/artifact-discovery-cleanup/012b-unattended-log-output-and-greggd-integration.md`
+
+Hard constraints:
+
+- ADR 001 ownership classes and authorization remain unchanged;
+- C003/C004/C006 complete manifest coverage and fresh combined ownership proof remain unchanged;
+- learned discovery state never becomes cleanup evidence;
+- every `scan` remains read-only;
+- `--dry-run` must invoke zero Cargo clean processes;
+- log mode may not add another filesystem/Cargo pass merely to decorate output;
+- cargo-cleanme does not gain a scheduler, daemon, load policy, or persistent job history;
+- schema-v1 field meanings may not be silently redefined to fit the new CLI;
+- the breaking bare-invocation change must be prominent at the release boundary.
+
+Exit condition:
+
+- M012A closes with premise-negative CLI/spawn evidence and all existing destructive safety regressions green;
+- M012B closes with bounded-output tests, JSON/human compatibility evidence, generated CLI artifacts, and automation documentation;
+- no medium-or-higher finding remains in the new default execution path or unattended-output path.
+
 ## Dependency summary
 
 ~~~text
@@ -435,7 +488,14 @@ M011D Cargo selector qualification lifecycle [ready; independent evidence line]
 
 First future qualification release:
   carries C018 + supplies M011A/M011B/M011C operational evidence
+                                              |
+                                              v
+ADR 003 -> M012A canonical CLI -> M012B unattended log/docs
 ~~~
+
+Phase 12 may implement before or after that qualification release, but the first
+release carrying M012A's bare destructive default must use a new pre-1.0 minor
+boundary rather than a 0.1.x patch.
 
 
 Destructive work MUST NOT be pulled forward merely to make the tool feel complete.
