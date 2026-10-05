@@ -23,7 +23,7 @@ Planning framework baseline: `97dee9fa64868534cedf3a9310e7160335a91be2`
 M006 implementation baseline: `47574fa8a087ac2f9111e29821c23b13657e7bbe`
 M008 planning baseline: `3ee9699a0b0d987287d08e427195284e08d079f7`
 Phase 11 implementation baseline: `a150eda8b43e8bf2f088aec8b804e7fa557c3a18`
-Phase 12 planning baseline: `9f573c1a327aec162bc2ad61de1e3740ad1f4e46`
+Phase 12 planning baseline: `e4e9d92673e5f10548248e23db788c0906760916`
 Immutability policy enabled: `2026-10-05T13:34:38Z` (repository-level, not owner-enforced)
 
 ## Subsystem status
