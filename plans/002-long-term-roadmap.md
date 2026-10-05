@@ -414,8 +414,16 @@ Exit condition:
 
 ## Phase 12 — Canonical maintenance UX and unattended operation
 
-Status: **ready.** This phase intentionally changes the public front door under
-ADR 003 while preserving the existing destructive ownership/freshness boundary.
+Status: **closed.** M012A and M012B are implemented and closed under ADR 003.
+The public front door changed while the existing destructive
+ownership/freshness boundary remained intact. `Cargo.toml` is now 0.2.0, so
+the breaking bare-invocation change cannot ship as a 0.1.x patch.
+
+Post-phase release-readiness corrective: **C021 ready** —
+`plans/implementation/artifact-discovery-cleanup/c021-pre-release-test-and-verification-evidence-reconciliation.md`.
+C021 does not reopen Phase 12; it reconciles a flaky updater-test premise,
+verification-inventory drift, changelog completeness, and the final hosted
+pre-release baseline before 0.2.0 staging.
 
 Decision:
 
@@ -442,10 +450,13 @@ Implementation sequence:
    - recommend a user-owned/rootless greggd instance for developer-home maintenance and absolute argv paths;
    - record the downstream Gregg stale `scan --deep` documentation correction without making cargo-cleanme closure depend on another repository.
 
-Plans:
+Plans / closure:
 
 - `plans/implementation/artifact-discovery-cleanup/012a-canonical-maintenance-cli-and-dry-run-semantics.md`
+- `plans/closure/artifact-discovery-cleanup/m012a-status.md`
 - `plans/implementation/artifact-discovery-cleanup/012b-unattended-log-output-and-greggd-integration.md`
+- `plans/closure/artifact-discovery-cleanup/m012b-status.md`
+- post-phase corrective: `plans/implementation/artifact-discovery-cleanup/c021-pre-release-test-and-verification-evidence-reconciliation.md`
 
 Hard constraints:
 
@@ -490,12 +501,19 @@ First future qualification release:
   carries C018 + supplies M011A/M011B/M011C operational evidence
                                               |
                                               v
-ADR 003 -> M012A canonical CLI -> M012B unattended log/docs
+ADR 003 -> M012A canonical CLI [closed] -> M012B unattended log/docs [closed]
+                                              |
+                                              v
+                                C021 pre-release evidence [ready]
+                                              |
+                                              v
+                                  first 0.2.0 release
 ~~~
 
-Phase 12 may implement before or after that qualification release, but the first
-release carrying M012A's bare destructive default must use a new pre-1.0 minor
-boundary rather than a 0.1.x patch.
+Phase 12 is implemented. The first release carrying M012A's bare destructive
+default is 0.2.0 and must not be staged as publication-ready until C021 closes.
+That release also supplies the first opportunity to finish the outstanding
+published-release evidence for C018/M011A/M011B/M011C.
 
 
 Destructive work MUST NOT be pulled forward merely to make the tool feel complete.
