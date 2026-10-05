@@ -64,10 +64,50 @@ jobs:
         run: |
           python3 scripts/check-selector-qualification.py --self-test
           python3 scripts/check-selector-qualification.py
-      - name: Install the exact supported Cargo toolchains
+      # `dtolnay/rust-toolchain` takes ONE singular `toolchain` input. Passing it
+      # a `toolchains:` JSON list — as this workflow originally did — leaves the
+      # action's `toolchain` input empty and every job dies on "'toolchain' is a
+      # required input", so the gate never ran. One step per version is verbose
+      # on purpose: it keeps every version literal and independently auditable,
+      # and it is what check-selector-qualification.py now reads, so a version
+      # removed from the policy but left here (or the reverse) is a hard failure
+      # rather than a quietly narrowed evidence set.
+      - name: Install Cargo 1.89.0
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
-          toolchains: '["1.89.0","1.90.0","1.91.1","1.92.0","1.93.1","1.94.1","1.95.0","1.98.1","1.99.0"]'
+          toolchain: '1.89.0'
+      - name: Install Cargo 1.90.0
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchain: '1.90.0'
+      - name: Install Cargo 1.91.1
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchain: '1.91.1'
+      - name: Install Cargo 1.92.0
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchain: '1.92.0'
+      - name: Install Cargo 1.93.1
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchain: '1.93.1'
+      - name: Install Cargo 1.94.1
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchain: '1.94.1'
+      - name: Install Cargo 1.95.0
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchain: '1.95.0'
+      - name: Install Cargo 1.98.1
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchain: '1.98.1'
+      - name: Install Cargo 1.99.0
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchain: '1.99.0'
       - name: Qualify selectors against real Cargo
         run: bash scripts/qualify-cargo-selectors.sh --evidence evidence/qualification.json
       - name: Publish the qualification summary
@@ -101,7 +141,7 @@ jobs:
       - name: Install current stable Cargo
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
-          toolchains: '["stable"]'
+          toolchain: 'stable'
       - name: Observe current stable selector behaviour
         run: bash scripts/qualify-cargo-selectors.sh --exploratory --evidence evidence/exploratory.json
       - name: Publish the observation summary

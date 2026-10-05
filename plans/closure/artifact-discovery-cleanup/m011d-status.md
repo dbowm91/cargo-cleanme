@@ -176,3 +176,59 @@ edit to the file or to the Rust allowlist.
 **Downstream effect:** no plan was blocked on M011D. The support claim can now be
 audited and its evidence regenerated on demand, which is what the C013/C015
 lineage required and could not previously supply.
+
+## Addendum (2026-10-05, the first hosted run of the qualification gate)
+
+**The gate this record closed had never run. Its two jobs failed on their first
+execution, before any qualification step, and the workflow had been red on every
+push since it landed.**
+
+`qualify-cargo-selectors.yml` passed the toolchain matrix to
+`dtolnay/rust-toolchain` as a plural `toolchains:` input holding a JSON list:
+
+```yaml
+- uses: dtolnay/rust-toolchain@2c7215f…
+  with:
+    toolchains: '["1.89.0","1.90.0",…]'
+```
+
+That action declares a single **`toolchain`** input and no `toolchains` input. An
+unknown `with:` key is not an error in GitHub Actions, so the action received an
+empty `toolchain` and exited:
+
+```text
+Run : parse toolchain version
+'toolchain' is a required input
+##[error]Process completed with exit code 101.
+```
+
+Both `Supported matrix` and `Exploratory current stable` died that way, on run
+`37328157746`. The 79 local assertions this record cites were real — they were
+produced by `scripts/qualify-cargo-selectors.sh` against locally installed
+toolchains — but the *hosted* gate was a paper gate, and the record's claim that
+the matrix is a "hosted matrix" was unverified when it was written.
+
+**This is the failure mode this milestone was created to prevent, reproduced by
+the milestone itself.** A qualification gate that cannot run reports no drift,
+which is indistinguishable from a gate that finds none. The record's own
+evidence discipline demanded a hosted run; the run was never performed, and a
+compiling workflow file was accepted in its place.
+
+The fix is one action invocation per version, each with the singular
+`toolchain:` input the action actually declares. That keeps every version
+literal — the property the record relies on to make a dropped version
+detectable — while feeding the action something it can read.
+
+`check-selector-qualification.py` is updated to match, and it is now *stricter*
+than before: it reads the union of the singular `toolchain:` values the action
+genuinely receives, rather than a list in a string, so a version named in the
+file but never passed to the action is a finding. It also gained a rule for the
+defect itself — a plural `toolchains:` input is rejected outright — plus a
+rejection for an empty singular value. The self-test grew from 20 to 24 cases,
+and both new mutations carry a control asserting the mutation actually applied,
+because a self-test case that reports "rejected" for an unchanged artifact
+proves nothing.
+
+No support claim changes. The policy, the runtime allowlist, the script, and the
+matrix still agree on the same 9 profile-qualified and 2 package-qualified Cargo
+releases.

@@ -191,16 +191,33 @@ def job_blocks(workflow: str) -> dict[str, str]:
 
 
 def toolchain_list(job_body: str) -> list[str] | None:
-    match = re.search(r"toolchains:\s*'([^']*)'", job_body)
-    if match is None:
+    """Every Cargo release this job actually hands to the toolchain action.
+
+    The action takes ONE singular `toolchain` input, so the workflow installs
+    each version in its own step and the matrix is the union of those steps.
+    Reading the values the action genuinely receives is stricter than reading a
+    list in a comment or a variable: a version mentioned in the file but never
+    passed to the action is not installed, and not installed means not
+    qualified.
+    """
+    values = re.findall(r"^\s*toolchain:\s*'([^']*)'\s*$", job_body, re.MULTILINE)
+    if not values:
         return None
-    try:
-        value = json.loads(match.group(1))
-    except json.JSONDecodeError:
+    if any(not value.strip() for value in values):
         return None
-    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
-        return None
-    return value
+    return values
+
+
+def plural_toolchain_inputs(workflow: str) -> list[str]:
+    """`toolchains:` keys — an input the toolchain action does not have.
+
+    This is the defect that kept the M011D gate permanently red: passing a JSON
+    list under a key the action does not declare leaves its singular `toolchain`
+    input empty, and the action exits with "'toolchain' is a required input"
+    before any qualification step runs. Nothing else in this file would notice,
+    because a gate that never runs cannot report a drift.
+    """
+    return re.findall(r"^\s*toolchains:\s*\S+", workflow, re.MULTILINE)
 
 
 def pinned_actions(workflow: str) -> list[str]:
@@ -293,17 +310,29 @@ def check(source: str, policy: dict, workflow: str, script: str) -> list[str]:
         problems.append("no jobs were found in the qualification workflow")
         return problems
 
-    supported_job = next((body for body in jobs.values() if "toolchains" in body and "supported" in body), None)
+    for offender in plural_toolchain_inputs(workflow):
+        problems.append(
+            f"the workflow passes {offender.strip()!r} to the toolchain action, which has no "
+            "`toolchains` input; its singular `toolchain` input would be empty and the job "
+            "would exit before qualifying anything"
+        )
+
+    supported_job = next(
+        (body for body in jobs.values() if "supported" in body and "toolchain:" in body), None
+    )
     if supported_job is None:
-        supported_job = next((body for body in jobs.values() if "toolchains" in body), None)
+        supported_job = next((body for body in jobs.values() if "toolchain:" in body), None)
     exploratory_job = next((body for body in jobs.values() if "exploratory" in body), None)
 
     if supported_job is None:
-        problems.append("the qualification workflow has no supported-matrix job with an explicit toolchain list")
+        problems.append("the qualification workflow has no supported-matrix job that installs toolchains")
     else:
         matrix = toolchain_list(supported_job)
         if matrix is None:
-            problems.append("the supported matrix does not declare a machine-readable `toolchains` list")
+            problems.append(
+                "the supported matrix installs no toolchain: it has no non-empty singular "
+                "`toolchain:` input for the toolchain action"
+            )
         else:
             missing = sorted(set(profile) - set(matrix))
             extra = sorted(set(matrix) - set(profile))
@@ -323,7 +352,7 @@ def check(source: str, policy: dict, workflow: str, script: str) -> list[str]:
     else:
         matrix = toolchain_list(exploratory_job)
         if matrix is None:
-            problems.append("the exploratory lane does not declare its toolchain list")
+            problems.append("the exploratory lane installs no toolchain")
         else:
             unknown = sorted(set(matrix) - set(exploratory))
             if unknown:
@@ -443,18 +472,54 @@ def self_test() -> int:
         False,
     )
 
-    # Missing supported version from the hosted matrix.
-    matrix = toolchain_list(
-        next(b for b in job_blocks(workflow).values() if "toolchains" in b and "supported" in b)
-    ) or []
-    reduced = "".join(f'"{v}",' for v in matrix if v != baseline_profile)
+    # Missing supported version from the hosted matrix. Each version is its own
+    # step now, so dropping one means removing that step's `toolchain:` line
+    # rather than editing a list.
     shrunk = re.sub(
-        r"toolchains: '[^']*'",
-        "toolchains: '[" + reduced.rstrip(",") + "]'",
+        rf"^\s*toolchain:\s*'{re.escape(baseline_profile)}'\s*$\n",
+        "",
         workflow,
         count=1,
+        flags=re.MULTILINE,
     )
+    if shrunk == workflow:
+        failures.append("control: dropping a supported version actually removed its step")
+        print("  FAIL control: the version-drop mutation was a no-op")
+    else:
+        print("  ok   control: dropping a supported version actually removed its step")
     expect("a supported version missing from the matrix is rejected", check(source, policy, shrunk, script), True)
+
+    # The plural key. This is the exact defect that kept this gate red: the
+    # action has no `toolchains` input, so its singular `toolchain` input is
+    # empty and the job exits before any qualification runs. A gate that never
+    # runs cannot report a drift, which is why it needs its own rule.
+    plural = workflow.replace(
+        f"          toolchain: '{baseline_profile}'",
+        f"          toolchains: '[\"{baseline_profile}\"]'",
+        1,
+    )
+    if plural == workflow:
+        failures.append("control: the plural-input mutation actually applied")
+        print("  FAIL control: the plural-input mutation was a no-op; the anchor no longer matches")
+    else:
+        print("  ok   control: the plural-input mutation actually applied")
+    expect(
+        "a plural `toolchains:` input to the toolchain action is rejected",
+        check(source, policy, plural, script),
+        True,
+    )
+
+    # An empty singular input is the same failure with a different spelling.
+    blanked = workflow.replace(
+        f"          toolchain: '{baseline_profile}'",
+        "          toolchain: ''",
+        1,
+    )
+    expect(
+        "an empty singular `toolchain:` input is rejected",
+        check(source, policy, blanked, script),
+        True,
+    )
 
     # Exploratory version promoted into the runtime allowlist. The anchor is a
     # `| "-prefixed` arm rather than the first entry, because the first entry of
