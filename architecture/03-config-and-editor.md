@@ -29,7 +29,7 @@ own atomic publish (see [Discovery state](06-discovery-state.md)).
 **The template is not the runtime config.** The most load-bearing fact about
 `config.toml`, enforced from both sides: `src/config.rs:10` embeds the repository
 file verbatim at compile time (`include_str!("../config.toml")`), and the only
-reader of those checked-in bytes is `create_initial` (`src/config.rs:275`).
+reader of those checked-in bytes is `create_initial` (`src/config.rs:322`).
 `config.toml:5-8` states it directly — runtime configuration "is resolved from
 the platform application config directory (or `--config PATH`); this repository
 file is a distribution template and is never loaded implicitly from the current
@@ -174,51 +174,66 @@ where `load_or_create` would refuse to show them the file they need to fix.
 
 ### `create_initial` — atomic, verbatim, never overwriting
 
-`src/config.rs:254-341`: `create_dir_all` the parent (`:255-260`, re-checked at
-`:261-266`); write to `<file_name>.tmp.<pid>.<attempt>` in the **same directory**
-(`:277-279`, so publication stays on one volume) opened `create_new(true)`
-(`:280-283`); `write_all` the template verbatim and `sync_all` it (`:312-315`);
-publish with `fs::hard_link(&temp, path)` then `remove_file(&temp)` (`:319-320`).
-Linking is atomic and **cannot overwrite**: a concurrent winner makes it fail
-with `AlreadyExists`, which is swallowed as success (`:325-327`). After 100
-attempts: `AppError::Config("could not create a temporary config beside …")`
-(`:338-341`); and if the destination exists and is not a regular file the error
-path refuses to replace it (`:329-334`).
+`src/config.rs:259-368`: `create_dir_all` the parent (`:260-264`, re-checked at
+`:270-274`); write to `<file_name>.tmp.<pid>.<nonce>.<attempt>` in the **same
+directory** (`:293-296`, so publication stays on one volume) opened
+`create_new(true)` (`:297-301`); `write_all` the template verbatim and `sync_all`
+it (`:322-325`); publish with `fs::hard_link(&temp, path)` then
+`remove_file(&temp)` (`:329-330`). Linking is atomic and **cannot overwrite**. A
+regular file already at the destination means a racer published first, which is
+success (`:350-352`). After 100 attempts: `AppError::Config("could not create a
+temporary config beside …")` (`:365-368`); and if the destination exists and is
+not a regular file the error path refuses to replace it (`:355-359`).
 
 So writes are atomic at publication, the template is byte-for-byte verbatim, and
 an existing config is never replaced.
 
-**Losing a race is not spelled the same way on every platform, and only one of
-the two spellings may be matched by error kind.** `step_error` (`:245-253`)
-names the call that failed while preserving `ErrorKind` exactly, because the
-code below decides everything by inspecting the kind — so a "helpful" wrapper
-that changed the kind would silently stop the race handling from recognising its
-own benign outcome. With the step named, two cases were found on hosted runners:
+**The staging name must be unique among everything that can create a config at
+once, or "lost the race" becomes a routine event dressed as an error.** The pid
+separates *processes*, so threads inside one process were the only remaining
+collision — and they collided on every concurrent first use, because they all
+began at the same `attempt`. A process-wide `STAGING_NONCE` (`:253`) removes the
+collision rather than teaching the code to recognise a lost one. The `attempt`
+suffix stays for the case the nonce cannot cover: a stale `.tmp.` file left by a
+crashed process whose pid the OS later reuses, where `AlreadyExists` is the
+authoritative answer (`:318`).
 
-- **`create_new` on a taken staging name.** POSIX reports `AlreadyExists`
-  (`:307`). Windows reports `PermissionDenied` — os error 5, "Access is denied" —
-  for a file another thread is still creating, because the name is reserved
-  before its metadata is committed (`:308`). Both mean the name is taken.
-- **The publish link.** `hard_link` losing the publication race is tolerated on
-  `AlreadyExists` (`:325`). Across 24 rounds of 16 threads on `windows-latest`
-  no `PermissionDenied` was observed here, so the asymmetry is documented for the
-  staging name only. That is an observation, not a proof the platform cannot do
-  it; if a future run reports `publishing the config failed: Access is denied`,
-  the discriminator has to be "a regular-file destination now exists", never a
-  bare list of error kinds.
+**Where the filesystem is the discriminator and where it is not.** Both race
+steps once reported "somebody else got there" only as `AlreadyExists`, and only
+`AlreadyExists` was tolerated. Three hosted findings changed that:
 
-The staging case is deliberately **not** decided by `temp.exists()` alone
-(`:308`). That probe answers whether the name is taken *now*, while the syscall
-answered whether it was taken *then* — and the winner can publish and unlink its
-staging file in between, so probing alone regresses Linux, macOS, and the 1.89
-lane by letting `AlreadyExists` escape as an error. A genuine permissions
-problem leaves the name free and still hard-fails on both platforms.
+- `create_new` on a taken staging name reports `AlreadyExists` on POSIX and
+  `PermissionDenied` — os error 5 — on Windows, because the name is reserved
+  before its metadata is committed. With the nonce, nothing else is competing,
+  so this no longer arises; if it ever does, it is a genuine permissions problem
+  and must hard-fail.
+- Probing `temp.exists()` instead of reading the kind was tried and is **wrong
+  on both platforms**: the winner unlinks its staging file, so the probe reads
+  free and the real failure escapes. A syscall answers whether the name was
+  taken *then*; a probe answers whether it is taken *now*. It was observed
+  regressing Linux, macOS, and the 1.89 lane, and later leaking a Windows
+  `PermissionDenied` through the same gap.
+- The **publish** step is the mirror image and is decided by the filesystem
+  (`:350-352`). The destination is never unlinked, so `path.is_file()` is a
+  stable answer, not a race against a winner cleaning up. It is also the only
+  file that can exist at that path, published solely by hard-linking a written
+  and synced staging file, so a regular file there is always a complete
+  template. The adjacent refusal of a non-file destination (`:355-359`) is
+  unchanged: "exists" must not become "acceptable".
 
-`concurrent_first_use_creates_one_complete_template` (`:552-585`) pins this: 16
-workers over 24 rounds, each round a fresh nested path, asserting that every
-racer succeeds and the final bytes equal the template. One 8-thread round hit
-the Windows failure roughly one run in three, so the premise is strengthened
-deliberately — a premise the defect can miss is not a premise.
+`step_error` (`:255-257`) names the call that failed while preserving
+`ErrorKind` **exactly** — everything below decides by inspecting the kind, so a
+wrapper that changed it would silently stop the race handling recognising its own
+outcome. It is also what made the above diagnosable: the pre-fix Windows failure
+was an unactionable `Io(Os { code: 5 })`, and became
+`creating a staging file failed: Access is denied. (os error 5)`.
+
+`concurrent_first_use_creates_one_complete_template` (`:599-632`) pins this: 16
+workers over 24 rounds, a fresh nested path each round, asserting every racer
+succeeds and the bytes are one complete template. One 8-thread round missed the
+Windows failure most of the time, so the premise is strengthened deliberately —
+a premise the defect can miss is not a premise, and a single green run of it is
+not evidence either.
 
 Two honest caveats remain: no directory-level `fsync` after the link, and the
 mechanism is `hard_link` rather than `rename` (same directory, so still atomic,
@@ -472,7 +487,7 @@ build compiles 13.
 | `operational_bootstrap_refuses_overwrite` | `:501` | `load_or_create` creates once, then preserves an edited `recency_seconds = 61`. |
 | `bootstrap_bytes_equal_checked_in_template` | `:510` | The created file is byte-equal to `CONFIG_TEMPLATE` and loads as defaults. |
 | `malformed_config_is_not_replaced_automatically` | `:521` | A malformed file errors *and* is left byte-identical on disk. |
-| `concurrent_first_use_creates_one_complete_template` | `:552` | 16 workers over 24 rounds, a fresh nested path each round; every racer succeeds and the bytes are one complete template. Strengthened deliberately — a single 8-thread round missed the Windows race most of the time. |
+| `concurrent_first_use_creates_one_complete_template` | `:599` | 16 workers over 24 rounds, a fresh nested path each round; every racer succeeds and the bytes are one complete template. Strengthened deliberately — a single 8-thread round missed the Windows race most of the time. |
 
 `config.toml:10` tells contributors to run `cargo test config_template` after
 editing the template. That substring matches

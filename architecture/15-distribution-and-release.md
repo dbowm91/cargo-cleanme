@@ -382,7 +382,7 @@ pub const CONFIG_TEMPLATE: &str = include_str!("../config.toml");
   compile at all** — `cargo install cargo-cleanme` fails with a compile error in
   `src/config.rs`, not with a runtime error and not with a degraded feature.
 - First-use config creation is impossible without it. The constant is the only
-  source of the default template; `src/config.rs:275` writes those bytes as the
+  source of the default template; `src/config.rs:322` writes those bytes as the
   new config file, and `src/config.rs:493` parses them to prove the checked-in
   template is well-formed. Both are compile-time-dependent facts about a file
   that lives outside `src/`.
