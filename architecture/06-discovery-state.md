@@ -479,10 +479,10 @@ appliable outside uncertain coverage.
 
 The unit test at `:553-602` feeds `/work/uncertain/nested` as an uncertainty
 path, exercising genuinely localized uncertainty. But the production path
-supplies something much coarser: the diagnostic at `discovery.rs:770-775` sets
+supplies something much coarser: the diagnostic at `discovery.rs:843-848` sets
 `path: Some(root.to_path_buf())` — the **scan root of the walk**, not the
 unreadable subtree. The other uncertainty-producing site,
-`discovery.rs:519-528`, also carries a root path
+`discovery.rs:585-594`, also carries a root path
 (`roots.get(root_idx).map(|(_, root)| root.clone())`).
 
 For a Full scan the roots are `["/"]` on Linux and `["/", "/usr/local"]` on
@@ -502,8 +502,8 @@ Consequences, all verifiable from the code above:
   reachable through `main.rs` today. It is a green test whose premise the
   pipeline does not supply — exactly the failure class `plans/registry.md`
   warns about at the summary quoted in [overview](overview.md) §7.
-- Because the walker never follows symlinks (`discovery.rs:745`,
-  `discovery.rs:465`), root-anchored paths stay canonical and the
+- Because the walker never follows symlinks (`discovery.rs:818`,
+  `discovery.rs:527`), root-anchored paths stay canonical and the
   un-canonicalized `starts_with` comparison is sound in practice. Had the walker
   crossed a symlink, the un-canonicalized comparison in
   `uncertainty_intersects` would silently stop matching.
@@ -724,7 +724,7 @@ Two further qualifications, both load-bearing:
   `main.rs:338` via `filter_map`, silently, with no way for the module to know.
   This is a fail-open edge: an uncertainty that cannot be located cannot retain
   anything. The two diagnostics that feed the filter do carry a path
-  (`discovery.rs:526`, `discovery.rs:774`), so the gap is latent rather than
+  (`discovery.rs:592`, `discovery.rs:847`), so the gap is latent rather than
   active today — but nothing in the type system prevents a future
   `PermissionDenied` / `Metadata` / `Vanished` emitter from omitting it.
 
@@ -910,7 +910,7 @@ weak exactly where the module is subtle. Concretely under-tested:
 6. **The collapse direction versus the `covered` direction** (§8 items 1 and 2) is
    never tested in combination.
 7. **Uncertainty granularity.** Test `:553` feeds a deep path the real pipeline
-   never produces (§5), so nothing would fail if `discovery.rs:773` changed the
+   never produces (§5), so nothing would fail if `discovery.rs:846` changed the
    diagnostic path to the failing subtree — or to `None`.
 8. **The Windows rename path** (`:380-400`) and the `MOVEFILE_WRITE_THROUGH`
    durability claim are asserted nowhere in this file.
@@ -965,7 +965,7 @@ against the code, not against its test count.
    one must be made to the other, and the fact that Routine applies it at read
    time while Full applies it at write time is easy to miss.
 9. **Did a change to `discovery.rs` diagnostic `path` values alter what reaches
-   `uncertain`?** `discovery.rs:519-528` and `discovery.rs:770-775` currently
+   `uncertain`?** `discovery.rs:585-594` and `discovery.rs:843-848` currently
    carry a **walk root**, which on unix means `/` and retains everything
    (`main.rs:344-356`, `discovery_state.rs:108`). A `None` path is silently
    dropped at `main.rs:355` and cannot retain anything — check this whenever

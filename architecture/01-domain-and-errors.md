@@ -53,7 +53,7 @@ belongs to `output.rs`, which maps domain structs to DTOs by hand.
 | | `ExplicitRoots(Vec<PathBuf>)` | Several explicit roots forming one boundary; doc comment restricts it to *cleanup only* (`domain.rs:14`). Constructed only at `cleanup.rs:774` and `cleanup.rs:1606`. |
 | | `Global(Vec<PathBuf>)` | Machine-wide discovery roots (`policy.rs:23`). |
 | | `Routine(Vec<PathBuf>)` | The learned-root set from the state file (`policy.rs:46`). |
-| `DiscoveryFilters` | `Active { ignore, unignore }` | `Vec<String>` patterns and `Vec<PathBuf>` re-inclusions, handed to the walker (`discovery.rs:265`). |
+| `DiscoveryFilters` | `Active { ignore, unignore }` | `Vec<String>` patterns and `Vec<PathBuf>` re-inclusions, handed to the walker (`discovery.rs:327`). |
 | | `Bypassed` | No filtering; used for explicit and cleanup-internal scans. |
 
 ### 2.2 `domain.rs` — project and activity
@@ -269,7 +269,7 @@ directory, cargo-cleanme does not second-guess them with ignore rules.
 `ScanScope::ExplicitRoots(roots)` with `DiscoveryFilters::Bypassed`. That is why
 `ExplicitRoots` is documented as cleanup-only: a scan is driven by
 `policy::resolve` and would never produce it. `Bypassed` is the safe default for
-internal callers — `discovery.rs:265-266` destructures it to empty slices.
+internal callers — `discovery.rs:327-328` destructures it to empty slices.
 
 ### 3.5 The output half: `DiscoveredProject`, `ActivityState`, `SizeMetric`
 

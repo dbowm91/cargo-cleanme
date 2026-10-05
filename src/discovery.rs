@@ -28,20 +28,82 @@ impl Filters {
             unignore: unignore.to_vec(),
         })
     }
-    fn ignored(&self, p: &Path) -> bool {
+    /// Whether a user rule names this directory **itself**.
+    ///
+    /// This is the only place globs are matched, so it also pins the
+    /// repository's existing matching model: the lossy string form of the
+    /// path, so a broad pattern such as `*` must still match when a name is not
+    /// valid UTF-8 (Linux only). A pattern that spells the valid part still
+    /// only matches what it spells.
+    fn directly_ignored(&self, p: &Path) -> bool {
         if self.globs.is_empty() {
             return false;
         }
-        // Match the lossy form when a name is not valid UTF-8 (Linux only): a
-        // broad pattern such as `*` must still match, or a non-UTF-8 directory
-        // would silently escape a rule the user wrote. A pattern that spells
-        // the valid part still only matches what it spells.
-        let s = p.to_string_lossy();
-        self.globs.is_match(s.as_ref()) && !self.unignore.iter().any(|u| p.starts_with(u))
+        self.globs.is_match(p.to_string_lossy().as_ref())
     }
-    fn exception_below(&self, p: &Path) -> bool {
-        self.unignore.iter().any(|u| u.starts_with(p))
+    /// Whether `p`, or any directory above it, is named directly by an ignore
+    /// rule — that is, whether `p` carries excluded state rather than merely
+    /// matching nothing.
+    ///
+    /// `Path::ancestors` yields `p` first and walks up to the filesystem root,
+    /// so a directory a rule names outright is covered here too. The empty
+    /// component a relative path would contribute is skipped: it is not a
+    /// directory, and a bare `*` would otherwise match it.
+    fn inherits_ignore(&self, p: &Path) -> bool {
+        p.ancestors()
+            .any(|a| !a.as_os_str().is_empty() && self.directly_ignored(a))
     }
+    /// The filter disposition of one directory, derived from the configured
+    /// rules and the path alone.
+    ///
+    /// Inheriting excluded state is the whole of the C019 defect. A literal
+    /// ignored ancestor does not textually match its children, so a stateless
+    /// "does this exact path match a glob?" test loses the fact that
+    /// `/archive/other` is still underneath `/archive`, and the sibling is
+    /// walked. Testing the ancestry restores it.
+    ///
+    /// The cost is bounded by path depth and rule count — never by the size of
+    /// the discovered tree — and it is paid on the directory that is about to be
+    /// refused, so a broad ignored region still prunes before it is descended.
+    fn disposition(&self, p: &Path) -> Disposition {
+        // The exact unignore path and everything below it are in scope. Tested
+        // first because it is the cheapest test and the only one that can
+        // clear an inherited exclusion.
+        if self.unignore.iter().any(|u| p.starts_with(u)) {
+            return Disposition::ReIncluded;
+        }
+        // No rule names this directory or anything above it, so there is no
+        // excluded state to inherit. This is also the whole explicit-scope
+        // case, which arrives with an empty glob set.
+        if !self.inherits_ignore(p) {
+            return Disposition::Included;
+        }
+        // Excluded here. An exact unignore path at or below this directory means
+        // the walk has to come in far enough to reach it — and no further.
+        if self.unignore.iter().any(|u| u.starts_with(p)) {
+            return Disposition::PassThrough;
+        }
+        Disposition::Pruned
+    }
+}
+/// What the user ignore/unignore policy says about one directory.
+///
+/// The two excluded states are not interchangeable, because they lead to
+/// opposite decisions about the walk:
+///
+/// - `Pruned` refuses the subtree;
+/// - `PassThrough` is *still excluded*, but the walk must enter it to reach an
+///   exact `unignore` path below. That permission is for the ancestry route to
+///   the exception and does **not** extend to the directory's other children.
+///
+/// `ReIncluded` is the only state that clears excluded state, and it clears it
+/// for the whole subtree rooted at the exact unignore path.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Disposition {
+    Included,
+    Pruned,
+    PassThrough,
+    ReIncluded,
 }
 /// Whether an on-disk name is a Cargo manifest on this platform's volumes.
 ///
@@ -481,7 +543,11 @@ fn discover_global_roots(
                 return true;
             }
             let path = entry.path();
-            !descend_filters.ignored(&path) || descend_filters.exception_below(&path)
+            // `PassThrough` descends, and so does `ReIncluded`; only `Pruned`
+            // refuses. The internal prunes above are tested first, so a
+            // `target`, `.git`, symlink, or Cargo/rustup home stays refused even
+            // when it is also a `PassThrough` or `ReIncluded` directory.
+            !matches!(descend_filters.disposition(&path), Disposition::Pruned)
         },
     );
     let mut system_count = 0;
@@ -572,9 +638,16 @@ fn discover_global_roots(
             let cargo = entry.depth > 0 && entry_is_within_any(&entry, root, &cargo_prunes);
             let rustup = entry.depth > 0 && entry_is_within_any(&entry, root, &rustup_prunes);
             let target = entry.depth > 0 && (entry.file_name == "target" || vcs(&entry.file_name));
-            let ignored = if entry.depth > 0 && !filters.globs.is_empty() {
-                let path = entry.path();
-                filters.ignored(&path) && !filters.exception_below(&path)
+            // Counted only when the walk actually refused the subtree, so the
+            // counter reports skips and nothing else. A `PassThrough` ancestor
+            // was entered, and a `ReIncluded` directory is in scope, so neither
+            // is a user-ignore prune; the inherited sibling that stays excluded
+            // is. Unlike the other reasons this is counted at `depth == 0` as
+            // well: a scan root that inherits exclusion from a literal ignored
+            // ancestor is now refused outright, and an empty result that reports
+            // zero prunes would be unexplainable (C019).
+            let ignored = if !filters.globs.is_empty() {
+                matches!(filters.disposition(&entry.path()), Disposition::Pruned)
             } else {
                 false
             };
@@ -755,7 +828,7 @@ fn discover_manifests_root(
             if is_cargo_home_pruned(&path, &descend_prunes) {
                 return false;
             }
-            explicit || !descend_filters.ignored(&path) || descend_filters.exception_below(&path)
+            explicit || !matches!(descend_filters.disposition(&path), Disposition::Pruned)
         },
     );
     for item in &mut walk {
@@ -789,12 +862,15 @@ fn discover_manifests_root(
         }
         let path = entry.path();
         // Count pruned dirs for instrumentation (target/VCS/system/cargo/ignored).
+        // The ignore term is the same `Pruned` disposition the descend predicate
+        // above uses, so a directory that was entered to reach an `unignore`
+        // exception is not counted as a skip (C019).
         if entry.file_type.is_dir()
             && path != root_path
             && (path.file_name().is_some_and(|n| n == "target" || vcs(n))
                 || system_prune(&path)
                 || is_cargo_home_pruned(&path, prunes)
-                || (!explicit && filters.ignored(&path)))
+                || (!explicit && matches!(filters.disposition(&path), Disposition::Pruned)))
         {
             *pruned = pruned.saturating_add(1);
             batch_pruned += 1;
@@ -1068,8 +1144,21 @@ mod tests {
         .unwrap()
     }
 
-    /// Routine-scope discovery: the mode that consults `scan.ignore` against
-    /// canonical walk paths (M2/H1).
+    /// Materialise `Cargo.toml` at each of `projects` under `root`.
+    ///
+    /// Discovery only requires the manifest to be a real regular file, so an
+    /// empty one is enough and keeps these fixtures about scope selection rather
+    /// than about workspace resolution.
+    fn project_fixtures(root: &Path, projects: &[&str]) {
+        for name in projects {
+            let dir = root.join(name);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("Cargo.toml"), "").unwrap();
+        }
+    }
+
+    /// Routine-scope discovery, as `scan --config` runs it: the mode that
+    /// consults `scan.ignore` against canonical walk paths (M2/H1).
     fn routine_manifests(
         roots: Vec<PathBuf>,
         ignore: &[String],
@@ -1124,11 +1213,16 @@ mod tests {
         let canonical = fs::canonicalize(&p).unwrap();
         let filters = Filters::new(&[format!("{}/*", canonical.display())], &[]).unwrap();
         assert!(
-            filters.ignored(&odd),
+            filters.directly_ignored(&odd),
             "a broad pattern must match a non-UTF-8 name"
         );
+        assert_eq!(
+            filters.disposition(&odd),
+            Disposition::Pruned,
+            "a directly matched name with no exception below it is refused"
+        );
         // The finder itself is unchanged for valid paths.
-        assert!(!filters.ignored(&canonical));
+        assert!(!filters.directly_ignored(&canonical));
     }
 
     #[test]
@@ -1358,13 +1452,415 @@ mod tests {
     }
     #[test]
     fn filters_ignored_parent_keeps_exception_route() {
+        // The historical `/*` shape, asserted through the disposition states
+        // that replaced the old `ignored`/`exception_below` pair. The parent is
+        // not itself matched, so it is simply included; `old` is matched
+        // directly and refused; `keep` is the exception and everything under it
+        // is re-included.
         let f = Filters::new(
             &["/tmp/archive/*".into()],
             &[PathBuf::from("/tmp/archive/keep")],
         )
         .unwrap();
-        assert!(f.ignored(Path::new("/tmp/archive/old")));
-        assert!(f.exception_below(Path::new("/tmp/archive")));
-        assert!(!f.ignored(Path::new("/tmp/archive/keep/child")));
+        assert_eq!(
+            f.disposition(Path::new("/tmp/archive")),
+            Disposition::Included
+        );
+        assert_eq!(
+            f.disposition(Path::new("/tmp/archive/old")),
+            Disposition::Pruned
+        );
+        assert_eq!(
+            f.disposition(Path::new("/tmp/archive/keep")),
+            Disposition::ReIncluded
+        );
+        assert_eq!(
+            f.disposition(Path::new("/tmp/archive/keep/child")),
+            Disposition::ReIncluded
+        );
+    }
+
+    #[test]
+    fn literal_ignored_ancestor_becomes_pass_through_and_not_inherited_by_siblings() {
+        // C019's defect, at the level of the state model. A literal ignore rule
+        // does not textually match the children of the directory it names, so
+        // the ancestry of `/archive` has to carry the excluded state down to
+        // `other` while still letting the walk in to reach `keep`.
+        let f = Filters::new(
+            &["/tmp/archive".into()],
+            &[
+                PathBuf::from("/tmp/archive/keep"),
+                PathBuf::from("/tmp/archive/nested/keep-b"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            f.disposition(Path::new("/tmp/archive")),
+            Disposition::PassThrough,
+            "the ignored ancestor is entered only as the route to an exception"
+        );
+        assert_eq!(
+            f.disposition(Path::new("/tmp/archive/other")),
+            Disposition::Pruned,
+            "an unrelated sibling inherits the exclusion"
+        );
+        assert_eq!(
+            f.disposition(Path::new("/tmp/archive/keep")),
+            Disposition::ReIncluded
+        );
+        assert_eq!(
+            f.disposition(Path::new("/tmp/archive/nested")),
+            Disposition::PassThrough,
+            "intermediate ancestry for a nested exception is entered"
+        );
+        assert_eq!(
+            f.disposition(Path::new("/tmp/archive/nested/other")),
+            Disposition::Pruned,
+            "a sibling below that intermediate level is still excluded"
+        );
+        assert_eq!(
+            f.disposition(Path::new("/tmp/archive/nested/keep-b")),
+            Disposition::ReIncluded
+        );
+        // A sibling name that merely shares a string prefix is not an ancestor.
+        assert_eq!(
+            f.disposition(Path::new("/tmp/archive-old")),
+            Disposition::Included,
+            "`/tmp/archive-old` is not under `/tmp/archive`"
+        );
+    }
+
+    #[test]
+    fn disposition_of_a_recursive_ignore_pattern_is_still_pass_through() {
+        // The documented `/**` workaround keeps working, and it reaches the
+        // exception through the same pass-through state rather than a special
+        // case: `**` names the base directory itself.
+        let f = Filters::new(
+            &["/tmp/archive/**".into()],
+            &[PathBuf::from("/tmp/archive/keep")],
+        )
+        .unwrap();
+        assert_ne!(
+            f.disposition(Path::new("/tmp/archive")),
+            Disposition::Pruned,
+            "the base directory must not be refused, or the exception is unreachable"
+        );
+        assert_eq!(
+            f.disposition(Path::new("/tmp/archive/other")),
+            Disposition::Pruned
+        );
+        assert_eq!(
+            f.disposition(Path::new("/tmp/archive/keep/deep")),
+            Disposition::ReIncluded
+        );
+    }
+
+    #[test]
+    fn literal_ignored_ancestor_does_not_readmit_ignored_siblings() {
+        // C019's mandatory premise negative. `ignore` names the ancestor with a
+        // literal path, so no pattern matches `other` on its own; only the
+        // exclusion inherited from `/archive` keeps it out. The pre-C019
+        // implementation discovers 2 manifests here.
+        let d = tempdir().unwrap();
+        let root = fs::canonicalize(d.path()).unwrap();
+        let archive = root.join("archive");
+        project_fixtures(&archive, &["keep", "other"]);
+
+        let found = routine_manifests(
+            vec![root.clone()],
+            &[archive.to_string_lossy().into_owned()],
+            &[archive.join("keep")],
+        );
+        assert_eq!(
+            found.manifests,
+            vec![archive.join("keep/Cargo.toml")],
+            "the ignored sibling must not re-enter through the exception route"
+        );
+        // The same tree with no exception at all is still wholly excluded, so
+        // the assertion above cannot be satisfied by ignoring the rules.
+        let none = routine_manifests(vec![root], &[archive.to_string_lossy().into_owned()], &[]);
+        assert!(none.manifests.is_empty());
+    }
+
+    #[test]
+    fn user_ignore_prune_counts_only_the_subtrees_the_walk_refused() {
+        // C019's instrumentation contract: a sibling pruned because it inherits
+        // exclusion is a user-ignore prune; the pass-through ancestor that was
+        // entered on purpose, and the re-included directory, are not.
+        let d = tempdir().unwrap();
+        let root = fs::canonicalize(d.path()).unwrap();
+        let archive = root.join("archive");
+        project_fixtures(&archive, &["keep", "other", "third"]);
+
+        let found = routine_manifests(
+            vec![root],
+            &[archive.to_string_lossy().into_owned()],
+            &[archive.join("keep")],
+        );
+        assert_eq!(
+            found.counters.user_ignore_prunes, 2,
+            "only `other` and `third` were refused; `archive` was entered and `keep` is in scope"
+        );
+        assert_eq!(found.counters.directories_pruned, 2);
+        assert_eq!(
+            found.counters.directories_pruned,
+            found.counters.platform_system_prunes
+                + found.counters.cargo_home_prunes
+                + found.counters.rustup_home_prunes
+                + found.counters.target_vcs_prunes
+                + found.counters.user_ignore_prunes,
+            "the five specific counters must still sum to the total"
+        );
+    }
+
+    #[test]
+    fn wildcard_and_recursive_ignore_patterns_keep_their_documented_behavior() {
+        // The two shapes 0.1.6 documented as the workaround must still admit
+        // only the exception. They are in one test on purpose: the assertion is
+        // that correcting the literal rule left them alone.
+        let d = tempdir().unwrap();
+        let root = fs::canonicalize(d.path()).unwrap();
+        let archive = root.join("archive");
+        project_fixtures(&archive, &["keep", "other"]);
+        for pattern in ["*", "**"] {
+            let found = routine_manifests(
+                vec![root.clone()],
+                &[format!("{}/{}", archive.display(), pattern)],
+                &[archive.join("keep")],
+            );
+            assert_eq!(
+                found.manifests,
+                vec![archive.join("keep/Cargo.toml")],
+                "ignore = archive/{pattern} must admit only the exception"
+            );
+        }
+    }
+
+    #[test]
+    fn several_exceptions_under_one_ignored_ancestor_are_each_reachable() {
+        // One direct exception and one nested exception, with siblings at both
+        // levels. Only the two exception subtrees may be discovered.
+        let d = tempdir().unwrap();
+        let root = fs::canonicalize(d.path()).unwrap();
+        let archive = root.join("archive");
+        project_fixtures(
+            &archive,
+            &["keep-a", "other", "nested/keep-b", "nested/other", "plain"],
+        );
+
+        let found = routine_manifests(
+            vec![root],
+            &[archive.to_string_lossy().into_owned()],
+            &[archive.join("keep-a"), archive.join("nested/keep-b")],
+        );
+        let mut expected = vec![archive.join("keep-a/Cargo.toml")];
+        expected.push(archive.join("nested/keep-b/Cargo.toml"));
+        expected.sort();
+        assert_eq!(found.manifests, expected);
+        assert_eq!(
+            found.counters.user_ignore_prunes, 3,
+            "`other`, `nested/other`, and `plain` are refused; `archive` and `nested` are entered"
+        );
+    }
+
+    #[test]
+    fn a_deeply_nested_exception_never_visits_a_pruned_siblings_subtree() {
+        // The strongest form of the containment claim: the pruned sibling holds
+        // its own project, so finding it would prove the subtree was walked
+        // rather than refused.
+        let d = tempdir().unwrap();
+        let root = fs::canonicalize(d.path()).unwrap();
+        let archive = root.join("archive");
+        project_fixtures(
+            &archive,
+            &[
+                "a/b/c/keep",
+                "a/b/sibling/inner",
+                "a/sibling/inner",
+                "sibling/inner",
+            ],
+        );
+
+        let found = routine_manifests(
+            vec![root],
+            &[archive.to_string_lossy().into_owned()],
+            &[archive.join("a/b/c/keep")],
+        );
+        assert_eq!(
+            found.manifests,
+            vec![archive.join("a/b/c/keep/Cargo.toml")],
+            "only the exception subtree is in scope, at every intermediate level"
+        );
+        assert_eq!(
+            found.visited_entries, 10,
+            "the three refused siblings' subtrees are never read, so the traversal \
+             total counts only root + archive + the pass-through route + the \
+             exception + its manifest"
+        );
+    }
+
+    #[test]
+    fn an_exact_unignore_reincludes_the_whole_subtree_at_its_root() {
+        // Re-inclusion is for the subtree rooted at the exact path, so a nested
+        // project beneath the exception root stays discoverable even though the
+        // literal ancestor above it is ignored.
+        let d = tempdir().unwrap();
+        let root = fs::canonicalize(d.path()).unwrap();
+        let archive = root.join("archive");
+        project_fixtures(&archive, &["keep", "keep/nested", "other"]);
+
+        let found = routine_manifests(
+            vec![root],
+            &[archive.to_string_lossy().into_owned()],
+            &[archive.join("keep")],
+        );
+        let mut expected = vec![archive.join("keep/Cargo.toml")];
+        expected.push(archive.join("keep/nested/Cargo.toml"));
+        expected.sort();
+        assert_eq!(found.manifests, expected);
+        assert_eq!(found.counters.user_ignore_prunes, 1, "only `other`");
+    }
+
+    #[test]
+    fn an_explicit_root_still_bypasses_a_literal_ignore_entirely() {
+        // Requirement: a named root means it. The corrected filter must not
+        // narrow an explicit scope, or `scan <dir>` would silently lose
+        // projects the caller asked for.
+        let d = tempdir().unwrap();
+        let root = fs::canonicalize(d.path()).unwrap();
+        let archive = root.join("archive");
+        project_fixtures(&archive, &["keep", "other"]);
+
+        let mut expected = vec![archive.join("keep/Cargo.toml")];
+        expected.push(archive.join("other/Cargo.toml"));
+        expected.sort();
+        assert_eq!(explicit_manifests(&archive).manifests, expected);
+    }
+
+    #[test]
+    fn an_exact_unignore_does_not_reopen_an_internal_prune() {
+        // The internal prunes are decided before the user filters, so even a
+        // literal unignore aimed straight at a `target` or `.git` tree leaves it
+        // refused. This is the ordering that keeps unignore from becoming a way
+        // around VCS/target/symlink policy.
+        let d = tempdir().unwrap();
+        let root = fs::canonicalize(d.path()).unwrap();
+        let archive = root.join("archive");
+        let keep = archive.join("keep");
+        project_fixtures(&keep, &["", "target", ".git", "target/nested"]);
+        fs::create_dir_all(archive.join("other")).unwrap();
+
+        let found = routine_manifests(
+            vec![root],
+            &[archive.to_string_lossy().into_owned()],
+            &[keep.clone(), keep.join("target"), keep.join(".git")],
+        );
+        assert_eq!(
+            found.manifests,
+            vec![keep.join("Cargo.toml")],
+            "only the plain project under the exception root is in scope"
+        );
+        assert_eq!(
+            found.counters.target_vcs_prunes, 2,
+            "`target` and `.git` are internal prunes"
+        );
+        assert_eq!(
+            found.counters.user_ignore_prunes, 1,
+            "only `other`, and an internal prune is never also counted as a user-ignore prune"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_exact_unignore_does_not_reopen_a_symlinked_directory() {
+        use std::os::unix::fs::symlink;
+        let d = tempdir().unwrap();
+        let root = fs::canonicalize(d.path()).unwrap();
+        let archive = root.join("archive");
+        let keep = archive.join("keep");
+        // The target has to sit outside the scan root, or the walk would reach
+        // it directly and the assertion would not be about the symlink at all.
+        let outside_dir = tempdir().unwrap();
+        let outside = fs::canonicalize(outside_dir.path()).unwrap();
+        project_fixtures(&keep, &[""]);
+        project_fixtures(&outside, &[""]);
+        symlink(&outside, keep.join("link")).unwrap();
+
+        let found = routine_manifests(
+            vec![root],
+            &[archive.to_string_lossy().into_owned()],
+            &[keep.clone(), keep.join("link")],
+        );
+        assert_eq!(
+            found.manifests,
+            vec![keep.join("Cargo.toml")],
+            "a symlinked directory stays refused even when unignored by name"
+        );
+    }
+
+    #[test]
+    fn a_broad_ignored_region_is_pruned_before_its_siblings_are_read() {
+        // C019's cost requirement: refusing a sibling must be a refusal, not a
+        // cheap-looking check that still walks the subtree. Each sibling holds
+        // its own project, so a walk that entered them would both discover them
+        // and inflate the traversal total far past the refused-entry count.
+        const SIBLINGS: usize = 200;
+        let d = tempdir().unwrap();
+        let root = fs::canonicalize(d.path()).unwrap();
+        let archive = root.join("archive");
+        project_fixtures(&archive, &["keep"]);
+        for index in 0..SIBLINGS {
+            project_fixtures(&archive, &[&format!("s{index}/inner")]);
+        }
+
+        let found = routine_manifests(
+            vec![root],
+            &[archive.to_string_lossy().into_owned()],
+            &[archive.join("keep")],
+        );
+        assert_eq!(found.manifests, vec![archive.join("keep/Cargo.toml")]);
+        assert_eq!(
+            found.counters.user_ignore_prunes, SIBLINGS as u64,
+            "every sibling is refused, and each refusal is counted once"
+        );
+        assert_eq!(
+            found.visited_entries,
+            (SIBLINGS + 4) as u64,
+            "root + archive + the exception directory + its manifest: a refused \
+             sibling yields its directory entry and nothing beneath it"
+        );
+    }
+
+    #[test]
+    fn an_explicit_unignore_of_the_scan_root_prunes_the_whole_root_visibly() {
+        // A scan root inside a literal ignored region is refused outright, and
+        // unlike the other reasons that refusal is counted even at depth 0, so
+        // an empty scan says why instead of reporting zero prunes.
+        let d = tempdir().unwrap();
+        let root = fs::canonicalize(d.path()).unwrap();
+        let archive = root.join("archive");
+        let inside = archive.join("inside");
+        project_fixtures(&inside, &[""]);
+
+        let found = routine_manifests(
+            vec![inside.clone()],
+            &[archive.to_string_lossy().into_owned()],
+            &[],
+        );
+        assert!(found.manifests.is_empty());
+        assert_eq!(found.counters.directories_pruned, 1);
+        assert_eq!(found.counters.user_ignore_prunes, 1);
+    }
+
+    #[test]
+    fn an_empty_policy_includes_everything() {
+        // The explicit-scope case arrives with no rules at all; there is no
+        // exclusion to inherit and nothing to re-include.
+        let f = Filters::new(&[], &[]).unwrap();
+        assert_eq!(
+            f.disposition(Path::new("/any/archive")),
+            Disposition::Included
+        );
+        assert!(!f.inherits_ignore(Path::new("/any/archive")));
     }
 }

@@ -48,8 +48,8 @@ setting.
 |---|---|---|---|---|
 | `[scan]` | `recency_seconds` | `u64` | `300` (`src/config.rs:62-64`, `:54`) | Inactivity window: a candidate must be untouched at least this long. `0` is rejected; values above `u64::MAX / 1_000_000_000` are rejected (`:97-104`). |
 | `[scan]` | `root` | `Option<PathBuf>` | `None` (`:43`, `:55`) | Exclusive scan scope. Must be absolute (`:110-112`). A CLI root takes precedence (`src/policy.rs:30`). |
-| `[scan]` | `ignore` | `Vec<String>` | `[]` (`:44-45`, `:56`) | Absolute glob patterns pruned from global/routine discovery. Compiled with `globset` (`:146-149`) and matched against **canonical** paths (`src/discovery.rs:31-41`). |
-| `[scan]` | `unignore` | `Vec<PathBuf>` | `[]` (`:46-47`, `:57`) | Exact absolute directories re-included beneath ignored trees. Not globs — a plain prefix exception via `p.starts_with(u)` (`src/discovery.rs:40`) plus `exception_below` at `:42-44`. Must be absolute (`:120-122`). |
+| `[scan]` | `ignore` | `Vec<String>` | `[]` (`:44-45`, `:56`) | Absolute glob patterns pruned from global/routine discovery. Compiled with `globset` (`:146-149`) and matched against **canonical** paths (`src/discovery.rs:38-45`). |
+| `[scan]` | `unignore` | `Vec<PathBuf>` | `[]` (`:46-47`, `:57`) | Exact absolute directories re-included beneath ignored trees. Not globs — a component-wise prefix test (`p.starts_with(u)`) resolved by `Filters::disposition` (`src/discovery.rs:68-99`). Must be absolute (`:120-122`). |
 | `[scan]` | `learned_root_retention_days` | `u32` | `30` (`src/config.rs:65-67`, `:58`) | How long a learned developer root survives after the last project observation. `0` disables expiration (`config.toml:14-15`). Accepted range `0..=3650`, enforced in `load` (`:105-109`). |
 | `[cleanup]` | `allowed_output_roots` | `Vec<PathBuf>` | `[]` (`:22-23`) | Authorization for already-private output outside the `clean ROOT` sandbox. Must be absolute (`:123-125`). See below. |
 | `[cleanup.policy]` | `min_reclaimable_bytes` | `u64` | `0` (`:30-31`) | Minimum reclaimable size for a group. `--min-reclaimable-bytes` replaces it when supplied (`src/main.rs:157-158`). |
@@ -388,7 +388,7 @@ What must remain true for this surface to stay safe:
    there is no supported way to turn the inactivity guard off.
 8. **Glob spelling is normalized, or exclusions silently exclude nothing.** Any new
    pattern list must pass through `canonical_pattern_prefix` (`:190-214`), because
-   matching is against canonical paths (`src/discovery.rs:31-41`).
+   matching is against canonical paths (`src/discovery.rs:38-45`).
 9. **Unknown keys are errors.** `deny_unknown_fields` on all four structs
    (`:12`, `:20`, `:28`, `:39`) means no field can ship without a struct change.
 10. **Glob compilation happens at load, not at use** (`:133-149`), so
@@ -416,7 +416,7 @@ consumed elsewhere, update that consumer (`src/policy.rs`, `src/discovery.rs`,
 | `--config` points at a directory | `load` reads it and fails `cannot read …`; creation refuses to replace a non-file (`src/config.rs:289-294`) |
 | `--config` with no file name | `file_name()` yields the last component; the fallback name is literally `config.toml` (`:257-260`) |
 | Config file is not valid UTF-8 | `fs::read_to_string` fails → `cannot read …` (`:90-91`) |
-| Non-UTF-8 directory name during glob matching | Matched through `to_string_lossy` in discovery, so a broad `*` cannot be escaped (`src/discovery.rs:35-40`) |
+| Non-UTF-8 directory name during glob matching | Matched through `to_string_lossy` in discovery, so a broad `*` cannot be escaped (`src/discovery.rs:30-45`) |
 | Symlinked config file | `path.exists()` follows symlinks, so creation is skipped and the target's contents load |
 
 ## 8. Testing

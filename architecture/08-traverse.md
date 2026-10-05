@@ -80,7 +80,7 @@ pub fn workspace_member_activity(member_root: &Path, output_roots: &[PathBuf],
 Derivation, in order: `std::thread::available_parallelism()`, `map_or(1, ..)` on error, then
   `.clamp(1, 8)` — **available parallelism, hard-capped at 8, floor 1**. There is **no environment
   override on this function**; the crate does have `CARGO_CLEANME_PROFILE_THREADS`
-  (`discovery.rs:295`) but that feeds discovery's profiling pool only. `discovery.rs:296` then
+  (`discovery.rs:357`) but that feeds discovery's profiling pool only. `discovery.rs:358` then
   applies `.min(GLOBAL_DISCOVERY_WORKER_CAP /* 8 */)` on top, redundant with the clamp already
   inside. Because this is a leaf, `discovery.rs` reaches it for its own walks (`:296`, `:736`,
   `:875`, `:928`) — the single worker-count policy really is shared crate-wide, as
@@ -198,7 +198,7 @@ Root guard → `dua_core::walk` with `Order::ParentFirst` and a constant `|_| tr
   `is_dir()` — so a symlink-to-directory is never queued as a `ReadDir` job. Since a hard link to
   a directory cannot exist on Unix or Windows, **no cycle is constructible and no visited-set is
   required.** A symlink still counts in `entries` and contributes its own mtime; it contributes 0
-  bytes. (`discovery.rs:744` carries the same note.)
+  bytes. (`discovery.rs:817` carries the same note.)
 
 **Hard links — counted once per directory entry, no dedup.** `st_blocks` is a property of the
   inode, so N dirents pointing at one inode each report the same allocation and the walk sums them
@@ -429,7 +429,7 @@ One Windows-specific hazard, verifiable and worth stating: that path calls `std:
 
 | Cost | Where | Note |
 |---|---|---|
-| **Two metadata syscalls per entry.** The engine collects `entry.metadata()` eagerly because `skip_metadata` is off (`dua-core lib.rs:776`), then `traverse.rs:93`/`:190` throws it away and re-`stat`s. | `:35-37` + `:93` | The single largest avoidable cost in the module. `discovery.rs:460` uses `.skip_metadata()`; `traverse.rs` cannot, because it needs the `modified()` value — but it does not need the *rest* of the metadata. |
+| **Two metadata syscalls per entry.** The engine collects `entry.metadata()` eagerly because `skip_metadata` is off (`dua-core lib.rs:776`), then `traverse.rs:93`/`:190` throws it away and re-`stat`s. | `:35-37` + `:93` | The single largest avoidable cost in the module. `discovery.rs:522` uses `.skip_metadata()`; `traverse.rs` cannot, because it needs the `modified()` value — but it does not need the *rest* of the metadata. |
 | `PathBuf` allocated per entry. `entry.path()` joins parent + filename and returns an owned `PathBuf` (`dua-core lib.rs:748`). | `:89`, `:182` | O(entries) heap allocations. Unavoidable given the re-stat design. |
 | **Double directory read in source activity.** The descend closure calls `fs::read_dir` (`:287`), then `is_excluded` calls it *again* on the same path (`:340`). | `:287` + `:340` | Two full child enumerations of every included directory, purely to look for a VCS name. Same duplication at `:394` + `:443`. |
 | O(entries) with two passes for roots. `symlink_metadata` runs once in the batch pre-pass and again per entry inside the walk. | `:148`, `:190` | |

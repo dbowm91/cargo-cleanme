@@ -91,15 +91,15 @@ valuable.
 
 ## Coverage shape, honestly
 
-237 inline `#[test]` functions are **declared**; **236 compile and run on Linux**,
+266 inline `#[test]` functions are **declared**; **265 compile and run on Linux**,
 because exactly one is `#[cfg(any(target_os = "macos", windows))]`
-(`discovery.rs:1092`). A further 18 carry `#[cfg(unix)]` or
-`#[cfg(target_os = "linux")]`, so **on Windows the inline suite is 1 of 237**. A
-green local run is not a green run elsewhere — that is what the OS matrix in
-`ci.yml` is for, and why `check-fixture-portability.py` exists to catch a *new*
-ungated fixture before a lane disagrees about it.
+(`discovery.rs:1181`). A further 19 carry `#[cfg(unix)]` or
+`#[cfg(target_os = "linux")]`, so **on Windows and macOS the inline suite is 246
+of 266**. A green local run is not a green run elsewhere — that is what the OS
+matrix in `ci.yml` is for, and why `check-fixture-portability.py` exists to catch
+a *new* ungated fixture before a lane disagrees about it.
 
-State which number you mean. "237 tests" (declared) and "236 passing" (on Linux)
+State which number you mean. "266 tests" (declared) and "265 passing" (on Linux)
 are both true, and a record that gives one while meaning the other is ambiguous in
 the direction that matters.
 

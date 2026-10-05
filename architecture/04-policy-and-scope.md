@@ -42,10 +42,10 @@ Plus the `directories` crate (`policy.rs:82`) and, on Windows only,
 `effective_rustup_home` (`:83`) and `cargo_home_prunes` (`:114`, i.e.
 `$CARGO_HOME/registry` and `$CARGO_HOME/git`). `policy.rs` owns only the
 *platform* and global-only prune sets. The division is by scope, not by subject:
-`cargo_home_prunes()` applies to **every** scope (`discovery.rs:269`) because a
+`cargo_home_prunes()` applies to **every** scope (`discovery.rs:331`) because a
 registry tree must never trigger Cargo resolution even under an explicit root,
 whereas the rustup list applies **only** to `Global` or `Routine`
-(`discovery.rs:270-276`) and is sourced from
+(`discovery.rs:332-338`) and is sourced from
 `policy::global_discovery_policy().managed_tool_prunes`, populated by
 `managed_rust_prunes()` (`policy.rs:242-246`). `policy.rs` reaches into
 `discovery` exactly once (`policy.rs:243`), for a single path; everything else
@@ -129,7 +129,7 @@ Only one variant, from two sites, both in the Explicit branch:
 
 The Full and Routine branches are infallible. A Routine scope with no
 available roots returns `Ok(ScanScope::Routine(vec![]))`, never an error; the
-user-facing signal is a diagnostic emitted later by `discovery.rs:282-291` and
+user-facing signal is a diagnostic emitted later by `discovery.rs:344-353` and
 the one stderr line at `policy.rs:91`. A propagated `AppError` reaches
 `main.rs:9-12` and becomes exit code 2.
 
@@ -199,35 +199,45 @@ between them — it never merges them:
 
 | State | Set by | Effect in `discovery.rs` |
 |---|---|---|
-| `Active { ignore: Vec<String>, unignore: Vec<PathBuf> }` | Full (`:24-27`) and Routine (`:47-50`) | `Filters::new(ignore, unignore)` at `discovery.rs:268` |
-| `Bypassed` | Explicit (`:42`) | `(&[][..], &[][..])` at `discovery.rs:266` |
+| `Active { ignore: Vec<String>, unignore: Vec<PathBuf> }` | Full (`:24-27`) and Routine (`:47-50`) | `Filters::new(ignore, unignore)` at `discovery.rs:330` |
+| `Bypassed` | Explicit (`:42`) | `(&[][..], &[][..])` at `discovery.rs:328` |
 
 `config.ignore` and `config.unignore` are cloned verbatim from `ScanConfig`
 (`config.rs:44-47`); `resolve` adds no patterns of its own.
 
 ### Semantics
 
-- **ignore globs prune.** Each `scan.ignore` string is compiled into a
-  `globset::GlobSet` (`discovery.rs:18-30`) and matched against
-  `path.to_string_lossy()` (`discovery.rs:39-40`). The lossy match is
+- **ignore globs prune, and the exclusion is inherited.** Each `scan.ignore`
+  string is compiled into a `globset::GlobSet` (`discovery.rs:18-30`) and matched
+  against `path.to_string_lossy()` (`discovery.rs:38-45`). The lossy match is
   deliberate: a non-UTF-8 directory name must not escape a broad `*` rule on
-  Linux (comment at `discovery.rs:35-38`, test
+  Linux (comment at `discovery.rs:30-37`, test
   `non_utf8_directory_still_matches_a_broad_ignore_pattern` at
-  `discovery.rs:1114`).
-- **unignore re-includes a subtree, not a single entry.** `Filters::ignored`
-  is `globs.is_match(s) && !unignore.iter().any(|u| p.starts_with(u))`
-  (`discovery.rs:40`) — so the unignore path *and everything beneath it*
-  escapes the prune. `Filters::exception_below` (`discovery.rs:42-44`) is the
-  other half: if any unignore entry is *below* `p`, the walker keeps descending
-  through `p` so it can reach the exception. Test
-  `discovery_reaches_unignored_project_without_entering_ignored_sibling`
-  (`discovery.rs:1307`) pins both halves.
+  `discovery.rs:1203`). The match is also consulted for every **ancestor** of the
+  candidate (`Filters::inherits_ignore`, `discovery.rs:52-59`), because a literal
+  ignore rule names a directory, not its children: `/archive` is not a match for
+  `/archive/other`, but `other` is still under an ignored directory and must
+  stay excluded. This is the C019 correction, and the walk descends into
+  `/archive` only as far as an exception requires.
+- **`unignore` re-includes a subtree, not a single entry.** One function decides
+  all of it: `Filters::disposition` (`discovery.rs:68-99`) returns
+  `Included` / `Pruned` / `PassThrough` / `ReIncluded` (enum at
+  `discovery.rs:101-110`). `ReIncluded` applies when
+  `p.starts_with(u)` for some unignore entry, so the unignore path *and everything
+  beneath it* escapes the prune. `PassThrough` is the other half: excluded, but
+  with an unignore entry at or below it, so the walker enters far enough to reach
+  the exception — and only that route. Tests:
+  `filters_ignored_parent_keeps_exception_route` (`discovery.rs:1454`) for the
+  `/*` shape, `literal_ignored_ancestor_becomes_pass_through_and_not_inherited_by_siblings`
+  (`discovery.rs:1484`) for the literal shape, and
+  `literal_ignored_ancestor_does_not_readmit_ignored_siblings`
+  (`discovery.rs:1559`) for the same case through a real walk.
 - **a CLI scan root takes precedence over configured scope.** Verified at
   `policy.rs:30`. The stronger form is what the code actually does: an explicit
   root does not merely win the root slot, it switches filters to `Bypassed`, so
   configured `scan.ignore` / `scan.unignore` do not apply to it at all. The
   inline test helper comment states the same intent
-  (`discovery.rs:1057-1058`).
+  (`discovery.rs:1133-1134`).
 
 ### What must be absolute, and why
 
@@ -254,7 +264,7 @@ than a re-parse. The unignore side uses no globbing at all — it is exact
 **One divergence to be aware of.** `config.toml:21` says these filters "apply
 only to global discovery". The code applies them to Routine scope as well
 (`policy.rs:47-50`), and `discovery.rs` honours them for both
-(`discovery.rs:264-268`, `discovery.rs:281-327` vs `:334-350`). The comment is
+(`discovery.rs:326-330`, `discovery.rs:343-389` vs `:334-350`). The comment is
 narrower than the behaviour.
 
 ## 5. Seed candidates
@@ -278,7 +288,7 @@ The order is the literal array order, not a priority order. The paired
 capitalizations `Projects`/`projects`, `Code`/`code`, `Repos`/`repos`,
 `GitHub`/`github` exist because macOS and Windows volumes are case-insensitive
 by default while Linux is not — the same reasoning that drives
-`is_manifest_name` (`discovery.rs:46-63`).
+`is_manifest_name` (`discovery.rs:108-125`).
 
 **This function is pure and does no filtering.** It is a literal `join` over a
 fixed array: no existence check, no config read, no env read, no state read.
@@ -287,13 +297,13 @@ Existence filtering happens one level up, in `routine_roots_from_state`
 
 **Who supplies `home`:** `routine_roots` (`policy.rs:81-84`) builds it itself
 from `directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf())` — the
-same crate and accessor used by `discovery.rs:86` and `discovery.rs:110`, but
+same crate and accessor used by `discovery.rs:148` and `discovery.rs:172`, but
 obtained independently of `main.rs`. `policy::resolve` cannot inject a home
 directory; `routine_seed_candidates` is the only seam, and it exists so the list
 can be asserted without touching the real home directory. If
 `BaseDirs::new()` returns `None`, `routine_roots` returns an empty `Vec`
 (`policy.rs:82-84`) and Routine silently degrades to "no roots", which
-`discovery.rs:282-291` reports as `Info` / `PlatformRoot`.
+`discovery.rs:344-353` reports as `Info` / `PlatformRoot`.
 
 **Heuristic vs exact:**
 
@@ -374,20 +384,20 @@ inside an otherwise-pruned `/usr`. Test
 `/Applications` are *not* pruned. `managed_tool_prunes` is `Some` only via
 `managed_rust_prunes()` → `discovery::effective_rustup_home()`
 (`policy.rs:242-246`), i.e. `$RUSTUP_HOME` when absolute, else `~/.rustup`
-(`discovery.rs:90-99`).
+(`discovery.rs:152-161`).
 
 ### Consumers
 
 | Consumer | Behaviour |
 |---|---|
-| `discovery.rs:248` | re-derives the policy for `Global` scope only |
-| `discovery.rs:249-256` | **adopts it only if `canonical_roots(roots) == canonical_roots(&candidate.roots)`**; otherwise treats the scope as a plain root list with no platform prunes |
-| `discovery.rs:260` | when adopted, walks `p.roots` — which is why the `roots` carried in `ScanScope::Global` and in `GlobalDiscoveryPolicy` are kept in agreement |
-| `discovery.rs:273` | `managed_tool_prunes`, gated on `global` (Global **or** Routine) |
-| `discovery.rs:316` | `global_only_prunes`, passed only to `discover_global_roots` |
+| `discovery.rs:310` | re-derives the policy for `Global` scope only |
+| `discovery.rs:311-318` | **adopts it only if `canonical_roots(roots) == canonical_roots(&candidate.roots)`**; otherwise treats the scope as a plain root list with no platform prunes |
+| `discovery.rs:322` | when adopted, walks `p.roots` — which is why the `roots` carried in `ScanScope::Global` and in `GlobalDiscoveryPolicy` are kept in agreement |
+| `discovery.rs:335` | `managed_tool_prunes`, gated on `global` (Global **or** Routine) |
+| `discovery.rs:378` | `global_only_prunes`, passed only to `discover_global_roots` |
 | `examples/traversal-qualification.rs:50` | reads `.roots` for the standalone qualification harness |
 
-The equality guard at `discovery.rs:249-256` is why a *caller-constructed*
+The equality guard at `discovery.rs:311-318` is why a *caller-constructed*
 `ScanScope::Global` (as several `discovery.rs` tests do) does **not** silently
 acquire platform prunes it never asked for.
 
@@ -439,7 +449,7 @@ subtree to be scanned twice.
    invocation fail with `AppError::InvalidRoot` → exit code 2 (`main.rs:9-12`).
    There is no degradation path back to Routine.
 6. **Empty Routine roots are not an error.** `resolve` returns
-   `Ok(Routine(vec![]))`; `discovery.rs:282-291` emits `Info` / `PlatformRoot`
+   `Ok(Routine(vec![]))`; `discovery.rs:344-353` emits `Info` / `PlatformRoot`
    "no Routine roots are available; run `scan --full` or scan an explicit root".
 7. **`learned_root_retention_days as u16` (`policy.rs:46`) is lossless only
    because of the caller's validation.** `config::load` range-checks it to
@@ -486,19 +496,19 @@ constructing `EffectiveScanPolicy` directly rather than through `resolve` — vi
 the `explicit_manifests` (`:1059`) and `routine_manifests` (`:1073`) helpers:
 
 - `discovery_reaches_unignored_project_without_entering_ignored_sibling`
-  (`discovery.rs:1307`) — the unignore `exception_below` half, negative control
+  (`discovery.rs:1401`) — the unignore `exception_below` half, negative control
   inline.
-- `filters_ignored_parent_keeps_exception_route` (`discovery.rs:1360`).
+- `filters_ignored_parent_keeps_exception_route` (`discovery.rs:1454`).
 - `ignored_subtree_never_invokes_cargo_manifest_count_zero_for_pruned`
-  (`discovery.rs:1281`) — `ScanScope::Global` + `Active` filters, and
+  (`discovery.rs:1375`) — `ScanScope::Global` + `Active` filters, and
   `user_ignore_prunes` attribution.
 - `non_utf8_directory_still_matches_a_broad_ignore_pattern`
-  (`discovery.rs:1114`, Linux only) and
+  (`discovery.rs:1203`, Linux only) and
   `manifest_name_is_matched_case_insensitively_where_the_volume_is`
-  (`discovery.rs:1094`).
+  (`discovery.rs:1183`).
 - `global_multi_root_walk_deduplicates_equivalent_roots_and_manifests`
-  (`discovery.rs:911`), `global_rustup_prune_keeps_adjacent_user_project_reachable`
-  (`discovery.rs:855`).
+  (`discovery.rs:987`), `global_rustup_prune_keeps_adjacent_user_project_reachable`
+  (`discovery.rs:931`).
 
 Integration: `tests/end_to_end.rs:124` is the only test that calls
 `policy::resolve` end to end, and it uses a **configured** root with
@@ -530,7 +540,7 @@ the JSON `scope` field equals `"explicit"` — but per §7.9 that string comes f
    before `policy.rs:30` is reached. Anything that reorders it changes what
    `--full` means.
 2. **An explicit root still bypasses filters, not merely outranks config.**
-   `policy.rs:42` must keep `DiscoveryFilters::Bypassed`; `discovery.rs:266`
+   `policy.rs:42` must keep `DiscoveryFilters::Bypassed`; `discovery.rs:328`
    turns that into empty ignore/unignore slices.
 3. **Every new `GlobalDiscoveryPolicy` field needs a `#[cfg]`-paired
    definition.** The two `global_discovery_policy` bodies are
@@ -539,7 +549,7 @@ the JSON `scope` field equals `"explicit"` — but per §7.9 that string comes f
    that only one CI job will catch.
 4. **New seed names must be absolute-joinable and case variants must be
    deliberate.** `policy.rs:61-75`; the pairs exist because of volume
-   case-sensitivity (`discovery.rs:46-63`).
+   case-sensitivity (`discovery.rs:108-125`).
 5. **A new retention rule must fail conservative.** `policy.rs:112-117` keeps
    the root when `retention_days == 0` or the timestamp is in the future; ADR
    002 §5 requires the same for any new expiry path.

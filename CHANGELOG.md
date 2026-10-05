@@ -6,6 +6,39 @@ All notable changes to cargo-cleanme are documented here. The format follows
 stance: the `0.x` line may make breaking changes in any release, and the
 command-line, JSON, and release-asset contracts are the stable surface.
 
+## [Unreleased]
+
+### Fixed
+
+- **`scan.unignore` re-admitted every sibling under a literally ignored
+  directory.** With
+
+  ```toml
+  [scan]
+  ignore   = ["/home/you/projects/archived"]
+  unignore = ["/home/you/projects/archived/keepme"]
+  ```
+
+  and both `archived/keepme` and `archived/other` present, discovery reported
+  **2** manifests instead of 1. The walk decided each directory on its own text
+  alone, so an `unignore` below an ignored directory forced the walk back in —
+  and a sibling that did not itself match the ignore pattern came in with it.
+  Append `/**` to the `ignore` pattern to work around it.
+
+  The walk now carries the excluded state a directory inherits from an ignored
+  ancestor: the ancestor is entered only as far as the exact `unignore` path
+  requires, and every other branch beneath it is refused. `keepme` and any
+  projects nested beneath it are discovered; `other` is not.
+
+  **0.1.6 and earlier are affected** and keep the broader behaviour. The `/*`
+  and `/**` forms work on every release and are unchanged. No configuration
+  migration is required — configurations using a literal ignored ancestor with an
+  exact `unignore` simply become narrower, which is what they asked for.
+
+  Scope selection is the only thing that changed. Ownership resolution,
+  authorization, activity, marker, and final cleanup proof are untouched, and an
+  explicit scan root still bypasses `ignore`/`unignore` entirely.
+
 ## [0.1.6] - 2026-10-05
 
 This release changes no product behavior. It exists so that the fix shipped in

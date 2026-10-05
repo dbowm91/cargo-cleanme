@@ -1,6 +1,6 @@
 # C019 — Exact Unignore Sibling-Containment Corrective
 
-Status: ready
+Status: implemented — awaiting closure record
 
 Repository baseline: `a150eda8b43e8bf2f088aec8b804e7fa557c3a18`
 

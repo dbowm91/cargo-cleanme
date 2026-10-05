@@ -6,7 +6,7 @@ per-component deep dives that follow.
 - **What it is:** a Cargo subcommand (`cargo cleanme`) that finds inactive Cargo
   build artifacts on a machine and either reports or safely reclaims them.
 - **Shape:** one binary (`src/main.rs`) over one library (`src/lib.rs`) of 15
-  modules, 17 source files, 18,971 lines of Rust in `src/`, no async runtime
+  modules, 17 source files, 19,467 lines of Rust in `src/`, no async runtime
   of its own, and exactly one binary dependency that matters for safety
   (`cargo metadata`).
 - **Version:** 0.1.6 · **Edition:** 2024 · **MSRV:** 1.89
@@ -92,7 +92,7 @@ it.**
 ## 3. Module index
 
 Line counts are `total`; where a module carries an inline `#[cfg(test)]`
-module, the `prod / test` split is given. The crate has **252 inline `#[test]`
+module, the `prod / test` split is given. The crate has **266 inline `#[test]`
 functions**, and **46.8% of them live in the two largest modules**
 (`cleanup.rs` 71 + `workspace.rs` 47). Five modules have **zero** tests:
 `main.rs`, `output.rs`, `domain.rs`, `error.rs`, `lib.rs`.
@@ -100,7 +100,7 @@ functions**, and **46.8% of them live in the two largest modules**
 Test counts in this table are **declared**, not "how many ran on my machine".
 237 are declared; **236 compile and run on Linux**, because exactly one is
 gated to other platforms
-(`discovery.rs:1092`, `#[cfg(any(target_os = "macos", windows))]`). A further
+(`discovery.rs:1181`, `#[cfg(any(target_os = "macos", windows))]`). A further
 18 are `#[cfg(unix)]` or `#[cfg(target_os = "linux")]`, so on Windows the
 inline suite is 1 of 237. Read the total as coverage concentrated in two
 modules, not as a balance — see
@@ -112,7 +112,7 @@ modules, not as a balance — see
 | [`cli.rs`](02-cli.md) | 506 / 200 | Clap surface, `cargo`-subcommand argv normalization, scan-root absolutization. | [CLI](02-cli.md) |
 | [`config.rs`](03-config-and-editor.md) | 548 / 308 | Load/create/validate `config.toml`; embedded template; path resolution. | [Config & editor](03-config-and-editor.md) |
 | [`policy.rs`](04-policy-and-scope.md) | 349 / 248 | Turns a `ScanRequest` + config into an `EffectiveScanPolicy` — the Routine/Full scope decision. | [Policy & scope](04-policy-and-scope.md) |
-| [`discovery.rs`](05-discovery.md) | 1370 / 826 | Finds `Cargo.toml` manifests across a bounded walk, with attribution for what was pruned. | [Discovery](05-discovery.md) |
+| [`discovery.rs`](05-discovery.md) | 1866 / 902 | Finds `Cargo.toml` manifests across a bounded walk, with attribution for what was pruned. | [Discovery](05-discovery.md) |
 | [`discovery_state.rs`](06-discovery-state.md) | 656 / 402 | Persisted "learned roots", uncertainty-aware reconciliation, atomic publish. | [Discovery state](06-discovery-state.md) |
 | [`workspace.rs`](07-workspace.md) | 3918 / 1446 | `cargo metadata` resolution, capability probing, physical grouping, cleanup-unit construction. | [Workspace](07-workspace.md) |
 | [`traverse.rs`](08-traverse.md) | 599 / 470 | Parallel size/recency measurement and source-activity classification. | [Traverse](08-traverse.md) |

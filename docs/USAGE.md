@@ -283,31 +283,41 @@ cargo cleanme scan --config ./filters.toml            # Routine: filters apply
 
 This surprises people who test an `ignore` rule with `scan .` and see no effect.
 
-### Make an `ignore` pattern cover its own children
+### An `ignore` pattern and an `unignore` exception
 
-A literal directory in `ignore` prunes by refusing to *descend* into it; the
-pattern does not itself match that directory's children. So an `unignore` entry
-anywhere beneath it forces the walk back in, and the siblings come with it:
+A literal directory in `ignore` prunes the whole subtree beneath it. An
+`unignore` entry re-includes **that one path and its subtree**, and nothing
+else: the walk comes back in far enough to reach the exception, and every other
+directory under the ignored ancestor stays excluded.
 
 ```toml
-# WRONG — unignoring one project restores the whole ignored subtree
 ignore   = ["/home/you/projects/archived"]
 unignore = ["/home/you/projects/archived/keepme"]
 ```
 
-Verified on 0.1.6: with `archived/keepme` and `archived/other` both present,
-the above discovers **2** manifests instead of 1. The fix is to make the ignore
-pattern cover its children, which is what makes the exception precise:
+With `archived/keepme` and `archived/other` both present, this discovers **1**
+manifest — `keepme` — plus any projects nested beneath it.
+
+This is the intended meaning of the pair, and it is what `ignore` has always
+been documented to mean. **0.1.6 and earlier did not do this**: the walk
+forgot that a sibling was still under the ignored directory, so a literal
+`ignore` plus any `unignore` beneath it re-admitted every sibling, and the
+above discovered **2** manifests. Appending `/**` (or `/*`) to the ignore
+pattern worked around it and is still accepted:
 
 ```toml
-# RIGHT — the ignore now matches each child, so unignore is precise
+# Also correct, on every release including 0.1.6
 ignore   = ["/home/you/projects/archived/**"]
 unignore = ["/home/you/projects/archived/keepme"]
 ```
 
-That discovers **1** manifest, as intended. `archived/*` works equally well.
-This is a known defect, tracked in
-[TROUBLESHOOTING.md](TROUBLESHOOTING.md#unignore-restores-more-than-it-names).
+Use the plain literal form above. If a scan on 0.1.6 or earlier returns more
+projects than you expect from an ignored region, that is a known defect fixed
+after 0.1.6 — upgrade rather than tuning the pattern. See
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md#unignore-re-admitted-siblings-fixed-after-0-1-6)
+for the historical detail, and
+[An `ignore` rule seems to do nothing](TROUBLESHOOTING.md#an-ignore-rule-seems-to-do-nothing)
+for the explicit-root case, which is a different thing entirely.
 
 `unignore` is a literal path, not a glob. A `*` in it is not expanded, so
 `archived/keep*` names a literal directory that does not exist and re-includes

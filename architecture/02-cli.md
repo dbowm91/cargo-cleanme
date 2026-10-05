@@ -31,7 +31,7 @@ What it deliberately does **not** do:
 - **No filesystem discovery.** The only filesystem call is
   `std::env::current_dir()` (`src/cli.rs:157`); there is no `exists`, `is_dir`,
   or `read_dir`. Root existence/directory/symlink checks are later layers' job
-  — e.g. `src/discovery.rs:385` refuses a symlinked scan root.
+  — e.g. `src/discovery.rs:447` refuses a symlinked scan root.
 - **No config loading.** `Cli` holds `config: Option<PathBuf>`
   (`src/cli.rs:19`) and resolves a *path reference*, not a policy:
   `main.rs:17` hands it to `config::ConfigPathResolver::new(cli.config.clone())
@@ -403,7 +403,7 @@ must be reasoned about on the cleanup side only.
 - **A symlinked relative root** is absolutized to a path still containing the
   symlink; `collapse_roots` then canonicalizes it to the target, and the two
   values genuinely differ. Downstream a symlinked *root* is refused outright by
-  discovery (`src/discovery.rs:385-386`), so the divergence is caught — by a
+  discovery (`src/discovery.rs:447-448`), so the divergence is caught — by a
   later layer, not by `cli.rs`.
 - **A non-existent relative root** survives `absolutize_root`, then survives
   `collapse_roots` via `.unwrap_or(p)`, reaching cleanup as an absolute path

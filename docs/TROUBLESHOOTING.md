@@ -27,33 +27,35 @@ If those disagree, run `cargo install cargo-cleanme --locked --force`.
 
 ## Discovery filters
 
-### `unignore` restores more than it names
+### `unignore` re-admitted siblings (fixed after 0.1.6)
 
-**Symptom.** You set an `ignore` for a large directory and an `unignore` for one
-project inside it. Discovery walks the whole ignored subtree again, so projects
-you never meant to re-include show up in the report — and a `clean` may then
+**Applies to 0.1.6 and earlier.** On those releases, a literal `ignore` plus an
+`unignore` beneath it re-admitted the *whole* ignored subtree, so projects you
+never meant to re-included showed up in the report — and a `clean` could then
 consider them.
 
-**Cause.** `ignore` prunes by refusing to *descend* into a matched directory; the
-pattern does not itself match that directory's children. An `unignore` entry
-anywhere beneath it forces the walk back in, and the siblings come along.
+| `ignore` | `unignore` | 0.1.6 and earlier | fixed |
+|---|---|---|---|
+| `/home/you/projects/archived` | `…/archived/keepme` | **2** — over-broad | **1** — correct |
+| `/home/you/projects/archived/**` | `…/archived/keepme` | **1** | **1** |
+| `/home/you/projects/archived/*` | `…/archived/keepme` | **1** | **1** |
 
-Verified on 0.1.6, with `archived/keepme` and `archived/other` both present:
+**Fix.** Upgrade past 0.1.6. The walk now carries the exclusion it inherits from
+an ignored ancestor, so it enters the ancestor only far enough to reach the
+exact `unignore` path and refuses the siblings. Nothing in your config needs to
+change, and the `/**` and `/*` forms above keep working unchanged.
 
-| `ignore` | `unignore` | manifests found |
-|---|---|---|
-| `/home/you/projects/archived` | `/home/you/projects/archived/keepme` | **2** — over-broad |
-| `/home/you/projects/archived/**` | `/home/you/projects/archived/keepme` | **1** — correct |
-| `/home/you/projects/archived/*` | `/home/you/projects/archived/keepme` | **1** — correct |
-
-**Workaround.** Make the ignore pattern cover its own children by appending
-`/**` (or `/*`):
+**If you cannot upgrade yet**, make the ignore pattern cover its own children by
+appending `/**` (or `/*`):
 
 ```toml
 [scan]
 ignore   = ["/home/you/projects/archived/**"]
 unignore = ["/home/you/projects/archived/keepme"]
 ```
+
+This is correct on every release, but it is a workaround for a defect that no
+longer exists — prefer the plain literal form once you are past 0.1.6.
 
 ### An `ignore` rule seems to do nothing
 

@@ -456,7 +456,7 @@ dropped from Routine scope, not deleted, and a later Full scan re-learns it.
 here. Small, real, one-sided in severity.
 
 **No duplicate-publication exposure.** `manifests` is sorted and deduped by
-discovery before return (`src/discovery.rs:662-665`), so `observations` is 1:1
+discovery before return (`src/discovery.rs:735-738`), so `observations` is 1:1
 with distinct manifests and cannot duplicate `ProjectRecord`s; and
 `reconcile_full` separately collapses nested learned roots by nearest ancestor
 (`src/discovery_state.rs:189-216`). `main.rs` needs no defence against either,

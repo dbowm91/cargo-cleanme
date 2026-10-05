@@ -2,8 +2,8 @@
 
 > Component deep dive · part of the [architecture overview](overview.md)
 
-`src/discovery.rs` — 1370 lines; production code ends at `:824`, the inline
-`#[cfg(test)]` module opens at `:826` and holds 18 `#[test]` functions. It is
+`src/discovery.rs` — 1866 lines; production code ends at `:900`, the inline
+`#[cfg(test)]` module opens at `:902` and holds 32 `#[test]` functions. It is
 step 3 of the scan pipeline: given the scope decided by
 [`policy.rs`](04-policy-and-scope.md), walk it for `Cargo.toml` files and report
 what could not be seen.
@@ -76,8 +76,9 @@ block is listed here because it *is* the ignore engine:
 | Method | Signature | Contract |
 |---|---|---|
 | `new` | `(&[String], &[PathBuf]) -> Result<Self, AppError>` (`:18`) | compiles the ignore globs into one `GlobSet`; a bad glob is a fatal `AppError::Config` (`:23`). |
-| `ignored` | `(&self, &Path) -> bool` (`:31`) | `true` when the lossy string form matches any glob **and** no unignore entry is a prefix of the path (`:40`). Short-circuits to `false` on an empty glob set (`:32`). |
-| `exception_below` | `(&self, &Path) -> bool` (`:42`) | `true` when some unignore entry lives *under* the path — the reason a pruned parent is still descended into. |
+| `directly_ignored` | `(&self, &Path) -> bool` (`:38`) | `true` when the lossy string form of *this* path matches any glob. The only glob match site, so it also pins the lossy-match policy. Short-circuits to `false` on an empty glob set (`:40`). |
+| `inherits_ignore` | `(&self, &Path) -> bool` (`:52`) | `true` when `p` **or any ancestor** is matched directly (`:54-56`). This is what carries a literal ignore rule down to the children it does not textually name — the C019 correction. |
+| `disposition` | `(&self, &Path) -> Disposition` (`:68`) | the whole filter decision: `ReIncluded` if `p` is at/below an unignore entry, else `Pruned`/`PassThrough` by whether an unignore entry lies at or below `p`, else `Included`. Bounded by path depth × rule count, never by tree size. |
 
 ---
 
@@ -228,12 +229,12 @@ Every skip the code implements, with the reason it is auditable:
 | Cargo home `registry`/`git` | `cargo_home_prunes()` | `:475`, `:572` | `:755`, `:796` | `cargo_home_prunes` | none |
 | Rustup home (managed tool) | `managed_tool_prunes` | `:476`, `:573` | **not applied** | `rustup_home_prunes` | none |
 | `target/`, `.git/`, `.hg/`, `.svn/` | hardcoded, `vcs()` `:64-66` | `:471`, `:574` | `:748`, `:794` | `target_vcs_prunes` | none |
-| `scan.ignore` globs | `Filters::ignored` + `exception_below` | `:480-484`, `:575-580` | `:758`, `:797` | `user_ignore_prunes` | none |
+| `scan.ignore` globs | `Filters::disposition` == `Pruned` | `:542-550`, `:649-653` | `:831`, `:873` | `user_ignore_prunes` | none |
 | Root is a symlink | `root_is_usable` (`:384-391`) | `:426` | `:335` | — | **Error + `PlatformRoot`** (`:395-400`) |
 | Root missing / not a directory | same | `:426` | `:335` | — | **Error + `PlatformRoot`** |
 | No Routine roots available | `:282-291` | — | — | — | **Info + `PlatformRoot`, `path: None`** |
 | Any symlinked directory | descend refuses (`:465`, `:741-747`) | `:465` | `:745` | not counted as pruned | none |
-| `scan.unignore` exception | re-enables descent | `:484`, `:577` | `:758` | — | none |
+| `scan.unignore` exception | `ReIncluded` subtree, or `PassThrough` ancestry | `:543-550`, `:649-653` | `:831`, `:873` | — | none |
 
 **Counted vs invisible.** A pruned directory increments `directories_pruned`
 (`:592-595`) and exactly one specific counter, chosen by a fixed `else if`
@@ -253,24 +254,42 @@ asserts that `.hidden-project/Cargo.toml` **is** found (`:979-982`). There is no
 
 1. **The non-global path keeps only 3 of 8 counters.** `discover_manifests_root`
    maintains per-reason classification logic, but the sequential `ScanCounters`
-   literal (`:353-358`) fills only `directories_visited`, `directories_pruned` and
+   literal (`:415-420`) fills only `directories_visited`, `directories_pruned` and
    `manifests_found`. On `scan <dir>` the `--stats` line reports
    `rustup_prunes=0 target_vcs_prunes=0 user_ignore_prunes=0` even when
    directories were pruned: the total is honest, the breakdown is not produced.
-2. **A whole root inside a pruned subtree under-reports.** The counter guards
-   require `entry.depth > 0` (`:571-573`) while the descend predicate does not
-   (`:474-479`, via the `depth == 0` arm of `entry_is_within`). A root that is
+2. **A whole root inside a pruned subtree under-reports — except for a user
+   ignore.** The counter guards for the four internal reasons require
+   `entry.depth > 0` (`:637-640`) while the descend predicate does not
+   (`:536-541`, via the `depth == 0` arm of `entry_is_within`). A root that is
    itself inside `/proc` or a cargo-home prune is walked as a single refused
    entry: 1 visited, 0 pruned. The walk is right; the accounting loses the skip.
-3. **The rustup prune is global-only** (`:270-276`), so a Routine scan gets none.
+   The user-ignore reason deliberately does **not** carry that guard
+   (`:641-653`). Since C019 a scan root can inherit exclusion from a literal
+   ignored ancestor and be refused outright, and a scan that returned nothing
+   while reporting zero prunes would be unexplainable — so that one reason is
+   counted at `depth == 0` as well. It is the only reason for which the two
+   sites disagree about the root, and it is counted at most once, because both
+   the counter and the total read the same `Pruned` disposition.
+3. **The rustup prune is global-only** (`:332-338`), so a Routine scan gets none.
    Routine roots are `$HOME/<Projects|src|repos|…>` (`policy.rs:60-79`) plus
    learned roots, so this only bites if a learned root points into a toolchain —
    where `lib/rustlib/src/rust/library/**` holds hundreds of real manifests.
 
+**What counts as a user-ignore prune.** Only `Disposition::Pruned`
+(`:101-110`, decided at `:68-99`). A `PassThrough` ancestor was *entered* — it
+is the route to an exception — and a `ReIncluded` directory is in scope, so
+neither is a skip. The sibling that stays excluded beneath the same ancestor is,
+because refusing it is the whole correction (C019). Before C019 this counter
+also counted exception ancestors, which made it report skips the walk had not
+performed; the invariant `directories_pruned ==` the sum of the five specific
+counters (`:654-664` → `:665`, asserted at `:960-967` and again at `:1605-1612`) is unchanged and is the reason
+the two sites are derived from one disposition rather than two predicates.
+
 **Explicit scope bypasses `scan.ignore` twice over.** `explicit ||` short-circuits
-the descend predicate (`:758`) *and* the counter condition repeats `!explicit`
-(`:797`); in addition `policy.rs:42` hands `ScanScope::Explicit` the
-`DiscoveryFilters::Bypassed` variant, which becomes empty slices at `:266`.
+the descend predicate (`:831`) *and* the counter condition repeats `!explicit`
+(`:873`); in addition `policy.rs:42` hands `ScanScope::Explicit` the
+`DiscoveryFilters::Bypassed` variant, which becomes empty slices at `:328`.
 
 ---
 
@@ -465,8 +484,8 @@ diagnostic.** (Contrast `policy.rs:32-41`, where an unusable *root* is a fatal
 
 ## 9. Testing
 
-18 `#[test]` functions (verified `grep -c '#\[test\]' src/discovery.rs`), all in
-`discovery.rs:826-1370`. Four are compile-time platform-gated — `:1092`
+32 `#[test]` functions (verified `grep -c '#\[test\]' src/discovery.rs`), all in
+`discovery.rs:902-1866`. Four are compile-time platform-gated — `:1092`
 (`macos`/`windows`), `:1112` (`linux`), `:1151` and `:1337` (`unix`) — so a Linux
 or macOS run executes 17 and a Windows run 15.
 
@@ -484,8 +503,9 @@ or macOS run executes 17 and a Windows run 15.
 | `discovers_real_manifest_and_prunes_target` / `manifest_discovery_prunes_target_children` / `manifest_discovery_finds_project_without_target` | `:1184`, `:1234`, `:1218` | `target/` descent refused and a nested `target/` manifest excluded, while a project with no `target/` is still a candidate |
 | `global_attribution_is_unallocated_when_not_requested` | `:1200` | `attribution = false` leaves the map empty while manifests and counters are unchanged |
 | `manifest_discovery_prunes_cargo_home_registry` | `:1254` | `$CARGO_HOME/registry/src` sources are not user projects |
-| `ignored_subtree_never_invokes_cargo_manifest_count_zero_for_pruned` | `:1281` | an ignored tree contributes prunes and zero manifests |
-| `discovery_reaches_unignored_project_without_entering_ignored_sibling` / `filters_ignored_parent_keeps_exception_route` | `:1307`, `:1360` | both halves of the unignore mechanism, against canonical spellings, and the re-enable path in `Filters` |
+| `ignored_subtree_never_invokes_cargo_manifest_count_zero_for_pruned` | `:1375` | an ignored tree contributes prunes and zero manifests |
+| `discovery_reaches_unignored_project_without_entering_ignored_sibling` / `filters_ignored_parent_keeps_exception_route` | `:1401`, `:1454` | the `/*` half of the unignore mechanism, against canonical spellings, and the re-enable path in `Filters` |
+| `literal_ignored_ancestor_does_not_readmit_ignored_siblings` and 8 further C019 tests | `:1559`–`:1802` | the literal-ancestor premise negative, wildcard/recursive/multiple/nested exceptions, re-included subtree, explicit bypass, internal-prune precedence, and the prune-counter contract |
 | `discovery_rejects_symlink_target` | `:1339` | a symlinked `target` does not stop manifest discovery (eligibility is decided later) |
 
 **Not covered — the gaps a reader should worry about.**
@@ -539,7 +559,7 @@ or macOS run executes 17 and a Windows run 15.
    `else if` chain at `:581-591`?** That chain's ordering plus
    `directories_pruned` is what makes the identity asserted at `:884-891` hold; a
    prune counted in `pruned` but absent from the chain breaks it silently.
-3. **Are the `depth > 0` guards at `:571-573` and `:793` still right for a new
+3. **Are the `depth > 0` guards at `:637-639` and `:868` still right for a new
    reason?** They are why a root inside a pruned subtree reports 0 prunes (§5).
    Fixing that means touching both the counter and the descend predicate, which
    use different guards today (`:474-479` vs `:571-573`).
@@ -560,7 +580,7 @@ or macOS run executes 17 and a Windows run 15.
 8. **Does a new manifest test assert a fixture property it does not establish?**
    The case-insensitivity test (`:1094-1108`) is the current example of a green
    test that does not prove its stated premise. Relatedly: did a change touch
-   `is_manifest_name` or `Filters::ignored`? Both encode platform assumptions with
+   `is_manifest_name` or `Filters::directly_ignored`? Both encode platform assumptions with
    compile-time-gated tests (`:1094`, `:1114`); a runtime `cfg!` in their place
    turns a skipped test into a passing one.
 9. **Are the four undocumented `CARGO_CLEANME_PROFILE_*` knobs still inert by

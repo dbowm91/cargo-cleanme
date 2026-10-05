@@ -31,6 +31,29 @@ so `cargo cleanme …` and `cargo-cleanme …` are equivalent.
 → [docs/INSTALLING.md](docs/INSTALLING.md) for pinned versions, Windows,
 destination and PATH handling, and what the installer refuses to do.
 
+### Prebuilt release targets
+
+[`release/eggpack/distribution.toml`](release/eggpack/distribution.toml) is the
+single authority for this matrix and the asset names; it is not maintained by
+hand.
+
+| Target triple | Install name |
+|---|---|
+| `x86_64-unknown-linux-gnu` | `cargo-cleanme` |
+| `aarch64-unknown-linux-gnu` | `cargo-cleanme` |
+| `x86_64-apple-darwin` | `cargo-cleanme` |
+| `aarch64-apple-darwin` | `cargo-cleanme` |
+| `x86_64-pc-windows-msvc` | `cargo-cleanme.exe` |
+
+Each asset ships a `.sha256` sidecar. `armv7-unknown-linux-gnueabihf` is a
+recognized host with **no** prebuilt binary: it is Cargo-install-only, as are
+musl, Windows ARM64/ARMv7, and any unlisted OS or architecture.
+
+The Linux targets are built against a glibc 2.17 floor, but that floor is
+**not yet claimed** as support — no runtime evidence for the exact release bytes
+exists yet, so nothing here advertises a minimum glibc. See
+[the ABI floor section](docs/INSTALLING.md#linux-abi-floor).
+
 ## Quickstart
 
 Scan finds inactive output. It never deletes.
@@ -194,13 +217,15 @@ For contributors and coding agents: [AGENTS.md](AGENTS.md) and
 
 ## Support and policy
 
-- **MSRV** 1.89. **Prebuilt** x86_64/aarch64 Linux gnu, x86_64/aarch64 macOS,
-  x86_64 Windows MSVC. Musl, Windows ARM64, and ARMv7 are Cargo-only.
+- **MSRV** 1.89. **Prebuilt** for the five targets in
+  [Prebuilt release targets](#prebuilt-release-targets). Musl, Windows ARM64, and
+  ARMv7 are Cargo-only.
 - **Integrity, not authenticity.** Published `.sha256` files prove the bytes
   match what the release built. There is no signature and no authenticity
   claim. macOS binaries are unsigned and not notarized — Gatekeeper will
   refuse a downloaded binary on first launch.
-- **No glibc floor is advertised yet**, though the Linux builds target 2.17.
+- **No glibc floor is advertised yet.** See the
+  [ABI floor note](#prebuilt-release-targets).
 - **Pre-1.0.** Breaking changes to the CLI, JSON schema, or asset names can
   occur in any `0.x` release. Read [CHANGELOG.md](CHANGELOG.md) before
   upgrading. `1.0.0` is when those are declared stable.

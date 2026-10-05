@@ -68,9 +68,9 @@ is a complete, allocation-free implementation.
 | Method | Argument | Meaning | Phases that use it |
 |---|---|---|---|
 | `phase(ScanPhase)` | new phase | Announce a transition; re-scopes the determinate scope | All four scan + all three cleanup phases |
-| `dirs_visited(u64)` | batch delta | Entries walked, batched at 512 (`discovery.rs:563-565`) | `Discovery` |
-| `dirs_pruned(u64)` | batch delta | Entries cut by prune rules, batched at 64 (`discovery.rs:612-614`) | `Discovery` |
-| `manifests_found(u64)` | batch delta | Validated `Cargo.toml` files (`discovery.rs:609`) | `Discovery` |
+| `dirs_visited(u64)` | batch delta | Entries walked, batched at 512 (`discovery.rs:629-631`) | `Discovery` |
+| `dirs_pruned(u64)` | batch delta | Entries cut by prune rules, batched at 64 (`discovery.rs:685-687`) | `Discovery` |
+| `manifests_found(u64)` | batch delta | Validated `Cargo.toml` files (`discovery.rs:682`) | `Discovery` |
 | `workspaces_resolved(u64)` | batch delta | Successful `cargo metadata` runs (`workspace.rs:425`) | `Resolution` |
 | `cargo_failure()` | — | One `cargo metadata` run failed (`workspace.rs:360,375,388,526,541,556`) | `Resolution` |
 | `empty_skipped()` | — | Group skipped: no eligible bytes (`workspace.rs:958,1154`) | `Analysis` |
@@ -126,9 +126,9 @@ after `group_measured(100)`, `determinate_done_value()` is still `0`; only
 `unit_completed` moves it (`progress.rs:640-641`).
 
 **`Send + Sync` (`progress.rs:39`) is load-bearing.** The observer is handed into a
-`dua_core::walk_roots` closure (`discovery.rs:455`, `move |root_idx, entry|` at
-`discovery.rs:463`) running on dua-core's work-stealing pool; the closure calls
-`dirs_visited`, `dirs_pruned`, `manifests_found` (`discovery.rs:564`, `:625`,
+`dua_core::walk_roots` closure (`discovery.rs:517`, `move |root_idx, entry|` at
+`discovery.rs:525`) running on dua-core's work-stealing pool; the closure calls
+`dirs_visited`, `dirs_pruned`, `manifests_found` (`discovery.rs:630`, `:625`,
 `:629`). A shared `&dyn ProgressObserver` can only cross that boundary if it is
 `Sync`. With `&self` on every method, this forces interior mutability: `AtomicU64`
 for counters, `Mutex` for the candidate list, the phase, and the draw timestamp
@@ -394,7 +394,7 @@ exit code? No — definitively.** Traced end to end:
 
 1. No trait method returns a `Result` (`progress.rs:40-51`); nothing to propagate.
 2. No caller in `src/` writes `?` against an observer call. All are bare
-   statements: `discovery.rs:564`, `workspace.rs:932`, `cleanup.rs:857`,
+   statements: `discovery.rs:630`, `workspace.rs:932`, `cleanup.rs:857`,
    `main.rs:463`.
 3. `new` is infallible (`progress.rs:231`); the only fallible indicatif call,
    `multi.clear()`, has its `io::Result` dropped at `progress.rs:397`.
@@ -414,8 +414,8 @@ stats go to stderr (`main.rs:560-584`), as `main.rs:557-559` requires.
 **Are the observer calls cheap enough for a hot loop? Mostly yes, one exception.**
 The trait doc requires *"Implementations MUST NOT allocate per visited entry;
 directory counters are aggregated in batches"* (`progress.rs:30-31`), and producers
-honour it: `discovery.rs:563-565` batches `dirs_visited` at 512 entries,
-`discovery.rs:612-614` batches `dirs_pruned` at 64. Per-call cost is one relaxed
+honour it: `discovery.rs:629-631` batches `dirs_visited` at 512 entries,
+`discovery.rs:685-687` batches `dirs_pruned` at 64. Per-call cost is one relaxed
 `fetch_add` (`progress.rs:445`, `:464`).
 
 The exception: **`unit_completed` takes a `Mutex` on every call** —
@@ -440,10 +440,10 @@ check each.
 renderer's counters (`progress.rs:195-199`) and `ScanCounters` (`main.rs:340-359`)
 are independent values fed by independent increments. The bar's `visited` counts
 **every entry** — `dirs_visited` receives `batch_visited += 1` per entry including
-files (`discovery.rs:559`) — while `ScanCounters.directories_visited` counts
+files (`discovery.rs:625`) — while `ScanCounters.directories_visited` counts
 **directories only**: *"`directories_visited` counts directories only; `visited`
 keeps counting every entry (files included) as the traversal total (L6)"*
-(`discovery.rs:559-562`). So one run shows "visited N" on the bar and a different,
+(`discovery.rs:625-628`). So one run shows "visited N" on the bar and a different,
 smaller visited-entries number in the report (`main.rs:502`), and neither labels
 the other. Sharper still: the message template hardcodes the word `analyzing`
 whenever a total exists (`progress.rs:365`), so a `CleanupExecute` bar reads
@@ -581,8 +581,8 @@ directly). Not covered by `tests/cli_contract.rs` either, which always passes
    `determinate_done` is intentionally unclamped; any refactor letting the atomic
    drive `set_position` directly reintroduces `130/100`.
 7. **The bar's counters and the report's already disagree.** Bar `visited` counts
-   all entries (`discovery.rs:559`); `ScanCounters.directories_visited` counts
-   directories only (`discovery.rs:559-562`). The `analyzing` literal at
+   all entries (`discovery.rs:625`); `ScanCounters.directories_visited` counts
+   directories only (`discovery.rs:625-628`). The `analyzing` literal at
    `progress.rs:365` is wrong for every phase except `Analysis`. Fixing this means
    sharing one counter set, not patching the label.
 8. **The error path never calls `finish_and_clear`.** `main.rs:210` follows a `?`

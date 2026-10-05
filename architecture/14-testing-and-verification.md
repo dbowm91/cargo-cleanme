@@ -8,7 +8,7 @@
 
 The verification apparatus does three distinct jobs. The third is what makes it unusual.
 
-**(a) Product behaviour.** 237 inline `#[test]` functions in `src/`, plus two integration suites that drive the compiled binary as a subprocess: ownership proof, cleanup authorization, the three clean modes, workspace resolution, the versioned JSON contract.
+**(a) Product behaviour.** 266 inline `#[test]` functions in `src/`, plus two integration suites that drive the compiled binary as a subprocess: ownership proof, cleanup authorization, the three clean modes, workspace resolution, the versioned JSON contract.
 
 **(b) Structural contracts invisible at runtime.** 12 scripts in `scripts/` and 4 GitHub workflows. No product code path can detect a file left out of the published crate's `include` allowlist, completions drifted from `cli.rs`, a tag pointing at the wrong commit, or release bytes differing from qualified bytes. These are properties of the repository *as an artifact* — see [Distribution & release](15-distribution-and-release.md).
 
@@ -23,46 +23,50 @@ were the premises, and is any of them unchecked?*
 
 | Layer | Location | Count | What it can catch | What it cannot catch |
 |---|---|---:|---|---|
-| Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 237 `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
+| Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 266 `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
 | Integration — CLI contract | `tests/cli_contract.rs` (708 lines) | 9 `#[test]` | The subprocess boundary end to end: argv normalization, exit codes, JSON shape, `--stats` stream discipline | Internals of `run()`; the `update` command; anything on a real machine |
-| Integration — end to end | `tests/end_to_end.rs` (211 lines) | 1 `#[test]` | One full scan against a synthetic tree with real mtimes | Cleanup, update, config editing |
+| Integration — end to end | `tests/end_to_end.rs` (369 lines) | 2 `#[test]` | Full production-pipeline scans against synthetic trees with real mtimes, under both a filtered Routine scope and an explicit scope | Cleanup, update, config editing |
 | Shared harness | `tests/common/mod.rs` (102 lines) | 0 tests | `set_path_modified` / `backdate_file` (per-platform mtime control) | — |
 | Contract checkers | `scripts/` | **12** (not 13 — see note) | Published-crate contents, fixture portability, installer/shape/smoke contracts, release identity, benchmark regression | That a fixture case proves its intended branch (explicitly disclaimed) |
 | CI | `.github/workflows/` | 4 | Cross-platform, cross-toolchain, MSRV, generated-doc freshness, release drift | Doctests (`cargo test --all-targets` skips them) |
 
-**Note on the script count.** The brief for this document stated 13 scripts in `scripts/`. The directory contains **12**; `find scripts/ -type f` returns exactly twelve. All twelve are characterised in [§5](#5-the-contract-checkers). The likely source of the discrepancy is `packaging/tests/`, which holds two more Python files (`test_installers.py`, `fixture_server.py`) that are verification apparatus but live outside `scripts/`. Counting both directories gives 14.
+**Note on the script count.** The brief for this document stated 13 scripts in `scripts/`. The directory now contains **17**; `find scripts/ -type f` returns exactly seventeen, and the count grew during Phase 11 as the selector-qualification, staged-validation, smoke-transition, and release-attestation checks were added. **The table in [§5](#5-the-contract-checkers) does not yet list all seventeen, and its `check-release-contract.py` row predates M010A** (when Eggpack became producer authority and the script became a comparison against `release/eggpack/distribution.toml` rather than a list of required files). That drift is recorded as an open finding against this document, not silently repaired: the checkers themselves are wired into CI and each one takes a `--self-test`, so the tree is guarded even though this table under-describes it. Every static checker is a claim somebody has to keep true, which is why the `--self-test` — not this table — is the thing that has to hold.
 
 ### Per-file inline test distribution
 
+`mod tests opens at` is the line of the module's `#[cfg(test)]` attribute;
+`lines in test module` counts that line to end of file. Both are recomputed
+from `src/`, never copied between documents.
+
 | File | `#[test]` | `mod tests` opens at | Total lines | Lines in test module |
 |---|---:|---:|---:|---:|
-| `src/cleanup.rs` | 71 | 2324 | 6161 | 3838 |
-| `src/workspace.rs` | 44 | 1447 | 3771 | 2325 |
-| `src/update.rs` | 30 | 1021 | 1971 | 951 |
-| `src/discovery.rs` | 18 | 827 | 1370 | 544 |
-| `src/cli.rs` | 17 | 201 | 506 | 306 |
-| `src/config.rs` | 14 | 309 | 548 | 240 |
-| `src/progress.rs` | 12 | 500 | 703 | 204 |
-| `src/discovery_state.rs` | 11 | 403 | 656 | 254 |
-| `src/report.rs` | 7 | 73 | 195 | 123 |
-| `src/policy.rs` | 5 | 249 | 349 | 101 |
-| `src/traverse.rs` | 6 | 470 | 599 | 129 |
-| `src/editor.rs` | 2 | 157 | 215 | 59 |
+| `src/cleanup.rs` | 71 | 2323 | 6161 | 3839 |
+| `src/workspace.rs` | 47 | 1446 | 3918 | 2473 |
+| `src/update.rs` | 42 | 1211 | 2468 | 1258 |
+| `src/discovery.rs` | 32 | 902 | 1866 | 965 |
+| `src/cli.rs` | 17 | 200 | 506 | 307 |
+| `src/config.rs` | 14 | 308 | 548 | 241 |
+| `src/progress.rs` | 12 | 499 | 703 | 205 |
+| `src/discovery_state.rs` | 11 | 402 | 656 | 255 |
+| `src/report.rs` | 7 | 72 | 195 | 124 |
+| `src/traverse.rs` | 6 | 470 | 599 | 130 |
+| `src/policy.rs` | 5 | 248 | 349 | 102 |
+| `src/editor.rs` | 2 | 156 | 215 | 60 |
 | `src/domain.rs` | 0 | — | 381 | — |
 | `src/error.rs` | 0 | — | 16 | — |
 | `src/lib.rs` | 0 | — | 15 | — |
 | `src/main.rs` | 0 | — | 606 | — |
 | `src/output.rs` | 0 | — | 265 | — |
-| **Total** | **237** | | | |
+| **Total** | **266** | | | |
 
-**The count is declared, not executed.** 237 `#[test]` functions exist in `src/`; **236
-compile and run on Linux**, because exactly one is gated to other platforms
-(`discovery.rs:1092`, `#[cfg(any(target_os = "macos", windows))]`). A further 18 carry
-`#[cfg(unix)]` or `#[cfg(target_os = "linux")]`, so on Windows the inline suite is 1 of
-237. A green local run therefore does not mean a green run elsewhere — which is the
-whole reason the OS matrix exists, and the reason
-`check-fixture-portability.py` exists to catch a *new* ungated fixture before a lane
-disagrees about it.
+**The count is declared, not executed.** 266 `#[test]` functions exist in `src/`;
+**265 compile and run on Linux**, because exactly one is gated to the other
+platforms (`discovery.rs:1181`, `#[cfg(any(target_os = "macos", windows))]`). A
+further 19 carry `#[cfg(unix)]` or `#[cfg(target_os = "linux")]`, so on Windows
+and on macOS the inline suite is 246 of 266. A green local run therefore does not
+mean a green run elsewhere — which is the whole reason the OS matrix exists, and
+the reason `check-fixture-portability.py` exists to catch a *new* ungated fixture
+before a lane disagrees about it.
 
 `cleanup.rs` (71) + `workspace.rs` (44) = 115 of 237 = **48.5%**. The two largest and most
 safety-critical modules — authorization, ownership proof, pre-spawn decision, and the `cargo
@@ -73,7 +77,7 @@ allocation is correct, and it is the one place the pyramid is emphatically *not*
 
 The convention is a separate `tests/` tree beside a lean `src/`. This crate does the
 opposite. `cleanup.rs` is 6161 lines of which **3838 are test code** — 62% of that file is
-fake-Cargo runners and assertion bodies. `workspace.rs` is 3771 lines, 2325 of them tests.
+fake-Cargo runners and assertion bodies. `workspace.rs` is 3918 lines, 2473 of them tests.
 `report.rs` runs the other way: its test module opens at line 73, roughly the first quarter,
 so the rendering tests sit *above* most of the production code they exercise.
 
@@ -144,7 +148,7 @@ src/output.rs` returns `0` for all five. They split into two very different grou
 
 **Not defensible, and significant.**
 
-- **`src/main.rs` (590 lines, 0 tests).** The composition root. It *is* covered — `cli_contract.rs` runs the binary as a subprocess, so `main()` and `run()` execute in all 8 cases, including exit-code assertions at `cli_contract.rs:268` (`Some(1)`) and `:630` (`Some(17)`). But that is black-box coverage of an opaque process: nothing asserts on `run()`'s structure, and the exit-code table is only as complete as the cases someone remembered to write.
+- **`src/main.rs` (606 lines, 0 tests).** The composition root. It *is* covered — `cli_contract.rs` runs the binary as a subprocess, so `main()` and `run()` execute in all 9 cases, including exit-code assertions at `cli_contract.rs:318` (`Some(1)`) and `:680` (`Some(17)`). But that is black-box coverage of an opaque process: nothing asserts on `run()`'s structure, and the exit-code table is only as complete as the cases someone remembered to write.
 - **`src/output.rs` (265 lines, 0 tests).** The entire versioned DTO layer — `EnvelopeV1` (`output.rs:8`), `scan()` (`:103`), `cleanup()` (`:158`), both hardcoding `schema_version: 1` at `:140` and `:206`. Every field is asserted only from outside the process. No unit test pins the struct shape, so adding a field to `EnvelopeV1` requires someone to notice and update external assertions.
 - **`update_json` (`main.rs:568`)** is the sharpest single gap. The only machine-readable output path that does **not** go through `EnvelopeV1`; it hand-builds a `serde_json::Map` with its own `json!(1)` at `main.rs:571` and a bespoke `result` object at `:578`. It has no test of any kind.
 
@@ -187,7 +191,7 @@ with the FILETIME-ticks epoch constant) and `SetFileTime` on Windows (mirrored a
 infrastructure in the repository — without it "inactive" cannot be tested at all, and on
 Windows the naive approach was precisely the C009 defect class.
 
-### `tests/cli_contract.rs` — 8 cases
+### `tests/cli_contract.rs` — 9 cases
 
 | Test | Line | Contract pinned |
 |---|---:|---|
@@ -427,7 +431,7 @@ testing can see, because the subject is bytes on a registry and a CDN.
 | Module | Lines | Tests | Tests / prod. lines | Verdict |
 |---|---:|---:|---:|---|
 | `cleanup.rs` | 6161 | 71 | 71 / 2323 | Appropriate. Most safety-critical module has the most tests; the race fakes show the hard cases were found and pinned |
-| `workspace.rs` | 3771 | 44 | 44 / 1446 | Appropriate, and the fakes are argument-focused rather than result-focused — the right instinct |
+| `workspace.rs` | 3918 | 47 | 47 / 1446 | Appropriate, and the fakes are argument-focused rather than result-focused — the right instinct |
 | `update.rs` | 1971 | 30 | 30 / 1020 | Reasonable unit coverage, but this is the module whose defects (C011, C016, C017) escaped to production. Unit tests cannot see a transport that cannot reach its authority |
 | `discovery.rs` | 1370 | 18 | 18 / 826 | Thin-ish for a filesystem walk with attribution, but the attribution logic is pure and testable |
 | `cli.rs` | 506 | 17 | 17 / 200 | Good |
@@ -441,7 +445,7 @@ testing can see, because the subject is bytes on a registry and a CDN.
 | `domain.rs` | 381 | 0 | 0 / 381 | Defensible. Pure data, exercised transitively. Semantic *rules* live in the modules that interpret the types |
 | `error.rs` | 16 | 0 | — | Defensible |
 | `lib.rs` | 15 | 0 | — | Defensible |
-| `main.rs` | 590 | 0 | 0 / 590 | **Zero inline tests for the composition root.** Partly mitigated — `cli_contract.rs` runs the binary as a subprocess, so `main()` and `run()` execute in all 8 cases and two exit codes are pinned. But `run()`'s structure is opaque and `update_json` (`:568`) is entirely unasserted |
+| `main.rs` | 606 | 0 | 0 / 606 | **Zero inline tests for the composition root.** Partly mitigated — `cli_contract.rs` runs the binary as a subprocess, so `main()` and `run()` execute in all 9 cases and two exit codes are pinned. But `run()`'s structure is opaque and `update_json` (`:584`) is entirely unasserted |
 | `output.rs` | 265 | 0 | 0 / 265 | **Zero tests for the entire versioned DTO layer.** The sharpest structural weakness in the tree |
 
 The contrast in the last three rows is the finding. The *human* renderer beside the
