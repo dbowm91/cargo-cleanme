@@ -27,25 +27,33 @@ M008 planning baseline: `3ee9699a0b0d987287d08e427195284e08d079f7`
 
 | Subsystem | Status | Roadmap | Current milestone | Blocker |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | closed for current objectives | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | Phase 9 closed (C008); C009 closed | none |
-| Distribution, release, and update | closed | `plans/subsystems/distribution-release-update-roadmap.md` | Phase 10 closed; correctives C013–C017 closed | none |
+| Artifact discovery and cleanup | ready / Phase 11 hardening | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | M011D Cargo selector qualification lifecycle | none; evidence-lifecycle hardening only, no selector support expansion |
+| Distribution, release, and update | ready / Phase 11 hardening | `plans/subsystems/distribution-release-update-roadmap.md` | C018 provenance uncertainty fail-closed | C018 is the immediate safety handoff; M011A-M011C are also ready and can proceed in parallel, with operational closure tied to a future release |
 
 ## Open work
 
 | Item | Status | Plan | Note |
 |---|---|---|---|
+| C018 — self-update provenance uncertainty fail-closed | **ready** | `plans/implementation/distribution-release-update/c018-self-update-provenance-uncertainty-fail-closed.md` | Immediate safety handoff. Positive Cargo-manager evidence that cannot be interpreted must become `UnprovableOwnership`, never self-managed ownership; mutating refusals move before remote acquisition. |
+| M011A — immutable release attestation + verification | **ready** | `plans/implementation/distribution-release-update/011a-immutable-release-attestation-and-verification.md` | Enable/verify immutable GitHub releases and their release attestations without hand-editing Eggpack-generated CI. Operational closure requires the first covered future release. |
+| M011B — staged-release validation workflow gate | **ready** | `plans/implementation/distribution-release-update/011b-staged-release-validation-workflow-gate.md` | Product-owned read-only workflow runs `validate-staged-release.py` automatically after a trusted Eggpack candidate-build/stage run. Stop and move upstream to Eggpack if exact source/tag binding cannot be made safe. |
+| M011C — published-release smoke automation | **ready** | `plans/implementation/distribution-release-update/011c-published-release-smoke-automation.md` | Add release-published automation for the real five-target updater rehearsal while retaining manual dispatch; boundedly wait for crates.io because GitHub publication precedes crate publication. |
+| M011D — Cargo selector qualification lifecycle | **ready** | `plans/implementation/artifact-discovery-cleanup/011d-cargo-selector-qualification-lifecycle.md` | Guard the exact runtime selector allowlist with real-Cargo qualification evidence and a dedicated compatibility workflow; exploratory future Cargo versions never auto-promote support. |
 | C010 — `CurlConfig::user_agent` seam in `eggup-curl` | **proposed** | `plans/implementation/distribution-release-update/c010-eggup-curl-user-agent-seam.md` | Bounded upstream request. It cannot be closed from this repository, and nothing here waits on it: `eggup-eggfetch` already provides the seam. No closure record, by design. |
 
-**Nothing else is open.** There is no milestone in `active`, `ready`, `blocked`,
-or `closing`. Starting new work means a new implementation plan plus, if the
-work corrects a closed one, a corrective plan per §6 — not an edit to a closed
-plan or its closure record.
+C018 is the next safety-critical handoff. M011A-M011D are independently
+implementation-ready and may proceed in parallel where they do not consume the
+same release event. The first future release after these changes is expected to
+supply operational evidence for C018 and M011A-M011C; no release number is
+pre-authorized by planning.
 
 ## Published state
 
 Seven releases are published as GitHub releases and on crates.io, none yanked:
-**v0.1.0, v0.1.1, v0.1.2, v0.1.3, v0.1.4, v0.1.5, v0.1.6**. No release is
-required and none is scheduled.
+**v0.1.0, v0.1.1, v0.1.2, v0.1.3, v0.1.4, v0.1.5, v0.1.6**. Phase 11 now
+requires a future qualification release for C018/M011A-M011C closure evidence,
+but planning deliberately does not assign its version before implementation
+selects the release boundary.
 
 Not every published version is defect-free, and the registry is where that is
 recorded rather than hidden:
