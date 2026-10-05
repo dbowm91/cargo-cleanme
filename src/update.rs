@@ -1321,6 +1321,15 @@ mod tests {
         /// Two independent claims, deliberately not collapsed into one:
         /// production reached the cleanup callback, *and* the directory it
         /// owned no longer exists on disk.
+        ///
+        /// Only the `#[cfg(unix)]` cases call this, because the success path
+        /// executes the candidate as a real script. On Windows it is
+        /// therefore unreachable, which is the same reason `absent` carries
+        /// the attribute below — and the first cut of this method omitted it,
+        /// so `clippy -D warnings` failed the Windows lane while Linux was
+        /// green. The unused method was the evidence of a platform gap, not a
+        /// style problem.
+        #[cfg_attr(not(unix), allow(dead_code))]
         fn assert_no_staging_leak(&self, what: &str) {
             assert_eq!(
                 self.created_staging.borrow().len(),

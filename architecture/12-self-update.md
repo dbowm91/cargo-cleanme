@@ -2,7 +2,7 @@
 
 > Component deep dive · part of the [architecture overview](overview.md)
 
-`src/update.rs` (2635 lines: 1210 production, 1425 inline tests, 44 `#[test]`
+`src/update.rs` (2644 lines: 1210 production, 1434 inline tests, 44 `#[test]`
 functions) implements `cargo cleanme update`. It is architecturally distinct from
 the other 16 modules in `src/`: the only module with a network dependency, and
 the only one that writes to its own executable path.
@@ -837,7 +837,7 @@ came from" (`:433-436`). It does not fail open in the common case.
 |---|---|---|
 | Test module starts | line 1212 (`#[cfg(test)]` at `:1211`) | direct read |
 | `#[test]` functions | **44** | `grep -nE '^\s*#\[test\]' src/update.rs` |
-| Inline test lines | 1425 (1211–2635) | 2635 − 1211 + 1 |
+| Inline test lines | 1434 (1211–2644) | 2644 − 1211 + 1 |
 | `tests/` integration tests referencing `update` | **0** | `grep -rniE 'update\|provenance\|self.?update' tests/` → no matches |
 
 `tests/cli_contract.rs` has 8 `#[test]` functions, `tests/end_to_end.rs` has 1, and
@@ -847,37 +847,37 @@ came from" (`:433-436`). It does not fail open in the common case.
 
 | Group | Tests (line) | Protects |
 |---|---|---|
-| **Provenance** (9) | `the_crates_toml_we_parse_is_the_one_cargo_writes` (1693), `a_cargo_root_install_is_refused_even_when_it_is_not_the_cargo_home` (1719), `cargo_managed_installation_is_refused_with_the_manager_command` (1743), `an_unrecorded_file_in_a_cargo_root_is_not_ours_to_replace` (1779), `the_published_installer_layout_is_not_mistaken_for_a_cargo_root` (2116), `a_cargo_record_that_omits_this_binary_does_not_claim_this_file` (2152), `a_malformed_crates_toml_entry_does_not_hide_the_entry_after_it` (2177), `a_self_managed_installation_is_proven_by_its_digest` (2214), `ownership_is_never_inferred_from_the_file_name` (2224) | The C017 fix from both directions. Most carefully written: `:2116`, whose comment explains a lenient fixture would prove nothing — with an irrelevant record both the correct and the broken answer are "self-managed" — so it plants the one near miss that could cause a wrongful claim (2122-2129). |
-| **Version selection & comparison** (8) | `version_authority_accepts_only_plain_releases` (1565), `version_authority_reads_exactly_one_field` (1585), `version_authority_rejects_prerelease_and_junk` (1592), `already_current_is_not_an_error_to_hide` (1621), `a_registry_outage_is_reported_not_guessed` (1634), `the_release_tag_is_constructed_not_scraped` (1609), `versions_order_numerically_not_lexically` (2526), `an_older_published_version_is_not_offered_to_a_matching_build` (2566) | Narrow authority, numeric comparison, constructed tags, outage as error not guess. |
-| **No-downgrade** (1) | `a_newer_local_build_is_never_downgraded` (2550) | The C011 guard; comment records the defect was found by live smoke, not a fixture. |
-| **Integrity** (5) | `a_verified_candidate_replaces_the_live_binary` (2260), `a_checksum_mismatch_leaves_the_live_binary_untouched` (2272), `a_candidate_reporting_the_wrong_version_is_rejected_before_commit` (2300), `a_sidecar_naming_a_different_asset_is_rejected` (2315), `an_absent_release_asset_is_not_replaced_with_anything` (2337) | `:2272` is the most significant test in the module: it is the one proving a bad candidate cannot become the installed binary. |
-| **Transaction hygiene** (4) | `staging_is_cleaned_up_on_success_and_on_failure` (2390), `a_dry_run_downloads_nothing` (2478), `a_deliberately_leaked_staging_path_is_still_reported` (2420), `a_foreign_staging_directory_is_not_evidence_of_a_leak` (2451) | No residue, on evidence bound to the fixture's **own** staging path rather than a scan of the temp directory. The last two are C021's controls: the first proves the check can still fail, the second proves it ignores a concurrent sibling's live path. Without both, the check is indistinguishable from the process-global scan it replaced. |
-| **Transport & release contract** (5) | `the_production_transport_identifies_itself_descriptively` (2577), `the_published_target_table_matches_the_eggpack_contract` (2495), `the_version_authority_url_is_https_and_product_scoped` (2611), `release_urls_are_constructed_from_the_tag_and_contracted_asset` (2618), `the_host_target_has_a_contracted_asset` (2628) | `:2577` is the C011 guard and the only test touching real transport construction. |
+| **Provenance** (9) | `the_crates_toml_we_parse_is_the_one_cargo_writes` (1702), `a_cargo_root_install_is_refused_even_when_it_is_not_the_cargo_home` (1728), `cargo_managed_installation_is_refused_with_the_manager_command` (1752), `an_unrecorded_file_in_a_cargo_root_is_not_ours_to_replace` (1788), `the_published_installer_layout_is_not_mistaken_for_a_cargo_root` (2125), `a_cargo_record_that_omits_this_binary_does_not_claim_this_file` (2161), `a_malformed_crates_toml_entry_does_not_hide_the_entry_after_it` (2186), `a_self_managed_installation_is_proven_by_its_digest` (2223), `ownership_is_never_inferred_from_the_file_name` (2233) | The C017 fix from both directions. Most carefully written: `:2116`, whose comment explains a lenient fixture would prove nothing — with an irrelevant record both the correct and the broken answer are "self-managed" — so it plants the one near miss that could cause a wrongful claim (2122-2129). |
+| **Version selection & comparison** (8) | `version_authority_accepts_only_plain_releases` (1574), `version_authority_reads_exactly_one_field` (1594), `version_authority_rejects_prerelease_and_junk` (1601), `already_current_is_not_an_error_to_hide` (1630), `a_registry_outage_is_reported_not_guessed` (1643), `the_release_tag_is_constructed_not_scraped` (1618), `versions_order_numerically_not_lexically` (2535), `an_older_published_version_is_not_offered_to_a_matching_build` (2575) | Narrow authority, numeric comparison, constructed tags, outage as error not guess. |
+| **No-downgrade** (1) | `a_newer_local_build_is_never_downgraded` (2559) | The C011 guard; comment records the defect was found by live smoke, not a fixture. |
+| **Integrity** (5) | `a_verified_candidate_replaces_the_live_binary` (2269), `a_checksum_mismatch_leaves_the_live_binary_untouched` (2281), `a_candidate_reporting_the_wrong_version_is_rejected_before_commit` (2309), `a_sidecar_naming_a_different_asset_is_rejected` (2324), `an_absent_release_asset_is_not_replaced_with_anything` (2346) | `:2272` is the most significant test in the module: it is the one proving a bad candidate cannot become the installed binary. |
+| **Transaction hygiene** (4) | `staging_is_cleaned_up_on_success_and_on_failure` (2399), `a_dry_run_downloads_nothing` (2487), `a_deliberately_leaked_staging_path_is_still_reported` (2429), `a_foreign_staging_directory_is_not_evidence_of_a_leak` (2460) | No residue, on evidence bound to the fixture's **own** staging path rather than a scan of the temp directory. The last two are C021's controls: the first proves the check can still fail, the second proves it ignores a concurrent sibling's live path. Without both, the check is indistinguishable from the process-global scan it replaced. |
+| **Transport & release contract** (5) | `the_production_transport_identifies_itself_descriptively` (2586), `the_published_target_table_matches_the_eggpack_contract` (2504), `the_version_authority_url_is_https_and_product_scoped` (2620), `release_urls_are_constructed_from_the_tag_and_contracted_asset` (2627), `the_host_target_has_a_contracted_asset` (2637) | `:2577` is the C011 guard and the only test touching real transport construction. |
 
 9 + 8 + 1 + 5 + 4 + 5 = **32 named below, of 44 in the file.** The gap is not
 random: it is **C018's provenance-uncertainty group**, eleven tests added after
 this table was written and never folded into it —
-`unreadable_cargo_metadata_can_never_become_self_managed` (1838),
-`a_malformed_cargo_cleanme_record_is_not_skipped_into_self_managed` (1853),
-`an_unrelated_malformed_entry_does_not_hide_a_valid_record` (1870),
-`a_cargo_record_in_an_unsupported_shape_is_uncertain_not_absent` (1892),
-`an_explicit_cargo_home_bin_with_a_missing_record_is_unprovable` (1903),
-`an_ancestor_cargo_root_with_unreadable_metadata_is_unprovable` (1919),
-`a_non_utf8_executable_name_in_a_cargo_root_is_unprovable` (1933),
-`a_genuinely_self_managed_installer_layout_stays_self_managed` (1965),
-`the_cargo_root_search_cannot_miss_a_supported_layout` (1983),
-`a_recorded_cargo_root_beyond_the_cargo_home_is_still_refused_before_the_registry` (2092),
-and `a_mutating_run_on_forbidden_provenance_makes_zero_registry_requests` (2030).
+`unreadable_cargo_metadata_can_never_become_self_managed` (1847),
+`a_malformed_cargo_cleanme_record_is_not_skipped_into_self_managed` (1862),
+`an_unrelated_malformed_entry_does_not_hide_a_valid_record` (1879),
+`a_cargo_record_in_an_unsupported_shape_is_uncertain_not_absent` (1901),
+`an_explicit_cargo_home_bin_with_a_missing_record_is_unprovable` (1912),
+`an_ancestor_cargo_root_with_unreadable_metadata_is_unprovable` (1928),
+`a_non_utf8_executable_name_in_a_cargo_root_is_unprovable` (1942),
+`a_genuinely_self_managed_installer_layout_stays_self_managed` (1974),
+`the_cargo_root_search_cannot_miss_a_supported_layout` (1992),
+`a_recorded_cargo_root_beyond_the_cargo_home_is_still_refused_before_the_registry` (2101),
+and `a_mutating_run_on_forbidden_provenance_makes_zero_registry_requests` (2039).
 They are the automated evidence behind the C018 changelog entry, and they are
 recorded here so the count discrepancy is a stated fact rather than a silent gap.
 
 ### `FixtureEnvironment` (`:1222-1356`)
 
 **What it fakes:** executable path, Cargo home, current version, the staging
-directory (real on disk, via `unique()` at `:1433`), `fetch` (writes canned bytes
+directory (real on disk, via `unique()` at `:1442`), `fetch` (writes canned bytes
 to the destination, returns the byte count), and `fetch_metadata` (canned bytes).
 Three response modes — `respond` (`:1274`), `fail_transport` (`:1284`), `absent`
-(`:1343`) — plus `requested` (`:1254`), asserted at `:2478`.
+(`:1352`) — plus `requested` (`:1254`), asserted at `:2487`.
 
 **What it cannot fake:**
 
@@ -887,7 +887,7 @@ Three response modes — `respond` (`:1274`), `fail_transport` (`:1284`), `absen
 2. **`env!("CARGO_PKG_VERSION")`.** `current_version` returns whatever the test
    declares (`:1225`), so a test can claim to be any version without the
    binary being that version — the no-downgrade tests depend on this (`:2554`).
-3. **argv.** The candidate stub at `:1459` printed the identity for *any*
+3. **argv.** The candidate stub at `:1468` printed the identity for *any*
    invocation, which is precisely why C016 survived. I verified that from the
    comments at `:966-971` and `:1916-1921`; I did not read `:1183-1215` line by
    line.

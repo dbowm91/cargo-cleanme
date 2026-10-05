@@ -46,7 +46,7 @@ from `src/`, never copied between documents.
 |---|---:|---:|---:|---:|
 | `src/cleanup.rs` | 71 | 2393 | 6347 | 3955 |
 | `src/workspace.rs` | 47 | 1446 | 3918 | 2473 |
-| `src/update.rs` | 44 | 1211 | 2635 | 1425 |
+| `src/update.rs` | 44 | 1211 | 2644 | 1434 |
 | `src/discovery.rs` | 32 | 902 | 1866 | 965 |
 | `src/cli.rs` | 24 | 381 | 901 | 521 |
 | `src/config.rs` | 14 | 374 | 632 | 259 |
@@ -485,7 +485,7 @@ Now guarded:
 | Docs/completions drift | `generated-docs` job |
 | Documentation citing lines that no longer exist | `check-doc-citations.py`, in `ci.yml` `checks` |
 | **Documentation inventory that silently lost a script** | `check-doc-citations.py` §5 parity rule — added by C021 |
-| **A test whose observation surface is wider than its subject** | C021's fixture-owned staging evidence (`leaked_staging`, `src/update.rs:1310`) plus the foreign-path concurrency control at `:2451` |
+| **A test whose observation surface is wider than its subject** | C021's fixture-owned staging evidence (`leaked_staging`, `src/update.rs:1310`) plus the foreign-path concurrency control at `:2460` |
 | Performance regression | `benchmark` job vs `release/baseline-benchmark.json` |
 
 **Residual risks in the present tree.**
@@ -527,7 +527,7 @@ testing can see, because the subject is bytes on a registry and a CDN.
 |---|---:|---:|---:|---|
 | `cleanup.rs` | 6347 | 71 | 71 / 2392 | Appropriate. Most safety-critical module has the most tests; the race fakes show the hard cases were found and pinned |
 | `workspace.rs` | 3918 | 47 | 47 / 1445 | Appropriate, and the fakes are argument-focused rather than result-focused — the right instinct |
-| `update.rs` | 2635 | 44 | 44 / 1210 | Reasonable unit coverage, but this is the module whose defects (C011, C016, C017) escaped to production. Unit tests cannot see a transport that cannot reach its authority. Its transaction-hygiene evidence was briefly a false green too — see R6 |
+| `update.rs` | 2644 | 44 | 44 / 1210 | Reasonable unit coverage, but this is the module whose defects (C011, C016, C017) escaped to production. Unit tests cannot see a transport that cannot reach its authority. Its transaction-hygiene evidence was briefly a false green too — see R6 |
 | `discovery.rs` | 1866 | 32 | 32 / 901 | Adequate for a filesystem walk with attribution; the attribution logic is pure and testable |
 | `cli.rs` | 901 | 24 | 24 / 380 | Good |
 | `config.rs` | 632 | 14 | 14 / 373 | Good for its surface |

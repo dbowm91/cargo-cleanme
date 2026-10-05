@@ -1,6 +1,6 @@
 ## Artifact Discovery and Cleanup Roadmap
 
-Status: Phase 12 is **closed** under ADR 003. M012A and M012B are both implemented and closed with evidence; neither changed what can be cleaned or how ownership is proven. C021 pre-release test and verification-evidence reconciliation is **ready** and is the current artifact-discovery handoff; 0.2.0 must not be staged as publication-ready until it closes.
+Status: Phase 12 is **closed** under ADR 003. M012A and M012B are both implemented and closed with evidence; neither changed what can be cleaned or how ownership is proven. C021 pre-release test and verification-evidence reconciliation is **implemented on `81af7f4`**; its disposition is recorded in [`plans/closure/artifact-discovery-cleanup/c021-status.md`](../closure/artifact-discovery-cleanup/c021-status.md), and 0.2.0 must not be staged as publication-ready until that record reads `closed`.
 
 
 Repository audit baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
@@ -728,7 +728,9 @@ Exit: both plans close with the normal verification ladder, generated-doc drift 
 
 ## 10I. C021 — Pre-release test and verification-evidence reconciliation
 
-Status: **ready**.
+Status: **see the closure record**. Implemented on `81af7f4` from baseline
+`f3dfd7a`. Closure record:
+[`plans/closure/artifact-discovery-cleanup/c021-status.md`](../closure/artifact-discovery-cleanup/c021-status.md).
 
 Plan:
 
@@ -737,38 +739,45 @@ Plan:
 C021 is a post-Phase-12 release-readiness corrective. It does not reopen M012A
 or M012B and does not change the destructive proof boundary.
 
-It owns three findings that should be closed before 0.2.0 staging:
+It owned three findings that had to be closed before 0.2.0 staging, and all
+three are now addressed:
 
-1. **Updater staging-cleanup test premise.**
-   `src/update.rs::tests::staging_is_cleaned_up_on_success_and_on_failure`
-   currently detects leftovers by scanning the whole process temp directory for
-   a prefix shared by every updater fixture. Under parallel tests, another
-   fixture's legitimate in-flight staging directory can therefore look like
-   this transaction's leak. C021 must prove that premise deterministically,
-   replace it with fixture-owned path evidence, and keep an intentional-own-leak
-   negative control. No sleeps, retries, or global test serialization qualify.
+1. **Updater staging-cleanup test premise.** Confirmed, and worse than reported:
+   the test's observation surface was the process-wide temp directory, so a
+   sibling's live staging directory could fail it — the test could not pass for
+   its own reason either. Proven deterministically (a foreign same-prefix
+   directory reproduces the historical failure on a subject that leaked
+   nothing), then replaced with fixture-owned path evidence plus two controls: a
+   deliberate leak of the fixture's *own* path must be rejected, and a live
+   foreign path must be ignored. No sleeps, retries, or suite serialization.
+   Production update code unchanged.
 
-2. **Verification-inventory drift.**
-   `architecture/14-testing-and-verification.md` says 17 scripts but omits
-   `check-doc-citations.py` from its primary table and later retains stale
-   pre-M011B/M011D claims that staged validation and real-Cargo selector
-   qualification are unwired. C021 reconciles the complete current inventory
-   and extends an already-wired documentation guard with exact script-set
-   parity/self-test premises.
+2. **Verification-inventory drift.** The 17-script table is now complete and
+   machine-checked: `check-doc-citations.py` requires exact set parity with
+   `scripts/` in both directions plus uniqueness, with premise-negative
+   self-tests. It failed on its first run against the pre-corrective tree,
+   naming the exact drift C019 had recorded. The stale claim that
+   `validate-staged-release.py` and `qualify-cargo-selectors.sh` were unwired
+   is deleted — M011B and M011D wired both.
 
-3. **0.2.0 changelog completeness.**
-   The Unreleased section already covers M012A, M012B, and C019, but must also
-   describe C018's fail-closed provenance correction and C020's Windows
-   concurrent first-use config race before publication. Release-process notes
-   must not claim attestation/staged/published evidence before those events
-   occur.
+3. **0.2.0 changelog completeness.** The `[Unreleased]` entry now also describes
+   C018's fail-closed provenance correction and C020's Windows concurrent
+   first-use configuration race, and claims no attestation, staged-draft, or
+   post-publication smoke evidence that cannot exist before publication.
 
-The baseline hosted runs at `f3dfd7a` are not closure evidence: CI #250,
-Release drift #78, and selector qualification #5 ended non-green with cancelled
-jobs/lanes. C021 requires fresh complete hosted evidence from its final head.
-If that evidence exposes a new product defect outside this plan's harness/docs
-scope, implementation stops and opens a separate corrective rather than
-absorbing it.
+### What C021 did not absorb
+
+Four medium-or-low findings sit outside its authorized surfaces and are recorded
+rather than fixed, per the corrective-pass rule: 257 opaque bare `:N` citations in
+`architecture/12-self-update.md` that no tool can check; `check-installer-contract.py`
+having no `--self-test`; hosted jobs being cancellable while queued for a runner;
+and `update_json` remaining untested. Each needs its own corrective.
+
+The baseline hosted runs at `f3dfd7a` (CI #250, Release drift #78, selector
+qualification #5) were diagnosed rather than assumed: every cancelled job
+reports zero executed steps, so they were cancelled while queued for a runner,
+and no job that obtained a runner ever failed. That is runner-capacity
+contention, not a product defect, and no CI policy change was made on that basis.
 
 ## 11. Cross-cutting reliability concerns
 
