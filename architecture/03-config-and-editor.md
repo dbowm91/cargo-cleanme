@@ -11,9 +11,9 @@ repository-root `config.toml` (45 lines), and `src/editor.rs` (215 lines,
 **Owns** — the four config structs, their `serde` attributes and defaults
 (`src/config.rs:11-67`); reading, validating and normalizing a config file
 (`load`, `src/config.rs:88-180`); first-use creation from an embedded template
-(`create_initial`, `src/config.rs:240-303`); which config file an invocation
+(`create_initial`, `src/config.rs:255-342`); which config file an invocation
 means (`ConfigPathResolver`, `src/config.rs:69-87`); the `config show`
-projection (`show`, `src/config.rs:304-306`); editor resolution
+projection (`show`, `src/config.rs:343-345`); editor resolution
 (`editor::resolve_editor`, `src/editor.rs:7-37`).
 
 **Does not own** — any policy *decision* (`config.rs` validates shape and range;
@@ -127,7 +127,7 @@ it says — it matches nothing); trailing separators are structural and preserve
 around the canonicalized name (`:198`, `:202`, `:209`). Without it, a pattern
 spelled the way the user's own shell shows it (`/tmp/...` where `/tmp` is a
 symlink) would silently exclude nothing — the regression pinned at
-`src/config.rs:313`.
+`src/config.rs:352`.
 
 ## 3. Loading, creation, and validation
 
@@ -174,29 +174,60 @@ where `load_or_create` would refuse to show them the file they need to fix.
 
 ### `create_initial` — atomic, verbatim, never overwriting
 
-`src/config.rs:240-303`: `create_dir_all` the parent (`:241-245`, re-checked at
-`:251-256`); write to `<file_name>.tmp.<pid>.<attempt>` in the **same directory**
-(`:262-264`, so publication stays on one volume) opened `create_new(true)`
-(`:265-268`, a name collision just advances the attempt counter at `:271`);
-`write_all` the template verbatim and `sync_all` it (`:274-277`); publish with
-`fs::hard_link(&temp, path)` then `remove_file(&temp)` (`:280-281`). Linking is
-atomic and **cannot overwrite**: a concurrent winner makes it fail with
-`AlreadyExists`, which is swallowed as success (`:286-288`) —
-`concurrent_first_use_creates_one_complete_template` (`:533-547`) runs 8 threads
-against one fresh nested path and asserts the final bytes equal the template.
-After 100 attempts: `AppError::Config("could not create a temporary config
-beside …")` (`:261`, `:299-302`); and if the destination exists and is not a
-regular file the error path refuses to replace it (`:289-294`).
+`src/config.rs:254-341`: `create_dir_all` the parent (`:255-260`, re-checked at
+`:261-266`); write to `<file_name>.tmp.<pid>.<attempt>` in the **same directory**
+(`:277-279`, so publication stays on one volume) opened `create_new(true)`
+(`:280-283`); `write_all` the template verbatim and `sync_all` it (`:312-315`);
+publish with `fs::hard_link(&temp, path)` then `remove_file(&temp)` (`:319-320`).
+Linking is atomic and **cannot overwrite**: a concurrent winner makes it fail
+with `AlreadyExists`, which is swallowed as success (`:325-327`). After 100
+attempts: `AppError::Config("could not create a temporary config beside …")`
+(`:338-341`); and if the destination exists and is not a regular file the error
+path refuses to replace it (`:329-334`).
 
 So writes are atomic at publication, the template is byte-for-byte verbatim, and
-an existing config is never replaced. Two honest caveats: no directory-level
-`fsync` after the link, and the mechanism is `hard_link` rather than `rename`
-(same directory, so still atomic, but a link count is briefly 2).
+an existing config is never replaced.
+
+**Losing a race is not spelled the same way on every platform, and only one of
+the two spellings may be matched by error kind.** `step_error` (`:245-253`)
+names the call that failed while preserving `ErrorKind` exactly, because the
+code below decides everything by inspecting the kind — so a "helpful" wrapper
+that changed the kind would silently stop the race handling from recognising its
+own benign outcome. With the step named, two cases were found on hosted runners:
+
+- **`create_new` on a taken staging name.** POSIX reports `AlreadyExists`
+  (`:307`). Windows reports `PermissionDenied` — os error 5, "Access is denied" —
+  for a file another thread is still creating, because the name is reserved
+  before its metadata is committed (`:308`). Both mean the name is taken.
+- **The publish link.** `hard_link` losing the publication race is tolerated on
+  `AlreadyExists` (`:325`). Across 24 rounds of 16 threads on `windows-latest`
+  no `PermissionDenied` was observed here, so the asymmetry is documented for the
+  staging name only. That is an observation, not a proof the platform cannot do
+  it; if a future run reports `publishing the config failed: Access is denied`,
+  the discriminator has to be "a regular-file destination now exists", never a
+  bare list of error kinds.
+
+The staging case is deliberately **not** decided by `temp.exists()` alone
+(`:308`). That probe answers whether the name is taken *now*, while the syscall
+answered whether it was taken *then* — and the winner can publish and unlink its
+staging file in between, so probing alone regresses Linux, macOS, and the 1.89
+lane by letting `AlreadyExists` escape as an error. A genuine permissions
+problem leaves the name free and still hard-fails on both platforms.
+
+`concurrent_first_use_creates_one_complete_template` (`:552-585`) pins this: 16
+workers over 24 rounds, each round a fresh nested path, asserting that every
+racer succeeds and the final bytes equal the template. One 8-thread round hit
+the Windows failure roughly one run in three, so the premise is strengthened
+deliberately — a premise the defect can miss is not a premise.
+
+Two honest caveats remain: no directory-level `fsync` after the link, and the
+mechanism is `hard_link` rather than `rename` (same directory, so still atomic,
+but a link count is briefly 2).
 
 ### `show` — a projection, not a file dump
 
 `show(&Config) -> Result<String, AppError>` is `toml::to_string_pretty`
-(`src/config.rs:304-306`), serializing the **in-memory, validated, normalized**
+(`src/config.rs:343-345`), serializing the **in-memory, validated, normalized**
 config. Comments and original formatting are gone; `scan.ignore` and friends
 appear in canonicalized spelling rather than the spelling the user typed; absent
 optionals are omitted rather than written as null (TOML has no null, and the
@@ -413,7 +444,7 @@ consumed elsewhere, update that consumer (`src/policy.rs`, `src/discovery.rs`,
 
 | Case | Behaviour |
 |---|---|
-| `--config` points at a directory | `load` reads it and fails `cannot read …`; creation refuses to replace a non-file (`src/config.rs:289-294`) |
+| `--config` points at a directory | `load` reads it and fails `cannot read …`; creation refuses to replace a non-file (`src/config.rs:328-333`) |
 | `--config` with no file name | `file_name()` yields the last component; the fallback name is literally `config.toml` (`:257-260`) |
 | Config file is not valid UTF-8 | `fs::read_to_string` fails → `cannot read …` (`:90-91`) |
 | Non-UTF-8 directory name during glob matching | Matched through `to_string_lossy` in discovery, so a broad `*` cannot be escaped (`src/discovery.rs:30-45`) |
@@ -422,7 +453,7 @@ consumed elsewhere, update that consumer (`src/policy.rs`, `src/discovery.rs`,
 ## 8. Testing
 
 `src/config.rs` has **14** `#[test]` functions. The module starts at
-`src/config.rs:308` (`#[cfg(test)]`) / `:309` (`mod tests`); production code ends
+`src/config.rs:347` (`#[cfg(test)]`) / `:309` (`mod tests`); production code ends
 at `:306`. One of the 14 is `#[cfg(unix)]`-gated (`:311-312`), so a non-Unix
 build compiles 13.
 
@@ -441,7 +472,7 @@ build compiles 13.
 | `operational_bootstrap_refuses_overwrite` | `:501` | `load_or_create` creates once, then preserves an edited `recency_seconds = 61`. |
 | `bootstrap_bytes_equal_checked_in_template` | `:510` | The created file is byte-equal to `CONFIG_TEMPLATE` and loads as defaults. |
 | `malformed_config_is_not_replaced_automatically` | `:521` | A malformed file errors *and* is left byte-identical on disk. |
-| `concurrent_first_use_creates_one_complete_template` | `:533` | 8 threads racing on one nested path produce exactly one complete template. |
+| `concurrent_first_use_creates_one_complete_template` | `:552` | 16 workers over 24 rounds, a fresh nested path each round; every racer succeeds and the bytes are one complete template. Strengthened deliberately — a single 8-thread round missed the Windows race most of the time. |
 
 `config.toml:10` tells contributors to run `cargo test config_template` after
 editing the template. That substring matches
@@ -492,5 +523,5 @@ three failure modes) and `tests/cli_contract.rs:161`/`:171` (the
    (`src/editor.rs:8-27`), and is the program still separated from its arguments
    in the return type (`:7`)? A single-string return regresses `code --wait`.
 10. Does `config show` still print the normalized projection rather than the file
-    bytes (`src/config.rs:304-306`)? That difference is the only visible way
+    bytes (`src/config.rs:343-345`)? That difference is the only visible way
     canonicalized patterns show up.

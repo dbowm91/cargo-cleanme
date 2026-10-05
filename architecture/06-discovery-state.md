@@ -579,7 +579,7 @@ There is no `set_permissions` call anywhere in the module (verified by grep).
 file with the process umask, i.e. typically `0644` on unix — **world-readable**.
 The file contains the canonical path of every Rust project on the machine, which
 is a mild but real information disclosure on a shared host. This is consistent
-with `config.rs:265-268`, which uses the identical temp+`create_new` pattern for
+with `config.rs:280-283`, which uses the identical temp+`create_new` pattern for
 `config.toml` and also sets no permissions, so it reads as an existing repo
 convention rather than an oversight in this module. It is still worth a decision.
 

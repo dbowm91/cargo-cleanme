@@ -529,7 +529,7 @@ descriptive prefix. `AppError::Config` is also the wrong *variant* — the user
 sees `cargo-cleanme: configuration error: cannot serialize JSON report: …`,
 sending them to `config.toml` when the fault is in report serialization (it
 does at least match the existing habit: `config::show` does the same at
-`src/config.rs:304-306`). In practice `serde_json::to_string` on these DTOs
+`src/config.rs:343-345`). In practice `serde_json::to_string` on these DTOs
 cannot fail — `EnvelopeV1` is owned primitives, strings and `Option`s, with no
 map keys and no `f64` NaN/Infinity — so this is a defensive branch that is
 effectively dead. The real risk is that the *human* path has no equivalent guard.
@@ -615,7 +615,7 @@ new scope.
 
 **Config directory read-only.** Only *creation* fails. `load_or_create` (`:316`,
 `:99`) calls `create_initial`, which does `fs::create_dir_all(parent)?`
-(`src/config.rs:244`) → `AppError::Io` via `#[from]` (`src/error.rs:9`) → exit 2.
+(`src/config.rs:259`) → `AppError::Io` via `#[from]` (`src/error.rs:9`) → exit 2.
 If the file exists and is readable, `load` performs no writes and everything
 works. Scope: `scan`, bare invocation, `clean …`, `config show` and `config edit`
 all exit 2; `config path` works (resolves without touching the FS, `:41`) and

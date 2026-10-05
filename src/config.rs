@@ -5,6 +5,7 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 pub const CONFIG_TEMPLATE: &str = include_str!("../config.toml");
@@ -248,6 +249,9 @@ fn require_absolute(p: &Path, field: &str) -> Result<(), AppError> {
 /// It is also the only way a diagnostic can say *which* call failed. A bare
 /// `AppError::Io` reports the kind and the OS message but not the step, and on
 /// Windows two different calls can report the same kind.
+/// Monotonic counter making each staging name unique within this process.
+static STAGING_NONCE: AtomicU64 = AtomicU64::new(0);
+
 fn step_error(step: &str, e: std::io::Error) -> std::io::Error {
     std::io::Error::new(e.kind(), format!("{step} failed: {e}"))
 }
@@ -273,9 +277,22 @@ fn create_initial(path: &Path) -> Result<(), AppError> {
         .file_name()
         .map(|s| s.to_os_string())
         .unwrap_or_else(|| std::ffi::OsString::from("config.toml"));
+    // The staging name must be unique among everything that can be creating a
+    // config at the same time, or "lost the race" becomes a routine event
+    // dressed up as an error. The pid separates *processes*, so threads within
+    // one process were the only remaining collision -- and they collided on
+    // every concurrent first use, because they all started at the same
+    // `attempt`. A process-wide nonce removes that collision instead of
+    // teaching the code to recognise a lost one.
+    //
+    // The `attempt` suffix stays as a second line for the case the nonce cannot
+    // cover: a stale `.tmp.` file left by a crashed process whose pid the OS
+    // later reuses. That one really is a name collision, and `AlreadyExists` is
+    // the authoritative answer to it.
     for attempt in 0..100 {
+        let nonce = STAGING_NONCE.fetch_add(1, Ordering::Relaxed);
         let mut temp_name = file_name.clone();
-        temp_name.push(format!(".tmp.{}.{}", std::process::id(), attempt));
+        temp_name.push(format!(".tmp.{}.{}.{}", std::process::id(), nonce, attempt));
         let temp = parent.join(temp_name);
         let created = fs::OpenOptions::new()
             .write(true)
@@ -283,29 +300,22 @@ fn create_initial(path: &Path) -> Result<(), AppError> {
             .open(&temp);
         let mut f = match created {
             Ok(f) => f,
-            // Losing this race is not a failure; it is why the loop exists.
-            // Two spellings mean the name was taken, and they are not
-            // interchangeable:
+            // Only a stale name from a previous process can land here now, and
+            // `AlreadyExists` is the authoritative answer to that.
             //
-            // - `AlreadyExists` is the OS saying the name was taken *at the
-            //   moment of the call*. That answer is authoritative even though
-            //   the file may be gone by the time we look: the winner can
-            //   publish and unlink its staging file before the loser inspects
-            //   the path. Probing `temp.exists()` instead of reading the kind
-            //   regresses exactly this case -- observed as
-            //   `AlreadyExists ... File exists (os error 17)` escaping on
-            //   Linux, macOS, and the 1.89 lane.
-            // - `PermissionDenied` is Windows' spelling when the name is
-            //   reserved by a thread that has not finished creating it, since
-            //   the reservation precedes the metadata commit. Observed on
-            //   `windows-latest` as
-            //   `creating a staging file failed: Access is denied. (os error 5)`.
-            //   Here the kind says nothing, so the name itself is the evidence.
+            // It is deliberately NOT decided by probing `temp.exists()`. That
+            // probe was tried and is wrong on both platforms: the winner of the
+            // publication can unlink its staging file before a loser inspects
+            // the path, so the name reads free and the real `AlreadyExists`
+            // escapes as an error -- observed failing Linux, macOS, and the 1.89
+            // lane -- and a Windows `PermissionDenied` leaks through the same
+            // gap. A syscall answers whether the name was taken *then*; a probe
+            // answers whether it is taken *now*. Where they disagree, the kind.
             //
-            // A genuine permissions problem leaves the name free, so it still
-            // hard-fails on both platforms.
+            // A genuine permissions problem still hard-fails: with the nonce,
+            // nothing else is competing for this name, so `PermissionDenied`
+            // means exactly what it says.
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(_) if temp.exists() => continue,
             Err(e) => return Err(AppError::Io(step_error("creating a staging file", e))),
         };
         let write_result: std::io::Result<()> = (|| {
@@ -322,10 +332,27 @@ fn create_initial(path: &Path) -> Result<(), AppError> {
         })();
         if let Err(e) = write_result {
             let _ = fs::remove_file(&temp);
-            if e.kind() == std::io::ErrorKind::AlreadyExists {
+            // "A racer already published a complete config" is success, not
+            // failure, and every caller reaching this point wants to carry on
+            // with that file.
+            //
+            // Here the *filesystem* is the discriminator, because unlike the
+            // staging name the destination is never unlinked: once published it
+            // stays, so `path.is_file()` is a stable answer rather than a race
+            // against a winner cleaning up. It is also the only file that can
+            // exist at this path, because this is the code that publishes it,
+            // and it is only ever published by hard-linking a fully written and
+            // synced staging file -- so a regular file here is a complete
+            // template, never a partial one. That makes the check independent
+            // of which error the platform chose for the lost race: POSIX
+            // reports `AlreadyExists`, and Windows can report
+            // `PermissionDenied` for the same contention.
+            if path.is_file() {
                 return Ok(());
             }
-            if path.exists() && !path.is_file() {
+            // A destination that exists but is not a regular file is still
+            // refused: "exists" must not become "acceptable".
+            if path.exists() {
                 return Err(AppError::Config(format!(
                     "refusing to replace non-file config {}: {e}",
                     path.display()
