@@ -310,7 +310,21 @@ For comparison, the same workflows on `main` at `c448154` were red:
 `installers (ubuntu-latest)`; `Cargo selector qualification` failed both jobs;
 `Release drift guard` failed `Eggpack drift + contract`.
 
-### 9.1 The qualification gate is no longer a paper gate
+### 9.1 `main` after the merge
+
+Merged to `main` as `9b4df98`. All three workflows are green there, which is
+the first time that has been true on this branch:
+
+| Workflow | Run | Result |
+|---|---|---|
+| `CI` (10 jobs, incl. ubuntu/macos/windows and `msrv`) | `37334733986` | **success** |
+| `Cargo selector qualification` | `37334733493` | **success** |
+| `Release drift guard` | `37334733502` | **success** |
+
+`scripts/release-check.sh` was also run against the clean merged tree and
+passed end to end, including packaging and a publish dry run.
+
+### 9.2 The qualification gate is no longer a paper gate
 
 The point of §7.2 is only worth making if the fixed gate produces real evidence,
 so this was checked rather than assumed. The hosted log:
