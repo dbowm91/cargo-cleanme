@@ -30,6 +30,29 @@ pub trait CargoRunner {
     fn run(&self, cwd: &Path, args: &[std::ffi::OsString]) -> io::Result<ProcessOutput>;
 }
 
+/// Anchor a manifest path for use as Cargo's `--manifest-path`.
+///
+/// The child's working directory is set to the manifest's own parent, so a
+/// *relative* manifest path is resolved against the wrong directory: for a
+/// discovered `fixture/Cargo.toml`, Cargo is asked for
+/// `<root>/fixture/fixture/Cargo.toml`, which does not exist. The scan then
+/// degrades to zero resolved workspaces, still exits 0, and reports no groups.
+///
+/// This is a lexical absolutization against the process working directory, not
+/// a canonicalization: it does not resolve symlinks, so the path Cargo sees
+/// keeps the spelling the user gave and Cargo's own config discovery from the
+/// manifest's directory is unchanged. A relative path that cannot be anchored
+/// is passed through unchanged, and Cargo produces the error it always would.
+fn manifest_path_for_cargo(manifest: &Path) -> PathBuf {
+    if manifest.is_absolute() {
+        return manifest.to_path_buf();
+    }
+    match std::env::current_dir() {
+        Ok(cwd) => cwd.join(manifest),
+        Err(_) => manifest.to_path_buf(),
+    }
+}
+
 /// Refresh one previously resolved root manifest directly through Cargo metadata.
 /// The caller must compare the returned identity and complete workspace shape
 /// with the state it is revalidating; this function never locates a new root.
@@ -318,7 +341,11 @@ pub fn resolve_workspaces_with_coverage(
             ["locate-project", "--workspace", "--manifest-path"]
                 .into_iter()
                 .map(Into::into)
-                .chain(std::iter::once(manifest.as_os_str().to_owned()))
+                // Anchored for Cargo, not for the diagnostic below: the recorded
+                // path keeps the spelling the user gave.
+                .chain(std::iter::once(
+                    manifest_path_for_cargo(manifest).into_os_string(),
+                ))
                 .collect();
         counters.cargo_locate_calls += 1;
         let locate_start = std::time::Instant::now();
@@ -3134,6 +3161,221 @@ mod tests {
         let src_dir = manifest.parent().unwrap().join("src");
         std::fs::create_dir_all(&src_dir).unwrap();
         std::fs::write(src_dir.join("main.rs"), "fn main() {}\n").unwrap();
+    }
+
+    /// A fixture that lives **under** the process working directory, plus its
+    /// forward relative spelling.
+    ///
+    /// The `..` case is not a valid test of C015. A path like
+    /// `../../tmp/x/Cargo.toml` joined onto the manifest's own parent composes
+    /// back to the right file, so the defect is invisible — the first version of
+    /// these cases proved nothing that way. The defect needs a *forward*
+    /// relative spelling, which is what a user produces by running
+    /// `cd project && cargo-cleanme scan fixture`: the manifest is
+    /// `fixture/Cargo.toml` and the child's working directory is `fixture/`, so
+    /// the two compose to a path that does not exist.
+    ///
+    /// The fixture is created under the repo's gitignored `target/` so the tree
+    /// is not polluted, and is removed on drop.
+    struct ForwardFixture {
+        root: PathBuf,
+        relative_root: PathBuf,
+    }
+
+    impl Drop for ForwardFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn forward_fixture(name: &str) -> ForwardFixture {
+        let cwd = std::env::current_dir().expect("a process working directory");
+        let root = cwd
+            .join("target")
+            .join(format!("c015-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("fixture directory");
+        let relative_root = root
+            .strip_prefix(&cwd)
+            .expect("the fixture is created under the working directory")
+            .to_path_buf();
+        assert!(
+            !relative_root
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir)),
+            "the spelling must be forward-only, got {}",
+            relative_root.display()
+        );
+        ForwardFixture {
+            root,
+            relative_root,
+        }
+    }
+
+    /// The premise of every locate-project call: the `--manifest-path` we hand
+    /// Cargo must resolve against the working directory we hand it.
+    ///
+    /// This is the C015 assertion. Before the fix, a discovered relative
+    /// manifest was passed through verbatim while `cwd` was the manifest's own
+    /// parent, so Cargo was asked for a path that cannot exist -- the scan
+    /// resolved zero workspaces, exited 0, and reported no groups. A recording
+    /// runner catches that at the argument level, without needing the network.
+    #[test]
+    fn the_composed_locate_arguments_resolve_against_the_supplied_working_directory() {
+        struct RecordingRunner {
+            seen: std::sync::Mutex<Vec<(PathBuf, Vec<std::ffi::OsString>)>>,
+        }
+
+        impl CargoRunner for RecordingRunner {
+            fn run(&self, cwd: &Path, args: &[std::ffi::OsString]) -> io::Result<ProcessOutput> {
+                self.seen
+                    .lock()
+                    .unwrap()
+                    .push((cwd.to_path_buf(), args.to_vec()));
+                Ok(ProcessOutput {
+                    success: false,
+                    code: Some(1),
+                    stdout: Vec::new(),
+                    stderr: b"recorded".to_vec(),
+                })
+            }
+        }
+
+        let fixture = forward_fixture("args");
+        write_valid_package(&fixture.root.join("Cargo.toml"), "relative-fixture");
+        let relative_manifest = fixture.relative_root.join("Cargo.toml");
+        assert!(
+            !relative_manifest.is_absolute() && relative_manifest.exists(),
+            "the case must exercise a real relative manifest, got {}",
+            relative_manifest.display()
+        );
+
+        let runner = RecordingRunner {
+            seen: std::sync::Mutex::new(Vec::new()),
+        };
+        let mut counters = ScanCounters::default();
+        let mut diags = Vec::new();
+        resolve_workspaces_with_coverage(
+            std::slice::from_ref(&relative_manifest),
+            &runner,
+            &mut counters,
+            &mut diags,
+            &NoopObserver,
+        );
+        let seen = runner.seen.lock().unwrap().clone();
+        assert!(
+            !seen.is_empty(),
+            "the locate path was never exercised, so nothing was proven"
+        );
+        for (cwd, args) in seen {
+            let manifest_arg = args
+                .last()
+                .expect("the locate invocation ends with --manifest-path's value");
+            let resolved = cwd.join(manifest_arg);
+            assert!(
+                resolved.exists(),
+                "Cargo would be asked for {} (cwd {} + {}), which does not exist",
+                resolved.display(),
+                cwd.display(),
+                manifest_arg.to_string_lossy()
+            );
+        }
+    }
+
+    /// A relative root and its absolute spelling must agree.
+    ///
+    /// C015: the relative spelling silently resolved zero Cargo workspaces,
+    /// reported no groups, and still exited 0. This uses the real Cargo, because
+    /// the defect was in the arguments the real Cargo receives; a stub that
+    /// ignores the manifest path would not have detected it.
+    #[test]
+    fn a_relative_root_resolves_the_same_workspaces_as_its_absolute_spelling() {
+        // The version this toolchain can actually resolve, or the case cannot
+        // run. Announced rather than silently returned.
+        let version = std::process::Command::new("cargo")
+            .arg("--version")
+            .output()
+            .expect("cargo must be on PATH to run this case");
+        assert!(
+            version.status.success(),
+            "cargo --version failed: {}",
+            String::from_utf8_lossy(&version.stderr)
+        );
+        let reported = String::from_utf8_lossy(&version.stdout).into_owned();
+        let minor: u32 = reported
+            .split_whitespace()
+            .nth(1)
+            .and_then(|v| v.split('.').nth(1))
+            .and_then(|m| m.parse().ok())
+            .unwrap_or_else(|| panic!("cannot read a cargo minor version from {reported:?}"));
+        // `cargo metadata --no-deps` landed in 1.77, which is below this
+        // project's 1.89 MSRV, so every supported toolchain can run this case.
+        // An earlier version of this gate compared the *patch* component, so
+        // `1.99.0` read as patch 0, fell under the threshold, and the case
+        // silently skipped -- passing without proving anything, twice.
+        if minor < 77 {
+            eprintln!("skipping: cargo {reported} predates `metadata --no-deps` support");
+            return;
+        }
+
+        let fixture = forward_fixture("spelling");
+        write_valid_package(&fixture.root.join("Cargo.toml"), "spelling-fixture");
+        std::fs::write(fixture.root.join("Cargo.lock"), "version = 4\n").unwrap();
+
+        let runner = SystemCargoRunner;
+        let mut absolute = ScanCounters::default();
+        let mut absolute_diags = Vec::new();
+        let absolute_ws = resolve_workspaces(
+            &[fixture.root.join("Cargo.toml")],
+            &runner,
+            &mut absolute,
+            &mut absolute_diags,
+            &NoopObserver,
+        );
+
+        let relative_manifest = fixture.relative_root.join("Cargo.toml");
+        assert!(
+            !relative_manifest.is_absolute() && relative_manifest.exists(),
+            "the case must exercise a real relative manifest, got {}",
+            relative_manifest.display()
+        );
+
+        let mut relative = ScanCounters::default();
+        let mut relative_diags = Vec::new();
+        let relative_ws = resolve_workspaces(
+            &[relative_manifest],
+            &runner,
+            &mut relative,
+            &mut relative_diags,
+            &NoopObserver,
+        );
+
+        assert_eq!(
+            absolute_ws.len(),
+            1,
+            "the fixture must resolve one workspace"
+        );
+        assert_eq!(
+            absolute_ws.len(),
+            relative_ws.len(),
+            "the two spellings resolved different workspace counts \
+             (absolute {}, relative {}); relative diagnostics: {:?}",
+            absolute_ws.len(),
+            relative_ws.len(),
+            relative_diags
+        );
+        assert_eq!(
+            relative.unique_workspaces, absolute.unique_workspaces,
+            "the two spellings made different numbers of unique workspace resolutions"
+        );
+        assert_eq!(
+            relative.cargo_failures, absolute.cargo_failures,
+            "the relative spelling made Cargo fail where the absolute one did not"
+        );
+        assert!(
+            relative_diags.is_empty(),
+            "the relative spelling produced diagnostics: {relative_diags:?}"
+        );
+        assert_eq!(relative_ws[0].members.len(), absolute_ws[0].members.len());
     }
 
     #[test]

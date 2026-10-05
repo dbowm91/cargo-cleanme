@@ -1,6 +1,12 @@
 # C015 — Relative Scan Root Degrades Cargo Workspace Resolution
 
-Status: ready
+Status: closed
+
+Closure: `plans/closure/distribution-release-update/c015-status.md`
+
+Implementation commit: PENDING (this change)
+
+Shipped in: v0.1.3
 
 Repository baseline: `c9b0104c5c6480c4056be3cacd11b893b7d52642`
 
