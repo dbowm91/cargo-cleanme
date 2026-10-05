@@ -6,6 +6,24 @@ All notable changes to cargo-cleanme are documented here. The format follows
 stance: the `0.x` line may make breaking changes in any release, and the
 command-line, JSON, and release-asset contracts are the stable surface.
 
+## [0.1.6] - 2026-10-05
+
+This release changes no product behavior. It exists so that the fix shipped in
+0.1.5 can be exercised against two real published releases.
+
+0.1.5 refuses to replace a binary that Cargo owns, but proving that a published
+binary does so requires an installation that is *behind* the published version:
+when a Cargo-managed binary is already current, the tool reports "already at the
+latest stable version" and never reaches the ownership check, because there is
+nothing to do. 0.1.6 supplies that missing condition, exactly as 0.1.4 supplied
+it for the 0.1.3 updater fix.
+
+If you are on 0.1.3 or later, you can reach this release with:
+
+```sh
+cargo cleanme update
+```
+
 ## [0.1.5] - 2026-10-05
 
 This release fixes the only defect in the 0.1.x line that could **change a file

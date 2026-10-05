@@ -1,6 +1,6 @@
 [package]
 name = "cargo-cleanme"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 rust-version = "1.89"
 description = "Find inactive Cargo artifacts and safely preview their cleanup"
