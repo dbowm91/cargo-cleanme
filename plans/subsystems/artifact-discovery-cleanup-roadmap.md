@@ -1,12 +1,7 @@
-# Artifact Discovery and Cleanup Roadmap
+## Artifact Discovery and Cleanup Roadmap
 
-Status: Phase 9 remains closed for feature objectives, and the Phase 11 thread
-is **closed**: C019 (filter-scope containment) and C020 (a Windows-only race in
-`config::create_initial`, found in C019's hosted evidence). C020 is not a scope
-or policy question — the staging name was never unique within a process, so every
-concurrent first use collided and only Windows reported it as a failure. Both
-corrections are unreleased. Phase 11's two threads
-are both **closed**: C019 exact-unignore sibling containment (`plans/closure/artifact-discovery-cleanup/c019-status.md`) and M011D Cargo selector qualification lifecycle (`plans/closure/artifact-discovery-cleanup/m011d-status.md`, addendum: the hosted gate had never run and was fixed). Neither broadened selector capability or the destructive safety boundary. C019's correction is **unreleased** — 0.1.6 and earlier keep the over-broad unignore behavior. Distribution/release hardening remains owned by `plans/subsystems/distribution-release-update-roadmap.md`.
+Status: Phase 12 is **ready** under ADR 003. M012A changes the canonical invocation/mode contract without changing what can be cleaned; M012B adds bounded unattended output and greggd integration documentation. Phase 9 and Phase 11 implementation objectives remain closed. C019/C020 and the Phase 11 release-hardening corrections remain unreleased until a future publication.
+
 
 Repository audit baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 
@@ -25,7 +20,7 @@ It does not own Cargo global cache GC, arbitrary build-system caches, a general 
 
 ## 2. Discovery invariants
 
-- Scanning is read-only; cleanup is a separate opt-in operation.
+- Every `scan` operation is read-only. Under ADR 003, bare invocation becomes canonical Routine cleanup, but it must compose the same separately proven cleanup engine rather than creating a weaker destructive path.
 - No symlink directory is followed.
 - scan_start_time is captured once.
 - default recency_seconds is 300.
@@ -664,6 +659,49 @@ corrective against M011D. A third red — a C018 test whose premise (a raw-byte
 file name on disk) does not hold on APFS — was fixed as a third corrective, and
 `check-fixture-portability.py` gained the rule that should have caught it.
 
+## 10H. Phase 12 — Canonical maintenance and unattended operation
+
+Status: **ready**.
+
+Decision:
+
+- `plans/adr/003-canonical-maintenance-invocation-and-unattended-output.md`
+
+Plans:
+
+- `plans/implementation/artifact-discovery-cleanup/012a-canonical-maintenance-cli-and-dry-run-semantics.md`
+- `plans/implementation/artifact-discovery-cleanup/012b-unattended-log-output-and-greggd-integration.md`
+
+### M012A — Canonical maintenance CLI and dry-run semantics
+
+Purpose:
+
+- make bare `cargo cleanme` invoke Routine Execute over bounded seed + learned roots using the existing C006 combined-root engine;
+- make `--dry-run` mean zero-`cargo clean` application simulation;
+- retain Cargo's own dry-run only as explicitly named `--cargo-preview`;
+- make advanced cleanup execute by default while retaining policy/selectors;
+- make rootless `scan` the Full read-only reconciler, `scan ROOT` Explicit, and `scan --known` Routine read-only;
+- reconcile JSON operation/scope/mode and generated CLI artifacts;
+- carry the breaking bare-invocation change only across a pre-1.0 minor boundary.
+
+M012A changes the command surface, not the destructive proof. Learned state remains advisory; unresolved ownership still blocks the complete selected scope; every CleanupUnit still requires fresh complete ownership/freshness proof immediately before Cargo.
+
+### M012B — Bounded unattended log output and greggd integration
+
+Purpose:
+
+- add explicit `--format log` without auto-switching on non-TTY output;
+- project ScanReport/CleanReport into one deterministic ASCII line capped at 384 bytes;
+- suppress progress and ordinary diagnostic fan-out in log mode;
+- preserve JSON as the complete machine contract and existing exit codes;
+- document daily bare Routine maintenance plus weekly Full `scan` under greggd's load threshold/retry/max-wait scheduler;
+- document absolute argv paths and the need for a user-owned/rootless greggd instance when maintaining developer-home Cargo trees;
+- record, but do not cross-repo-block on, Gregg's stale `scan --deep` documentation example.
+
+Dependency: M012B has an interface dependency on M012A's resolved operation/scope/mode vocabulary. Rendering work may proceed in parallel after that vocabulary is fixed.
+
+Exit: both plans close with the normal verification ladder, generated-doc drift checks, and premise-negative tests. No scheduler, daemon, load sampler, persistent history, direct deletion, or weakened ownership proof is introduced.
+
 ## 11. Cross-cutting reliability concerns
 
 ### Races
@@ -724,4 +762,4 @@ The implementation should specifically verify:
 
 ## 14. Completion definition
 
-The initial read-only boundary was reached when M001-M003 closed with evidence that cargo-cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004-M007 and C001-C007 establish Cargo-mediated cleanup, complete ownership/freshness proof, adaptive discovery, and combined-root orchestration while scans remain read-only. Phase 9 remains closed for current objectives: M008A/B policy and reporting, profile support from M008C, and package support from M008D. Profile support is limited to exact qualified releases 1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0, 1.98.1, and 1.99.0; package support is limited to exact Cargo 1.98.1 and 1.99.0. Selector estimates remain unknown and unqualified Cargo versions fail closed. C019 restored M002 exact-unignore sibling containment without changing the destructive safety boundary, and closed; M011D closed the selector evidence lifecycle and its hosted gate now actually executes. Both corrections are unreleased, so the next release from `main` is the first that carries either. Distribution/release Phase 11 work is tracked by `plans/subsystems/distribution-release-update-roadmap.md`.
+The initial read-only boundary was reached when M001-M003 closed with evidence that cargo-cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004-M007 and C001-C007 establish Cargo-mediated cleanup, complete ownership/freshness proof, adaptive discovery, and combined-root orchestration. Scans remain read-only; ADR 003/Phase 12 intentionally changes bare invocation from a scan front door to Routine cleanup without changing that proof boundary. Phase 9 remains closed for current objectives: M008A/B policy and reporting, profile support from M008C, and package support from M008D. Profile support is limited to exact qualified releases 1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0, 1.98.1, and 1.99.0; package support is limited to exact Cargo 1.98.1 and 1.99.0. Selector estimates remain unknown and unqualified Cargo versions fail closed. C019 restored M002 exact-unignore sibling containment without changing the destructive safety boundary, and closed; M011D closed the selector evidence lifecycle and its hosted gate now actually executes. Both corrections are unreleased, so the next release from `main` is the first that carries either. Distribution/release Phase 11 work is tracked by `plans/subsystems/distribution-release-update-roadmap.md`.
