@@ -86,6 +86,35 @@ echo "release-check: post-release smoke matrix is bound to the release contract"
 python3 scripts/check-post-release-smoke-contract.py --self-test
 python3 scripts/check-post-release-smoke-contract.py
 
+# M011C: the transition resolver is the thing that keeps an automated smoke from
+# testing a floating "latest", and the crates.io wait is what keeps it from
+# running before the version it updates to exists. Both are premise-tested.
+echo "release-check: published-release smoke transition resolver and crates.io wait"
+python3 scripts/resolve-smoke-transition.py --self-test
+
+# M011B: staged validation is only an enforcement point if it cannot be made to
+# run on the wrong input. Both directions run here, because the quietest failure
+# in that workflow is a green validation of a default-branch checkout.
+echo "release-check: staged-release validation workflow premises"
+python3 scripts/check-staged-validation-contract.py --self-test
+python3 scripts/check-staged-validation-contract.py
+
+# M011D: the Cargo selector support claim is a checked-in policy, so it is gated
+# the same way. Both directions run because the product fails closed on an
+# unknown Cargo version, which is exactly why a stale allowlist is invisible.
+echo "release-check: Cargo selector qualification matrix is bound to the policy"
+python3 scripts/check-selector-qualification.py --self-test
+python3 scripts/check-selector-qualification.py
+bash scripts/qualify-cargo-selectors.sh --self-test
+
+# M011A: the attestation verifier is a guard, so its classifications are proved
+# rather than trusted. The live `--settings-only` query is what tells the
+# operator whether the repository's immutability policy is still on, which is a
+# live external fact and not something a self test can establish.
+echo "release-check: release attestation verification helper"
+python3 scripts/verify-release-attestation.py --self-test
+python3 scripts/verify-release-attestation.py --settings-only
+
 echo "release-check: installer fixture qualification"
 python3 packaging/tests/test_installers.py
 

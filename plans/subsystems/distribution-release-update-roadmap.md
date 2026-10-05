@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: Phase 10 and post-release correctives C013-C017 are **closed**. Phase 11 hardening is **ready**: C018 is the immediate provenance-safety corrective; M011A immutable-release attestation, M011B staged-release validation automation, and M011C published-release smoke automation are also ready and may proceed in parallel. C010 remains an upstream request (`proposed`) that nothing here waits on.
+Status: Phase 10 and post-release correctives C013-C017 are **closed**. Phase 11 hardening is **closed**: C018, M011A, M011B, and M011C are all closed (`plans/closure/distribution-release-update/`). Four outstanding evidences require the next published release and no plan in this repository can supply them. C010 remains an upstream request (`proposed`) that nothing here waits on.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 
@@ -423,18 +423,22 @@ Dependency/parallelism:
 C013-C017 [closed]
       |
       v
-C018 provenance uncertainty fail-closed [READY; immediate]
+C018 provenance uncertainty fail-closed [CLOSED]
       |
       +----------------------+----------------------+
       |                      |                      |
       v                      v                      v
 M011A immutable          M011B staged           M011C published
 release attestation      validation workflow    smoke automation
-[READY]                  [READY]                [READY]
+[CLOSED]                 [CLOSED]               [CLOSED]
+  conditional*             conditional*            conditional*
 
-First future release after implementation supplies operational evidence for
-C018 + M011A + M011B + M011C.
-~~~
+* implementation, static guarantees, and documentation are complete and verified.
+  Each retains one outstanding *hosted* evidence, and all four are supplied by the
+  same event: the first release published from `main` after 2026-10-05. M011A's
+  immutable-releases policy is enabled and verified live, so that release is also
+  the first to carry an attestation.
+
 
 ### 11.1 C018 — Self-update provenance uncertainty fail-closed
 

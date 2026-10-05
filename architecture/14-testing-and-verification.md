@@ -253,7 +253,7 @@ would understate what a cleanup reclaims.
 
 ## 5. The contract checkers
 
-12 scripts. The dividing line is the one this project cares about: **outcome checkers** fail
+17 scripts. The dividing line is the one this project cares about: **outcome checkers** fail
 when the subject misbehaves; **premise checkers** fail when the *evidence* is no longer
 valid. Premise checkers are the distinctive category.
 
@@ -265,9 +265,13 @@ valid. Premise checkers are the distinctive category.
 | `check-release-identity.py` | Tag/source identity: the release tag matches the source commit, version and tag agree, and the provenance identity machine is internally consistent | Tag and source disagree — the class that made a release irreproducible | `release-binaries.yml`; `release-check.sh` |
 | `check-post-release-smoke-contract.py` | The post-release smoke workflow is itself well-formed: required steps, lanes, and assertions present and in order | The smoke workflow is edited down to a shape that cannot fail | `post-release-smoke.yml`; `release-check.sh` |
 | `gen-release-workflow-shape.py` | Generates the *expected* shape of `release-binaries.yml` from the release contract, so the workflow is a checked-in generated artifact rather than hand-edited prose | The committed workflow drifts from the generated shape | `release-check.sh`; output compared in `release-binaries.yml` |
-| `validate-staged-release.py` | Six-step staged-release proof: exact artifact inventory, sidecar integrity (checksums), manifest agreement, contract agreement, static ABI, real-installer qualification — i.e. published bytes are the qualified bytes | Any step cannot be satisfied against the staged tree | **Nowhere today; M011B ready** (`plans/implementation/distribution-release-update/011b-staged-release-validation-workflow-gate.md`) |
+| `validate-staged-release.py` | Six-step staged-release proof: exact artifact inventory, sidecar integrity (checksums), manifest agreement, contract agreement, static ABI, real-installer qualification — i.e. published bytes are the qualified bytes | Any step cannot be satisfied against the staged tree | `validate-staged-release.yml` (hosted, M011B); `release-check.sh` |
+| `check-staged-validation-contract.py` | The hosted validation workflow is upstream-bound and read-only: exact upstream workflow name, `completed` only, no push/pull/schedule, `contents: read` only, no publication command, checkout bound to the upstream `head_sha`, upstream event *and* conclusion compared (not merely mentioned), identity and validator both invoked, no inlined reimplementation | A validation job is edited into a shape that runs on the wrong input or can publish — the quietest version of which is a default-branch checkout that genuinely passes | `ci.yml` `checks`; `release-check.sh` |
+| `check-selector-qualification.py` | The Cargo selector support claim is a projection of one policy: runtime allowlist == `release/selector-qualification.json` == hosted matrix == the script's own inputs, all exact `X.Y.Z`, package ⊆ profile, exploratory disjoint, workflow read-only and promotion-proof | The claim drifts from the evidence, or an exploratory toolchain reaches the runtime allowlist | `ci.yml` `checks`; `release-check.sh` |
+| `verify-release-attestation.py` | A published release is immutable, carries a valid GitHub attestation for *that* repository and tag, and every contracted local asset hashes to the attested digest | Policy off, release mutable, attestation missing or unparseable, wrong repository/tag, an asset the attestation does not name, digest mismatch, inventory drift, or a missing/old `gh` | `release-check.sh` (settings + `--self-test`) |
+| `resolve-smoke-transition.py` | An exact `from`→`to` transition is resolved numerically, a predecessor is never silently skipped, and crates.io is polled within a finite deadline with backoff | A floating or pre-release version is used, `0.1.9`/`0.1.10` order is wrong, a yanked/wrong/non-stable target satisfies the wait, or the deadline silently becomes a skip | `ci.yml` `checks`; `release-check.sh`; `post-release-smoke.yml` |
 | `release-check.sh` | The local pre-push gate: full crate test suite, `cargo test --doc` (which CI does not run), all the Python checkers, the generated-shape comparison, `fmt`/`clippy` hygiene | Anything the local gate covers fails | `ci.yml` `checks`; also the documented manual path |
-| `qualify-cargo-selectors.sh` | Real-Cargo selector characterization: what `--profile`/`--package` actually do on genuine Cargo, and where the support boundary is | Real behaviour does not match what the fakes assume | **Nowhere today; M011D ready** (`plans/implementation/artifact-discovery-cleanup/011d-cargo-selector-qualification-lifecycle.md`) |
+| `qualify-cargo-selectors.sh` | Real-Cargo selector characterization: what `--profile`/`--package` actually do on genuine Cargo, and where the support boundary is | Real behaviour does not match what the fakes assume | `qualify-cargo-selectors.yml` (hosted matrix) and `qualify-cargo-selectors.sh --self-test` (CI); the full real-Cargo run is weekly/dispatch (M011D) |
 | `release-benchmark.py` | Compares current scan performance against `release/baseline-benchmark.json`, fails on a configurable regression percentage | The scan is materially slower than the recorded baseline | `ci.yml` `benchmark` |
 | `smoke-release-candidate.py` | Release-candidate smoke: the built binaries respond correctly before publication | A candidate binary misbehaves | `release-binaries.yml`; also manual |
 | `post-release-smoke.sh` | Post-publication verification against the *actual published bytes* — the external `update` check that first exposed C011 | The published release does not behave as qualified | `post-release-smoke.yml` |
@@ -278,7 +282,18 @@ Three notes:
 
 2. **`check-fixture-portability.py` is a premise checker, and its own docstring (lines 23-32) states the limit of its guarantee.** It scans `src/**/*.rs` (globs at lines 54-59) and rejects statically-detectable POSIX-only fixture shape. It explicitly does **not** check whether a case's pass condition proves the intended branch — "reviewing that is the point of the C013 inventory". A static checker can catch a missing `#[cfg(unix)]`. It cannot catch a test that would have passed anyway. Read its green as "no visibly platform-shaped fixture is ungated", never as "every fixture proves something on every lane".
 
-3. **`release-check.sh` closes a CI gap of its own making.** `ci.yml` runs `cargo test --all-targets --all-features`, which does not execute doctests; the local gate runs `cargo test --doc` separately. Doc examples are verified by a human with a shell script, not by CI.
+3. **The Phase 11 checkers all guard against the same shape, and it is a shape the
+   repository has already met seven times: *a guard that cannot fail*.**
+   `check-staged-validation-contract.py`, `check-selector-qualification.py`,
+   `verify-release-attestation.py`, and `resolve-smoke-transition.py` each ship a
+   `--self-test` that mutates the guarded artifact and requires a rejection, and three
+   of them also assert a **control** — that the mutation actually changed something. That
+   control is not decoration: during implementation, a self-test case reported "rejected"
+   for a tree that contained no defect at all, because its mutation had silently become a
+   no-op after an unrelated reformat. A guard with a no-op mutation is the worst outcome,
+   because it converts a broken tree into a passing check.
+
+4. **`release-check.sh` closes a CI gap of its own making.** `ci.yml` runs `cargo test --all-targets --all-features`, which does not execute doctests; the local gate runs `cargo test --doc` separately. Doc examples are verified by a human with a shell script, not by CI.
 
 ---
 

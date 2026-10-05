@@ -89,8 +89,33 @@ jobs:
       # here rather than trusted because the tree currently passes.
       - name: Release contract rejects a floating release toolchain
         run: python3 scripts/check-release-contract.py --self-test
+      # M011D: the Cargo selector support claim is a checked-in policy, so it is
+      # gated the same way. Both directions run here because the product fails
+      # closed on an unknown Cargo version, which means a stale allowlist never
+      # crashes anything -- it just quietly stops offering a selector, and only
+      # a static comparison can see that.
+      - name: Cargo selector qualification matrix is a projection of the policy
+        run: python3 scripts/check-selector-qualification.py
+      - name: Selector qualification guard rejects matrix drift
+        run: python3 scripts/check-selector-qualification.py --self-test
+      - name: Selector qualification harness still distinguishes premise failures
+        shell: bash
+        run: bash scripts/qualify-cargo-selectors.sh --self-test
+      # M011B: the staged validator is the repository's only end-to-end
+      # "staged bytes == qualified bytes" check. Hosted, it is only an
+      # enforcement point if it cannot be made to validate the wrong input, so
+      # the guard is proved in the failing direction too.
+      - name: Staged-release validation workflow is upstream-bound and read-only
+        run: python3 scripts/check-staged-validation-contract.py
+      - name: Staged-validation guard rejects a mis-bound workflow
+        run: python3 scripts/check-staged-validation-contract.py --self-test
       - name: Check installer wrappers match the contract
         run: python3 scripts/check-installer-contract.py
+      # M011C: the smoke is now automatic, so the things that keep "automatic"
+      # from meaning "runs on unpublished bytes, or resolves latest, or skips
+      # when crates.io is slow" become static premises.
+      - name: Published-release smoke resolver and crates.io wait
+        run: python3 scripts/resolve-smoke-transition.py --self-test
   benchmark:
     # Semantic counters are a hard gate; wall-clock timings are recorded and
     # printed but never fail the build, because shared-runner timing is noise.

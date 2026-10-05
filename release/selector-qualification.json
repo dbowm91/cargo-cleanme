@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "product": "cargo-cleanme",
+
+  "_comment_authority": [
+    "M011D: this file is the single machine-readable authority for which exact",
+    "Cargo releases cargo-cleanme claims selector support for. It is consumed by",
+    "scripts/check-selector-qualification.py (drift gate), by the hosted",
+    "qualification workflow (toolchain matrix), and by a Rust test that asserts",
+    "workspace::clean_capabilities_from_version agrees with it exactly.",
+    "",
+    "Do not add a version here without hosted real-Cargo evidence. A newly",
+    "released Cargo version is NOT supported because an exploratory lane",
+    "happened to pass; see _comment_promotion."
+  ],
+
+  "_comment_promotion": [
+    "Promotion rule (M011D work package D): adding an entry to",
+    "profile_selector or package_selector requires a dedicated implementation",
+    "plan or closure record carrying exact hosted real-Cargo evidence for that",
+    "version, not merely an edit to this file or to the Rust allowlist. The",
+    "checker's --self-test proves each guard still rejects the defect shape."
+  ],
+
+  "_comment_exploratory": [
+    "exploratory lists toolchains that are *observed* but deliberately not",
+    "claimed. Running them is a research signal; support remains false until an",
+    "entry is added to profile_selector/package_selector and reviewed."
+  ],
+
+  "profile_selector": [
+    "1.89.0",
+    "1.90.0",
+    "1.91.1",
+    "1.92.0",
+    "1.93.1",
+    "1.94.1",
+    "1.95.0",
+    "1.98.1",
+    "1.99.0"
+  ],
+
+  "package_selector": [
+    "1.98.1",
+    "1.99.0"
+  ],
+
+  "exploratory": [
+    "stable"
+  ]
+}

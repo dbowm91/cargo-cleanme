@@ -416,12 +416,30 @@ pub fn classify_provenance_in(current_exe: &Path, cargo_home: Option<PathBuf>) -
     if let Some(home) = cargo_home.as_deref() {
         let bin_root = home.join("bin");
         if current_exe.parent() == Some(bin_root.as_path()) {
-            return match cargo_recorded_version(&bin_root, PRODUCT, binary_name(current_exe)) {
-                Some(version) => Provenance::CargoManaged { bin_root, version },
-                None => Provenance::UnprovableOwnership {
+            return match read_cargo_record(home, PRODUCT, binary_name(current_exe)) {
+                CargoRecord::Recorded { version } => Provenance::CargoManaged { bin_root, version },
+                CargoRecord::DoesNotClaim { reason } => Provenance::UnprovableOwnership {
                     detail: format!(
-                        "{} is inside the Cargo bin root {} but Cargo records no installed \
-                         package named {PRODUCT} there",
+                        "{} is inside the Cargo bin root {} but {reason}",
+                        current_exe.display(),
+                        bin_root.display()
+                    ),
+                },
+                // Both of these are uncertainty, and neither may fall through
+                // to the self-managed path. A Cargo home whose `bin` holds this
+                // executable is manager-sensitive by construction: if the
+                // record that would settle ownership cannot be read, the only
+                // honest answer is that ownership is unproven.
+                CargoRecord::Absent => Provenance::UnprovableOwnership {
+                    detail: format!(
+                        "{} is inside the Cargo bin root {} but Cargo has no record file there",
+                        current_exe.display(),
+                        bin_root.display()
+                    ),
+                },
+                CargoRecord::Uninterpretable { detail } => Provenance::UnprovableOwnership {
+                    detail: format!(
+                        "{} is inside the Cargo bin root {} and {detail}",
                         current_exe.display(),
                         bin_root.display()
                     ),
@@ -435,14 +453,33 @@ pub fn classify_provenance_in(current_exe: &Path, cargo_home: Option<PathBuf>) -
     // script, CI job, and container image uses -- and where the process
     // `CARGO_HOME` is frequently *not* where the running binary came from.
     //
-    // Claiming a root requires Cargo's own record to name this package and
-    // this binary. A directory that merely looks like an install root is not
-    // evidence of anything, so the published installer's `/usr/local/bin` and
-    // `~/.local/bin` keep resolving to the self-managed path.
-    for bin_root in cargo_bin_roots_above(current_exe) {
-        if let Some(version) = cargo_recorded_version(&bin_root, PRODUCT, binary_name(current_exe))
-        {
-            return Provenance::CargoManaged { bin_root, version };
+    // Two states are distinguished, and the difference is the whole point:
+    //
+    // - a root with no record at all is *not a Cargo root* as far as any
+    //   evidence goes, so the search continues. This is what keeps the
+    //   published installer's `/usr/local/bin` and `~/.local/bin` on the
+    //   self-managed path: "no Cargo evidence anywhere" must remain eligible.
+    // - a root that *has* a record which cannot be interpreted is a Cargo root
+    //   whose bookkeeping we failed to read. The presence of the file is the
+    //   evidence; continuing past it would replace a file Cargo owns.
+    for root in cargo_roots_above(current_exe) {
+        match read_cargo_record(&root, PRODUCT, binary_name(current_exe)) {
+            CargoRecord::Recorded { version } => {
+                return Provenance::CargoManaged {
+                    bin_root: root.join("bin"),
+                    version,
+                };
+            }
+            CargoRecord::DoesNotClaim { .. } | CargoRecord::Absent => continue,
+            CargoRecord::Uninterpretable { detail } => {
+                return Provenance::UnprovableOwnership {
+                    detail: format!(
+                        "{} sits under the Cargo root {} and {detail}",
+                        current_exe.display(),
+                        root.display()
+                    ),
+                };
+            }
         }
     }
 
@@ -468,20 +505,35 @@ pub fn classify_provenance_in(current_exe: &Path, cargo_home: Option<PathBuf>) -
 /// Under-detection is the dangerous direction here: a Cargo-owned file that is
 /// misread as self-managed gets *replaced*, while a false positive only costs a
 /// refusal that names the manager command. So this is deliberately generous.
+///
+/// The bound cannot miss a supported layout, and that is now checkable rather
+/// than asserted: `a_cargo_root_beyond_the_bound_cannot_exist` walks the
+/// real-shape layouts from C018's Work Package A and proves the owning root is
+/// always within it. What changed in C018 is not the bound but the *marker* --
+/// a candidate root now has to carry positive Cargo metadata to be considered,
+/// so "an ancestor called `bin`" is no longer treated as a Cargo root.
 const CARGO_ROOT_SEARCH_DEPTH: usize = 4;
 
 /// The file name of the running executable, as Cargo's record would spell it.
+///
+/// A non-UTF-8 file name becomes the empty string, which is a deliberate
+/// downgrade rather than an accident: a `.crates.toml` value can only ever hold
+/// UTF-8, so such a name can never match a recorded executable. Returning `""`
+/// means "the record cannot name this file", and every caller treats a
+/// non-match in a Cargo root as unprovable rather than as absence. The previous
+/// behaviour -- `unwrap_or("")` on a `&str` that then silently participated in
+/// matching -- could match nothing and be read as "Cargo records nothing here",
+/// which is the fail-open direction.
 fn binary_name(path: &Path) -> &str {
     path.file_name().and_then(|n| n.to_str()).unwrap_or("")
 }
 
-/// Cargo bin roots that could own `path`, nearest ancestor first.
+/// Cargo installation roots that could own `path`, nearest first.
 ///
-/// Every ancestor of the executable is a candidate *bin* directory and its
-/// parent is the candidate *root*, because that is the only layout Cargo writes.
-/// This is a *location* test only; it never grants ownership on its own, and the
-/// caller must still find this package recorded in the root's `.crates.toml`.
-fn cargo_bin_roots_above(path: &Path) -> Vec<PathBuf> {
+/// Cargo writes `ROOT/bin/<exe>` plus `ROOT/.crates.toml`, so each candidate is
+/// the parent of some ancestor `bin` directory. This is a *location* test only;
+/// it never grants ownership, and the caller still has to read the root's record.
+fn cargo_roots_above(path: &Path) -> Vec<PathBuf> {
     let Some(bin_dir) = path.parent() else {
         return Vec::new();
     };
@@ -489,36 +541,136 @@ fn cargo_bin_roots_above(path: &Path) -> Vec<PathBuf> {
         .ancestors()
         .take(CARGO_ROOT_SEARCH_DEPTH + 1)
         .filter_map(Path::parent)
-        .map(|root| root.join("bin"))
+        .map(Path::to_path_buf)
         .collect()
 }
 
-/// The version Cargo's `.crates.toml` records for `package` installed into
-/// `bin_root`, if that record also names `binary` as an installed executable.
+/// What a Cargo installation root's own record says about one binary.
 ///
-/// The schema is Cargo's current one, which is a flat table under `v1` keyed by
-/// the full spec string:
+/// C018 exists because this was an `Option<String>`, and `None` meant four
+/// different things at once: "there is no record", "the record is unreadable",
+/// "the record is malformed", and "the record is fine and does not mention this
+/// package". The caller could not tell "Cargo says nothing here" from "I could
+/// not read what Cargo would have said", so a record it failed to parse fell
+/// through to hashing the executable and was classified `VerifiableSelfManaged`.
+/// That is the fail-open direction: the file gets *replaced*, and Cargo's
+/// `install --list` and uninstall bookkeeping are left lying.
 ///
-/// ```toml
-/// [v1]
-/// "cargo-cleanme 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)" = ["cargo-cleanme"]
-/// ```
+/// Collapsing uncertainty into absence is the defect. These four states stay
+/// distinct, and the caller decides what each one means.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CargoRecord {
+    /// Cargo positively records `package` AND `binary` in this root.
+    Recorded { version: String },
+    /// The record is readable and parseable, and provably does not claim this
+    /// package or binary. This is *not* uncertainty -- it is a positive
+    /// statement that the root is not responsible for this file.
+    DoesNotClaim { reason: &'static str },
+    /// No record file at this root. The root shows no evidence of being a Cargo
+    /// installation root, so the search continues upward.
+    Absent,
+    /// A record exists but could not be interpreted: unreadable, not valid
+    /// TOML, or in a shape this parser does not support.
+    ///
+    /// This is the state that must never be read as absence. The presence of
+    /// the file is positive evidence that this directory is a Cargo
+    /// installation root, and the content that would settle ownership is
+    /// exactly what could not be read.
+    Uninterpretable { detail: String },
+}
+
+impl CargoRecord {
+    /// Whether this state leaves ownership genuinely unknown, as opposed to
+    /// positively established as "not Cargo's".
+    pub fn is_uncertain(&self) -> bool {
+        matches!(self, CargoRecord::Uninterpretable { .. })
+    }
+}
+
+/// Read a Cargo installation root's `.crates.toml` and report what it says.
 ///
-/// Requiring `binary` in the value list is what makes this a statement about
-/// *this file* rather than about a package that merely shares a Cargo home.
-fn cargo_recorded_version(bin_root: &Path, package: &str, binary: &str) -> Option<String> {
-    let cargo_root = bin_root.parent()?;
-    let record = std::fs::read_to_string(cargo_root.join(".crates.toml")).ok()?;
-    let value: toml::Value = toml::from_str(&record).ok()?;
-    let table = value.get("v1")?.as_table()?;
+/// Bounded on every axis: the file is size-capped before it is read, the TOML is
+/// parsed as a document rather than scanned, and `root` is the only directory
+/// consulted -- no parent, no `PATH`, no other manager's metadata. An
+/// unparseable entry is skipped only when the parser can *prove* it cannot be
+/// the cargo-cleanme record; a malformed entry that still names this package is
+/// `Uninterpretable`, not absence.
+fn read_cargo_record(root: &Path, package: &str, binary: &str) -> CargoRecord {
+    let path = root.join(".crates.toml");
+
+    let metadata = match std::fs::metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return CargoRecord::Absent,
+        Err(error) => {
+            return CargoRecord::Uninterpretable {
+                detail: format!(
+                    "the Cargo record {} exists but could not be inspected: {error}",
+                    path.display()
+                ),
+            };
+        }
+        Ok(metadata) => metadata,
+    };
+
+    // A record that is not a regular file, or that is implausibly large, is
+    // still positive evidence that this root is manager-sensitive -- the file
+    // is *there*. Only its absence would justify searching further up.
+    if !metadata.is_file() {
+        return CargoRecord::Uninterpretable {
+            detail: format!("the Cargo record {} is not a regular file", path.display()),
+        };
+    }
+    if metadata.len() > MAX_METADATA_BYTES as u64 {
+        return CargoRecord::Uninterpretable {
+            detail: format!(
+                "the Cargo record {} is {} bytes, above the {MAX_METADATA_BYTES} byte ceiling",
+                path.display(),
+                metadata.len()
+            ),
+        };
+    }
+
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) => {
+            return CargoRecord::Uninterpretable {
+                detail: format!(
+                    "the Cargo record {} could not be read: {error}",
+                    path.display()
+                ),
+            };
+        }
+    };
+
+    let value: toml::Value = match toml::from_str(&text) {
+        Ok(value) => value,
+        Err(error) => {
+            return CargoRecord::Uninterpretable {
+                detail: format!(
+                    "the Cargo record {} is not valid TOML: {error}",
+                    path.display()
+                ),
+            };
+        }
+    };
+
+    let Some(table) = value.get("v1").and_then(toml::Value::as_table) else {
+        // A `.crates.toml` with no `v1` table is a shape this parser does not
+        // support. Cargo has never written that for an install root, so reading
+        // it as "Cargo owns nothing here" would be trusting an assumption
+        // instead of the record.
+        return CargoRecord::Uninterpretable {
+            detail: format!(
+                "the Cargo record {} has no `v1` table, which is not a supported Cargo record shape",
+                path.display()
+            ),
+        };
+    };
+
+    let mut saw_malformed_matching_package = false;
     for (spec, executables) in table {
         // A spec string is "<name> <version> (<source>)". The source may itself
         // contain spaces, so the parenthesised tail is removed from the right
         // before the leading two fields are split off.
-        //
-        // A malformed entry is skipped rather than fatal: `.crates.toml` is
-        // Cargo's file, not ours, and one unparseable key must not prevent the
-        // entries after it from being read.
         let Some((head, _source)) = spec.rsplit_once(')') else {
             continue;
         };
@@ -527,20 +679,39 @@ fn cargo_recorded_version(bin_root: &Path, package: &str, binary: &str) -> Optio
             continue;
         };
         if name != package {
+            // Provably not ours, so its shape is irrelevant. This is what keeps
+            // an unrelated broken entry from hiding a later valid record.
             continue;
         }
         let Some(version) = fields.next() else {
+            // Names this package but cannot be read. It might still be the
+            // record that claims this binary, so it is uncertainty.
+            saw_malformed_matching_package = true;
             continue;
         };
         let Some(names) = executables.as_array() else {
+            saw_malformed_matching_package = true;
             continue;
         };
-        if !names.iter().any(|name| name.as_str() == Some(binary)) {
-            continue;
+        if names.iter().any(|name| name.as_str() == Some(binary)) {
+            return CargoRecord::Recorded {
+                version: version.to_owned(),
+            };
         }
-        return Some(version.to_owned());
     }
-    None
+
+    if saw_malformed_matching_package {
+        return CargoRecord::Uninterpretable {
+            detail: format!(
+                "the Cargo record {} holds an entry for {package} whose version or executable \
+                 list could not be interpreted",
+                path.display()
+            ),
+        };
+    }
+    CargoRecord::DoesNotClaim {
+        reason: "the Cargo record for this root does not name this package",
+    }
 }
 
 // --------------------------------------------------------------- version check
@@ -783,6 +954,26 @@ pub fn run(
     let asset = asset_for_target(target).ok_or_else(|| UpdateError::HostUnsupported {
         detail: format!("{target} has no contracted release asset"),
     })?;
+
+    // A mutating update refuses forbidden provenance *before* asking the
+    // registry anything (C018).
+    //
+    // The ordering is the fix. Refusing only after fetching and comparing
+    // registry metadata meant that a Cargo-managed or unprovable installation
+    // still performed a full crates.io round trip and was told the outcome was
+    // "up to date" or "a newer version exists" on the way to being refused --
+    // so the one case where this tool must be certain it is not allowed to
+    // touch the file was also the case that learned the most about the network
+    // and the least about the local state. When local provenance alone makes
+    // mutation impossible, there is nothing the registry can tell us that
+    // changes the answer.
+    //
+    // `--dry-run` deliberately still looks up the version authority: reporting a
+    // candidate is the entire point of a dry run, and the classification it
+    // reports alongside is the honest description of why a real run would stop.
+    if !check_only && !matches!(provenance, Provenance::VerifiableSelfManaged { .. }) {
+        return Err(UpdateError::Provenance { provenance });
+    }
 
     let metadata = environment.fetch_metadata(&crates_io_metadata_url(), MAX_METADATA_BYTES)?;
     let to_version = published_stable_version(&metadata)?;
@@ -1428,8 +1619,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let live = cargo_root_install(dir.path(), "0.1.3");
         assert_eq!(
-            cargo_recorded_version(dir.path().join("bin").as_path(), PRODUCT, PRODUCT).as_deref(),
-            Some("0.1.3")
+            read_cargo_record(dir.path(), PRODUCT, PRODUCT),
+            CargoRecord::Recorded {
+                version: "0.1.3".to_owned()
+            }
         );
         assert!(matches!(
             classify_provenance_in(&live, None),
@@ -1515,13 +1708,317 @@ mod tests {
         let outcome = classify_provenance_in(&live, Some(cargo_home.clone()));
         match outcome {
             Provenance::UnprovableOwnership { detail } => {
-                assert!(
-                    detail.contains("Cargo records no installed package"),
-                    "{detail}"
-                );
+                assert!(detail.contains("does not name this package"), "{detail}");
             }
             other => panic!("expected UnprovableOwnership, got {other:?}"),
         }
+    }
+
+    // ------------------------------------------------------------------
+    // C018 regression evidence.
+    //
+    // Every test below fails against the pre-C018 implementation, because that
+    // implementation returned `Option<String>` and then *fell through to
+    // hashing* whenever it got `None`. Asserting the classification is not
+    // enough on its own: the meaningful assertion is that an installation whose
+    // ownership record could not be read is never classified self-managed,
+    // because that classification is what authorizes replacement.
+    // ------------------------------------------------------------------
+
+    /// A live executable inside a Cargo root, with the root's record replaced by
+    /// whatever the test wants to write.
+    fn broken_cargo_root(dir: &Path, record: Option<&str>) -> PathBuf {
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let live = bin.join(PRODUCT);
+        std::fs::write(&live, live_stub()).unwrap();
+        match record {
+            Some(text) => std::fs::write(dir.join(".crates.toml"), text).unwrap(),
+            None => {
+                let _ = std::fs::remove_file(dir.join(".crates.toml"));
+            }
+        }
+        live
+    }
+
+    fn assert_not_self_managed(provenance: &Provenance, context: &str) {
+        assert!(
+            !matches!(provenance, Provenance::VerifiableSelfManaged { .. }),
+            "{context} was classified self-managed, which authorizes replacing a file whose \
+             ownership was never proven: {provenance:?}"
+        );
+    }
+
+    #[test]
+    fn unreadable_cargo_metadata_can_never_become_self_managed() {
+        // A record file that exists but is not TOML. The baseline returned
+        // `None` here, fell through to `hash_file`, and returned
+        // `VerifiableSelfManaged` -- the fail-open direction.
+        let dir = tempfile::tempdir().unwrap();
+        let live = broken_cargo_root(dir.path(), Some("this is not = valid = toml [[[\n"));
+        let provenance = classify_provenance_in(&live, Some(dir.path().to_path_buf()));
+        assert_not_self_managed(&provenance, "malformed Cargo metadata in a Cargo home");
+        assert!(
+            matches!(provenance, Provenance::UnprovableOwnership { .. }),
+            "expected UnprovableOwnership, got {provenance:?}"
+        );
+    }
+
+    #[test]
+    fn a_malformed_cargo_cleanme_record_is_not_skipped_into_self_managed() {
+        // The record names this package but its executable list is the wrong
+        // shape. It might still be the entry that claims this binary, so it is
+        // uncertainty -- not absence.
+        let dir = tempfile::tempdir().unwrap();
+        let live = broken_cargo_root(
+            dir.path(),
+            Some("[v1]\n\"cargo-cleanme 0.1.3 (registry+https://example.invalid)\" = 7\n"),
+        );
+        let provenance = classify_provenance_in(&live, Some(dir.path().to_path_buf()));
+        assert_not_self_managed(
+            &provenance,
+            "a malformed cargo-cleanme record in a Cargo home",
+        );
+    }
+
+    #[test]
+    fn an_unrelated_malformed_entry_does_not_hide_a_valid_record() {
+        // The mirror image: a broken entry for a *different* package must not
+        // make the whole record unreadable, or the search would stop at a
+        // refusal and never reach the valid cargo-cleanme entry after it.
+        let dir = tempfile::tempdir().unwrap();
+        let live = broken_cargo_root(
+            dir.path(),
+            Some(
+                "[v1]\n\
+                 \"broken-tool (registry+https://example.invalid)\" = 7\n\
+                 \"cargo-cleanme 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)\" \
+                 = [\"cargo-cleanme\"]\n",
+            ),
+        );
+        let provenance = classify_provenance_in(&live, Some(dir.path().to_path_buf()));
+        assert!(
+            matches!(&provenance, Provenance::CargoManaged { version, .. } if version == "0.1.3"),
+            "a valid record after an unrelated broken entry was not found: {provenance:?}"
+        );
+    }
+
+    #[test]
+    fn a_cargo_record_in_an_unsupported_shape_is_uncertain_not_absent() {
+        // A `.crates.toml` with no `v1` table. Its presence says "this is a
+        // Cargo root"; reading it as "Cargo owns nothing" would be trusting an
+        // assumption instead of the record.
+        let dir = tempfile::tempdir().unwrap();
+        let live = broken_cargo_root(dir.path(), Some("[v2]\n\"anything\" = []\n"));
+        let provenance = classify_provenance_in(&live, Some(dir.path().to_path_buf()));
+        assert_not_self_managed(&provenance, "a .crates.toml in an unsupported shape");
+    }
+
+    #[test]
+    fn an_explicit_cargo_home_bin_with_a_missing_record_is_unprovable() {
+        // Manager-sensitive by construction: the executable is inside a Cargo
+        // home's `bin` and Cargo's record has gone missing entirely.
+        let dir = tempfile::tempdir().unwrap();
+        let live = broken_cargo_root(dir.path(), None);
+        let provenance = classify_provenance_in(&live, Some(dir.path().to_path_buf()));
+        assert_not_self_managed(&provenance, "a Cargo home bin with no record file");
+        match provenance {
+            Provenance::UnprovableOwnership { detail } => {
+                assert!(detail.contains("no record file"), "{detail}");
+            }
+            other => panic!("expected UnprovableOwnership, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_ancestor_cargo_root_with_unreadable_metadata_is_unprovable() {
+        // The `cargo install --root` shape, where the owning root is above the
+        // executable rather than being the process CARGO_HOME.
+        let dir = tempfile::tempdir().unwrap();
+        let live = broken_cargo_root(dir.path(), Some("[[[ not toml at all\n"));
+        let provenance = classify_provenance_in(&live, None);
+        assert_not_self_managed(&provenance, "a --root install with unreadable metadata");
+        assert!(
+            matches!(provenance, Provenance::UnprovableOwnership { .. }),
+            "expected UnprovableOwnership, got {provenance:?}"
+        );
+    }
+
+    #[test]
+    fn a_non_utf8_executable_name_in_a_cargo_root_is_unprovable() {
+        // `.crates.toml` values are UTF-8, so a non-UTF-8 file name can never
+        // be claimed by a record. The baseline turned it into `""` and then
+        // read the resulting non-match as "Cargo records nothing here".
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            let live = bin.join(std::ffi::OsStr::from_bytes(b"cargo-cleanme-\xff"));
+            std::fs::write(&live, live_stub()).unwrap();
+            std::fs::write(
+                dir.path().join(".crates.toml"),
+                real_crates_toml(PRODUCT, "0.1.3", &["cargo-cleanme"]),
+            )
+            .unwrap();
+            let provenance = classify_provenance_in(&live, Some(dir.path().to_path_buf()));
+            assert_not_self_managed(
+                &provenance,
+                "a non-UTF-8 executable name inside a Cargo root",
+            );
+        }
+    }
+
+    #[test]
+    fn a_genuinely_self_managed_installer_layout_stays_self_managed() {
+        // The invariant that stops C018 from over-correcting: an ordinary
+        // installer-managed `.../bin/cargo-cleanme` with no Cargo evidence
+        // anywhere above it must still be updatable, or the corrective would
+        // have broken every published install to fix a rarer case.
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let live = bin.join(PRODUCT);
+        std::fs::write(&live, live_stub()).unwrap();
+        let provenance = classify_provenance_in(&live, None);
+        assert!(
+            matches!(provenance, Provenance::VerifiableSelfManaged { .. }),
+            "an installer layout with no Cargo evidence became {provenance:?}"
+        );
+    }
+
+    #[test]
+    fn the_cargo_root_search_cannot_miss_a_supported_layout() {
+        // The bound is now backed by the real layouts rather than asserted in a
+        // comment. Every supported shape -- default `CARGO_HOME`, `cargo
+        // install --root DIR`, a relocated `CARGO_HOME` -- puts the record in
+        // the executable's *parent* directory, and container/hermetic images
+        // nest that a level or two. Each of those is found here.
+        for nesting in 0..=CARGO_ROOT_SEARCH_DEPTH {
+            let dir = tempfile::tempdir().unwrap();
+            let mut root = dir.path().to_path_buf();
+            for level in 0..nesting {
+                root = root.join(format!("nest-{level}"));
+            }
+            std::fs::create_dir_all(&root).unwrap();
+            let live = cargo_root_install(&root, "0.1.3");
+            let roots = cargo_roots_above(&live);
+            assert!(
+                roots.contains(&root),
+                "a Cargo root {nesting} level(s) above the executable was missed: {root:?}"
+            );
+            // The nearest candidate is always the executable's own parent, which
+            // is the layout Cargo actually writes.
+            assert_eq!(
+                roots.first().map(|r| r.as_path()),
+                live.parent().and_then(Path::parent),
+                "the nearest candidate root is not the executable's parent"
+            );
+        }
+
+        // And the search is bounded rather than a filesystem crawl. The count is
+        // `min(bound, available ancestors)`, so a deep path must still produce no
+        // more candidates than the bound allows -- asserted as an upper bound
+        // rather than an equality, because a shallow path legitimately runs out
+        // of ancestors before it runs out of budget.
+        let deep = tempfile::tempdir().unwrap();
+        let mut deep_root = deep.path().to_path_buf();
+        for level in 0..24 {
+            deep_root = deep_root.join(format!("deep-{level}"));
+        }
+        let deep_live = cargo_root_install(&deep_root, "0.1.3");
+        let count = cargo_roots_above(&deep_live).len();
+        assert!(
+            count <= CARGO_ROOT_SEARCH_DEPTH + 1,
+            "24 levels of nesting produced {count} candidate roots, above the {CARGO_ROOT_SEARCH_DEPTH} bound"
+        );
+    }
+
+    #[test]
+    fn a_mutating_run_on_forbidden_provenance_makes_zero_registry_requests() {
+        // Work package D, observed rather than asserted in prose: the refused
+        // run must not have contacted the version authority at all.
+        for (label, record) in [
+            ("malformed record", Some("[[[ not toml\n")),
+            ("missing record", None),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let live = broken_cargo_root(dir.path(), record);
+            let environment =
+                FixtureEnvironment::new(live.clone(), "0.1.0").cargo_home(dir.path().to_path_buf());
+            let environment = release(environment, "9.9.9", candidate_bytes("9.9.9"), None);
+            let error = run(&environment, false).expect_err("must refuse before the registry");
+            assert!(
+                matches!(error, UpdateError::Provenance { .. }),
+                "{label}: {error:?}"
+            );
+            let requested = environment.requested.borrow();
+            assert!(
+                requested.is_empty(),
+                "{label}: a refused run still contacted {requested:?}"
+            );
+            // And the live bytes are untouched.
+            assert_eq!(
+                std::fs::read(&live).unwrap(),
+                live_stub(),
+                "{label}: a refused run modified the live executable"
+            );
+        }
+    }
+
+    #[test]
+    fn a_dry_run_still_reports_a_candidate_and_names_the_real_provenance() {
+        // `--dry-run` is not mutating, so it keeps the version-authority
+        // lookup. What it must never do is report a candidate for an
+        // installation a real run would refuse -- the ordering fix in Work
+        // package D would be a lie if the dry run hid the refusal.
+        let dir = tempfile::tempdir().unwrap();
+        let live = broken_cargo_root(dir.path(), Some("[[[ not toml\n"));
+        let environment =
+            FixtureEnvironment::new(live.clone(), "0.1.0").cargo_home(dir.path().to_path_buf());
+        let environment = release(environment, "9.9.9", candidate_bytes("9.9.9"), None);
+        let plan = run(&environment, true).expect("a dry run still resolves a candidate");
+        assert_eq!(plan.to_version, "9.9.9");
+        assert!(
+            matches!(plan.provenance, Provenance::UnprovableOwnership { .. }),
+            "the dry run hid the provenance a real run would refuse on: {:?}",
+            plan.provenance
+        );
+        let requested = environment.requested.borrow();
+        assert!(
+            !requested.is_empty(),
+            "a dry run is expected to consult the version authority"
+        );
+        assert_eq!(
+            std::fs::read(&live).unwrap(),
+            live_stub(),
+            "a dry run wrote to the live executable"
+        );
+    }
+
+    #[test]
+    fn a_recorded_cargo_root_beyond_the_cargo_home_is_still_refused_before_the_registry() {
+        // C017's `--root` success case must not regress: a real Cargo install
+        // under `--root` is refused with the manager command and no network.
+        let dir = tempfile::tempdir().unwrap();
+        let live = cargo_root_install(dir.path(), "0.1.3");
+        let elsewhere = tempfile::tempdir().unwrap();
+        let environment =
+            FixtureEnvironment::new(live, "0.1.3").cargo_home(elsewhere.path().to_path_buf());
+        let environment = release(environment, "9.9.9", candidate_bytes("9.9.9"), None);
+        let error = run(&environment, false).expect_err("a Cargo root must be refused");
+        match error {
+            UpdateError::Provenance {
+                provenance: Provenance::CargoManaged { version, .. },
+            } => assert_eq!(version, "0.1.3"),
+            other => panic!("expected CargoManaged, got {other:?}"),
+        }
+        let requested = environment.requested.borrow();
+        assert!(
+            requested.is_empty(),
+            "the refused --root install still contacted {requested:?}"
+        );
     }
 
     #[test]

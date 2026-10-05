@@ -1,6 +1,8 @@
 # M011B — Staged Release Validation Workflow Gate
 
-Status: ready
+Status: closed (conditionally — hosted evidence pending a real staged draft)
+
+Closure record: `plans/closure/distribution-release-update/m011b-status.md`
 
 Repository baseline: `c3feae01fe5b684826b77b4d32afcb2e3bd4e3d0`
 

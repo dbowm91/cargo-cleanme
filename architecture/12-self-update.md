@@ -157,43 +157,42 @@ consequential logic: a four-step decision with a strictly ordered outcome.
 `:777`, showing that the classification result and the transaction's target are
 two independent reads of the same function.
 
-**Step 1 — explicit Cargo home (`:416-431`).** If
-`current_exe.parent() == cargo_home/bin`, this is the plain `cargo install`
-layout, with two outcomes, the second being the important one:
-`cargo_recorded_version` returns a version → `CargoManaged`; returns `None` →
-**`UnprovableOwnership`**, not `VerifiableSelfManaged`. The comment at
-`:411-415` is explicit that absence of a record inside a Cargo root is "itself a
-reason to refuse, not a reason to adopt the file", because the premise of
-`CargoManaged` is that Cargo's bookkeeping must not be made to lie. Inside
-`$CARGO_HOME/bin`, a missing record is evidence *for* a Cargo-managed file, not
-evidence of an adoptable one. This is the one place the classifier fails
-**closed**.
+**Step 1 — explicit Cargo home.** If `current_exe.parent() == cargo_home/bin`,
+this is the plain `cargo install` layout, and the outcome is read from the
+**typed** `CargoRecord` rather than an `Option<String>`. `Recorded { version }` →
+`CargoManaged`. The other three states — `DoesNotClaim`, `Absent`,
+`Uninterpretable` — all → **`UnprovableOwnership`**, never
+`VerifiableSelfManaged`.
 
-**Step 2 — the ancestor walk, the `cargo install --root` shape (`:442-447`).**
-`cargo_bin_roots_above` (`:484-494`) walks up to `CARGO_ROOT_SEARCH_DEPTH + 1 =
-5` ancestors of the executable's parent and maps each to `<ancestor>/bin`,
-because Cargo's only layout is `ROOT/bin/<exe>` with `ROOT/.crates.toml` — the
-owning root is the executable's grandparent (`:463-465`).
+The distinction between those three is C018's whole content. They used to
+collapse into a single `None`, which made "Cargo says nothing here"
+indistinguishable from "I could not read what Cargo would have said", and the
+second fell through to the digest step. Inside `$CARGO_HOME/bin` the directory is
+manager-sensitive by construction, so all three refuse. This remains the one
+place the classifier refuses unconditionally, and it is now unconditional for a
+*stated* reason rather than by accident of a null.
 
-This is the C017 fix. Before it, a `cargo install --root DIR` binary was
-**misdetected as self-managed and silently replaced**, leaving
-`cargo install --list` reporting a version the file no longer had
-(`plans/registry.md:81`). **The fix is present**, and three properties make it
-work:
+**Step 2 — the ancestor walk, the `cargo install --root` shape.**
+`cargo_roots_above` walks up to `CARGO_ROOT_SEARCH_DEPTH + 1 = 5` ancestors of
+the executable's parent, because Cargo's only layout is `ROOT/bin/<exe>` with
+`ROOT/.crates.toml` — the owning root is the executable's grandparent.
 
-1. **Location alone never grants ownership** (`:481-483`, `:438-441`). Every
-   candidate root must additionally yield a matching `cargo_recorded_version`.
-   This is what keeps the published installer's `~/.local/bin` and
-   `/usr/local/bin` resolving to self-managed: a directory that merely looks
-   like an install root is not evidence of anything (`:440-441`).
-2. **The record must name this package *and* this binary** (`:529`, `:538`).
-   `real_crates_toml` in the tests is parsed against Cargo's actual current
-   schema, verified by `the_crates_toml_we_parse_is_the_one_cargo_writes`
-   (`:1417`) — the pre-C017 code parsed a schema no current cargo writes.
-3. **The bound is deliberately generous** (`:468-470`): under-detection is "the
-   dangerous direction", since a Cargo-owned file misread as self-managed gets
-   *replaced*, while a false positive "only costs a refusal that names the
-   manager command".
+This is the C017 fix, and C018 changed *what makes a candidate a candidate*
+without changing the walk. Before C018, every ancestor was mapped to
+`<ancestor>/bin` and probed; the "bin-ness" was derived from the path shape. Now
+each candidate root is read directly, and:
+
+1. **`Recorded` → `CargoManaged`** (`:465-473`).
+2. **`DoesNotClaim` or `Absent` → keep walking.** Absence is *not* uncertainty:
+   a root with no `.crates.toml` shows no evidence of being a Cargo root, which is
+   precisely what keeps the published installer's `~/.local/bin` and
+   `/usr/local/bin` on the self-managed path. C018 could have closed this by
+   treating every ancestor `bin` as manager-owned; that would have made every
+   installer layout unupdatable to fix a rarer case.
+3. **`Uninterpretable` → `UnprovableOwnership`, stop** (`:474-482`). The file's
+   *presence* is the positive evidence that this is a Cargo installation root,
+   and the content that would settle ownership is exactly what could not be read.
+   Walking past it would replace a file Cargo owns.
 
 **Step 3 — digest, or refuse (`:449-457`).**
 `eggup_core::hash_file(current_exe)`. Success → `VerifiableSelfManaged { digest }`.
@@ -205,34 +204,55 @@ claims it, *and* its exact bytes are hashable. The name overstates the evidence;
 the doc comment at `:212-218` is accurate — it "never trusts the file name, the
 `PATH` order, or the directory it lives in."
 
-### `cargo_recorded_version` (`:509-544`)
+### `read_cargo_record` and `CargoRecord`
 
-Reads `bin_root/../.crates.toml`, parses as `toml::Value`, takes the `v1` table,
-and per entry: `spec.rsplit_once(')')` (`:522`) strips the parenthesised source
-**from the right**, because a source id may itself contain spaces (`:515-517`);
-a spec lacking `')'` is skipped, not fatal (`:519-521`); then requires
-`name == package` (`:529`) and `binary` ∈ the value array (`:538`).
+Reads `ROOT/.crates.toml`, size-capped before the read, and returns one of four
+states rather than `Option<String>`.
 
-The skip is deliberate and regression-tested at `:1589`, whose comment records
-that an earlier draft of the test placed the bad key *above* the `[v1]` header —
-making it a root-level key the parser never reads, so the test passed against
-code that aborted the scan. The comment names the shape directly: "the
-blind-fixture shape this subsystem has now paid for five times" (`:1599-1600`).
+`Recorded { version }` requires `spec.rsplit_once(')')` to strip the
+parenthesised source **from the right** (a source id may itself contain spaces),
+then requires the name to equal the package and the binary to be in the value
+array. Requiring the binary is what makes this a statement about *this file*
+rather than about a package that merely shares a Cargo home.
+
+`Uninterpretable` covers: unreadable, over the size ceiling, not a regular file,
+invalid TOML, a document with no `v1` table (a shape Cargo never writes, so
+reading it as "Cargo owns nothing" would be trusting an assumption instead of the
+record), and an entry that *names this package* but whose version or executable
+list cannot be interpreted. The last one is the case that matters: a malformed
+entry for a **different** package is skipped, because the parser can prove it
+cannot be the cargo-cleanme record, while a malformed entry that names this
+package might still be the one that claims this binary.
+
+The unrelated-malformed-entry case is regression-tested, because the two
+directions pull opposite ways: treating every broken entry as fatal would let an
+unrelated broken package hide a later valid cargo-cleanme record and force a
+refusal where ownership is provable.
 
 ### The consequence chain
 
 ```
 Cargo-managed file
- → .crates.toml unreadable / pruned / depth > 4 / non-UTF-8 name   (four fail-open cases, §8)
- → no root claims it
- → hash succeeds                                                     (src/update.rs:449)
- → VerifiableSelfManaged
- → run() provenance gate passes                                      (src/update.rs:835)
- → binary replaced; bytes no longer match the version Cargo recorded
+ → .crates.toml unreadable / pruned / non-UTF-8 name / malformed entry
+                                              (three of the four classes in §8)
+ → pre-C018: no root claims it
+ → pre-C018: hash succeeds                                       → VerifiableSelfManaged
+ → pre-C018: run() provenance gate passes
+ → pre-C018: binary replaced; bytes no longer match the version Cargo recorded
                                                      ← C017, silent and lasting
+
+post-C018: the record is read as typed evidence
+ → Uninterpretable → UnprovableOwnership, stop the walk              (§3, step 2)
+ → run() refuses a mutating update *before* contacting the registry
+ → binary untouched; the manager command is printed instead
 ```
 
-`remediation()` (`:195-209`) is the user-facing mitigation for the states a
+The chain above is quoted in its pre-C018 form because it is the failure that
+was fixed, and the second form is what the code does now. The fourth class —
+the owning root lying beyond the search bound — is characterised and bounded in
+§8 rather than closed.
+
+`remediation()` is the user-facing mitigation for the states a
 correct classifier reaches: `cargo install cargo-cleanme --locked --force` for a
 Cargo-managed file, reinstall-via-installer for unprovable ownership. `--force`
 is required because the file being replaced is Cargo's.
@@ -631,24 +651,28 @@ and the commit needs `Ownership::Owned`, which a Cargo-managed file still
 satisfies. So the protection lives entirely in classification, which is
 correctly stated rather than redundantly re-derived.
 
-**But the guarantee is exactly as strong as the classifier, and the classifier
-fails open** to `VerifiableSelfManaged` in four cases (see the chain in §3):
+**But the guarantee is exactly as strong as the classifier, and C018 narrowed
+the gap rather than closing it.** The four fail-open classes this review recorded
+were:
 
-1. `.crates.toml` absent, unreadable, or unparseable at the owning root —
-   `.ok()?` twice at `:511-512`.
+1. `.crates.toml` absent, unreadable, or unparseable at the owning root.
 2. The owning root is more than `CARGO_ROOT_SEARCH_DEPTH = 4` ancestors above the
-   executable (`:471`, `:490`).
-3. The executable's file name is not valid UTF-8 — `binary_name` returns `""`
-   (`:474-476`), matching no record.
-4. The record's value is not a TOML array, or the spec string lacks `')'`
-   (`:522`, `:535`).
+   executable.
+3. The executable's file name is not valid UTF-8.
+4. The record's value is not a TOML array, or the spec string lacks `')'`.
 
-Any of these turns a Cargo-owned file into `VerifiableSelfManaged` and replaces
-it silently. This is the C017 failure mode, narrowed. The asymmetry is
-documented and accepted (`:468-470`): over-detection costs a refusal,
-under-detection costs a user's Cargo install. **I could not determine whether any
-of these four is reachable on current Cargo** — that would require running cargo,
-out of scope here.
+**Classes 1, 3, and 4 are now closed**; class 2 was characterised and bounded
+rather than closed. C018 ran real Cargo 1.89.0 (the MSRV) and 1.99.0 (the release
+builder) against `cargo install --root`, and both write an identical
+`ROOT/.crates.toml` with `ROOT/bin/<exe>` and a `ROOT/.crates2.json` beside it.
+In every observed layout the record sits in the executable's *parent*, one level
+from the executable — the bound of 4 exists to survive container and hermetic
+nesting, and the closure evidence is
+`the_cargo_root_search_cannot_miss_a_supported_layout`, which builds each
+supported shape and proves the walk reaches it.
+
+The asymmetry is unchanged and still deliberate: over-detection costs a refusal
+that names the manager command, under-detection costs a user's Cargo install.
 
 ### Is integrity verified before replace?
 
@@ -768,8 +792,11 @@ came from" (`:433-436`). It does not fail open in the common case.
 ### Verified comment/code drift
 
 - Dead binding `let _ = target;` at `src/update.rs:409`.
-- "Refuse before acquiring anything" (`:832-834`) overstates: metadata was
-  already fetched at `:787`.
+- "Refuse before acquiring anything" was an overstatement until C018: metadata was
+  already fetched before the gate. The gate now runs immediately after
+  classification, so the claim is true for a mutating run — and `--dry-run`
+  deliberately still fetches, so the comment is read against the mutating path
+  only. See `a_dry_run_still_reports_a_candidate_and_names_the_real_provenance`.
 - `staging_dir` "never overwrites an existing path, it fails instead"
   (`:695-697`) is **wrong as written** — `create_dir_all` (`:704`) succeeds on an
   existing directory. Impact negligible (pid + nanosecond collision), but the
@@ -889,12 +916,18 @@ commit (`plans/registry.md:107`).
 Concrete checks, each anchored to a line observed. Priority reflects blast radius.
 
 1. **Provenance misdetection.** Confirm every non-`VerifiableSelfManaged` result
-   of `classify_provenance_in` (`src/update.rs:403-458`) is actually refused
-   before any rename — trace both gates at `:835-840` and `:850-857`. Then check
-   the four paths that reach `VerifiableSelfManaged` on a Cargo-owned file:
-   `.ok()?` twice (`:511-512`), the `CARGO_ROOT_SEARCH_DEPTH = 4` bound (`:471`),
-   `binary_name` returning `""` for non-UTF-8 (`:474-476`), and the non-array /
-   missing-`)` skips (`:522`, `:535`).
+   of `classify_provenance_in` is actually refused before any rename, and that a
+   mutating refusal now happens *before* the registry is contacted. This item was
+   rewritten by C018: the three closed classes are now regression-tested
+   individually (`unreadable_cargo_metadata_can_never_become_self_managed`,
+   `a_malformed_cargo_cleanme_record_is_not_skipped_into_self_managed`,
+   `a_non_utf8_executable_name_in_a_cargo_root_is_unprovable`,
+   `a_mutating_run_on_forbidden_provenance_makes_zero_registry_requests`), and
+   the one open class — the `CARGO_ROOT_SEARCH_DEPTH` bound — is characterised by
+   `the_cargo_root_search_cannot_miss_a_supported_layout` against real Cargo
+   layouts rather than asserted in a comment. Re-read the *unhappy* ordering:
+   a test that only checks the classification would still pass if the gate
+   were moved back after the registry fetch.
 2. **Integrity is checked before replace, against what.** Confirm
    `IntegrityRequirement::Sha256(*manifest.digest())` is attached to the member
    (`:929`) and that `verify_integrity()` (`:954-958`) runs *before* `validate`

@@ -1,6 +1,8 @@
 # C018 — Self-Update Provenance Uncertainty Fail-Closed Corrective
 
-Status: ready
+Status: closed
+
+Closure record: `plans/closure/distribution-release-update/c018-status.md`
 
 Repository baseline: `c3feae01fe5b684826b77b4d32afcb2e3bd4e3d0`
 

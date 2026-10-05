@@ -1,6 +1,6 @@
 # Artifact Discovery and Cleanup Roadmap
 
-Status: Phase 9 remains closed for feature objectives. Phase 11 hardening has C019 exact-unignore sibling containment **ready** as the immediate corrective; M011D Cargo selector qualification lifecycle remains **ready** in parallel and does not broaden selector capability. Distribution/release hardening remains owned by `plans/subsystems/distribution-release-update-roadmap.md`.
+Status: Phase 9 remains closed for feature objectives. Phase 11 has two concurrent threads: C019 exact-unignore sibling containment is **ready** as the immediate filter-correctness corrective, and M011D Cargo selector qualification lifecycle is **closed** (`plans/closure/artifact-discovery-cleanup/m011d-status.md`) and did not broaden selector capability. Distribution/release hardening remains owned by `plans/subsystems/distribution-release-update-roadmap.md`.
 
 Repository audit baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 
@@ -571,7 +571,7 @@ C008 must preserve period-accurate closure evidence, make no production Rust beh
 
 ## 10F. M011D — Cargo selector qualification lifecycle
 
-Status: **ready**.
+Status: **closed** — `plans/closure/artifact-discovery-cleanup/m011d-status.md`.
 
 Plan:
 
@@ -588,6 +588,14 @@ Purpose:
 - fail ordinary CI on policy/matrix/runtime-table drift;
 - preserve exact-version fail-closed support: an exploratory Cargo version is
   never promoted automatically.
+
+Outcome: `release/selector-qualification.json` is the single authority; the
+runtime allowlist in `workspace.rs`, the hosted matrix, and
+`scripts/qualify-cargo-selectors.sh` are all proved against it by
+`check-selector-qualification.py`. Real-Cargo evidence for all nine claimed
+releases (79 assertions) is recorded in the closure record. The hosted matrix is
+a recurring maintenance lane, not a release gate, so no hosted evidence holds this
+closure.
 
 M011D is evidence-lifecycle hardening over the closed M008C/M008D capability.
 It does not change cleanup ownership proof, selector accounting, minimum-size

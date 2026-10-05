@@ -351,6 +351,38 @@ false: the gates track what was empirically observed from a real `cargo clean`,
 per M008D's closure record ("Exact Cargo 1.98.1/1.99.0 behavior … hosted
 platform/MSRV gates pass", `plans/registry.md:68`).
 
+**The qualification lifecycle (M011D).** This table used to be a bare allowlist
+whose only evidence was a characterization script that defaulted to
+`1.89 1.91 1.92 stable` and was wired into nothing. Nothing connected it to the
+hosted matrix, so a version could be added, removed, or left behind with no
+signal at all — and because the table fails *closed*, no signal was needed for
+correctness. That is precisely why the drift was invisible: correctness and
+verifiability are different properties, and only the second one was missing.
+
+`release/selector-qualification.json` is now the single machine-readable
+authority, holding three deliberately separate lists: `profile_selector`,
+`package_selector`, and `exploratory`. Four artifacts are proved to agree by
+`scripts/check-selector-qualification.py`:
+
+| Artifact | Role |
+| --- | --- |
+| `release/selector-qualification.json` | the authority; profile, package, and exploratory held apart |
+| `clean_capabilities_from_version` | what the product actually does, and therefore what gets proved |
+| `.github/workflows/qualify-cargo-selectors.yml` | the hosted matrix, naming toolchains explicitly so a dropped version is detectable |
+| `scripts/qualify-cargo-selectors.sh` | the real-Cargo assertions, consuming the policy rather than carrying a second copy |
+
+Two properties are worth stating because both are the non-obvious direction. The
+matrix names its toolchains **literally** rather than reading the policy at run
+time — reading it would make a missing version impossible to detect, which is the
+defect the gate exists to catch. And `exploratory` is structurally incapable of
+becoming a claim: a leaked entry is rejected by both the checker and
+`exploratory_toolchains_are_never_promoted_by_accident`, and the hosted
+exploratory job is `continue-on-error` so a stable-Cargo regression is reported
+without reading as a product regression.
+
+`read_cargo_record`'s sibling here is the same idea in the updater: a support
+claim that cannot fail its own check is decoration.
+
 The asymmetry between the two selectors is the substantive part.
 `package_selector` is gated to exactly the two releases where the
 *configured* `build.target` discrepancy was resolved — the comment at `:161-162`

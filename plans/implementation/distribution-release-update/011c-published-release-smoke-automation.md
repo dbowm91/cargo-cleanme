@@ -1,6 +1,8 @@
 # M011C — Published Release Smoke Automation
 
-Status: ready
+Status: closed (conditionally — hosted evidence pending a real release publication)
+
+Closure record: `plans/closure/distribution-release-update/m011c-status.md`
 
 Repository baseline: `c3feae01fe5b684826b77b4d32afcb2e3bd4e3d0`
 

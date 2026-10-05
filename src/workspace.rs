@@ -1448,6 +1448,153 @@ mod tests {
     use super::*;
     use crate::progress::{NoopObserver, TestObserver};
 
+    /// The checked-in selector qualification policy (M011D).
+    ///
+    /// Read at test time from the checkout rather than embedded with
+    /// `include_str!`, so the published crate stays the deliberate subset
+    /// `Cargo.toml`'s `include` allowlist describes: this file is a maintenance
+    /// authority, not product surface.
+    fn selector_policy() -> serde_json::Value {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("release")
+            .join("selector-qualification.json");
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!(
+                "the selector policy {} is unreadable: {error}",
+                path.display()
+            )
+        });
+        serde_json::from_str(&text).unwrap_or_else(|error| {
+            panic!(
+                "the selector policy {} is not valid JSON: {error}",
+                path.display()
+            )
+        })
+    }
+
+    fn policy_versions(key: &str) -> Vec<String> {
+        selector_policy()
+            .get(key)
+            .and_then(serde_json::Value::as_array)
+            .unwrap_or_else(|| panic!("the selector policy has no `{key}` list"))
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .unwrap_or_else(|| panic!("`{key}` holds a non-string entry"))
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    /// The runtime allowlist is the product's actual capability claim, so it is
+    /// proved against the policy rather than allowed to define the truth.
+    ///
+    /// Everything here is checkable without a network or a second toolchain:
+    /// each asserted version must be enabled, and *every other* version must not
+    /// be. That second half is what stops an exploratory Cargo release from
+    /// becoming a support claim by appearing in only one of the two places.
+    #[test]
+    fn runtime_allowlist_agrees_with_the_selector_qualification_policy() {
+        let profile = policy_versions("profile_selector");
+        let package = policy_versions("package_selector");
+        assert!(
+            !profile.is_empty(),
+            "the policy claims no profile-qualified release"
+        );
+        assert!(
+            !package.is_empty(),
+            "the policy claims no package-qualified release"
+        );
+
+        for version in &profile {
+            assert!(
+                clean_capabilities_from_version(version).profile_selector,
+                "the policy claims profile selection for Cargo {version} but the runtime table does not enable it"
+            );
+        }
+        for version in &package {
+            assert!(
+                clean_capabilities_from_version(version).package_selector,
+                "the policy claims package selection for Cargo {version} but the runtime table does not enable it"
+            );
+        }
+
+        // Exact-version parsing is the fail-closed property: a version the
+        // policy never observed must be false, and it must stay false for its
+        // prefixes (`1.99` is not `1.99.0`) and its suffixes (`1.99.0-nightly`
+        // is not `1.99.0`).
+        for major in 0..3u32 {
+            for minor in 0..110u32 {
+                for patch in 0..3u32 {
+                    let candidate = format!("{major}.{minor}.{patch}");
+                    let expected_profile = profile.contains(&candidate);
+                    let expected_package = package.contains(&candidate);
+                    assert_eq!(
+                        clean_capabilities_from_version(&candidate).profile_selector,
+                        expected_profile,
+                        "profile selection for Cargo {candidate} disagrees with the policy"
+                    );
+                    assert_eq!(
+                        clean_capabilities_from_version(&candidate).package_selector,
+                        expected_package,
+                        "package selection for Cargo {candidate} disagrees with the policy"
+                    );
+                }
+            }
+        }
+
+        for version in [
+            "1.99",
+            "1.9",
+            "1.99.0-nightly",
+            "1.89",
+            "stable",
+            "unknown",
+            "",
+        ] {
+            assert!(
+                !clean_capabilities_from_version(version).profile_selector,
+                "Cargo {version:?} is not an exact qualified release but profile selection was enabled for it"
+            );
+            assert!(
+                !clean_capabilities_from_version(version).package_selector,
+                "Cargo {version:?} is not an exact qualified release but package selection was enabled for it"
+            );
+        }
+    }
+
+    /// An exploratory toolchain is observed, never claimed. A Cargo release that
+    /// someone wanted to try out must not be able to reach the runtime table by
+    /// appearing in the policy's exploratory list.
+    #[test]
+    fn exploratory_toolchains_are_never_promoted_by_accident() {
+        for version in policy_versions("exploratory") {
+            assert!(
+                !clean_capabilities_from_version(&version).profile_selector,
+                "exploratory toolchain {version} enables profile selection at runtime; exploratory evidence is a research signal, not a support claim"
+            );
+            assert!(
+                !clean_capabilities_from_version(&version).package_selector,
+                "exploratory toolchain {version} enables package selection at runtime; exploratory evidence is a research signal, not a support claim"
+            );
+        }
+    }
+
+    /// Package selection is claimed on a strict subset of profile selection,
+    /// because M008D only authorized it on the releases where a configured
+    /// `build.target` and an explicit `--target` select the same bytes.
+    #[test]
+    fn package_qualified_releases_are_a_subset_of_profile_qualified_ones() {
+        let profile = policy_versions("profile_selector");
+        for version in policy_versions("package_selector") {
+            assert!(
+                profile.contains(&version),
+                "the policy claims package selection for Cargo {version} without claiming profile selection for it"
+            );
+        }
+    }
+
     struct FakeCargo {
         locate_root: PathBuf,
         target: PathBuf,

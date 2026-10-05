@@ -63,7 +63,107 @@ the resolved plan.
 Publishing the draft is a separate, manual, human-reviewed action. That is
 deliberate: a compromised CI token must not be enough to publish a release.
 
-## Required release inventory
+## Publication gate: both workflows must be green
+
+Publication requires **all four** of these, in order:
+
+1. **Eggpack candidate build/stage green.** `release-binaries.yml`, generated
+   by Eggpack. Draft staged, nothing published.
+2. **Staged-release validation green for the same tag and source SHA.**
+   `validate-staged-release.yml` subscribes to the Eggpack run's completion,
+   checks out the upstream `head_sha`, re-proves the tag/source binding with
+   `check-release-identity.py`, and runs `validate-staged-release.py` against
+   the actual staged bytes.
+3. **Human inspection** of the validator's summary: exact tag, source SHA,
+   upstream run id, inventory count, measured glibc floors, installer result.
+4. **Then publish the draft.**
+
+**The validation workflow does not publish.** It holds `contents: read` and
+nothing else, and contains no publication command. A compromised or buggy
+validation job must never hold publication authority — and equally, its failure
+must never be worked around by a job that can publish.
+
+**There is no bypass.** If the validation workflow runs late, or GitHub has an
+outage, the release waits. Do not publish on the grounds that validation was
+"probably fine" or "already passed earlier": a rerun after the draft bytes change
+must re-download and re-validate everything, because cached prior success is not
+evidence about bytes that may have moved.
+
+Once a release is public and immutable, staged validation is no longer
+pre-publication evidence. Use the attestation verification
+(`scripts/verify-release-attestation.py`) and the published-release smoke
+(`post-release-smoke.yml`) instead.
+
+## Release authenticity: immutable releases and attestations
+
+Immutable releases are **enabled** for `dbowm91/cargo-cleanme` (repository
+policy, not owner-enforced; enabled 2026-10-05). From the first release
+published after that point:
+
+- The published release's assets and its tag cannot be replaced. That also means
+  a broken release **cannot be repaired by replacing an asset** — the remedy is
+  a new version. Decide before staging, not after.
+- GitHub issues a signed attestation binding the release to its repository, tag,
+  commit, and every asset digest.
+
+**State the trust root exactly.** The root is still GitHub's release and
+attestation infrastructure. This is **not** an independent maintainer-key
+signature, and it is **not** SLSA build provenance. It upgrades
+*authenticity* from "HTTPS to a host that also serves the checksum" to "a
+signature from GitHub over the artifact digests", and it is deliberately
+scoped no wider. A trust claim that overstates its own root is worse than none.
+
+The `.sha256` sidecar is now a **corruption and mis-download** check rather than
+the authenticity boundary, and the sidecar check is retained because
+`src/update.rs` performs it as the product's fail-closed integrity requirement
+and the updater is not yet attestation-aware. See C018 for that gap.
+
+Verify before you install or recommend a download:
+
+```sh
+python3 scripts/verify-release-attestation.py --settings-only
+python3 scripts/verify-release-attestation.py --tag v0.1.7
+python3 scripts/verify-release-attestation.py --tag v0.1.7 --assets-dir ./downloads
+```
+
+The helper fails closed on every non-pass state — policy off, release mutable,
+attestation missing or unparseable, attestation for another repository or tag,
+an asset the attestation does not name, local bytes that do not match the
+attested digest, an inventory that is not the contracted set, and a missing or
+too-old `gh` client. **Releases v0.1.0 through v0.1.6 predate the policy and
+remain mutable. Do not recreate them, and do not describe them as attested.**
+
+## After you publish: the automatic published-release smoke
+
+Once the GitHub release **and** the crates.io version both exist,
+`post-release-smoke.yml` runs automatically on the `release: published` event
+across all five contracted targets. It performs a real self-managed update from
+the previous stable release to the new one, verifies the final digest, re-runs
+the dry run, and proves Cargo-managed refusal leaves bytes unchanged.
+
+Two behaviours are deliberate and should not be "fixed":
+
+- **It waits for crates.io.** Publication is ordered GitHub-release-first and
+  `cargo publish`-second, so the event can fire before the version the updater
+  resolves actually exists. The wait is bounded; **exhausting it is a failure,
+  not a skip.** A closure record that shows a skipped smoke and one that shows a
+  passing smoke must never be confusable.
+- **It does not fail fast.** One platform's network or runner failure lets the
+  other four produce evidence.
+
+This path found C016 and C017 while every fixture suite was green. If it finds a
+defect in immutable published bytes, follow the patch-release corrective process
+in `docs/TROUBLESHOOTING.md`. **Never replace the published asset** — the
+release is immutable, and the remedy is a new version.
+
+Release closure records the smoke run id and all five target results. A manual
+re-run may prove transient infrastructure recovery, but it does not erase the
+failed original run: the closure record includes both.
+
+The attestation verification from M011A runs post-publication too; its failure
+stays separately visible and does not merge into the smoke's result.
+
+
 
 | Item | Count | Source |
 |---|---|---|

@@ -108,6 +108,32 @@ def on_block(workflow: str) -> set[str]:
     return triggers
 
 
+def _event_block(workflow: str, event: str) -> str:
+    """The body of one top-level event block, e.g. `release:` under `on:`."""
+    lines: list[str] = []
+    in_block = False
+    capturing = False
+    for line in workflow.splitlines():
+        if not in_block:
+            if line.strip() in ("on:", "on: "):
+                in_block = True
+            continue
+        if not line.strip():
+            continue
+        if not line[0].isspace():
+            break
+        stripped = line.strip().rstrip(":").strip()
+        if stripped == event:
+            capturing = True
+            lines.append(line)
+            continue
+        if capturing:
+            if re.match(r"^[ ]+[A-Za-z_][\w-]*:", line) and (len(line) - len(line.lstrip(" "))) <= 2:
+                break
+            lines.append(line)
+    return "\n".join(lines)
+
+
 def check(release: str, smoke: str) -> list[str]:
     problems: list[str] = []
 
@@ -140,15 +166,84 @@ def check(release: str, smoke: str) -> list[str]:
                 f"would not be the same host"
             )
 
-    if "workflow_dispatch" not in smoke:
-        problems.append("smoke workflow is not manually dispatched")
+    # Exactly two entry points (M011C): the manual rehearsal, and a real
+    # published stable release. Anything else -- a push, a schedule, a
+    # pull_request -- would rehearse bytes that were never published, and a green
+    # result would read as release evidence.
     triggers = on_block(smoke)
-    for trigger in ("push", "pull_request", "schedule"):
+    if "workflow_dispatch" not in triggers:
+        problems.append(
+            "smoke workflow lost its manual dispatch; the explicit rehearsal surface must remain"
+        )
+    if "release" not in triggers:
+        problems.append(
+            "smoke workflow is not triggered by release publication; without it the smoke runs "
+            "only when an operator remembers, which is how C016 and C017 stayed live as long as "
+            "they did"
+        )
+    for trigger in ("push", "pull_request", "pull_request_target", "schedule", "workflow_run"):
         if trigger in triggers:
             problems.append(
-                f"smoke workflow is triggered by `{trigger}` rather than by hand; "
-                f"a networked rehearsal must be deliberate"
+                f"smoke workflow is triggered by `{trigger}`; a networked rehearsal of published "
+                "bytes must run only for a published release or an explicit dispatch"
             )
+    if "release" in triggers:
+        release_block = _event_block(smoke, "release")
+        if "published" not in release_block:
+            problems.append(
+                "the release trigger does not filter on the `published` type; other release "
+                "activity (created, edited, prereleased) would launch a smoke for bytes that are "
+                "not a published stable release"
+            )
+        for forbidden in ("created", "edited", "deleted", "prereleased", "released", "published "):
+            if forbidden in release_block and forbidden.strip() != "published":
+                problems.append(
+                    f"the release trigger also fires on `{forbidden.strip()}`; only `published` "
+                    "describes a release whose bytes an operator could actually install"
+                )
+
+    # A `release: types: [published]` trigger is necessary but not sufficient:
+    # the payload must be re-validated, because a malformed or unexpected event
+    # would otherwise move the smoke onto a draft or a pre-release.
+    if "release" in triggers:
+        if "github.event.release.draft" not in smoke or "github.event.release.prerelease" not in smoke:
+            problems.append(
+                "the smoke workflow does not re-check the release event's draft/prerelease state; "
+                "trusting the trigger type alone is trusting a payload this workflow must verify"
+            )
+        if "TAG" not in smoke or "v[0-9]+" not in smoke:
+            problems.append(
+                "the smoke workflow does not assert that the release tag is a plain stable "
+                "vX.Y.Z; a pre-release or floating tag would make the transition unreproducible"
+            )
+
+    # The transition must be resolved and waited for by the tested helper, not by
+    # shell heuristics in YAML -- a resolver embedded in a workflow is a resolver
+    # with no self test.
+    if "resolve-smoke-transition.py" not in smoke:
+        problems.append(
+            "smoke workflow does not call scripts/resolve-smoke-transition.py; an embedded shell "
+            "predecessor heuristic is a second implementation with no premise tests"
+        )
+    else:
+        if "--wait-crates-io" not in smoke:
+            problems.append(
+                "the automatic path does not wait boundedly for crates.io; publication is ordered "
+                "GitHub-release-first, so a smoke can fire before the version the updater resolves "
+                "actually exists"
+            )
+        if "resolve-smoke-transition.py --self-test" not in smoke:
+            problems.append(
+                "the smoke workflow does not run the transition resolver's --self-test before "
+                "using it; an unproved resolver is a shell heuristic wearing a test's name"
+            )
+        if not re.search(r"needs:\s*resolve-transition", smoke):
+            problems.append(
+                "the matrix job does not depend on the resolve-transition job; five independently "
+                "resolved pairs are five chances to test different versions while the summary "
+                "claims one"
+            )
+
     if "fail-fast: false" not in smoke:
         problems.append(
             "smoke workflow sets fail-fast; one platform's network failure would "
@@ -163,10 +258,14 @@ def check(release: str, smoke: str) -> list[str]:
         )
     for pattern, description in (
         (r"softprops/action-gh-release", "a release publishing action"),
-        (r"gh\s+release\s+(create|edit|upload)", "the `gh release` client"),
-        (r"cargo\s+publish", "a crates.io publish"),
+        (r"gh\s+release\s+(create|edit|upload|delete)", "the `gh release` client"),
+        # Command-shaped, so the workflow's own prose explaining that publication
+        # is ordered GitHub-first and `cargo publish`-second does not trip the
+        # guard. A bare word match would have rejected the file that documents
+        # the constraint.
+        (r"(?:^|[;&|]\s*|&&|\|\|)\s*(?:sudo\s+)?cargo\s+publish\b", "a crates.io publish"),
     ):
-        if re.search(pattern, smoke):
+        if re.search(pattern, smoke, re.MULTILINE):
             problems.append(f"smoke workflow contains {description}")
 
     if "post-release-smoke.sh" not in smoke:
@@ -253,6 +352,116 @@ def self_test() -> int:
     expect(
         "a publish step is rejected",
         check(release, smoke + "      - run: gh release create v0.1.2\n"),
+        True,
+    )
+
+    # --- M011C: the automatic-path premises -------------------------------
+    #
+    # These are the guards that keep "automated" from meaning "a rehearsal that
+    # runs on something that was never published, or that resolves 'latest', or
+    # that skips when crates.io is slow".
+
+    def expect_control(name: str, mutated: str, original: str) -> None:
+        if mutated == original:
+            failures.append(name)
+            print(f"  FAIL {name}: the mutation was a no-op")
+        else:
+            print(f"  ok   {name}")
+
+    control_dropped_release = smoke.replace("  release:\n    types: [published]\n", "")
+    expect_control(
+        "control: the missing-release-trigger mutation applied",
+        control_dropped_release,
+        smoke,
+    )
+    expect(
+        "a missing release trigger is rejected",
+        [p for p in check(release, control_dropped_release) if "release" in p],
+        True,
+    )
+
+    widened = smoke.replace("types: [published]", "types: [created, edited, published]")
+    expect_control("control: the widened-release-filter mutation applied", widened, smoke)
+    expect(
+        "a release trigger that fires on non-publication activity is rejected",
+        check(release, widened),
+        True,
+    )
+
+    for trigger in ("workflow_run", "pull_request_target"):
+        expect(
+            f"a {trigger} trigger is rejected",
+            check(release, add_trigger(smoke, trigger)),
+            True,
+        )
+
+    dropped_dispatch = re.sub(
+        r"^  workflow_dispatch:\n(?:    .*\n|      .*\n)+", "", smoke, count=1, flags=re.MULTILINE
+    )
+    expect_control("control: the missing-dispatch mutation applied", dropped_dispatch, smoke)
+    expect(
+        "a workflow that cannot be dispatched by hand is rejected",
+        check(release, dropped_dispatch),
+        True,
+    )
+
+    no_crates_wait = smoke.replace("--wait-crates-io ", "")
+    expect_control("control: the missing-crates-io-wait mutation applied", no_crates_wait, smoke)
+    expect(
+        "an automatic path with no crates.io wait is rejected",
+        check(release, no_crates_wait),
+        True,
+    )
+
+    no_resolver = smoke.replace("scripts/resolve-smoke-transition.py", "bash -c 'resolve()'")
+    expect_control("control: the inlined-resolver mutation applied", no_resolver, smoke)
+    expect(
+        "a resolver reimplemented in the workflow is rejected",
+        check(release, no_resolver),
+        True,
+    )
+
+    no_resolver_selftest = smoke.replace(
+        "python3 scripts/resolve-smoke-transition.py --self-test\n", ""
+    )
+    expect_control(
+        "control: the missing-resolver-self-test mutation applied", no_resolver_selftest, smoke
+    )
+    expect(
+        "a resolver used without its own --self-test is rejected",
+        check(release, no_resolver_selftest),
+        True,
+    )
+
+    untrusted_payload = smoke.replace(
+        "          IS_DRAFT: ${{ github.event.release.draft }}", "          IS_DRAFT: 'false'"
+    ).replace(
+        "          IS_PRERELEASE: ${{ github.event.release.prerelease }}",
+        "          IS_PRERELEASE: 'false'",
+    )
+    expect_control("control: the untrusted-payload mutation applied", untrusted_payload, smoke)
+    expect(
+        "an unvalidated release payload is rejected",
+        check(release, untrusted_payload),
+        True,
+    )
+
+    no_dependency = smoke.replace("    needs: resolve-transition\n", "")
+    expect_control("control: the missing-dependency mutation applied", no_dependency, smoke)
+    expect(
+        "a matrix job that does not consume the resolved pair is rejected",
+        check(release, no_dependency),
+        True,
+    )
+
+    # A workflow that computes a transition but never runs the rehearsal is the
+    # exact false green this milestone exists to prevent: the resolve job goes
+    # green, the matrix job is removed, and the summary claims five lanes.
+    no_rehearsal = smoke.replace("bash scripts/post-release-smoke.sh", "echo nothing to do")
+    expect_control("control: the never-executed-rehearsal mutation applied", no_rehearsal, smoke)
+    expect(
+        "a workflow that computes but never executes the rehearsal is rejected",
+        check(release, no_rehearsal),
         True,
     )
 

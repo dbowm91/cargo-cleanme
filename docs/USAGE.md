@@ -349,6 +349,42 @@ releases where package cleanup passed the configured-target matrix. Any other or
 unknown Cargo version gets a typed `selector_unsupported` result *before* any
 Cargo clean.
 
+### How a version gets added to those lists
+
+The lists above are not hand-maintained prose, and they are not a bare allowlist
+inside the binary. `release/selector-qualification.json` is the single
+machine-readable authority, and four things are proved to agree with it by
+`scripts/check-selector-qualification.py`:
+
+- the runtime capability table in `src/workspace.rs` — what the product actually
+  does, and therefore what gets proved rather than what gets to define the truth;
+- the policy's `profile_selector`, `package_selector`, and `exploratory` lists,
+  held separately because package selection has stricter preconditions;
+- the hosted qualification matrix in
+  `.github/workflows/qualify-cargo-selectors.yml`;
+- the real-Cargo assertions in `scripts/qualify-cargo-selectors.sh`.
+
+**Adding a version is a plan, not an edit.** Putting a release in
+`profile_selector` or `package_selector` requires an implementation plan or
+closure record carrying exact real-Cargo evidence for that version, checked by
+`rustup` against that pinned toolchain. A newly released Cargo version is **not**
+supported because the exploratory lane happened to pass: an exploratory result is
+a research signal, and both the static gate and a Rust test reject an exploratory
+toolchain that reaches the runtime table.
+
+To requalify the current matrix against real Cargo:
+
+~~~sh
+bash scripts/qualify-cargo-selectors.sh --evidence /tmp/qualification.json
+~~~
+
+Every claimed capability produces a named assertion with an explicit verdict, and
+a claimed version that produced **no** assertion is a failure rather than a pass.
+Three failure classes are deliberately kept apart: `semantic_regression` (a
+product finding), `toolchain_unavailable` (an operational blocker — reported as
+one, and never a reason to drop a version from the list), and `premise_failed`
+(a fixture that did not build, which is not evidence about Cargo).
+
 Selector-specific byte estimates are not trustworthy, so the JSON estimate is
 `null` and complete output-union measurements are context only. A nonzero
 `--min-reclaimable-bytes` with any selector therefore **fails closed** before

@@ -1,0 +1,117 @@
+name: Cargo selector qualification
+
+# Real-Cargo evidence for the exact Cargo releases cargo-cleanme claims
+# `--profile` and `--package` support for (M011D).
+#
+# The product fails closed for an unknown Cargo version, so a stale allowlist
+# never crashes anything — it just quietly stops offering a selector, which is
+# why the claim needs an evidence lifecycle rather than a comment. The checked-in
+# authority is `release/selector-qualification.json`; this workflow proves the
+# claim against real Cargo, and `scripts/check-selector-qualification.py` proves
+# the runtime table, the policy, this matrix, and the script still agree.
+#
+# Least privilege: read-only scope, no publication credential, and no step that
+# can edit the support allowlist. A qualification run that turned itself into a
+# promotion would make the evidence self-fulfilling.
+
+on:
+  workflow_dispatch:
+  # Low frequency on purpose. The failure this lane exists to catch is
+  # ecosystem/toolchain availability drift — a pinned toolchain that rustup stops
+  # serving, or a stable release whose selector semantics moved — not a change
+  # in this repository.
+  schedule:
+    - cron: '23 5 * * 1'
+  push:
+    paths:
+      - src/workspace.rs
+      - src/cleanup.rs
+      - release/selector-qualification.json
+      - scripts/qualify-cargo-selectors.sh
+      - scripts/check-selector-qualification.py
+      - .github/workflows/qualify-cargo-selectors.yml
+  pull_request:
+    paths:
+      - src/workspace.rs
+      - src/cleanup.rs
+      - release/selector-qualification.json
+      - scripts/qualify-cargo-selectors.sh
+      - scripts/check-selector-qualification.py
+      - .github/workflows/qualify-cargo-selectors.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: selector-qualification-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  supported-matrix:
+    name: Supported matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      # Static drift first, and in the failing direction. A hosted run that
+      # qualifies a matrix the policy does not claim is evidence for nothing,
+      # and one that qualifies fewer versions than the product advertises is a
+      # green lie.
+      - name: Selector qualification matrix agrees with the policy
+        run: |
+          python3 scripts/check-selector-qualification.py --self-test
+          python3 scripts/check-selector-qualification.py
+      - name: Install the exact supported Cargo toolchains
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchains: '["1.89.0","1.90.0","1.91.1","1.92.0","1.93.1","1.94.1","1.95.0","1.98.1","1.99.0"]'
+      - name: Qualify selectors against real Cargo
+        run: bash scripts/qualify-cargo-selectors.sh --evidence evidence/qualification.json
+      - name: Publish the qualification summary
+        if: always()
+        run: cat evidence/qualification.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain the evidence artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: selector-qualification-supported
+          path: evidence/qualification.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  exploratory-stable:
+    name: Exploratory current stable
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Research signal only. A newly released Cargo version is NOT supported
+    # because this lane is green: runtime support stays false until the version
+    # is explicitly registered in the policy and reviewed, which is the
+    # fail-closed stance the product already has for every other unknown
+    # version. Marked continue-on-error so a stable-Cargo regression is reported
+    # without reading as a product regression.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install current stable Cargo
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchains: '["stable"]'
+      - name: Observe current stable selector behaviour
+        run: bash scripts/qualify-cargo-selectors.sh --exploratory --evidence evidence/exploratory.json
+      - name: Publish the observation summary
+        if: always()
+        run: cat evidence/exploratory.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain the observation artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: selector-qualification-exploratory
+          path: evidence/exploratory.json
+          if-no-files-found: warn
+          retention-days: 30
