@@ -137,6 +137,23 @@ Check each of these:
   diagnostics on stderr.
 - `update --dry-run` reports already-current rather than offering a downgrade.
 
+A binary installed by Cargo must be **refused**, not updated. `cargo cleanme
+update` replaces the running executable in place when it believes the
+installation is self-managed, so a misdetected Cargo root means overwriting a
+file `cargo install --list` still believes Cargo owns. Check the `--root` form
+specifically, not only the default `CARGO_HOME`:
+
+```sh
+cargo install cargo-cleanme --version <published> --locked --root /tmp/root
+/tmp/root/bin/cargo-cleanme update          # must refuse, exit non-zero
+cargo install --list --root /tmp/root       # must still report <published>
+```
+
+Through v0.1.4 this check fails: the refusal names no version in its remediation
+(`cargo install cargo-cleanme --locked --force` resolves to the newest release
+by itself), so assert the *command*, not a version string. `scripts/post-release-smoke.sh`
+covers this and fails the release if the binary's bytes change.
+
 Use an **absolute** path for the bounded scan. An explicitly relative root
 resolved zero Cargo workspaces through 0.1.2 — tracked as C015, fixed in 0.1.3 —
 so on an older version the scan reports no groups while looking healthy. The two

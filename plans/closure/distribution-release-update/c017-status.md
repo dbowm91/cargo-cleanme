@@ -2,9 +2,7 @@
 
 Plan: `plans/implementation/distribution-release-update/c017-cargo-managed-provenance-misdetection-corrective.md`
 
-Disposition: **pending the proving rehearsal** — implementation, gates, and
-v0.1.5 publication are complete; the `v0.1.5` -> `v0.1.6` live rehearsal and the
-v0.1.6 publication are the outstanding items.
+Disposition: **closed**
 
 Discovered by: `plans/implementation/distribution-release-update/c014-v0.1.2-live-update-and-release-reproducibility-corrective.md`
 (work package F, the `v0.1.3` -> `v0.1.4` rehearsal, cargo-managed scenario)
@@ -209,12 +207,128 @@ This is the defect reproduced end to end by the harness, and it simultaneously
 re-confirms the C016 fix: the same published 0.1.4 binary updates itself
 correctly when the installation really is self-managed.
 
-## Outstanding
+## v0.1.6, the target the fix needed
 
-1. v0.1.6 published as the newer target.
-2. `scripts/post-release-smoke.sh --from 0.1.5 --to 0.1.6` — the proving
-   rehearsal, whose cargo-managed scenario must refuse with unchanged bytes.
-3. The five-target post-release smoke workflow.
+| Fact | Value |
+|---|---|
+| Source revision | `383b64e7c5f23916c697139099c97f79679f2314` |
+| Tag | `v0.1.6` |
+| Eggpack run | `37256235897`, 20/20 green |
+| Staged validation | `scripts/validate-staged-release.py --tag v0.1.6`, 6/6 |
+| GitHub published | `2026-10-05T02:56:29Z` |
+| crates.io | `cksum=d89be4bac1096ef5b073858c7c2370b58064a130ba39828c6e567e6fcfa7134b`, not yanked |
+| Public asset sha256 (x86_64-unknown-linux-gnu) | `9bb8c582adcb1cf8bd6953f084d096e8249964b123ec01f61f6552e1efe9fc2c` |
+| Linux ABI | both Linux artifacts `GLIBC_2.17.0` |
+
+v0.1.6 changes no product behavior. It exists because the refusal is raised
+after the already-current check, so observing it needs an installation that is
+*behind* the published version — the same gap 0.1.4 filled for C016.
+
+## Proving rehearsal: `v0.1.5` -> `v0.1.6`
+
+~~~text
+  published v0.1.5 cargo-cleanme-x86_64-unknown-linux-gnu sha256 bbaa2dc71923a1b9...
+  published v0.1.6 cargo-cleanme-x86_64-unknown-linux-gnu sha256 9bb8c582adcb1cf8...
+self-managed: update without --dry-run
+  updated in place, digest equals the published v0.1.6 asset
+self-managed: update --dry-run must report already-current
+  already-current reported (exit 2, which is the documented 'nothing to do' status)
+cargo-managed: install exact v0.1.5 into an isolated root
+  Cargo-managed install reports 0.1.5 (local build, sha256 133edfe9abbc, not the release asset)
+  refused as Cargo-managed, remediation is the manager command, bytes untouched
+
+post-release-smoke: PASSED (x86_64-unknown-linux-gnu v0.1.5 -> v0.1.6)
+~~~
+
+The refusal, verbatim:
+
+~~~text
+cargo-cleanme: self-update refused: cargo-cleanme is cargo_managed; run this instead:
+  cargo install cargo-cleanme --locked --force
+~~~
+
+### A latent harness bug this rehearsal exposed
+
+The first run of this rehearsal **failed on the harness, not the product**. The
+refusal above is exactly what C017 requires, and the harness rejected it with:
+
+~~~text
+post-release-smoke: FAILED: the remediation does not name v0.1.6: ...
+~~~
+
+The assertion required the remediation to name `v0.1.6`, which no correct
+refusal can do: `Provenance::CargoManaged::remediation` returns `cargo install
+cargo-cleanme --locked --force` and deliberately carries no version, because
+that command resolves to the newest published release on its own. Handing a
+Cargo user back to their package manager is the point; a version-pinned
+reinstall would be the wrong instruction for someone who ran `update` in order
+to get the newer version.
+
+The bug was latent rather than obvious because the cargo-managed scenario had
+**never previously reached that line**: with the pre-fix binary the update
+succeeded and the harness failed one assertion earlier.
+
+Worse, the assertion was not merely unsatisfiable but actively wrong. Checked
+against plausible output it would have **accepted**:
+
+~~~text
+cargo-cleanme: updated to 0.1.6, see v0.1.6 release notes
+~~~
+
+— a message claiming the tool performed the update, which is the exact outcome
+the scenario exists to forbid and which would accompany an overwritten binary.
+
+Replaced at `3548fc2` with an assertion of the exact manager command: stricter
+than a version substring, satisfiable by correct behavior, and verified in both
+directions. It matches the real refusal and rejects all four wrong
+remediations, including the success message the old check waved through.
+
+This is the third harness bug this rehearsal line has found — after the
+already-current exit-2 semantics and `cargo install --no-progress` being an
+invalid flag — and the first that was hiding a check weaker than it appeared.
+
+## Acceptance criteria
+
+| Criterion | Evidence | Result |
+|---|---|---|
+| A published release's updater **refuses** a `cargo install --root` installation with unchanged bytes, and names `cargo install cargo-cleanme --locked --force` | `v0.1.5` -> `v0.1.6`, "refused as Cargo-managed, remediation is the manager command, bytes untouched" | pass |
+| The same release refuses a `$CARGO_HOME/bin` installation, not `unprovable_ownership` | `cargo_recorded_version` parses the real schema; `the_crates_toml_we_parse_is_the_one_cargo_writes` and the two refusal tests | pass |
+| Both premise-negatives are reproduced from the closing tree | five deliberate breaks, 4/3/1/1/1 red (§ Premise-negative evidence) | pass |
+| Hosted Linux/macOS/Windows CI green on the release commit | `37254633448` 9/9, drift `37254633505` | pass |
+| `v0.1.1`..`v0.1.4` recorded as immutable releases carrying this defect | see Disposition | pass |
+
+## Five-target hosted smoke
+
+Run `37257527651`, dispatched as `post-release-smoke.yml` with
+`from_version=0.1.5`, `to_version=0.1.6`, across every contracted target:
+
+| Target | Runner | Result |
+|---|---|---|
+| `aarch64-apple-darwin` | `macos-14` | pass |
+| `aarch64-unknown-linux-gnu` | `ubuntu-24.04-arm` | pass |
+| `x86_64-apple-darwin` | `macos-15-intel` | pass |
+| `x86_64-pc-windows-msvc` | `windows-latest` | pass |
+| `x86_64-unknown-linux-gnu` | `ubuntu-latest` | pass |
+
+Run conclusion: **success**, 5/5.
+
+The `x86_64-unknown-linux-gnu` lane log, verbatim:
+
+~~~text
+self-managed: update without --dry-run
+  updated in place, digest equals the published v0.1.6 asset
+self-managed: update --dry-run must report already-current
+  already-current reported (exit 2, which is the documented 'nothing to do' status)
+cargo-managed: install exact v0.1.5 into an isolated root
+  refused as Cargo-managed, remediation is the manager command, bytes untouched
+post-release-smoke: PASSED (x86_64-unknown-linux-gnu v0.1.5 -> v0.1.6)
+~~~
+
+This is the evidence that C017's refusal holds against **real published
+binaries on real hosted runners**, not only against a locally built binary and a
+fixture. It also supplies the Windows commit-path evidence C016 could not get
+from a fixture, since Eggup's identity validator executes the candidate and a
+`#!/bin/sh` stub is not a Windows executable.
 
 ## Known limitation
 

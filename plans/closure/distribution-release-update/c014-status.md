@@ -2,15 +2,27 @@
 
 Plan: `plans/implementation/distribution-release-update/c014-v0.1.2-live-update-and-release-reproducibility-corrective.md`
 
-Disposition: **open — publication complete, live rehearsal failed**
+Disposition: **closed — all four requirements that were open are now met**
 
-C014 is deliberately **not** closed. Its own failure semantics say not to close
-it merely because publication succeeded, and its live self-update rehearsal — an
-acceptance criterion — did not pass. The rehearsal found a real defect, which is
-registered as C016 and not absorbed here.
+C014 was deliberately held **open** while its live self-update rehearsal failed,
+because closing it on the strength of publication is exactly what its own failure
+semantics forbid. The rehearsal now passes. The defect it exposed was registered
+as C016 and fixed there; the relative-root defect it also surfaced was registered
+as C015 and closed separately.
 
-Plans: `plans/implementation/distribution-release-update/c015-relative-scan-root-cargo-resolution-corrective.md` (ready, does not gate publication),
-`plans/implementation/distribution-release-update/c016-live-self-update-identity-invocation-corrective.md` (ready, carries the fix and the remaining verification)
+Closure sequence:
+
+| Rehearsal | Result | What it established |
+|---|---|---|
+| `v0.1.1` -> `v0.1.2` | **failed** | published 0.1.1/0.1.2 ship a non-functional updater; opened C016 |
+| `v0.1.2` -> `v0.1.3` | **failed by design** | the defect is real in the wild, not only in a fixture |
+| `v0.1.3` -> `v0.1.4` | **passed** | the C016 fix commits a real update with the correct bytes |
+| `v0.1.4` -> `v0.1.5` | **failed at cargo-managed** | opened C017: a Cargo-owned binary was being replaced |
+| `v0.1.5` -> `v0.1.6` | **passed** | the C017 fix refuses a Cargo-owned binary with bytes untouched |
+
+Plans: `plans/implementation/distribution-release-update/c015-relative-scan-root-cargo-resolution-corrective.md` (**closed**, `c015-status.md`),
+`plans/implementation/distribution-release-update/c016-live-self-update-identity-invocation-corrective.md` (**closed**, `c016-status.md`),
+`plans/implementation/distribution-release-update/c017-cargo-managed-provenance-misdetection-corrective.md` (**closed**, `c017-status.md`)
 
 Precondition: C013 closed at `51d70f1`, recorded in
 `plans/closure/distribution-release-update/c013-status.md`
@@ -143,18 +155,30 @@ unauthenticated.
 `install.ps1` is not exercised on this Linux host; the block is gated on
 `os.name == "nt"` and its result is taken from hosted Windows CI.
 
-## Unclosed requirements
+## Requirements that were open, and how each closed
 
-Four, all consequences of the one defect:
+Four were open, all consequences of the one defect:
 
-1. a real public `v0.1.1` -> `v0.1.2` self-update commit;
-2. post-update digest equal to the published v0.1.2 asset digest;
-3. `update --dry-run` reporting already-current after a successful commit;
-4. the Cargo-managed refusal scenario and the five-target live smoke dispatch.
+1. **a real public self-update commit** — met by the `v0.1.5` -> `v0.1.6`
+   rehearsal: "updated in place, digest equals the published v0.1.6 asset";
+2. **post-update digest equal to the published asset digest** — met by the same
+   run; the digest comparison is the assertion, not an inference from exit `0`;
+3. **`update --dry-run` reporting already-current after a successful commit** —
+   met, with the exit-code semantics corrected: "already current" is deliberately
+   *not* a success exit, so the tool exits `2` to stop a script mistaking
+   "nothing to do" for "updated". The harness now asserts the message and treats
+   the non-zero exit as the expected outcome, rather than reporting a working
+   updater as broken;
+4. **the Cargo-managed refusal scenario and the five-target live smoke
+   dispatch** — the cargo-managed scenario is met by the same rehearsal:
+   "refused as Cargo-managed, remediation is the manager command, bytes
+   untouched". The five-target dispatch is recorded in the post-release section
+   below.
 
-All four are C016's closure conditions. None can be met by re-running anything
-against the already-published releases, because both `v0.1.1` and `v0.1.2` carry
-the broken updater and neither can be republished.
+None of these could be met by re-running anything against the already-published
+0.1.1 and 0.1.2, because both carry the broken updater and neither can be
+republished. Each required a new release carrying a fix, which is why the line
+ran to 0.1.6.
 
 ## Known limitations
 
@@ -175,27 +199,38 @@ the broken updater and neither can be republished.
 
 ## Unresolved findings
 
-- **high** — C016: the self-update commit path never invoked the candidate
-  correctly, in any published version. Fix applied and gated locally; a published
-  release carrying it is required to close.
-- **medium** — C015: a relative scan root resolves zero Cargo workspaces.
-  Disclosed in v0.1.2; fix not started.
-- **low** — `check-fixture-portability.py` cannot statically decide whether a
-  fixture could fail for the right reason. Three defects in this line slipped
-  through a static guard for exactly that reason. C016's argv-sensitive stub is
-  the pattern that worked, and it is not mechanically checkable.
-- No finding here requires publication to be undone. `v0.1.2` is correct except
-  for its updater, and that failure is loud and non-mutating, so yanking would
-  misdescribe it; C016 §9 says annotate instead.
+- **none blocking.** Every finding this line opened is closed: C015 at `1316e81`,
+  C016 at `826fbf2` plus the `v0.1.5` -> `v0.1.6` rehearsal, C017 at `0aa7664`
+  plus the same rehearsal. Each has its own closure record.
+- **low, not mechanically decidable** — `check-fixture-portability.py` cannot
+  statically decide whether a fixture could fail for the right reason. Five
+  defects in this line slipped through a static guard for exactly that reason
+  (C009, C011, C012, C013, C016), and two more blind fixtures were caught in
+  C017 by the premise-negative harness rather than by any static check. C016's
+  argv-sensitive stub and C017's real-schema fixtures are the patterns that
+  worked, and neither is mechanically checkable by a static rule.
+- **low** — `validate-staged-release.py` runs its real-installer step only on
+  this host's platform; the other four targets' installer paths are covered by
+  the contract check and hosted CI rather than by that script.
+- No finding requires publication to be undone. `v0.1.1` and `v0.1.2` are
+  correct except for an updater that fails loudly and mutates nothing;
+  `v0.1.1`..`v0.1.4` additionally carry C017, whose failure is a silent success
+  rather than a loud one and which is disclosed in the v0.1.5 changelog with a
+  safe upgrade route. In both cases yanking would misdescribe releases whose
+  scan, clean, config, and reporting behavior is correct.
 
 ## Disposition
 
-**open.** Publication and every reproducibility requirement are complete and
-verified. The live self-update rehearsal failed, and closing C014 on the
-strength of publication is exactly what its failure semantics forbid.
+**closed.** Publication and every reproducibility requirement were complete
+before the rehearsal passed; what remained was the live evidence, and it is now
+recorded in this file, in `c016-status.md`, and in `c017-status.md`.
 
-C016 owns the fix, the remaining live evidence, and the five-target smoke
-dispatch. C015 remains open and does not gate publication. No secret was created
-or stored; publication used the operator's pre-existing `gh` and crates.io
-credentials, and the crate was published from a detached worktree at the tag
-rather than from CI.
+Two defects were found by this plan's own evidence work and neither was repaired
+under it: C016 (the identity invocation) and C017 (Cargo-managed provenance
+misdetection), plus C015 (the relative scan root) found by the release
+validator. That is the plan's failure semantics working as intended — a
+corrective that finds a product defect registers it rather than absorbing it.
+
+No secret was created or stored. Publication used the operator's pre-existing
+`gh` and crates.io credentials, and every crate was published from a detached
+worktree at the exact tag, never from `main` and never from CI.

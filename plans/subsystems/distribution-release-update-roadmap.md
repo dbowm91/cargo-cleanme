@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: Phase 10 remains **closed**, with a post-release corrective line in progress. C013 cross-platform fixture-premise audit is **closed**; its sweep registered C015. C014 **published v0.1.2** and met every reproducibility requirement, but its live self-update rehearsal failed, so it stays **open** and handed **C016** the defect. C015 and C016 are the two production defects this line found. C010 remains an upstream request (`proposed`) that nothing here waits on.
+Status: Phase 10 remains **closed**, and the post-release corrective line is now **closed**. C013, C014, C015, C016, and C017 are all closed, each with a closure record. The line found three production defects — C015, C016, and C017 — and repaired none of them under the plan that found it. Seven tags and crate versions are published (v0.1.0..v0.1.6), none yanked. C010 remains an upstream request (`proposed`) that nothing here waits on.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 
@@ -304,7 +304,7 @@ input.
 
 Plan: `plans/implementation/distribution-release-update/c016-live-self-update-identity-invocation-corrective.md`
 
-Status: ready. Discovered by C014's live rehearsal.
+Status: **closed**. Discovered by C014's live rehearsal.
 
 `cargo cleanme update` has never completed a commit in any published version.
 Eggup's `ExactIdentityValidator` executes the staged candidate with no arguments
@@ -325,9 +325,63 @@ The stub now answers only for `--version` and writes to stderr otherwise, so
 dropping the argument turns the commit-path tests red. A fixture that accepts
 every input asserts nothing about the input.
 
-The fix is applied and gated locally. Closing C016 requires a published release
-carrying it: a `v0.1.2` -> `v0.1.3` rehearsal is expected to fail by design,
-because the installing binary is the broken published 0.1.2.
+**Closed.** The fix shipped in v0.1.3; v0.1.4 existed only to give the fixed
+updater a real newer target, and the `v0.1.3` -> `v0.1.4` rehearsal passed with
+the post-update digest equal to the published asset digest. The `v0.1.2` ->
+`v0.1.3` rehearsal was run deliberately first and **failed by design**, which is
+the evidence that the defect was real in the wild and not only in a fixture.
+Re-confirmed as `v0.1.5` -> `v0.1.6`.
+
+Closure record: `plans/closure/distribution-release-update/c016-status.md`.
+
+## 8E. C017 — Cargo-managed provenance misdetection
+
+Plan: `plans/implementation/distribution-release-update/c017-cargo-managed-provenance-misdetection-corrective.md`
+
+Status: **closed**. Discovered by C014's `v0.1.3` -> `v0.1.4` rehearsal, cargo-managed
+scenario.
+
+`cargo install --root DIR` places the binary in `ROOT/bin` and the record in
+`ROOT/.crates.toml`. Detection compared the running executable's parent against
+`$CARGO_HOME/bin` and nothing else, so any install whose root was not the process
+`CARGO_HOME` was classified self-managed and **replaced in place**, silently, with
+exit `0`. Afterwards `cargo install --list` reported a version the file no longer
+had, so `cargo upgrade` and `cargo uninstall` could not work.
+
+This is the only defect in this corrective line that mutated. C011, C015, and
+C016 all failed loudly and wrote nothing, which is the distinction that makes
+this one worth its own plan.
+
+A second bug was hiding behind it: the `.crates.toml` parser read
+`[packages.<name>].vers`, which no cargo emits any more, so the refusal seen in
+the `$CARGO_HOME/bin` case was an accident of two bugs rather than a decision.
+The test covering it hand-wrote the obsolete shape, so the parser was checked
+against its own assumption — the blind-fixture pattern from C009, C011, C012,
+C013, and C016, now for the fifth time in this subsystem, and missed by C013's
+audit for the same reason as the others.
+
+**Closed.** The fix shipped in v0.1.5 and v0.1.6 supplied the target it needed.
+v0.1.6 is required because the refusal is raised *after* the already-current
+check, so observing it needs an installation behind the published version. The
+`v0.1.5` -> `v0.1.6` rehearsal passed end to end: the self-managed path committed
+the correct bytes, and the Cargo-managed path refused with the manager command and
+the binary untouched.
+
+Two of the five premise-negatives in C017 **failed to bite on the first attempt**
+and had to be rewritten before the harness could prove anything — the
+over-detection test and the malformed-entry test were both blind fixtures of the
+exact kind they were meant to catch. The second is the same mistake the plan
+exists to document, caught this time by the premise-negative rather than by a user.
+
+That rehearsal also exposed a latent harness bug: the cargo-managed assertion
+required the remediation to name the target version, which no correct refusal can
+do, because `cargo install cargo-cleanme --locked --force` resolves to the newest
+release on its own. It was latent rather than obvious because the scenario had
+never reached that line. Worse, it would have *accepted* a message claiming the
+tool had updated — the exact outcome the scenario forbids. Replaced at `3548fc2`
+with an assertion of the exact manager command, verified in both directions.
+
+Closure record: `plans/closure/distribution-release-update/c017-status.md`.
 
 ## 9. Verification strategy
 

@@ -1,11 +1,16 @@
 # C017 — Cargo-Managed Provenance Was Misdetected, and One Path Silently Took Ownership of a File Cargo Owns
 
-Status: ready
+Status: closed
 
 Discovered by: `plans/implementation/distribution-release-update/c014-v0.1.2-live-update-and-release-reproducibility-corrective.md`
 (work package F, the `v0.1.3` -> `v0.1.4` rehearsal, cargo-managed scenario)
 
-Partial fix applied: see §7. A further release is required to close.
+Closed. The fix shipped in v0.1.5; v0.1.6 supplied the newer target it needed
+(the refusal is raised after the already-current check, so an installation that
+is behind the published version is required to observe it), and the
+`v0.1.5` -> `v0.1.6` rehearsal passed end to end.
+
+Closure record: `plans/closure/distribution-release-update/c017-status.md`
 
 Related: C010c (which introduced install provenance), C016 (the identity-invocation
 defect, shipped in 0.1.3), C015 (the relative-root defect), C013 (the fixture-premise

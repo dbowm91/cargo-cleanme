@@ -1,11 +1,15 @@
 # C016 — Live Self-Update Commit Path Never Invoked the Candidate Correctly
 
-Status: ready
+Status: closed
 
 Discovered by: `plans/implementation/distribution-release-update/c014-v0.1.2-live-update-and-release-reproducibility-corrective.md`
 (work package F, the real `v0.1.1` -> `v0.1.2` rehearsal)
 
-Partial fix applied: see §7. A further release is required to close.
+Closed. The fix shipped in v0.1.3; v0.1.4 supplied the newer target it needed
+and the `v0.1.3` -> `v0.1.4` rehearsal passed, re-confirmed as
+`v0.1.5` -> `v0.1.6`.
+
+Closure record: `plans/closure/distribution-release-update/c016-status.md`
 
 Related: C011 (the updater transport corrective, which shipped in 0.1.1),
 C012/C013 (the fixture-premise correctives), C015 (the relative-root defect).

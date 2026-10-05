@@ -35,7 +35,7 @@ M008 planning baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
 | Artifact discovery and cleanup | closed/current objectives | plans/subsystems/artifact-discovery-cleanup-roadmap.md | Phase 9 closed; C009 corrective closed | C008 closed the cleanup feature roadmap's current objectives; C009 then restored the green hosted Windows lane. Phase 10 is owned by the separate distribution/release/update subsystem. |
-| Distribution, release, and update | open / post-release corrective | plans/subsystems/distribution-release-update-roadmap.md | C016 live self-update identity invocation | Phase 10 remains closed. C013, C014 (partly), and C015 are closed; C014 stays open only because its live rehearsal failed, which C016 owns. v0.1.3 carries the C015 and C016 fixes. C010 remains an upstream request that nothing here waits on. |
+| Distribution, release, and update | closed / post-release corrective complete | plans/subsystems/distribution-release-update-roadmap.md | none open | Phase 10 remains closed. The post-release corrective line is closed: C013, C014, C015, C016, and C017 are all closed, each with a closure record. Seven tags and crate versions are published (v0.1.0..v0.1.6), none yanked. C010 remains an upstream request that nothing here waits on. |
 
 ## Implementation handoffs
 
@@ -132,15 +132,16 @@ C011 self-update transport qualification corrective -> closed
 C012 Windows installer-fixture corrective -> closed
 C013 cross-platform fixture-premise audit -> closed (discharges C012's open sweep item)
 C015 relative scan root Cargo resolution -> closed (1316e81; ships in v0.1.3)
-C014 v0.1.2 live update/release reproducibility -> OPEN: v0.1.2 published and qualified; live rehearsal failed
-C016 live self-update identity invocation -> registered by C014; owns the fix and the remaining live evidence
+C014 v0.1.2 live update/release reproducibility -> closed (c014-status.md; rehearsal v0.1.5 -> v0.1.6 passed)
+C016 live self-update identity invocation -> closed (826fbf2; ships in v0.1.3; c016-status.md)
+C017 Cargo-managed provenance misdetection -> closed (0aa7664; ships in v0.1.5; c017-status.md)
 C010 upstream CurlConfig::user_agent seam -> proposed (upstream; nothing waits on it)
 
-Published: v0.1.0, v0.1.1, v0.1.2 (GitHub releases and crates.io)
-Next release: v0.1.3 under C016, carrying the self-update fix
+Published: v0.1.0, v0.1.1, v0.1.2, v0.1.3, v0.1.4, v0.1.5, v0.1.6 (GitHub releases and crates.io, none yanked)
+Next release: none required; the corrective line is closed
 ~~~
 
-Phase 10 remains closed. C013/C014/C015/C016 are post-release correctives and do not reopen the feature phase or alter the destructive cleanup boundary. C013 is closed. C014 published v0.1.2 and stays open because its live rehearsal failed. C015 and C016 are the two product defects this line found. C015 is closed; C016's fix is applied and awaiting a release to carry it. Three tags/releases and three crate versions are published; v0.1.1 and v0.1.2 both ship a self-update command that cannot complete a commit, which is recorded rather than hidden.
+Phase 10 remains closed. C013/C014/C015/C016/C017 are post-release correctives and do not reopen the feature phase or alter the destructive cleanup boundary. All five are now closed, each with a closure record, and the line needed seven published versions to get there. C013 found no production defect and was closed under its own failure semantics. C014 published v0.1.2 with every reproducibility requirement met, and was held **open** — deliberately — until its live rehearsal passed, because its failure semantics forbid closing on publication alone. That rehearsal failed and registered C016, whose fix shipped in 0.1.3; 0.1.4 then existed only to give the fixed updater a real target, and the `v0.1.3` -> `v0.1.4` rehearsal passed. The `v0.1.4` -> `v0.1.5` rehearsal then failed again and registered C017, the only defect in this line that mutated: it replaced a binary Cargo owns. 0.1.5 carries the fix and 0.1.6 supplies the target, and `v0.1.5` -> `v0.1.6` passed end to end. Three product defects were found by this line's own evidence work (C015, C016, C017) and none was repaired under the plan that found it. `v0.1.1` and `v0.1.2` ship an updater that cannot complete a commit and `v0.1.1`..`v0.1.4` carry C017; all are recorded, none is yanked, because their other behavior is correct and yanking would misdescribe them.
 
 ### Current destructive safety boundary
 
