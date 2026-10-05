@@ -3,50 +3,87 @@
 ## Check this first: known defects by version
 
 Two defects in the `0.1.x` line affected the updater. Both were found by the
-project's own release rehearsals, not by a test, and both are fixed. They are
-listed first because they are the only cases where a correct-looking run did
-the wrong thing.
+project's own release rehearsals rather than by a test, and both are fixed.
+They are listed first because they are the only cases where a correct-looking
+run did the wrong thing.
 
-### If you are on 0.1.1 through 0.1.4: check whether `update` replaced a Cargo-managed binary
+| If you are on | Check | Fixed in |
+|---|---|---|
+| **0.1.1 – 0.1.4** | `update` could replace a binary **Cargo owns**, silently, with exit `0` | **0.1.5** |
+| **0.1.1 – 0.1.2** | `update` could never complete a commit | **0.1.3** |
 
-**This is the one defect in the `0.1.x` line that could change a file it did
-not own.** A binary installed with `cargo install --root DIR` — the form every
-hermetic install script, CI job, and container image uses — was not recognised
-as Cargo-managed, because detection only ever looked at `$CARGO_HOME/bin`. The
-file was treated as a self-managed installation and **overwritten in place**,
-with no warning and exit status `0`. Afterwards `cargo install --list` reported
-the old version for a file that no longer had it, so `cargo upgrade` and
-`cargo uninstall` could no longer do their jobs.
+No version is yanked: their other behavior is correct, and yanking would
+misdescribe them. Detection and repair steps for both, plus the reasoning, are
+in [UPDATE.md](UPDATE.md#known-defects-by-version).
 
-Nothing else about those releases is affected: scanning, sizing, reporting, and
-cleanup are correct. To check whether you were hit:
+Quick check for the first one, if you installed with `cargo install --root`:
 
 ```sh
 cargo cleanme --version                      # the version the file reports now
 cargo install --list | grep cargo-cleanme     # the version Cargo believes it owns
 ```
 
-If those disagree, you are in the affected state. Repair it with:
+If those disagree, run `cargo install cargo-cleanme --locked --force`.
 
-```sh
-cargo install cargo-cleanme --locked --force
+## Discovery filters
+
+### `unignore` restores more than it names
+
+**Symptom.** You set an `ignore` for a large directory and an `unignore` for one
+project inside it. Discovery walks the whole ignored subtree again, so projects
+you never meant to re-include show up in the report — and a `clean` may then
+consider them.
+
+**Cause.** `ignore` prunes by refusing to *descend* into a matched directory; the
+pattern does not itself match that directory's children. An `unignore` entry
+anywhere beneath it forces the walk back in, and the siblings come along.
+
+Verified on 0.1.6, with `archived/keepme` and `archived/other` both present:
+
+| `ignore` | `unignore` | manifests found |
+|---|---|---|
+| `/home/you/projects/archived` | `/home/you/projects/archived/keepme` | **2** — over-broad |
+| `/home/you/projects/archived/**` | `/home/you/projects/archived/keepme` | **1** — correct |
+| `/home/you/projects/archived/*` | `/home/you/projects/archived/keepme` | **1** — correct |
+
+**Workaround.** Make the ignore pattern cover its own children by appending
+`/**` (or `/*`):
+
+```toml
+[scan]
+ignore   = ["/home/you/projects/archived/**"]
+unignore = ["/home/you/projects/archived/keepme"]
 ```
 
-Fixed in **0.1.5**. Versions 0.1.1 through 0.1.4 carry it; 0.1.5 and later
-refuse a Cargo-managed installation, and also parse the `.crates.toml` schema
-that current Cargo actually writes. None of these versions were yanked, because
-their other behaviour is correct and yanking would misdescribe them.
+### An `ignore` rule seems to do nothing
 
-### If you are on 0.1.1 or 0.1.2: `update` could not complete
+If you are testing with an explicit root, that is the reason:
 
-The identity check ran the downloaded candidate with **no arguments**, so its
-stdout could never equal a version string — and before failing, it scanned the
-whole machine. The transaction then aborted safely every time, so nothing was
-corrupted and no file was replaced. The advertised feature simply never once
-worked in any published version.
+```sh
+cargo cleanme scan .                          # filters are BYPASSED
+cargo cleanme scan --config ./filters.toml    # Routine scope: filters apply
+```
 
-Fixed in **0.1.3**. If you are on 0.1.1 or 0.1.2, upgrade with `cargo install
-cargo-cleanme --locked --force` rather than `cargo cleanme update`.
+`ignore` and `unignore` apply to global discovery and the Routine scope. An
+explicit root — a CLI `ROOT` argument or the config's `root` key — bypasses
+them, because a caller who names one directory means it.
+
+### A relative path in your config is rejected
+
+`configuration error: ignore pattern must be absolute: <value>`, exit `2`. Every
+path in `ignore`, `unignore`, `root`, `include`, `exclude`, and
+`allowed_output_roots` must be absolute.
+
+### An `exclude` pattern does not match
+
+`include` and `exclude` are matched against the **canonical workspace root**,
+not against output directories or anything beneath it. A trailing `/**` requires
+a segment after the name, so it never matches the directory itself:
+
+```toml
+exclude = ["**/archived/**"]   # does not match a workspace root that IS .../archived
+exclude = ["**/archived"]      # matches
+```
 
 ## Installation
 
