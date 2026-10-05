@@ -71,14 +71,20 @@ python3 scripts/check-fixture-portability.py --self-test && python3 scripts/chec
 python3 scripts/check-doc-citations.py --self-test && python3 scripts/check-doc-citations.py
 ```
 
-Full pre-release gate: `scripts/release-check.sh`.
+Focused test: `cargo test --all-features --test cli_contract <test_name>`
+(`tests/` holds `cli_contract.rs` with 9 tests, `end_to_end.rs` with 1, plus
+inline unit tests in `src/`).
 
-If you change the CLI surface, regenerate derived artifacts or the build fails
-on drift:
+If you change the CLI surface, regenerate derived artifacts or the drift gate
+fails (`generate-docs -- --check` in CI):
 
 ```sh
 cargo run --quiet --features dev-tools --bin generate-docs
 ```
+
+Full pre-release gate: `scripts/release-check.sh` — requires a clean tree, the
+`eggpack` binary, and toolchain 1.89 installed, so do not run it as routine
+verification; the ladder above is the ordinary gate.
 
 **Report what actually ran.** A record claiming a gate passed when it was not
 run is worse than no record, because the next milestone trusts it.
@@ -168,7 +174,9 @@ closure records.
 | `docs/` | `RELEASING.md` (operator checklist), `TROUBLESHOOTING.md` (includes known defects by version) |
 | `plans/` | decision records — see §6 |
 | `.skills/` | the six skills — see §2 |
-| `scripts/` | 13 contract checkers; the static ones take `--self-test` |
+| `scripts/` | 13 scripts; the static contract checkers take `--self-test` |
 | `completions/`, `man/` | **generated** — do not hand-edit; run `generate-docs` |
+| `xtask/` | `generate-docs` source (feature `dev-tools`); excluded from the published crate |
+| `release/eggpack/` | `distribution.toml` is the authority for the release target matrix |
 | `packaging/`, `release/` | installers, Eggpack policy, smoke and qualification scripts |
 | `CHANGELOG.md` | released changes, including known defects per version |
