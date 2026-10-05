@@ -23,26 +23,29 @@ Planning framework baseline: `97dee9fa64868534cedf3a9310e7160335a91be2`
 M006 implementation baseline: `47574fa8a087ac2f9111e29821c23b13657e7bbe`
 M008 planning baseline: `3ee9699a0b0d987287d08e427195284e08d079f7`
 Phase 11 implementation baseline: `a150eda8b43e8bf2f088aec8b804e7fa557c3a18`
+Phase 12 planning baseline: `9f573c1a327aec162bc2ad61de1e3740ad1f4e46`
 Immutability policy enabled: `2026-10-05T13:34:38Z` (repository-level, not owner-enforced)
 
 ## Subsystem status
 
 | Subsystem | Status | Roadmap | Current milestone | Blocker |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | ready | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | none open | none. C019 closed, and its two blocking baseline defects (the README/release-contract drift and the M011D gate that had never run) were reconciled in the same pass. The correction is **unreleased**: 0.1.6 and earlier keep the over-broad behavior. |
+| Artifact discovery and cleanup | ready / Phase 12 open | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | M012A, M012B | none. ADR 003 is accepted. M012A is the command/mode contract change; M012B is bounded unattended output + greggd documentation. Existing C019/C020 corrections remain unreleased. |
 | Distribution, release, and update | closed / Phase 11 complete, pending a published release | `plans/subsystems/distribution-release-update-roadmap.md` | M011A, M011B, M011C, C018 all closed | No plan is blocked. **The next release from `main` is the first covered by immutability**, and it is the first thing that can supply the outstanding hosted evidence for M011A, M011B, M011C, and C018. |
 
 ## Open work
 
-Two kinds of thing are open. The Phase 11 hardening milestone set is closed; its
+Three kinds of thing are open. Phase 12 now has two ready implementation
+handoffs under ADR 003. The Phase 11 hardening milestone set is closed; its
 outstanding items are **evidences that require a published release**, which no
 plan in this repository can supply without a human publishing one. Separately,
-two pre-existing documentation defects were found and left open while closing
-C019, and one of them is the reason `architecture/14-testing-and-verification.md`
-§5 under-describes the guard suite.
+the pre-existing testing/verification documentation debt recorded during C019
+remains open.
 
 | Item | Status | Plan / record | Note |
 |---|---|---|---|
+| M012A — canonical maintenance CLI and dry-run semantics | **ready** | `plans/implementation/artifact-discovery-cleanup/012a-canonical-maintenance-cli-and-dry-run-semantics.md` | Bare `cargo cleanme` becomes Routine Execute through the existing combined-root proof; `--dry-run` becomes zero-Cargo-clean simulation; rootless `scan` becomes Full; advanced cleanup remains available. First release carrying this destructive-default break must cross a pre-1.0 minor boundary, not a 0.1.x patch. |
+| M012B — bounded unattended log output and greggd integration | **ready** | `plans/implementation/artifact-discovery-cleanup/012b-unattended-log-output-and-greggd-integration.md` | Add explicit `--format log`, one deterministic ASCII summary <=384 bytes, and document daily Routine cleanup + weekly Full scan under user-owned/rootless greggd load gating. Interface-depends on M012A's operation/mode vocabulary. |
 | C019 — exact unignore sibling containment corrective | **closed** | `plans/closure/artifact-discovery-cleanup/c019-status.md` | Corrects M002: a literal ignored ancestor plus an exact unignore re-admitted unrelated siblings, so `ignore = […/archived]` with one `unignore` beneath it discovered every project in the archived subtree. Now one `Filters::disposition` decides `Included`/`Pruned`/`PassThrough`/`ReIncluded`, and inherited exclusion is proven by testing the path's ancestry. Unreleased. |
 | `architecture/14-testing-and-verification.md` §5 contract-checker table | **open — needs a plan** | recorded in `plans/closure/artifact-discovery-cleanup/c019-status.md` §12 | Characterises 4 of 17 scripts, and its `check-release-contract.py` row describes a contract M010A replaced. Documentation-only, low severity; the guards it under-describes are wired into CI and each take a `--self-test`. |
 | C020 — Windows concurrent first-use config creation race | **closed** | `plans/closure/artifact-discovery-cleanup/c020-status.md` | Corrects `config::create_initial`. The staging name was never unique within a process — threads shared the pid and the starting `attempt` — so every concurrent first use collided, and Windows spells that collision `PermissionDenied` rather than `AlreadyExists`. Fixed with a process-wide nonce, so the collision is removed rather than tolerated. Unreleased. |
@@ -85,8 +88,7 @@ recorded rather than hidden:
 
 ## Current destructive safety boundary
 
-Stable surface. Changing any of these is a canonical-direction change, not an
-implementation task.
+The proof boundary is stable; ADR 003 changes the public invocation front door, not these safety properties. Until M012A lands, main still has the historical `--yes` / `--dryrun` dispatch described by the current implementation. After M012A, the canonical spellings change but the proof below must remain identical.
 
 - Cargo resolves workspace/output configuration; cargo-cleanme does not infer
   unresolved output paths.
@@ -106,6 +108,23 @@ implementation task.
 
 Defined in ADR 001 plus milestones M004, M005, M007, M008A and correctives
 C002–C004, C006. Performance work must not weaken any of it.
+
+## Phase 12 accepted direction
+
+ADR 003 intentionally supersedes the historical front-door semantics without
+weakening cleanup safety:
+
+- bare `cargo cleanme` -> Routine Execute;
+- bare `cargo cleanme --dry-run` -> Routine Simulate with zero `cargo clean` subprocesses;
+- `cargo cleanme scan` -> Full read-only reconciliation;
+- `cargo cleanme scan ROOT` -> Explicit read-only scan;
+- `cargo cleanme scan --known` -> Routine read-only inventory;
+- Cargo's own dry-run moves to explicit `--cargo-preview` on advanced cleanup;
+- `--format log` is a bounded operator-history surface; JSON remains the complete machine contract;
+- scheduling/load policy stays external, with greggd documented as a first-class example.
+
+The implementation must preserve C003/C004/C006 ownership/freshness proof and
+must not ship the bare destructive default as a `0.1.x` patch release.
 
 ## The lesson this repository keeps re-learning
 
