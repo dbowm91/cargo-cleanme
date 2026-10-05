@@ -102,8 +102,7 @@ The proof boundary is stable; ADR 003 changes the public invocation front door, 
   non-symlink, marker-qualified, and stable under fresh complete combined
   ownership-graph revalidation.
 - `cleanup.allowed_output_roots` never manufactures ownership proof.
-- `--dryrun` remains zero-clean and shares the same completeness and final-proof
-  gates as Execute.
+- zero-mutation Simulation shares the same completeness and final-proof gates as Execute; current main spells it `--dryrun`, while M012A makes canonical `--dry-run` carry that meaning.
 - `--stats` is the qualification and debug surface.
 
 Defined in ADR 001 plus milestones M004, M005, M007, M008A and correctives
@@ -118,7 +117,7 @@ weakening cleanup safety:
 - bare `cargo cleanme --dry-run` -> Routine Simulate with zero `cargo clean` subprocesses;
 - `cargo cleanme scan` -> Full read-only reconciliation;
 - `cargo cleanme scan ROOT` -> Explicit read-only scan;
-- `cargo cleanme scan --known` -> Routine read-only inventory;
+- `cargo cleanme scan --known` -> the non-Full maintenance scope (Routine normally; Explicit when legacy configured `scan.root` wins);
 - Cargo's own dry-run moves to explicit `--cargo-preview` on advanced cleanup;
 - `--format log` is a bounded operator-history surface; JSON remains the complete machine contract;
 - scheduling/load policy stays external, with greggd documented as a first-class example.
