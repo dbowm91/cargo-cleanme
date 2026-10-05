@@ -344,23 +344,26 @@ cleanup boundary.
 
 Implementation sequence / parallelism:
 
-1. **C018 — self-update provenance uncertainty fail-closed** is the immediate
+1. **C018 — self-update provenance uncertainty fail-closed** is an immediate
    safety-critical corrective. Positive Cargo-manager evidence that cannot be
    interpreted must never collapse to self-managed ownership.
-2. **M011A — immutable release attestation and verification** adds a
+2. **C019 — exact unignore sibling containment** is an independent immediate
+   discovery-scope corrective against M002. Traversal through an ignored
+   ancestor may reach an exact exception but must not admit unrelated siblings.
+3. **M011A — immutable release attestation and verification** adds a
    post-publication authenticity layer while retaining SHA-256/manifest checks.
-3. **M011B — staged-release validation workflow gate** makes the existing
+4. **M011B — staged-release validation workflow gate** makes the existing
    staged-draft validator an actual hosted publication prerequisite without
    modifying Eggpack-generated CI.
-4. **M011C — published-release smoke automation** makes the five-target live
+5. **M011C — published-release smoke automation** makes the five-target live
    updater rehearsal automatic on public release publication while retaining
    manual dispatch.
-5. **M011D — Cargo selector qualification lifecycle** binds exact runtime
+6. **M011D — Cargo selector qualification lifecycle** binds exact runtime
    profile/package support to repeatable real-Cargo evidence and keeps future
    versions fail-closed until deliberately qualified.
 
-C018 and M011A-M011D may be implemented in parallel where their files do not
-conflict. The first future release after the relevant implementations supplies
+C018, C019, and M011A-M011D may be implemented in parallel where their files do
+not conflict. The first future release after the relevant implementations supplies
 operational closure evidence for C018 and M011A-M011C; planning does not reserve
 a version number in advance. M011D closes independently on its hosted
 qualification matrix.
@@ -386,6 +389,7 @@ Hard constraints:
 Plans:
 
 - `plans/implementation/distribution-release-update/c018-self-update-provenance-uncertainty-fail-closed.md`
+- `plans/implementation/artifact-discovery-cleanup/c019-exact-unignore-sibling-containment-corrective.md`
 - `plans/implementation/distribution-release-update/011a-immutable-release-attestation-and-verification.md`
 - `plans/implementation/distribution-release-update/011b-staged-release-validation-workflow-gate.md`
 - `plans/implementation/distribution-release-update/011c-published-release-smoke-automation.md`
@@ -396,6 +400,8 @@ Exit condition:
 - C018 is carried by a public release and real Cargo-managed installations
   refuse without remote acquisition or mutation when local provenance forbids
   replacement;
+- C019 restores exact unignore sibling containment with a premise-negative
+  literal-ancestor regression and hosted cross-platform evidence;
 - a future public release is immutable and its release attestation/assets verify
   under the documented trust model;
 - a real Eggpack staged draft automatically receives the full product staged
@@ -424,6 +430,7 @@ C018 provenance        M011A immutable  M011B staged      M011C published
 fail-closed [ready]    release trust    validation gate   smoke automation
                        [ready]          [ready]           [ready]
 
+C019 exact-unignore sibling containment [ready; independent corrective]
 M011D Cargo selector qualification lifecycle [ready; independent evidence line]
 
 First future qualification release:
