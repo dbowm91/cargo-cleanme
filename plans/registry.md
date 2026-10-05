@@ -29,26 +29,28 @@ Immutability policy enabled: `2026-10-05T13:34:38Z` (repository-level, not owner
 
 | Subsystem | Status | Roadmap | Current milestone | Blocker |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | ready / C019 is the current handoff | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | C019 exact-unignore sibling containment corrective | none; C019 is a filter-correctness corrective. M011D closed in parallel and does not broaden selector capability. |
+| Artifact discovery and cleanup | ready | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | none open | none. C019 closed, and its two blocking baseline defects (the README/release-contract drift and the M011D gate that had never run) were reconciled in the same pass. The correction is **unreleased**: 0.1.6 and earlier keep the over-broad behavior. |
 | Distribution, release, and update | closed / Phase 11 complete, pending a published release | `plans/subsystems/distribution-release-update-roadmap.md` | M011A, M011B, M011C, C018 all closed | No plan is blocked. **The next release from `main` is the first covered by immutability**, and it is the first thing that can supply the outstanding hosted evidence for M011A, M011B, M011C, and C018. |
 
 ## Open work
 
-Two things are open, of different kinds. **C019 is in implementation** — a
-discovery-scope corrective with no dependency on the release line. The
-Phase 11 hardening milestone set is closed; its outstanding items are
-**evidences that require a published release**, which no plan in this repository
-can supply without a human publishing one.
+Two kinds of thing are open. The Phase 11 hardening milestone set is closed; its
+outstanding items are **evidences that require a published release**, which no
+plan in this repository can supply without a human publishing one. Separately,
+two pre-existing documentation defects were found and left open while closing
+C019, and one of them is the reason `architecture/14-testing-and-verification.md`
+§5 under-describes the guard suite.
 
 | Item | Status | Plan / record | Note |
 |---|---|---|---|
-| C019 — exact unignore sibling containment corrective | **ready** | `plans/implementation/artifact-discovery-cleanup/c019-exact-unignore-sibling-containment-corrective.md` | Corrects M002: a literal ignored ancestor plus an exact unignore currently re-enters unrelated siblings. Restore pass-through ancestry without broadening the exception subtree. **Its own operational-closure dependency:** the unrelated README/release-contract drift must be green or explicitly reconciled first, so hosted evidence is not accepted from an already-red baseline. |
+| C019 — exact unignore sibling containment corrective | **closed** | `plans/closure/artifact-discovery-cleanup/c019-status.md` | Corrects M002: a literal ignored ancestor plus an exact unignore re-admitted unrelated siblings, so `ignore = […/archived]` with one `unignore` beneath it discovered every project in the archived subtree. Now one `Filters::disposition` decides `Included`/`Pruned`/`PassThrough`/`ReIncluded`, and inherited exclusion is proven by testing the path's ancestry. Unreleased. |
+| `architecture/14-testing-and-verification.md` §5 contract-checker table | **open — needs a plan** | recorded in `plans/closure/artifact-discovery-cleanup/c019-status.md` §12 | Characterises 4 of 17 scripts, and its `check-release-contract.py` row describes a contract M010A replaced. Documentation-only, low severity; the guards it under-describes are wired into CI and each take a `--self-test`. |
 | C010 — `CurlConfig::user_agent` seam in `eggup-curl` | **proposed** | `plans/implementation/distribution-release-update/c010-eggup-curl-user-agent-seam.md` | Bounded upstream request. It cannot be closed from this repository, and nothing here waits on it: `eggup-eggfetch` already provides the seam. No closure record, by design. |
 | C018 — self-update provenance uncertainty fail-closed | **closed** | `plans/closure/distribution-release-update/c018-status.md` | Outstanding: work package 9 — a default-Cargo-home and `--root` real installation refused by a *released* binary, bytes unchanged. |
 | M011A — immutable release attestation + verification | **closed (conditional)** | `plans/closure/distribution-release-update/m011a-status.md` | Outstanding: verification of a real attested `cargo-cleanme` release. Policy enabled and verified live; v0.1.0–v0.1.6 remain mutable and are not described as attested. |
 | M011B — staged-release validation workflow gate | **closed (conditional)** | `plans/closure/distribution-release-update/m011b-status.md` | Outstanding: a real Eggpack draft run triggering the workflow automatically, with a green validator against that draft. |
 | M011C — published-release smoke automation | **closed (conditional)** | `plans/closure/distribution-release-update/m011c-status.md` | Outstanding: a real `release: published` event launching the five-target workflow, all five lanes green after crates.io exposes the version. |
-| M011D — Cargo selector qualification lifecycle | **closed** | `plans/closure/artifact-discovery-cleanup/m011d-status.md` | None outstanding. The hosted matrix is a recurring maintenance lane, not a release gate. |
+| M011D — Cargo selector qualification lifecycle | **closed** | `plans/closure/artifact-discovery-cleanup/m011d-status.md` | None outstanding. The hosted matrix is a recurring maintenance lane, not a release gate. **Addendum:** the gate had never actually run — both jobs passed a plural `toolchains:` input to an action that declares a singular `toolchain:`, and died on "'toolchain' is a required input". Fixed and re-verified. |
 
 **Read this before the next release.** The next release from `main` is the first
 that will carry an attestation, and it is the first chance to supply four

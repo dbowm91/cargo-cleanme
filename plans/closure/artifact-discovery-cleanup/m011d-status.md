@@ -232,3 +232,11 @@ proves nothing.
 No support claim changes. The policy, the runtime allowlist, the script, and the
 matrix still agree on the same 9 profile-qualified and 2 package-qualified Cargo
 releases.
+
+**Verified, not assumed.** Run `37334039970` on `7a4dc5e` is the first successful
+execution of this gate. The hosted log reports
+`evidence: 79 assertion(s) across 9 toolchain(s)` with all nine passing
+(1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0, 1.98.1, 1.99.0) — the same
+count this record cites from the local run, now produced on a hosted runner with
+each toolchain installed by its own action invocation. The exploratory lane is
+also green.

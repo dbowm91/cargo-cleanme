@@ -1,6 +1,6 @@
 # C019 — Exact Unignore Sibling-Containment Corrective
 
-Status: implemented — awaiting closure record
+Status: closed — see [`plans/closure/artifact-discovery-cleanup/c019-status.md`](../../closure/artifact-discovery-cleanup/c019-status.md)
 
 Repository baseline: `a150eda8b43e8bf2f088aec8b804e7fa557c3a18`
 
