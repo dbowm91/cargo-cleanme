@@ -302,110 +302,132 @@ Exit condition:
 
 ## Phase 10 — Distribution and operational polish
 
-Status: closed. M010A, M010B, M010C, and M010D are closed, and correctives C011 and C012 are closed. `v0.1.0` and `v0.1.1` are published to GitHub and crates.io. Evidence: `plans/closure/distribution-release-update/010a-status.md`, `010b-status.md`, `010c-status.md`, `010d-status.md`, `c011-status.md`, `c012-status.md`. Phase 10 remains closed while post-release correctives proceed: C013 fixture-premise audit is ready; C014 v0.1.2 live-update/reproducibility corrective is blocked on C013 for publication. C010 is a bounded upstream request and is `proposed`.
+Status: **closed.** M010A-M010D are closed. The post-release corrective line
+C013-C017 is also closed, and seven public versions (`v0.1.0` through
+`v0.1.6`) record the evidence trail rather than rewriting history. C010 remains
+a bounded upstream `eggup-curl` request and nothing in cargo-cleanme waits on it.
 
 Subsystem roadmap:
 
 - `plans/subsystems/distribution-release-update-roadmap.md`
 
-Implementation sequence:
+Closed implementation sequence:
 
 1. M010A — Eggpack distribution contract and Cargo package readiness.
 2. M010B — product-owned bootstrap installers and release-artifact qualification.
 3. M010C — Eggup-backed self-update and explicit install-provenance policy.
 4. M010D — crates.io/GitHub publication, completions/manpage, benchmark/support evidence, and release closure.
+5. C013 — cross-platform fixture-premise audit.
+6. C014 — exact release-toolchain/source identity plus live updater rehearsal.
+7. C015 — relative scan-root Cargo resolution corrective.
+8. C016 — live self-update candidate-identity invocation corrective.
+9. C017 — Cargo-managed provenance misdetection corrective.
 
-Required direction:
+Phase 10's durable direction remains:
 
-- use Eggpack as the producer-side release contract/build/qualification/manifest/generated-CI authority instead of adding a parallel distribution framework;
-- use Eggup as the consumer-side verified acquisition/staging/replacement/rollback authority instead of copying updater machinery from Gregg;
-- retain cargo-cleanme ownership of public install wrappers, release/version authority, target/fallback policy, install destination/provenance policy, and CLI presentation;
-- qualify release binaries for x86_64/aarch64 Linux, Intel/Apple Silicon macOS, and x86_64 Windows;
-- publish only after package/release bytes, installer semantics, and updater behavior have closure evidence;
-- keep Cargo selector support policy distinct from application/platform support;
-- generate shell completions/manpage from the clap model and drift-check generated artifacts;
-- record release-oriented semantic counters, timings, dependency footprint, and binary-size baselines.
+- Eggpack owns producer-side release construction/qualification/generated CI;
+- Eggup owns generic verified acquisition/staging/replacement/rollback;
+- cargo-cleanme owns release/version/origin/fallback/provenance policy and public presentation;
+- publication remains explicit after qualification;
+- release artifacts, installers, updater behavior, and operational docs require evidence rather than build success alone.
 
-Eggpack needs no upstream feature plan for the initial direct single-binary release. The preferred lightweight self-update path depends on a separately registered Eggup acquisition milestone to publish the already-qualified `eggup-curl` adapter.
+Historical failures are retained in their original closure records. In
+particular, `v0.1.1`/`v0.1.2` carry the C016 updater defect and
+`v0.1.1`-`v0.1.4` carry the C017 Cargo-ownership defect; later releases fix
+them without rewriting immutable history.
 
-Later finding (2026-10-04, during M010C/M010D implementation): the `eggup-curl`
-premise above did not survive contact with the registry. The published
-`eggup-curl` 0.1.2 exposes no User-Agent seam, and crates.io answers
-`curl/x.y` with HTTP 403, so the lightweight curl path could not perform the
-required transaction. The transport was reversed to `eggfetch` and curl was not
-retained as a fallback; a bounded upstream request for the missing
-`CurlConfig::user_agent` seam is recorded as
-`plans/implementation/distribution-release-update/c010-eggup-curl-user-agent-seam.md`
-(`proposed`). The correction is recorded in
-`plans/closure/distribution-release-update/c011-status.md`.
+## Phase 11 — Hardening, release trust, and qualification automation
 
-Post-release corrective sequence (does not reopen Phase 10):
+Status: **ready.** This phase hardens the already-shipped product before new
+feature expansion. It does not reopen Phase 10 and does not widen the destructive
+cleanup boundary.
 
-1. C013 — audit external-process fixtures and prove their executable-resolution/branch premises on every platform they claim.
-2. C014 — pin an exact release Rust toolchain, enforce exact tag/source publication identity, publish the deliberately small v0.1.2 qualification release, and prove a real released v0.1.1 -> v0.1.2 self-update commit against public authorities.
+Implementation sequence / parallelism:
 
-C014 publication is blocked on C013 closure. Its non-publication release-toolchain/source-identity preparation may proceed in parallel.
+1. **C018 — self-update provenance uncertainty fail-closed** is the immediate
+   safety-critical corrective. Positive Cargo-manager evidence that cannot be
+   interpreted must never collapse to self-managed ownership.
+2. **M011A — immutable release attestation and verification** adds a
+   post-publication authenticity layer while retaining SHA-256/manifest checks.
+3. **M011B — staged-release validation workflow gate** makes the existing
+   staged-draft validator an actual hosted publication prerequisite without
+   modifying Eggpack-generated CI.
+4. **M011C — published-release smoke automation** makes the five-target live
+   updater rehearsal automatic on public release publication while retaining
+   manual dispatch.
+5. **M011D — Cargo selector qualification lifecycle** binds exact runtime
+   profile/package support to repeatable real-Cargo evidence and keeps future
+   versions fail-closed until deliberately qualified.
+
+C018 and M011A-M011D may be implemented in parallel where their files do not
+conflict. The first future release after the relevant implementations supplies
+operational closure evidence for C018 and M011A-M011C; planning does not reserve
+a version number in advance. M011D closes independently on its hosted
+qualification matrix.
+
+Hard constraints:
+
+- no hardening work may weaken ADR 001 cleanup ownership/freshness proof;
+- manager/provenance uncertainty fails closed rather than becoming permission to
+  replace a binary;
+- do not hand-edit the Eggpack-generated release workflow to add product-specific
+  signing/validation steps;
+- immutable-release attestation must be described with its real GitHub trust
+  boundary, not as an independent maintainer signature;
+- SLSA/per-build/SBOM/independent-signing work requires Eggpack Phase 12 and its
+  authenticity ADR threshold;
+- staged validation and published smoke remain non-publishing, least-privilege
+  evidence jobs;
+- live-network evidence is never silently replaced by fixture evidence;
+- Cargo selector support remains exact-version and fail-closed; exploratory
+  current-stable qualification never automatically enables support;
+- historical releases and closure records are immutable evidence.
+
+Plans:
+
+- `plans/implementation/distribution-release-update/c018-self-update-provenance-uncertainty-fail-closed.md`
+- `plans/implementation/distribution-release-update/011a-immutable-release-attestation-and-verification.md`
+- `plans/implementation/distribution-release-update/011b-staged-release-validation-workflow-gate.md`
+- `plans/implementation/distribution-release-update/011c-published-release-smoke-automation.md`
+- `plans/implementation/artifact-discovery-cleanup/011d-cargo-selector-qualification-lifecycle.md`
+
+Exit condition:
+
+- C018 is carried by a public release and real Cargo-managed installations
+  refuse without remote acquisition or mutation when local provenance forbids
+  replacement;
+- a future public release is immutable and its release attestation/assets verify
+  under the documented trust model;
+- a real Eggpack staged draft automatically receives the full product staged
+  validator before human publication;
+- publication automatically launches the five-target real updater smoke after a
+  bounded crates.io-authority wait;
+- every enabled Cargo selector version is represented by current hosted
+  real-Cargo qualification evidence;
+- no medium-or-higher finding remains in these five hardening scopes.
 
 ## Dependency summary
 
 ~~~text
-Phase 0 planning
-      |
-      v
-M001 foundation
-      |
-      v
-M002 discovery
-      |
-      v
-M003 activity + size + report
-      |
-      v
-read-only V0.1 field qualification
-      |
-      v
-M004 destructive cleanup
-      |
-      v
-M005 redirected/shared-output support
-      |
-      v
-M006 adaptive discovery/performance [closed]
-      |
-      v
-C005 M006E reconciliation corrective [closed]
-      |
-      v
-C006 combined-root cleanup proof [closed]
-      |
-      v
-M007 learned/full cleanup orchestration [closed]
-      |
-      v
-C007 state recovery/planning cleanup [closed]
-      |
-      v
-M008A workspace selective cleanup policy [closed]
-      |
-      v
-M008B machine-readable automation contract [closed]
-      |
-      v
-M008C Cargo profile/package selector qualification [closed by M008D evidence;
-    historical conditional closure retained]
-      |
-      v
-M008D Cargo package-selector qualification and enablement [closed]
-      |
-      v
-Phase 10 distribution and operational polish [closed; M010A-M010D and
-    correctives C011-C012]
-      |
-      v
-C013 post-release fixture-premise audit [ready]
-      |
-      v
-C014 v0.1.2 live update/release reproducibility [blocked on C013 for publication]
+Phase 0 -> M001 -> M002 -> M003 -> read-only qualification
+                                  |
+                                  v
+M004 -> M005 -> M006 -> M007 -> M008A-D -> Phase 9 [closed]
+                                              |
+                                              v
+Phase 10 distribution/release + C013-C017 [closed]
+                                              |
+             +--------------------------------+------------------+
+             |                |               |                  |
+             v                v               v                  v
+C018 provenance        M011A immutable  M011B staged      M011C published
+fail-closed [ready]    release trust    validation gate   smoke automation
+                       [ready]          [ready]           [ready]
+
+M011D Cargo selector qualification lifecycle [ready; independent evidence line]
+
+First future qualification release:
+  carries C018 + supplies M011A/M011B/M011C operational evidence
 ~~~
 
 
