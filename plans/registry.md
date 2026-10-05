@@ -24,29 +24,30 @@ M006 implementation baseline: `47574fa8a087ac2f9111e29821c23b13657e7bbe`
 M008 planning baseline: `3ee9699a0b0d987287d08e427195284e08d079f7`
 Phase 11 implementation baseline: `a150eda8b43e8bf2f088aec8b804e7fa557c3a18`
 Phase 12 planning baseline: `e4e9d92673e5f10548248e23db788c0906760916`
+C021 planning baseline: `f3dfd7a718d236a5a0b0b664fb74fe02ee7b0f62`
 Immutability policy enabled: `2026-10-05T13:34:38Z` (repository-level, not owner-enforced)
 
 ## Subsystem status
 
 | Subsystem | Status | Roadmap | Current milestone | Blocker |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | closed / Phase 12 complete | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | M012A and M012B both closed | none blocking. No plan is open in this subsystem. The breaking bare-invocation change is implemented and unreleased: `main` is at 0.2.0, so the next publication must cross the pre-1.0 minor boundary. Existing C019/C020 corrections ship in that same release. |
+| Artifact discovery and cleanup | ready / pre-release corrective | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | C021 pre-release test and verification-evidence reconciliation | C021 must close before 0.2.0 is staged as publication-ready. Phase 12 itself remains closed. |
 | Distribution, release, and update | closed / Phase 11 complete, pending a published release | `plans/subsystems/distribution-release-update-roadmap.md` | M011A, M011B, M011C, C018 all closed | No plan is blocked. **The next release from `main` is the first covered by immutability**, and it is the first thing that can supply the outstanding hosted evidence for M011A, M011B, M011C, and C018. |
 
 ## Open work
 
-Two kinds of thing are open. **No implementation plan is open in any
-subsystem.** Phase 12 closed with M012A and M012B; the Phase 11 hardening
-milestone set is closed. What remains is **evidence that requires a published
-release**, which no plan in this repository can supply without a human
-publishing one, plus a documentation debt recorded during C019.
+Two kinds of thing are open. **C021 is the one implementation-ready
+pre-release corrective.** Phase 12 itself closed with M012A and M012B, and the
+Phase 11 hardening milestone set is closed. After C021, the remaining open
+items are **evidences that require a published release**, which no plan in this
+repository can supply without a human publishing one.
 
 | Item | Status | Plan / record | Note |
 |---|---|---|---|
 | M012A — canonical maintenance CLI and dry-run semantics | **closed** | `plans/closure/artifact-discovery-cleanup/m012a-status.md` | Bare `cargo cleanme` is Routine Execute through the existing combined-root proof; `--dry-run` is zero-Cargo-clean simulation; rootless `scan` is Full and ignores a configured `scan.root`; `clean` defaults to Execute. `main` is at 0.2.0, so the destructive-default break now structurally cannot ship as a 0.1.x patch. Two defects were found and fixed inside the milestone: a configured `scan.root` made `clean --known` a silent no-op, and `clean --full` returned the scan's exit code silently. |
 | M012B — bounded unattended log output and greggd integration | **closed** | `plans/closure/artifact-discovery-cleanup/m012b-status.md` | `--format log` emits one bounded deterministic ASCII line (<=384 bytes, no paths, no Cargo stderr) with a typed block-reason code; progress and ordinary diagnostic fan-out are suppressed in that mode; JSON and exit codes unchanged; `docs/AUTOMATION.md` documents the greggd integration. A stale `scan --deep` example in Gregg's docs is a non-blocking downstream handoff. |
 | C019 — exact unignore sibling containment corrective | **closed** | `plans/closure/artifact-discovery-cleanup/c019-status.md` | Corrects M002: a literal ignored ancestor plus an exact unignore re-admitted unrelated siblings, so `ignore = […/archived]` with one `unignore` beneath it discovered every project in the archived subtree. Now one `Filters::disposition` decides `Included`/`Pruned`/`PassThrough`/`ReIncluded`, and inherited exclusion is proven by testing the path's ancestry. Unreleased. |
-| `architecture/14-testing-and-verification.md` §5 contract-checker table | **open — needs a plan** | recorded in `plans/closure/artifact-discovery-cleanup/c019-status.md` §12 | Characterises 4 of 17 scripts, and its `check-release-contract.py` row describes a contract M010A replaced. Documentation-only, low severity; the guards it under-describes are wired into CI and each take a `--self-test`. |
+| C021 — pre-release test and verification-evidence reconciliation | **ready** | `plans/implementation/artifact-discovery-cleanup/c021-pre-release-test-and-verification-evidence-reconciliation.md` | Release-blocking cleanup pass for 0.2.0: prove/fix the parallel updater staging-test false-positive premise without weakening leak detection; reconcile the 17-script verification inventory and add a mechanical inventory guard; reconcile the unreleased changelog for C018/C020 and current Phase 12 changes; require fresh complete hosted green evidence. |
 | C020 — Windows concurrent first-use config creation race | **closed** | `plans/closure/artifact-discovery-cleanup/c020-status.md` | Corrects `config::create_initial`. The staging name was never unique within a process — threads shared the pid and the starting `attempt` — so every concurrent first use collided, and Windows spells that collision `PermissionDenied` rather than `AlreadyExists`. Fixed with a process-wide nonce, so the collision is removed rather than tolerated. Unreleased. |
 | C010 — `CurlConfig::user_agent` seam in `eggup-curl` | **proposed** | `plans/implementation/distribution-release-update/c010-eggup-curl-user-agent-seam.md` | Bounded upstream request. It cannot be closed from this repository, and nothing here waits on it: `eggup-eggfetch` already provides the seam. No closure record, by design. |
 | C018 — self-update provenance uncertainty fail-closed | **closed** | `plans/closure/distribution-release-update/c018-status.md` | Outstanding: work package 9 — a default-Cargo-home and `--root` real installation refused by a *released* binary, bytes unchanged. |
@@ -57,12 +58,15 @@ publishing one, plus a documentation debt recorded during C019.
 
 **Read this before the next release.** The next release from `main` is the first
 that will carry an attestation, and it is the first chance to supply four
-outstanding evidences at once. Two constraints make the order matter:
+outstanding evidences at once. Three constraints make the order matter:
 
-1. Publication requires **both** `release-binaries.yml` and
+1. **C021 must close first.** Do not stage 0.2.0 as publication-ready while the
+   updater staging-test premise, verification inventory, changelog audit, and
+   final hosted baseline are still open.
+2. Publication requires **both** `release-binaries.yml` and
    `validate-staged-release.yml` green, then human inspection, then publication
    (`docs/RELEASING.md`).
-2. The release is **immutable once published**. A defect found in published bytes
+3. The release is **immutable once published**. A defect found in published bytes
    cannot be repaired by replacing an asset; it needs a patch version. The
    post-publication smoke is the last point at which that is cheap.
 
@@ -125,7 +129,9 @@ weakening cleanup safety. All eight points below are implemented and closed in
 
 C003/C004/C006 ownership and freshness proof is preserved. The bare destructive
 default cannot ship as a `0.1.x` patch: `Cargo.toml` reads `0.2.0`, so the
-boundary is structural rather than a promise in a document.
+boundary is structural rather than a promise in a document. C021 is the
+pre-release evidence corrective that must close before that 0.2.0 tree is
+staged for publication.
 
 ## The lesson this repository keeps re-learning
 
