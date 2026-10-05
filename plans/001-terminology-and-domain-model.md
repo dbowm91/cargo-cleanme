@@ -16,9 +16,9 @@ A scan intent selects how discovery roots are obtained.
 
 Intents:
 
-- **Routine** — bounded adaptive developer roots used by no-argument/default scans;
-- **Full** — explicit exhaustive machine reconciliation requested with `scan --full`;
-- **Explicit** — a CLI root or legacy configured `scan.root`.
+- **Routine** — bounded adaptive developer roots used by canonical bare maintenance and by explicit `scan --known` read-only inspection;
+- **Full** — exhaustive machine reconciliation requested by rootless `scan` (with historical `scan --full` optionally retained as a compatibility alias);
+- **Explicit** — a CLI scan root or an explicitly selected configured bounded root.
 
 A scan scope is the concrete set of filesystem roots produced by that intent.
 
@@ -26,13 +26,7 @@ A scan scope is the concrete set of filesystem roots produced by that intent.
 
 A user-supplied root that limits the entire scan to one tree.
 
-Effective intent precedence:
-
-~~~text
-CLI root > --full > configured scan.root > Routine roots
-~~~
-
-CLI root and --full conflict. When an explicit scope is active, user ignore/unignore search filters are bypassed. Internal safety pruning still applies.
+Read-only scan intent is selected explicitly: ROOT means Explicit, `--known` means Routine, and rootless `scan` means Full. ROOT conflicts with `--known` and with any retained compatibility `--full` alias. A configured legacy `scan.root` must not silently turn canonical rootless Full `scan` into an Explicit scan. When an explicit scope is active, user ignore/unignore search filters are bypassed. Internal safety pruning still applies.
 
 ## 4. Discovery filter
 
@@ -247,9 +241,9 @@ It is not a report and has no effect on eligibility. It is written to stderr, ra
 
 A non-mutating cleanup mode that may invoke `cargo clean --dry-run --verbose` for an otherwise authorized candidate.
 
-## 32. Simulation / --dryrun
+## 32. Simulation / --dry-run
 
-A cargo-cleanme debugging/performance mode that executes cargo-cleanme's own discovery, Cargo resolution/metadata, filtering, sizing, authorization, revalidation, progress, and final reporting but invokes no Cargo `clean` command.
+The canonical non-mutating cleanup mode. It executes cargo-cleanme's own discovery, Cargo resolution/metadata, filtering, sizing, authorization, revalidation, progress/reporting, and final proof but invokes no Cargo `clean` command. The historical `--dryrun` spelling may exist only as a compatibility alias.
 
 Simulation reports would-clean/estimated bytes, never recovered bytes.
 
@@ -297,9 +291,9 @@ Its output relationship is unknown. Because cargo-cleanme cannot prove it does n
 
 This strict rule does not apply to ordinary read-only scan partial results.
 
-## 38. Routine scan
+## 38. Routine discovery / Routine read-only scan
 
-The default no-argument read-only scan over a bounded adaptive root set.
+The bounded adaptive root set used by canonical bare maintenance. The same scope is available read-only through `scan --known`.
 
 Routine is shallow in scope, not depth: once a root is selected, recursive project discovery beneath it remains complete.
 
@@ -307,7 +301,7 @@ Routine roots come from conservative seed roots plus active learned roots. Routi
 
 ## 39. Full scan / Full reconciliation
 
-An explicit exhaustive read-only discovery operation requested with `scan --full`.
+The canonical exhaustive read-only discovery operation requested with rootless `scan`. The historical `scan --full` spelling may be retained as a compatibility alias during the pre-1.0 migration.
 
 Full uses the platform exhaustive-discovery policy and is the authority for reconciling exact project inventory and learned Routine roots. A Full scan must complete successfully before it may publish a pruned learned-state generation.
 
