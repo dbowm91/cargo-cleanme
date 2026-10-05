@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: Phase 10 remains **closed**, and the post-release corrective line is now **closed**. C013, C014, C015, C016, and C017 are all closed, each with a closure record. The line found three production defects — C015, C016, and C017 — and repaired none of them under the plan that found it. Seven tags and crate versions are published (v0.1.0..v0.1.6), none yanked. C010 remains an upstream request (`proposed`) that nothing here waits on.
+Status: Phase 10 and post-release correctives C013-C017 are **closed**. Phase 11 hardening is **ready**: C018 is the immediate provenance-safety corrective; M011A immutable-release attestation, M011B staged-release validation automation, and M011C published-release smoke automation are also ready and may proceed in parallel. C010 remains an upstream request (`proposed`) that nothing here waits on.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 
@@ -402,3 +402,106 @@ Release-specific verification adds:
 ## 10. Completion definition
 
 Phase 10 is complete when cargo-cleanme can be installed from crates.io or a verified prebuilt release on the required platforms, the public bootstrap wrappers and self-update path share the same release contract, Eggpack and Eggup own the generic producer/consumer mechanisms respectively, release workflow drift is mechanically detected, support limitations are explicit, and the first public release has closure evidence rather than only a successful build.
+
+
+## 11. Phase 11 — Hardening, release trust, and qualification automation
+
+Phase 11 is a hardening line over the closed Phase 10 distribution surface. It
+does not reopen M010A-M010D or rewrite C013-C017. Its purpose is to close the
+remaining provenance, release-trust, and live-evidence gaps identified by the
+post-release rehearsals and architecture review.
+
+Dependency/parallelism:
+
+~~~text
+C013-C017 [closed]
+      |
+      v
+C018 provenance uncertainty fail-closed [READY; immediate]
+      |
+      +----------------------+----------------------+
+      |                      |                      |
+      v                      v                      v
+M011A immutable          M011B staged           M011C published
+release attestation      validation workflow    smoke automation
+[READY]                  [READY]                [READY]
+
+First future release after implementation supplies operational evidence for
+C018 + M011A + M011B + M011C.
+~~~
+
+### 11.1 C018 — Self-update provenance uncertainty fail-closed
+
+Plan: `plans/implementation/distribution-release-update/c018-self-update-provenance-uncertainty-fail-closed.md`
+
+Status: **ready**.
+
+C018 corrects the residual C017 ownership boundary. Cargo-manager evidence that
+is present but unreadable, malformed, or otherwise ambiguous must not collapse
+to `VerifiableSelfManaged`. The implementation must characterize real Cargo
+layouts, replace the current `Option`-shaped manager-record evidence with typed
+outcomes, preserve genuine installer-managed layouts, and refuse mutating
+manager/unprovable provenance before remote release acquisition.
+
+Closure requires a public release carrying the fix plus real default/`--root`
+Cargo evidence that bytes and manager bookkeeping remain unchanged.
+
+### 11.2 M011A — Immutable release attestation and verification
+
+Plan: `plans/implementation/distribution-release-update/011a-immutable-release-attestation-and-verification.md`
+
+Status: **ready**.
+
+M011A enables GitHub immutable releases for future publications and makes the
+platform's immutable-release attestation/asset verification part of release
+closure. Existing SHA-256 sidecars, `release-manifest.json`, source identity,
+and candidate checks remain required.
+
+This is deliberately the product-owned first step. It does not hand-edit
+Eggpack-generated CI or request OIDC there. Independent signing, SLSA/per-build
+provenance, SBOM attestation, or updater enforcement crosses into Eggpack Phase
+12 and its authenticity-ADR threshold.
+
+### 11.3 M011B — Staged-release validation workflow gate
+
+Plan: `plans/implementation/distribution-release-update/011b-staged-release-validation-workflow-gate.md`
+
+Status: **ready**.
+
+M011B makes `scripts/validate-staged-release.py` a hosted publication
+prerequisite. A product-owned, read-only workflow observes successful trusted
+Eggpack candidate-build runs, re-binds the exact source/tag, downloads the
+actual draft, and runs the existing six-part validator. Human publication
+remains separate.
+
+If GitHub's workflow-run context cannot safely bind the exact tag/source,
+implementation stops and registers an Eggpack post-stage validation seam rather
+than modifying generated YAML.
+
+### 11.4 M011C — Published release smoke automation
+
+Plan: `plans/implementation/distribution-release-update/011c-published-release-smoke-automation.md`
+
+Status: **ready**.
+
+M011C preserves the existing five-target real updater rehearsal but adds an
+automatic stable `release.published` path. It deterministically selects the
+previous stable public release and waits with a finite deadline for crates.io to
+expose the newly published target version before exercising the updater.
+
+The workflow stays read-only, credential-free beyond public/repository reads,
+isolated to temporary directories, and `fail-fast: false`. Manual dispatch
+remains available for recovery/historical transitions.
+
+### 11.5 Cross-cutting release hardening constraints
+
+- Generated Eggpack CI remains generated and drift-checked.
+- Product evidence workflows never gain publication authority.
+- The first future release is not considered fully closed until the staged
+  validator, immutable-release verification, and automatic post-release smoke
+  all produce the evidence their plans require.
+- Failure after immutable publication creates a corrective/new patch release;
+  bytes/tags are not rewritten.
+- SHA-256 remains local integrity evidence even after release attestation is
+  added.
+- C010 remains independent; no Phase 11 item waits for `eggup-curl`.
