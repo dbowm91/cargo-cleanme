@@ -1,8 +1,13 @@
 # C021 — Pre-Release Test and Verification-Evidence Reconciliation
 
-Status: ready
+Status: closed
+
+Closure record:
+[`plans/closure/artifact-discovery-cleanup/c021-status.md`](../../closure/artifact-discovery-cleanup/c021-status.md)
 
 Repository baseline: `f3dfd7a718d236a5a0b0b664fb74fe02ee7b0f62`
+Implementation commits: `81af7f4`, `bf99aa4`
+Final head: `bf99aa4`
 
 Corrects / closes findings from:
 

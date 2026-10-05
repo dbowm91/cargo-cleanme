@@ -269,13 +269,22 @@ recorded as finding 1 in §11 rather than mass-rewritten.
 
 ## 8. Hosted evidence
 
-Final head: `81af7f43ef24652b051c0f1262237ef1a74f7af8`.
+Final head: `bf99aa4`.
+
+The first push (`81af7f4`) produced **CI run 37375658241, which failed on the
+Windows lane** — a genuine defect in C021's own change, recorded in §12
+finding 3. It is fixed in `bf99aa4`, which is the head these results are from.
+Reporting only the passing run would hide that the lane earned its keep.
 
 | Workflow | Run | Result |
 |---|---|---|
-| CI | 37375658241 | see §8.1 |
-| Release drift guard | 37375751351 | see §8.1 |
-| Cargo selector qualification | 37375754785 | see §8.1 |
+| CI | 37376843721 | see §8.2 |
+| Release drift guard | 37375751351 | **success** — `Eggpack drift + contract`, 15 steps |
+| Cargo selector qualification | 37375754785 | **success** — `Supported matrix` (19 steps) **and** `Exploratory current stable` (10 steps) |
+
+The exploratory lane completed and succeeded on its own terms, which is
+stronger than the plan's minimum ("completed according to its defined
+non-promotion contract"): nothing was inferred about it.
 
 ### 8.1 The baseline cancellations, diagnosed
 
@@ -286,25 +295,48 @@ infrastructure, not the tree:
 
 - Every cancelled job reports **`steps = 0`** — not one step ever executed.
   They were cancelled while still **queued for a runner**.
-- Every cancelled job sits on a hosted OS lane; every job that *obtained* a
-  runner completed successfully. **No job that ran a step ever failed**, in any
-  of the three workflows the plan cited.
+- Every job that *obtained* a runner completed successfully. Across all three
+  workflows the plan cited, **no job that ran a step ever failed**.
 - Neither `ci.yml` nor `release-drift.yml` declares a `concurrency` group, so no
   in-repo configuration can cancel a sibling run.
 - The four commits preceding this work were pushed within **30 seconds** of each
   other (20:53:49, 20:53:51, 20:53:53, 20:54:18), spawning CI, drift and
   selector runs concurrently against one shared runner pool.
+- GitHub's own runner emitted the corroborating notice during this work:
+  *"Due to capacity constraints, jobs targeting macOS arm64 runners may
+  experience longer queue times."*
 
 Diagnosis: **runner-capacity contention, not a product or test failure.** The
-evidence was incomplete because jobs never started, not because anything failed.
+baseline evidence was incomplete because jobs never started, not because
+anything failed. It is also why `81af7f4` sat queued for over two minutes
+before CI began.
 
 No code change is made on this basis. Adding a `concurrency` group to `ci.yml`
 would be a release/CI policy change, which §1 of the plan explicitly does not
 authorize. It is registered as a follow-up in §11 instead.
 
-### 8.2 Final-head results
+### 8.2 Final-head CI result
 
-<!-- FINAL-HEAD-RESULTS -->
+**Run 37376843721 — `success`, all 9 jobs, no cancellations, head `bf99aa4`.**
+
+| Job | Steps | Result |
+|---|---:|---|
+| `checks` (ubuntu-latest) | 15 | success |
+| `checks` (macos-latest) | 15 | success |
+| `checks` (windows-latest) | 15 | success — **the lane that failed on `81af7f4`** |
+| `installers` (ubuntu-latest) | 9 | success |
+| `installers` (macos-latest) | 9 | success |
+| `installers` (windows-latest) | 9 | success |
+| `generated-docs` | 17 | success |
+| `benchmark` | 9 | success |
+| `msrv` | 7 | success |
+
+Every job obtained a runner and executed every step. Unlike the baseline, there
+is nothing to qualify: **no job was cancelled, and no job was skipped.**
+
+This run is what makes the plan's acceptance criterion 14 satisfiable. It is not
+claimed because the local ladder was green — §12 finding 3 is the proof that a
+green local ladder is not sufficient, and the Windows lane is what caught it.
 
 ---
 
@@ -420,7 +452,26 @@ green". Local verification was green, and the lane was still red.
 
 ## 14. Disposition
 
-**See §15.** The disposition depends on the final-head hosted result, because
-the plan is explicit that a cancelled workflow is not a pass and must not be
-converted into one by prose. This record will not claim closure on local
-evidence alone.
+**closed.**
+
+Every acceptance criterion in §13 is met, including the one this record was
+written against: complete, acceptable hosted evidence from the final head
+(§8.2), not a conversion of a cancelled run into a pass by prose.
+
+Three things qualify that, and none of them are softened by the disposition:
+
+1. **The closure rests on a hosted run that first had to be earned.** The
+   Windows lane failed on `81af7f4` and the fix is in `bf99aa4` (§12 finding 3).
+   Had C021 stopped at "local verification green", the defect would have shipped
+   in 0.2.0 and the record would have claimed closure on a premise that was
+   false.
+2. **Publication is not closure.** Nothing here is published. M011A, M011B,
+   M011C and C018 keep their outstanding real-release evidence, and 0.2.0
+   remains unstaged (§10).
+3. **Four findings outside this plan's scope remain open** (§11). They are
+   recorded rather than absorbed, because a corrective that quietly widens its
+   own scope is how a milestone ends up claiming coverage it does not have.
+
+0.2.0 may now be staged as publication-ready. That is a statement about C021's
+scope only; the release path itself remains `docs/RELEASING.md`, and C021
+authorizes none of its actions.

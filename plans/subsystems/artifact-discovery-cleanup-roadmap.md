@@ -1,6 +1,6 @@
 ## Artifact Discovery and Cleanup Roadmap
 
-Status: Phase 12 is **closed** under ADR 003. M012A and M012B are both implemented and closed with evidence; neither changed what can be cleaned or how ownership is proven. C021 pre-release test and verification-evidence reconciliation is **implemented on `81af7f4`**; its disposition is recorded in [`plans/closure/artifact-discovery-cleanup/c021-status.md`](../closure/artifact-discovery-cleanup/c021-status.md), and 0.2.0 must not be staged as publication-ready until that record reads `closed`.
+Status: Phase 12 is **closed** under ADR 003. M012A and M012B are both implemented and closed with evidence; neither changed what can be cleaned or how ownership is proven. C021 pre-release test and verification-evidence reconciliation is **closed** on `bf99aa4`, with its evidence in [`plans/closure/artifact-discovery-cleanup/c021-status.md`](../closure/artifact-discovery-cleanup/c021-status.md). 0.2.0 staging is unblocked; the release itself is not authorized by any plan.
 
 
 Repository audit baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
@@ -728,7 +728,7 @@ Exit: both plans close with the normal verification ladder, generated-doc drift 
 
 ## 10I. C021 — Pre-release test and verification-evidence reconciliation
 
-Status: **see the closure record**. Implemented on `81af7f4` from baseline
+Status: **closed**. Implemented on `81af7f4` and `bf99aa4` from baseline
 `f3dfd7a`. Closure record:
 [`plans/closure/artifact-discovery-cleanup/c021-status.md`](../closure/artifact-discovery-cleanup/c021-status.md).
 
@@ -764,6 +764,19 @@ three are now addressed:
    C018's fail-closed provenance correction and C020's Windows concurrent
    first-use configuration race, and claims no attestation, staged-draft, or
    post-publication smoke evidence that cannot exist before publication.
+
+### Hosted evidence from the final head
+
+| Workflow | Run | Result |
+|---|---|---|
+| CI | 37376843721 | **success — all 9 jobs, no cancellations** (head `bf99aa4`) |
+| Release drift guard | 37375751351 | **success** |
+| Cargo selector qualification | 37375754785 | **success**, including the exploratory lane |
+
+The first push (`81af7f4`) failed the Windows lane on `-D dead_code` for a
+helper used only by `#[cfg(unix)]` tests. Local Linux verification was green
+throughout and could not have seen it. That defect is fixed in `bf99aa4` and
+verified locally by cross-target clippy as well as by the lane that found it.
 
 ### What C021 did not absorb
 
@@ -839,4 +852,4 @@ The implementation should specifically verify:
 
 ## 14. Completion definition
 
-The initial read-only boundary was reached when M001-M003 closed with evidence that cargo-cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004-M007 and C001-C007 establish Cargo-mediated cleanup, complete ownership/freshness proof, adaptive discovery, and combined-root orchestration. Scans remain read-only; ADR 003/Phase 12 intentionally changes bare invocation from a scan front door to Routine cleanup without changing that proof boundary. Phase 9 remains closed for current objectives: M008A/B policy and reporting, profile support from M008C, and package support from M008D. Profile support is limited to exact qualified releases 1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0, 1.98.1, and 1.99.0; package support is limited to exact Cargo 1.98.1 and 1.99.0. Selector estimates remain unknown and unqualified Cargo versions fail closed. C019 restored M002 exact-unignore sibling containment without changing the destructive safety boundary, and closed; M011D closed the selector evidence lifecycle and its hosted gate now actually executes. Both corrections are unreleased, so the next release from `main` is the first that carries either. C021 is the remaining pre-release evidence corrective and must close before 0.2.0 staging. Distribution/release Phase 11 work is tracked by `plans/subsystems/distribution-release-update-roadmap.md`.
+The initial read-only boundary was reached when M001-M003 closed with evidence that cargo-cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004-M007 and C001-C007 establish Cargo-mediated cleanup, complete ownership/freshness proof, adaptive discovery, and combined-root orchestration. Scans remain read-only; ADR 003/Phase 12 intentionally changes bare invocation from a scan front door to Routine cleanup without changing that proof boundary. Phase 9 remains closed for current objectives: M008A/B policy and reporting, profile support from M008C, and package support from M008D. Profile support is limited to exact qualified releases 1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0, 1.98.1, and 1.99.0; package support is limited to exact Cargo 1.98.1 and 1.99.0. Selector estimates remain unknown and unqualified Cargo versions fail closed. C019 restored M002 exact-unignore sibling containment without changing the destructive safety boundary, and closed; M011D closed the selector evidence lifecycle and its hosted gate now actually executes. Both corrections are unreleased, so the next release from `main` is the first that carries either. C021, the pre-release evidence corrective, is closed; 0.2.0 staging is unblocked. Distribution/release Phase 11 work is tracked by `plans/subsystems/distribution-release-update-roadmap.md`.
