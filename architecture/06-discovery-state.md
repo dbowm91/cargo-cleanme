@@ -75,7 +75,7 @@ pub struct DiscoveryState {
 | `schema_version` | `u32` | Format generation. `0` is treated as invalid on read (`:324-326`). | Every `reconcile_full` publish (`:127`); normalized in memory on every successful load (`:328`); passthrough on a Routine touch. |
 | `last_full_at` | `Option<u64>` | The generation stamp: wall-clock seconds of the newest **complete** Full reconciliation that published. `None` = never reconciled. | `reconcile_full` only (`:126-128`). Never written by the Routine/Explicit touch branch. |
 | `projects` | `Vec<ProjectRecord>` | Exact project inventory from the last complete Full scan. Fully replaced, never merged. | `reconcile_full` only (`:129-144`). |
-| `learned_roots` | `Vec<LearnedRoot>` | Containers the Routine scan should search, each with a positive-observation stamp. | `reconcile_full` (`:145-216`), and `last_project_seen_at` only via the Routine touch in `main.rs:427-433`. |
+| `learned_roots` | `Vec<LearnedRoot>` | Containers the Routine scan should search, each with a positive-observation stamp. | `reconcile_full` (`:145-216`), and `last_project_seen_at` only via the Routine touch in `main.rs:440-447`. |
 
 `#[serde(default)]` sits on the **struct** (`:64`), so all four fields may be
 absent from the JSON and decode to `Default`. That is what lets a v1 file with
@@ -424,7 +424,7 @@ fail-open for that entry — see §8.)
 PlatformRoot && d.severity == Error)`. Only an `Error`-severity
 `PlatformRoot` diagnostic makes a Full scan incomplete. Everything else —
 including every `Warning`-severity diagnostic — leaves the scan publishable.
-`main.rs:465-469` recomputes the identical predicate into `full_incomplete` for
+`main.rs:479-483` recomputes the identical predicate into `full_incomplete` for
 the exit code; the duplication is redundant but harmless.
 
 ## 5. Uncertainty handling
@@ -590,7 +590,7 @@ failure as a warning, never as a scan failure:
 
 - Full branch: `eprintln!("cargo-cleanme: discovery state was not saved: {error}")`
   (`main.rs:408-410`).
-- Routine/Explicit touch: the same message at `main.rs:434-438`, guarded by
+- Routine/Explicit touch: the same message at `main.rs:448-452`, guarded by
   `!observed.is_empty()` so an empty scan performs no write at all.
 
 `NoPublication` prints `"discovery state was not reconciled: {reason}"`
@@ -612,7 +612,7 @@ That contradicted the module's own stated invariant, *"State is an optimization
 only"*, which sits directly above `publish` in this file.
 
 The `state_reconciled` flag has been **removed**. The exit decision is now
-`if full_incomplete { return Ok(1); }` (`main.rs:576-578`) and nothing else, so
+`if full_incomplete { return Ok(1); }` (`main.rs:590-592`) and nothing else, so
 both branches leave the exit code alone and a failed save is a stderr notice
 only. A genuinely incomplete Full scan still exits 1, through `full_incomplete`
 — which is computed from the same `PlatformRoot`+`Error` predicate as
@@ -624,7 +624,7 @@ only. A genuinely incomplete Full scan still exits 1, through `full_incomplete`
 > corrupt a scan result.
 
 **Confirmed in code.** The scan pipeline's own results — `manifests`,
-`counters`, `diagnostics`, `groups`, `physical`, `report` (`main.rs:341-489`) —
+`counters`, `diagnostics`, `groups`, `physical`, `report` (`main.rs:341-503`) —
 are computed and rendered independently of `discovery_state`. The state write
 happens at `main.rs:387-416`, strictly *between* workspace resolution and
 grouping, and its result feeds only `state_reconciled` and stderr text. No
@@ -646,7 +646,7 @@ expire from Routine scope and are rediscoverable by a later Full scan.
 | `clean --full` roots | `main.rs:120-131` | `learned_roots[].path` | Becomes plain `Vec<PathBuf>` roots, canonicalized and containment-collapsed by `collapse_roots` (`main.rs:154`, `:269-283`). |
 | `clean --full` / `--known` generation | `main.rs:125`, `main.rs:144-147` | `last_full_at` | `Option<u64>` → `state_generation`. `--known` takes roots from `policy::resolve` and reads *only* the stamp. Explicit `ROOT` sets it to `None` (`main.rs:114`). |
 | `run_scan`, Full branch | `main.rs:357-422` | everything | `load_default`, `full_reconciliation_prior`, `now_seconds`, `ProjectObservation`, `reconcile_full`, `publish`. |
-| `run_scan`, Routine/Explicit branch | `main.rs:423-438` | `learned_roots[].last_project_seen_at` | The touch branch. Mutates only timestamps; never adds roots, never removes them, never touches `projects` or `last_full_at`. Advances a root when `project.starts_with(&root.path)` (`main.rs:429`) for an observed workspace root. |
+| `run_scan`, Routine/Explicit branch | `main.rs:423-452` | `learned_roots[].last_project_seen_at` | The touch branch. Mutates only timestamps; never adds roots, never removes them, never touches `projects` or `last_full_at`. Advances a root when `project.starts_with(&root.path)` (`main.rs:443`) for an observed workspace root. |
 | Human output | `main.rs:211-215` | `state_generation` | `println!("state generation last_full_at={generation} (Unix seconds)")` — Human format only, and only when a generation exists, so it prints for `--full` and `--known` and is absent for an explicit root. |
 | JSON output | `main.rs:187`, `main.rs:228` | `state_generation` | Serialized as `state_generation_last_full_at: Option<u64>` (`output.rs:61`, `output.rs:236`). |
 
@@ -731,8 +731,8 @@ Two further qualifications, both load-bearing:
 ### Can a Full scan with `complete == false` publish at all?
 
 **No.** `:122-124` returns before any mutation, and it is the sole
-`NoPublication` site. `main.rs:428-430` prints the reason, and the exit code is
-carried by the independently computed `full_incomplete` at `main.rs:576-578`.
+`NoPublication` site. `main.rs:442-444` prints the reason, and the exit code is
+carried by the independently computed `full_incomplete` at `main.rs:590-592`.
 The existing file is untouched — asserted directly at `:471`.
 
 ### What happens on the very first run?
@@ -972,7 +972,7 @@ against the code, not against its test count.
    diagnostics are refactored.
 10. **Has the save-failure exit-code coupling come back?** It is now
     structurally absent: the exit decision reads only `full_incomplete`
-    (`main.rs:576-578`) and there is no flag to set. The regression to watch
+    (`main.rs:590-592`) and there is no flag to set. The regression to watch
     for is someone reintroducing a save-result branch into that `if` — the
     module's own doc comment at `discovery_state.rs:338` is the authority to
     cite when arguing against it.

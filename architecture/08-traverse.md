@@ -31,7 +31,7 @@
     happens in `workspace.rs:1004-1011` and `cleanup.rs:2017-2021`.
 - **Sizing policy.** It reports bytes and an mtime; `workspace.rs:1164` applies
    the recency window, `:1152` the emptiness gate, `:1182-1191` the metric label. The window is
-    supplied by the caller (`main.rs:450-452`, `cleanup.rs:1311-1313`).
+    supplied by the caller (`main.rs:464-466`, `cleanup.rs:1311-1313`).
 - **Workspaces, manifests, ownership, authorization.** No knowledge of Cargo,
    `Cargo.toml`, or who owns what.
 - **Progress reporting.** It holds no observer. The `observer.group_measured` /
@@ -347,7 +347,7 @@ The cutoff never enters this module's arithmetic; it arrives as a parameter (`:2
   applied per entry (`:262`). Composition lives upstream:
 
 ```text
-main.rs:450-452       clock_cutoff = scan_start.checked_sub(recency)
+main.rs:464-466       clock_cutoff = scan_start.checked_sub(recency)
 workspace.rs:1000    workspace_source_activity(ws, &all_outputs, clock_start, clock_cutoff)
 workspace.rs:1004    Ok(true)  -> active_skipped, group never sized
 workspace.rs:1005    Ok(false) -> proceed to measure_many_targets

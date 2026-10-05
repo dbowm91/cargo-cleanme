@@ -27,24 +27,29 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+/// The three cleanup modes.
+///
+/// There is deliberately no `Default`: every cleanup entry point states its
+/// mode explicitly, so no future call site can silently inherit the weaker
+/// Cargo-preview behaviour.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CleanMode {
-    /// Cargo preview: invoke Cargo's own dry-run (`--dry-run --verbose`).
-    /// Default and explicit `--dry-run`.
-    #[default]
-    Preview,
-    /// Application simulation: full path, no `cargo clean` invocation.
-    /// Explicit `--dryrun` (no hyphen).
-    Simulate,
-    /// Real Cargo cleanup. Explicit `--yes`.
+    /// Real Cargo cleanup. The default for every cleanup intent.
     Execute,
+    /// Application simulation: the complete decision, proof, and reporting
+    /// path, with no `cargo clean` process of any kind spawned.
+    Simulate,
+    /// Cargo preview: after the same complete final proof, invoke Cargo's own
+    /// `clean --dry-run --verbose`. Distinct from [`Self::Simulate`] -- Cargo
+    /// preview does spawn Cargo, simulation does not.
+    CargoPreview,
 }
 
 impl CleanMode {
-    /// Stable machine label for the JSON `mode` field.
+    /// Stable machine label for the JSON and log `mode` field.
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Preview => "preview",
+            Self::CargoPreview => "preview",
             Self::Simulate => "simulate",
             Self::Execute => "execute",
         }
@@ -173,7 +178,53 @@ pub enum PolicyDisposition {
     SelectorEstimateUnavailable,
 }
 
-#[derive(Clone, Debug, Default)]
+/// Stable machine code for a whole-scope safety block.
+///
+/// This is the *only* reason taxonomy in the crate. The prose a human reads and
+/// the code an operator's log line matches are two views of one value, so the
+/// log renderer never parses English and the two surfaces cannot drift apart.
+/// JSON schema v1 keeps the prose `scope_reason` and does not yet expose the
+/// code, so adding it there stays a deliberate schema decision rather than an
+/// accident.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScopeBlockReason {
+    /// Discovery produced diagnostics, so the combined ownership universe is
+    /// incomplete before sizing or per-unit proof was attempted.
+    IncompleteDiscovery,
+    /// At least one discovered manifest could not be resolved, so coverage of
+    /// the selected scope is unproven.
+    OwnershipUnproven,
+}
+
+impl ScopeBlockReason {
+    /// Stable machine label. Never contains whitespace or user text.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::IncompleteDiscovery => "incomplete_discovery",
+            Self::OwnershipUnproven => "ownership_unproven",
+        }
+    }
+}
+
+/// A whole-scope safety block: a typed reason plus the prose a human reads.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScopeBlock {
+    pub reason: ScopeBlockReason,
+    pub message: String,
+}
+
+impl ScopeBlock {
+    pub fn new(reason: ScopeBlockReason, message: String) -> Self {
+        Self { reason, message }
+    }
+}
+
+/// The complete outcome of one cleanup run.
+///
+/// `Default` is intentionally not derived: a report must always state its
+/// `mode`, so there is no way to construct a report whose mode is only
+/// implied by a struct update.
+#[derive(Clone, Debug)]
 pub struct CleanReport {
     pub results: Vec<CleanResult>,
     pub diagnostics: usize,
@@ -181,7 +232,7 @@ pub struct CleanReport {
     pub mode: CleanMode,
     pub counters: ScanCounters,
     /// Whole-scope safety block raised before sizing or per-unit proof.
-    pub scope_blocked: Option<String>,
+    pub scope_blocked: Option<ScopeBlock>,
     /// Structured participants retained for diagnostics and audit consumers.
     pub unresolved_ownership: Vec<UnresolvedOwnershipParticipant>,
     pub selected_roots: Vec<PathBuf>,
@@ -234,8 +285,8 @@ impl CleanReport {
                 self.unresolved_ownership.len(),
             ));
         }
-        if let Some(reason) = &self.scope_blocked {
-            out.push_str(&format!("{reason}\n"));
+        if let Some(block) = &self.scope_blocked {
+            out.push_str(&format!("{}\n", block.message));
             return out;
         }
         let mut previewed = 0usize;
@@ -335,7 +386,7 @@ impl CleanReport {
             out.push('\n');
         }
         match self.mode {
-            CleanMode::Preview => {
+            CleanMode::CargoPreview => {
                 out.push_str(&format!(
                     "\ncargo preview: {previewed} previewed, {skipped} skipped, {failed} failed; pre-clean estimate {}; no cleanup executed; {} filesystem diagnostics\n",
                     crate::report::format_bytes(before),
@@ -776,7 +827,7 @@ pub fn clean_with_roots_policy_selector(
     };
     let scan_start = SystemTime::now();
     let cleanup_phase = match mode {
-        CleanMode::Preview => ScanPhase::CleanupPreview,
+        CleanMode::CargoPreview => ScanPhase::CleanupPreview,
         CleanMode::Simulate => ScanPhase::CleanupSimulate,
         CleanMode::Execute => ScanPhase::CleanupExecute,
     };
@@ -794,16 +845,26 @@ pub fn clean_with_roots_policy_selector(
 
     if !diagnostics.is_empty() {
         let mut report = CleanReport {
+            results: Vec::new(),
             diagnostics: diagnostics.len(),
+            failed: 0,
             mode,
+            counters: ScanCounters::default(),
+            scope_blocked: None,
+            unresolved_ownership: Vec::new(),
             selected_roots: roots.clone(),
             discovered_manifests: manifests.len(),
-            ..Default::default()
+            resolved_workspaces: 0,
+            units_considered: 0,
+            effective_policy: Some(policy.clone()),
+            selector: selector.clone(),
         };
-        report.effective_policy = Some(policy.clone());
-        report.scope_blocked = Some(format!(
-            "combined cleanup ownership universe is incomplete: {} discovery diagnostic(s); no cleanup commands were run",
-            diagnostics.len()
+        report.scope_blocked = Some(ScopeBlock::new(
+            ScopeBlockReason::IncompleteDiscovery,
+            format!(
+                "combined cleanup ownership universe is incomplete: {} discovery diagnostic(s); no cleanup commands were run",
+                diagnostics.len()
+            ),
         ));
         report.counters = counters;
         return Ok(report);
@@ -825,30 +886,39 @@ pub fn clean_with_roots_policy_selector(
     let unresolved_ownership = scope.unresolved;
 
     let mut report = CleanReport {
+        results: Vec::new(),
         diagnostics: diagnostics.len(),
+        failed: 0,
         mode,
+        counters: ScanCounters::default(),
+        scope_blocked: None,
+        unresolved_ownership: unresolved_ownership.clone(),
         selected_roots: roots.clone(),
         discovered_manifests: manifests.len(),
         resolved_workspaces: workspaces.len(),
         units_considered: units.len(),
-        ..Default::default()
+        effective_policy: Some(policy.clone()),
+        selector: selector.clone(),
     };
-    report.effective_policy = Some(policy.clone());
-    report.selector = selector.clone();
+    // The blocked report carries the counters measured up to the point the
+    // block was raised, exactly as the successful path does at the end.
+    report.counters = counters.clone();
 
     if !unresolved_ownership.is_empty() {
         let unresolved = unresolved_ownership.len();
-        report.scope_blocked = Some(format!(
-            "cleanup ownership could not be proven: {unresolved} discovered Cargo {} did not resolve; no cleanup commands were run",
-            if unresolved == 1 {
-                "manifest"
-            } else {
-                "manifests"
-            }
+        report.scope_blocked = Some(ScopeBlock::new(
+            ScopeBlockReason::OwnershipUnproven,
+            format!(
+                "cleanup ownership could not be proven: {unresolved} discovered Cargo {} did not resolve; no cleanup commands were run",
+                if unresolved == 1 {
+                    "manifest"
+                } else {
+                    "manifests"
+                }
+            ),
         ));
         report.unresolved_ownership = unresolved_ownership;
         report.resolved_workspaces = workspaces.len();
-        report.counters = counters;
         return Ok(report);
     }
 
@@ -1054,7 +1124,7 @@ pub fn clean_with_roots_policy_selector(
                 observe_unit_groups(observer, unit);
                 observer.unit_completed(cleanup_phase);
             }
-            CleanMode::Preview | CleanMode::Execute => {
+            CleanMode::CargoPreview | CleanMode::Execute => {
                 // Proof was generated immediately before spawn and is consumed
                 // here with no intervening mutation window beyond the spawn
                 // itself (fail-closed TOCTOU minimization, not elimination).
@@ -1105,7 +1175,7 @@ pub fn clean_with_roots_policy_selector(
                     observer.unit_completed(cleanup_phase);
                     continue;
                 }
-                if mode == CleanMode::Preview {
+                if mode == CleanMode::CargoPreview {
                     report.results.push(CleanResult {
                         display_path: unit.root.clone(),
                         workspace_roots: proof.workspace_roots.clone(),
@@ -2178,7 +2248,7 @@ fn clean_args(
     selector: Option<&CleanupSelector>,
 ) -> Vec<OsString> {
     let mut args = vec![OsString::from("clean")];
-    if mode == CleanMode::Preview {
+    if mode == CleanMode::CargoPreview {
         args.push(OsString::from("--dry-run"));
         args.push(OsString::from("--verbose"));
     }
@@ -2544,11 +2614,33 @@ mod tests {
 
     #[test]
     fn cli_modes_map_to_preview_simulate_execute() {
-        // Default and --dry-run => Preview; --dryrun => Simulate; --yes => Execute.
-        // Mapping lives in main.rs; here we assert enum defaults.
-        assert_eq!(CleanMode::default(), CleanMode::Preview);
-        assert_ne!(CleanMode::Preview, CleanMode::Simulate);
+        // `--cargo-preview` => CargoPreview; `--dry-run` => Simulate; no mode
+        // flag and `--yes` => Execute. Mapping lives in `cli::clean_mode`;
+        // here we pin the stable machine labels the JSON/log `mode` field
+        // carries, because renaming a variant must never change the contract.
+        assert_eq!(CleanMode::CargoPreview.as_str(), "preview");
+        assert_eq!(CleanMode::Simulate.as_str(), "simulate");
+        assert_eq!(CleanMode::Execute.as_str(), "execute");
+        assert_ne!(CleanMode::CargoPreview, CleanMode::Simulate);
         assert_ne!(CleanMode::Simulate, CleanMode::Execute);
+        assert_eq!(
+            crate::cli::clean_mode(false, false, false),
+            CleanMode::Execute,
+            "absent a mode flag, cleanup executes"
+        );
+        assert_eq!(
+            crate::cli::clean_mode(true, false, false),
+            CleanMode::Simulate
+        );
+        assert_eq!(
+            crate::cli::clean_mode(false, true, false),
+            CleanMode::CargoPreview
+        );
+        assert_eq!(
+            crate::cli::clean_mode(false, false, true),
+            CleanMode::Simulate,
+            "the hidden --dryrun alias maps to the canonical Simulate mode"
+        );
     }
 
     #[test]
@@ -2669,7 +2761,7 @@ mod tests {
         let runner = FakeCleanupRunner::new(&root, &target, 1);
         let noop = NoopObserver;
         // Preview invokes metadata + clean --dry-run.
-        let report = clean_with(&root, 0, &[], CleanMode::Preview, &runner, &noop).unwrap();
+        let report = clean_with(&root, 0, &[], CleanMode::CargoPreview, &runner, &noop).unwrap();
         assert_eq!(report.results.len(), 1);
         assert_eq!(report.results[0].outcome, CleanOutcome::Previewed);
         assert!(
@@ -2700,7 +2792,11 @@ mod tests {
 
     #[test]
     fn unresolved_discovered_manifest_blocks_every_cleanup_mode_before_clean() {
-        for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+        for mode in [
+            CleanMode::CargoPreview,
+            CleanMode::Simulate,
+            CleanMode::Execute,
+        ] {
             let (_d, root, target) = valid_fixture(1);
             let unresolved = root.join("unresolved/Cargo.toml");
             std::fs::create_dir_all(unresolved.parent().unwrap()).unwrap();
@@ -2732,7 +2828,7 @@ mod tests {
                 "blocked scope must report no cleanable bytes: {mode:?}"
             );
             assert_eq!(
-                report.scope_blocked.as_deref(),
+                report.scope_blocked.as_ref().map(|b| b.message.as_str()),
                 Some(
                     "cleanup ownership could not be proven: 1 discovered Cargo manifest did not resolve; no cleanup commands were run"
                 ),
@@ -2764,7 +2860,7 @@ mod tests {
         let exec_runner = FakeCleanupRunner::new(&root, &target, 1);
         let noop = NoopObserver;
         let sim = clean_with(&root, 0, &[], CleanMode::Simulate, &sim_runner, &noop).unwrap();
-        let exec = clean_with(&root, 0, &[], CleanMode::Preview, &exec_runner, &noop).unwrap();
+        let exec = clean_with(&root, 0, &[], CleanMode::CargoPreview, &exec_runner, &noop).unwrap();
         assert_eq!(sim.results.len(), exec.results.len());
         assert_eq!(sim.results[0].display_path, exec.results[0].display_path);
     }
@@ -3140,8 +3236,15 @@ mod tests {
     fn clean_requires_absolute_root() {
         let runner = FakeCleanupRunner::new(Path::new("/x"), Path::new("/x/target"), 1);
         let noop = NoopObserver;
-        let err =
-            clean_with(Path::new("."), 0, &[], CleanMode::Preview, &runner, &noop).unwrap_err();
+        let err = clean_with(
+            Path::new("."),
+            0,
+            &[],
+            CleanMode::CargoPreview,
+            &runner,
+            &noop,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("absolute sandbox root"));
         assert!(runner.calls().is_empty());
     }
@@ -3198,7 +3301,7 @@ mod tests {
             second_target: other,
         };
         let noop = NoopObserver;
-        let report = clean_with(&root, 0, &[], CleanMode::Preview, &runner, &noop).unwrap();
+        let report = clean_with(&root, 0, &[], CleanMode::CargoPreview, &runner, &noop).unwrap();
         // Changed target between scan and revalidation → skipped, never previewed.
         assert_eq!(report.results.len(), 1);
         assert_eq!(report.results[0].outcome, CleanOutcome::Skipped);
@@ -3313,8 +3416,19 @@ mod tests {
     #[test]
     fn final_report_lists_all_groups_and_deduped_total() {
         let mut report = CleanReport {
+            results: Vec::new(),
+            diagnostics: 0,
+            failed: 0,
             mode: CleanMode::Execute,
-            ..Default::default()
+            counters: ScanCounters::default(),
+            scope_blocked: None,
+            unresolved_ownership: Vec::new(),
+            selected_roots: Vec::new(),
+            discovered_manifests: 0,
+            resolved_workspaces: 0,
+            units_considered: 0,
+            effective_policy: None,
+            selector: None,
         };
         for i in 0..7 {
             report.results.push(CleanResult {
@@ -3436,7 +3550,7 @@ mod tests {
             Some(PolicyDisposition::Excluded)
         );
         // Preview (Cargo dry-run) must not mutate.
-        let preview = clean_with(&root, 0, &[], CleanMode::Preview, &runner, &noop).unwrap();
+        let preview = clean_with(&root, 0, &[], CleanMode::CargoPreview, &runner, &noop).unwrap();
         assert_eq!(
             preview.results.len(),
             1,
@@ -3455,7 +3569,7 @@ mod tests {
             std::slice::from_ref(&root),
             0,
             &[],
-            CleanMode::Preview,
+            CleanMode::CargoPreview,
             &runner,
             &noop,
             &CleanupPolicy::default(),
@@ -3608,10 +3722,10 @@ mod tests {
         // Fake multi-member (2 packages) with same target inside ROOT.
         let runner = FakeCleanupRunner::new(&root, &target, 2);
         let noop = NoopObserver;
-        for mode in [CleanMode::Preview, CleanMode::Simulate] {
+        for mode in [CleanMode::CargoPreview, CleanMode::Simulate] {
             let report = clean_with(&root, 0, &[], mode, &runner, &noop).unwrap();
             assert_eq!(report.results.len(), 1);
-            let expected = if mode == CleanMode::Preview {
+            let expected = if mode == CleanMode::CargoPreview {
                 CleanOutcome::Previewed
             } else {
                 CleanOutcome::Simulated
@@ -3682,7 +3796,7 @@ mod tests {
         backdate(&root, old);
         let runner = FakeCleanupRunner::new(&root, &target, 1);
         let noop = NoopObserver;
-        let report = clean_with(&root, 0, &[], CleanMode::Preview, &runner, &noop).unwrap();
+        let report = clean_with(&root, 0, &[], CleanMode::CargoPreview, &runner, &noop).unwrap();
         assert_eq!(report.results.len(), 1);
         assert_eq!(report.results[0].outcome, CleanOutcome::Skipped);
         assert!(report.results[0].detail.contains("CACHEDIR.TAG"));
@@ -3762,7 +3876,7 @@ mod tests {
             backdate(&root, SystemTime::now() - Duration::from_secs(3600));
             let runner = FakeCleanupRunner::new(&root, &target, 1);
             let noop = NoopObserver;
-            for mode in [CleanMode::Simulate, CleanMode::Preview] {
+            for mode in [CleanMode::Simulate, CleanMode::CargoPreview] {
                 let report = clean_with(&root, 0, &[], mode, &runner, &noop).unwrap();
                 assert_eq!(report.results[0].outcome, CleanOutcome::Skipped);
                 assert!(
@@ -3833,7 +3947,7 @@ mod tests {
             touch_future(&src);
             let runner = FakeCleanupRunner::new(&root, &target, 1);
             let noop = NoopObserver;
-            for mode in [CleanMode::Simulate, CleanMode::Preview] {
+            for mode in [CleanMode::Simulate, CleanMode::CargoPreview] {
                 let report = clean_with(&root, 0, &[], mode, &runner, &noop).unwrap();
                 // Recent source makes analysis filter the group (no measured
                 // rows) or final proof skip it. Either way it must never reach
@@ -3999,7 +4113,11 @@ mod tests {
         // Simulate and Execute pre-spawn dispositions must match (both skip).
         // Fresh runner per mode so each initial scan sees the original target;
         // revalidation then sees the replacement → target changed → skip.
-        for mode in [CleanMode::Simulate, CleanMode::Preview, CleanMode::Execute] {
+        for mode in [
+            CleanMode::Simulate,
+            CleanMode::CargoPreview,
+            CleanMode::Execute,
+        ] {
             let runner = RaceRunner::with_second_target(&root, &target, other_base.clone());
             let report = clean_with(&root, 0, &[], mode, &runner, &noop).unwrap();
             assert_eq!(report.results.len(), 1, "{mode:?}");
@@ -4011,7 +4129,11 @@ mod tests {
     #[test]
     fn direct_metadata_refresh_detects_workspace_root_and_member_changes() {
         for mutation_kind in ["root", "member", "malformed"] {
-            for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+            for mode in [
+                CleanMode::CargoPreview,
+                CleanMode::Simulate,
+                CleanMode::Execute,
+            ] {
                 let (_d, root, target) = valid_fixture(1);
                 let mutation = if mutation_kind == "root" {
                     MetadataMutation::WorkspaceRoot(
@@ -4151,7 +4273,7 @@ mod tests {
                 }
             }
             let noop = NoopObserver;
-            for mode in [CleanMode::Simulate, CleanMode::Preview] {
+            for mode in [CleanMode::Simulate, CleanMode::CargoPreview] {
                 // Fresh runner per mode so initial scan always sees Equal;
                 // revalidation then sees Distinct → build-dir changed → skip.
                 let runner = BuildChangingRunner {
@@ -4238,7 +4360,11 @@ mod tests {
 
     #[test]
     fn fresh_size_policy_rejects_shrunk_output_before_any_cargo_clean() {
-        for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+        for mode in [
+            CleanMode::CargoPreview,
+            CleanMode::Simulate,
+            CleanMode::Execute,
+        ] {
             let (_d, root, target) = valid_fixture(1);
             let changed_target = target.clone();
             let did_shrink = std::sync::atomic::AtomicBool::new(false);
@@ -4285,7 +4411,11 @@ mod tests {
     #[test]
     fn fresh_source_and_output_age_policy_rejects_before_any_cargo_clean() {
         for change_output in [false, true] {
-            for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+            for mode in [
+                CleanMode::CargoPreview,
+                CleanMode::Simulate,
+                CleanMode::Execute,
+            ] {
                 let (_d, root, target) = valid_fixture(1);
                 let changed_root = root.clone();
                 let changed_target = target.clone();
@@ -4464,12 +4594,16 @@ mod tests {
     #[test]
     fn cleanup_progress_is_determinate_through_observer_path() {
         use crate::progress::{ScanPhase, TestObserver};
-        for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+        for mode in [
+            CleanMode::CargoPreview,
+            CleanMode::Simulate,
+            CleanMode::Execute,
+        ] {
             let (_d, root, target) = valid_fixture(1);
             let runner = FakeCleanupRunner::new(&root, &target, 1);
             let observer = TestObserver::new();
             let expected_phase = match mode {
-                CleanMode::Preview => ScanPhase::CleanupPreview,
+                CleanMode::CargoPreview => ScanPhase::CleanupPreview,
                 CleanMode::Simulate => ScanPhase::CleanupSimulate,
                 CleanMode::Execute => ScanPhase::CleanupExecute,
             };
@@ -4946,7 +5080,11 @@ mod tests {
     fn distinct_private_target_and_build_is_one_cleanable_unit() {
         // C003 §9: private target + private build, distinct siblings => one
         // cleanable unit, one Cargo invocation, one result, in every mode.
-        for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+        for mode in [
+            CleanMode::CargoPreview,
+            CleanMode::Simulate,
+            CleanMode::Execute,
+        ] {
             let (_d, root, target, build) = sibling_ws_fixture("siblings");
             let mut runner = staged_sibling_runner(&root, &target, &build);
             runner.removes_on_clean(vec![
@@ -4959,7 +5097,7 @@ mod tests {
             assert_eq!(report.results.len(), 1, "{mode:?}: one result per unit");
             let row = row_for(&report, &root);
             let expected = match mode {
-                CleanMode::Preview => CleanOutcome::Previewed,
+                CleanMode::CargoPreview => CleanOutcome::Previewed,
                 CleanMode::Simulate => CleanOutcome::Simulated,
                 CleanMode::Execute => CleanOutcome::Cleaned,
             };
@@ -4967,7 +5105,7 @@ mod tests {
             assert_eq!(row.output_roots.len(), 2, "{mode:?}: both roots");
             assert_eq!(row.ownership, OutputOwnershipClass::PrivateBounded);
             match mode {
-                CleanMode::Preview => {
+                CleanMode::CargoPreview => {
                     assert_eq!(runner.dry_run_calls().len(), 1, "{mode:?}");
                     assert!(target.join("artifact.bin").exists());
                     assert!(build.join("artifact.bin").exists());
@@ -4994,7 +5132,11 @@ mod tests {
         // produce exactly one Cargo call, one result, and a cleanup progress
         // total of one for the workspace (not two physical groups).
         use crate::progress::{ScanPhase, TestObserver};
-        for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+        for mode in [
+            CleanMode::CargoPreview,
+            CleanMode::Simulate,
+            CleanMode::Execute,
+        ] {
             let (_d, root, target, build) = sibling_ws_fixture("one-invocation");
             let mut runner = staged_sibling_runner(&root, &target, &build);
             runner.removes_on_clean(vec![
@@ -5003,7 +5145,7 @@ mod tests {
             ]);
             let observer = TestObserver::new();
             let phase = match mode {
-                CleanMode::Preview => ScanPhase::CleanupPreview,
+                CleanMode::CargoPreview => ScanPhase::CleanupPreview,
                 CleanMode::Simulate => ScanPhase::CleanupSimulate,
                 CleanMode::Execute => ScanPhase::CleanupExecute,
             };
@@ -5031,7 +5173,11 @@ mod tests {
         // build directory into the same Cargo clean invocation, even when the
         // build directory is inside clean ROOT and would pass location
         // authorization.
-        for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+        for mode in [
+            CleanMode::CargoPreview,
+            CleanMode::Simulate,
+            CleanMode::Execute,
+        ] {
             let d = tempfile::tempdir().unwrap();
             let root = ws_root(d.path(), "ws");
             let target = cargo_output(&root.join("target"), 4096);
@@ -5067,7 +5213,11 @@ mod tests {
     fn private_target_with_shared_build_skips_entire_unit() {
         // C003-F1: a private target group cannot carry a Shared build directory
         // owned by another discovered workspace into the same invocation.
-        for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+        for mode in [
+            CleanMode::CargoPreview,
+            CleanMode::Simulate,
+            CleanMode::Execute,
+        ] {
             let d = tempfile::tempdir().unwrap();
             let root_a = ws_root(d.path(), "a");
             let root_b = ws_root(d.path(), "b");
@@ -5096,7 +5246,11 @@ mod tests {
     fn external_unproven_target_with_private_build_skips_entire_unit() {
         // Mirror of the private-target case: the failing group need not be the
         // build directory.
-        for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+        for mode in [
+            CleanMode::CargoPreview,
+            CleanMode::Simulate,
+            CleanMode::Execute,
+        ] {
             let d = tempfile::tempdir().unwrap();
             let root = ws_root(d.path(), "ws");
             let target = cargo_output(&d.path().join("external-target"), 4096);
@@ -5122,7 +5276,11 @@ mod tests {
         // C003-F1: an output root whose physical identity cannot be proven makes
         // the whole workspace unprovable; the unit is skipped, never partially
         // cleaned.
-        for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+        for mode in [
+            CleanMode::CargoPreview,
+            CleanMode::Simulate,
+            CleanMode::Execute,
+        ] {
             let d = tempfile::tempdir().unwrap();
             let root = ws_root(d.path(), "ws");
             let target = cargo_output(&root.join("target"), 4096);
@@ -5349,7 +5507,11 @@ mod tests {
         // C003-F3: B is re-resolved into A's target region after the initial
         // analysis; the complete fresh graph classifies the region shared and A
         // is skipped before any Cargo clean.
-        for mode in [CleanMode::Simulate, CleanMode::Preview, CleanMode::Execute] {
+        for mode in [
+            CleanMode::Simulate,
+            CleanMode::CargoPreview,
+            CleanMode::Execute,
+        ] {
             let d = tempfile::tempdir().unwrap();
             let root_a = ws_root(d.path(), "a");
             let root_b = ws_root(d.path(), "b");
@@ -5388,7 +5550,11 @@ mod tests {
     fn cross_workspace_overlap_race_into_distinct_build_skips_candidate() {
         // Same race against A's *distinct build* directory, proving the proof
         // covers the complete OutputSet rather than the authorizing target group.
-        for mode in [CleanMode::Simulate, CleanMode::Preview, CleanMode::Execute] {
+        for mode in [
+            CleanMode::Simulate,
+            CleanMode::CargoPreview,
+            CleanMode::Execute,
+        ] {
             let d = tempfile::tempdir().unwrap();
             let root_a = ws_root(d.path(), "a");
             let root_b = ws_root(d.path(), "b");
@@ -5462,7 +5628,11 @@ mod tests {
         // region. The fresh physical graph cannot represent it (no physical
         // identity), so the explicit cross-workspace reachability check must
         // still fail closed.
-        for mode in [CleanMode::Simulate, CleanMode::Preview, CleanMode::Execute] {
+        for mode in [
+            CleanMode::Simulate,
+            CleanMode::CargoPreview,
+            CleanMode::Execute,
+        ] {
             let d = tempfile::tempdir().unwrap();
             let root_a = ws_root(d.path(), "a");
             let root_b = ws_root(d.path(), "b");
@@ -5550,7 +5720,11 @@ mod tests {
         // C003 §9: overlap present in the initial complete graph is not relied
         // upon as fresh state; the unit is skipped from the initial graph alone
         // and no ownership proof is consumed.
-        for mode in [CleanMode::Simulate, CleanMode::Preview, CleanMode::Execute] {
+        for mode in [
+            CleanMode::Simulate,
+            CleanMode::CargoPreview,
+            CleanMode::Execute,
+        ] {
             let d = tempfile::tempdir().unwrap();
             let root_a = ws_root(d.path(), "a");
             let root_b = ws_root(d.path(), "b");
@@ -5704,7 +5878,11 @@ mod tests {
             backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
             let mut runner = StagedCargo::new();
             runner.add(&root, output, None);
-            for mode in [CleanMode::Simulate, CleanMode::Preview, CleanMode::Execute] {
+            for mode in [
+                CleanMode::Simulate,
+                CleanMode::CargoPreview,
+                CleanMode::Execute,
+            ] {
                 let report = clean_with(d.path(), 0, &[], mode, &runner, &NoopObserver).unwrap();
                 // The group is not a cleanup unit at all (it is never measured),
                 // so there is usually no row; if one is emitted it must be a skip.
@@ -5904,7 +6082,7 @@ mod tests {
         backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
         let roots = [root_a.clone(), root_b.clone()];
         for (mode, expected) in [
-            (CleanMode::Preview, CleanOutcome::Previewed),
+            (CleanMode::CargoPreview, CleanOutcome::Previewed),
             (CleanMode::Simulate, CleanOutcome::Simulated),
             (CleanMode::Execute, CleanOutcome::Cleaned),
         ] {
@@ -5924,7 +6102,7 @@ mod tests {
                 if mode == CleanMode::Simulate { 0 } else { 2 },
                 "{mode:?}"
             );
-            if mode == CleanMode::Preview {
+            if mode == CleanMode::CargoPreview {
                 assert!(
                     calls
                         .iter()
@@ -5942,7 +6120,11 @@ mod tests {
         let target_a = cargo_output(&root_a.join("target"), 4096);
         let _target_b = cargo_output(&root_b.join("target"), 2048);
         backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
-        for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+        for mode in [
+            CleanMode::CargoPreview,
+            CleanMode::Simulate,
+            CleanMode::Execute,
+        ] {
             let mut runner = StagedCargo::new();
             runner.add(&root_a, target_a.clone(), None);
             runner.add(&root_b, target_a.clone(), None);
@@ -5988,7 +6170,11 @@ mod tests {
         )
         .unwrap();
         backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
-        for mode in [CleanMode::Preview, CleanMode::Simulate, CleanMode::Execute] {
+        for mode in [
+            CleanMode::CargoPreview,
+            CleanMode::Simulate,
+            CleanMode::Execute,
+        ] {
             let mut runner = StagedCargo::new();
             runner.add(&root_a, target_a.clone(), None);
             runner.add(&root_b, target_b.clone(), None);

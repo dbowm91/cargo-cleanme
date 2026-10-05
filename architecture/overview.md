@@ -6,7 +6,7 @@ per-component deep dives that follow.
 - **What it is:** a Cargo subcommand (`cargo cleanme`) that finds inactive Cargo
   build artifacts on a machine and either reports or safely reclaims them.
 - **Shape:** one binary (`src/main.rs`) over one library (`src/lib.rs`) of 15
-  modules, 17 source files, 19,467 lines of Rust in `src/`, no async runtime
+  modules, 17 source files, 20,745 lines of Rust in `src/`, no async runtime
   of its own, and exactly one binary dependency that matters for safety
   (`cargo metadata`).
 - **Version:** 0.1.6 · **Edition:** 2024 · **MSRV:** 1.89
@@ -92,39 +92,39 @@ it.**
 ## 3. Module index
 
 Line counts are `total`; where a module carries an inline `#[cfg(test)]`
-module, the `prod / test` split is given. The crate has **266 inline `#[test]`
-functions**, and **46.8% of them live in the two largest modules**
-(`cleanup.rs` 71 + `workspace.rs` 47). Five modules have **zero** tests:
-`main.rs`, `output.rs`, `domain.rs`, `error.rs`, `lib.rs`.
+module, the `prod` half of the split is given. The crate has **286 inline
+`#[test]` functions**, and **41.3% of them live in the two largest modules**
+(`cleanup.rs` 71 + `workspace.rs` 47). Four modules have **zero** tests:
+`main.rs`, `domain.rs`, `error.rs`, `lib.rs`.
 
 Test counts in this table are **declared**, not "how many ran on my machine".
-237 are declared; **236 compile and run on Linux**, because exactly one is
+286 are declared; **285 compile and run on Linux**, because exactly one is
 gated to other platforms
 (`discovery.rs:1181`, `#[cfg(any(target_os = "macos", windows))]`). A further
-18 are `#[cfg(unix)]` or `#[cfg(target_os = "linux")]`, so on Windows the
-inline suite is 1 of 237. Read the total as coverage concentrated in two
+19 are `#[cfg(unix)]` (17) or `#[cfg(target_os = "linux")]` (2), so on Windows
+the inline suite is 1 of 286. Read the total as coverage concentrated in two
 modules, not as a balance — see
 [14-testing-and-verification](14-testing-and-verification.md) §2.
 
 | Module | Lines | Role | Deep dive |
 |---|---:|---|---|
-| [`main.rs`](13-orchestration.md) | 606 | Binary entry: argv → command dispatch → exit code. The only place the two scan pipelines are stitched together. | [Orchestration](13-orchestration.md) |
-| [`cli.rs`](02-cli.md) | 506 / 200 | Clap surface, `cargo`-subcommand argv normalization, scan-root absolutization. | [CLI](02-cli.md) |
-| [`config.rs`](03-config-and-editor.md) | 548 / 308 | Load/create/validate `config.toml`; embedded template; path resolution. | [Config & editor](03-config-and-editor.md) |
-| [`policy.rs`](04-policy-and-scope.md) | 349 / 248 | Turns a `ScanRequest` + config into an `EffectiveScanPolicy` — the Routine/Full scope decision. | [Policy & scope](04-policy-and-scope.md) |
-| [`discovery.rs`](05-discovery.md) | 1866 / 902 | Finds `Cargo.toml` manifests across a bounded walk, with attribution for what was pruned. | [Discovery](05-discovery.md) |
-| [`discovery_state.rs`](06-discovery-state.md) | 656 / 402 | Persisted "learned roots", uncertainty-aware reconciliation, atomic publish. | [Discovery state](06-discovery-state.md) |
-| [`workspace.rs`](07-workspace.md) | 3918 / 1446 | `cargo metadata` resolution, capability probing, physical grouping, cleanup-unit construction. | [Workspace](07-workspace.md) |
-| [`traverse.rs`](08-traverse.md) | 599 / 470 | Parallel size/recency measurement and source-activity classification. | [Traverse](08-traverse.md) |
-| [`cleanup.rs`](09-cleanup.md) | 6161 / 2323 | Authorization, ownership proof, pre-spawn decision, three clean modes. The heart of the safety story. | [Cleanup](09-cleanup.md) |
-| [`report.rs`](10-reporting.md) | 195 / 72 | Human-readable rendering of a `ScanReport`; byte formatting. | [Reporting](10-reporting.md) |
-| [`output.rs`](10-reporting.md) | 265 | Versioned machine-readable DTOs (`EnvelopeV1`); the stable JSON contract. **No tests.** | [Reporting](10-reporting.md) |
-| [`progress.rs`](11-progress.md) | 703 / 500 | `ProgressObserver` trait + indicatif renderer; terminal capability detection. | [Progress](11-progress.md) |
-| [`update.rs`](12-self-update.md) | 2468 / 1211 | Eggup-based self-update: provenance classification, version authority, staged replace. | [Self-update](12-self-update.md) |
+| [`main.rs`](13-orchestration.md) | 760 | Binary entry: argv → resolved invocation → dispatch → exit code. The only place the scan and cleanup pipelines are stitched together. | [Orchestration](13-orchestration.md) |
+| [`cli.rs`](02-cli.md) | 901 / 380 | Clap surface, resolved-invocation model, `cargo`-subcommand argv normalization, scan-root absolutization. | [CLI](02-cli.md) |
+| [`config.rs`](03-config-and-editor.md) | 632 / 373 | Load/create/validate `config.toml`; embedded template; path resolution. | [Config & editor](03-config-and-editor.md) |
+| [`policy.rs`](04-policy-and-scope.md) | 396 / 247 | Turns a `ScanRequest` + config into an `EffectiveScanPolicy` — the Routine/Full scope decision. | [Policy & scope](04-policy-and-scope.md) |
+| [`discovery.rs`](05-discovery.md) | 1866 / 901 | Finds `Cargo.toml` manifests across a bounded walk, with attribution for what was pruned. | [Discovery](05-discovery.md) |
+| [`discovery_state.rs`](06-discovery-state.md) | 656 / 401 | Persisted "learned roots", uncertainty-aware reconciliation, atomic publish. | [Discovery state](06-discovery-state.md) |
+| [`workspace.rs`](07-workspace.md) | 3918 / 1445 | `cargo metadata` resolution, capability probing, physical grouping, cleanup-unit construction. | [Workspace](07-workspace.md) |
+| [`traverse.rs`](08-traverse.md) | 599 / 469 | Parallel size/recency measurement and source-activity classification. | [Traverse](08-traverse.md) |
+| [`cleanup.rs`](09-cleanup.md) | 6347 / 2392 | Authorization, ownership proof, pre-spawn decision, three clean modes. The heart of the safety story. | [Cleanup](09-cleanup.md) |
+| [`report.rs`](10-reporting.md) | 195 / 71 | Human-readable rendering of a `ScanReport`; byte formatting. | [Reporting](10-reporting.md) |
+| [`output.rs`](10-reporting.md) | 671 | Versioned machine-readable DTOs (`EnvelopeV1`); the stable JSON contract; the bounded `--format log` line renderer. | [Reporting](10-reporting.md) |
+| [`progress.rs`](11-progress.md) | 703 / 498 | `ProgressObserver` trait + indicatif renderer; terminal capability detection. | [Progress](11-progress.md) |
+| [`update.rs`](12-self-update.md) | 2474 / 1210 | Eggup-based self-update: provenance classification, version authority, staged replace. | [Self-update](12-self-update.md) |
 | [`domain.rs`](01-domain-and-errors.md) | 381 | The shared vocabulary: reports, ownership classes, counters, diagnostics. Pure data. | [Domain & errors](01-domain-and-errors.md) |
 | [`error.rs`](01-domain-and-errors.md) | 16 | `AppError` — the six variants the binary can fail with. | [Domain & errors](01-domain-and-errors.md) |
 | [`lib.rs`](01-domain-and-errors.md) | 15 | Module manifest. | [Domain & errors](01-domain-and-errors.md) |
-| [`editor.rs`](03-config-and-editor.md) | 215 / 156 | Resolves `$EDITOR`/`$VISUAL` for `config edit`. | [Config & editor](03-config-and-editor.md) |
+| [`editor.rs`](03-config-and-editor.md) | 215 / 155 | Resolves `$EDITOR`/`$VISUAL` for `config edit`. | [Config & editor](03-config-and-editor.md) |
 
 Supporting surfaces, outside `src/`:
 
@@ -158,11 +158,11 @@ allowlist, so none of this documentation ships in the published crate.
    folds observations into the learned-root set and publishes atomically
    (`main.rs:403`).
 7. **Build physical groups** — `workspace::build_groups`; nested/duplicate
-   output roots collapse to one group so bytes are counted once (`main.rs:461`).
+   output roots collapse to one group so bytes are counted once (`main.rs:475`).
 8. **Analyze** — `workspace::analyze_groups` measures each group in parallel
-   via `traverse` and classifies activity (`main.rs:469`).
-9. **Render** — human (`report::render`, `main.rs:521`) or JSON
-   (`output::scan`, `main.rs:514`).
+   via `traverse` and classifies activity (`main.rs:483`).
+9. **Render** — human (`report::render`, `main.rs:535`) or JSON
+   (`output::scan`, `main.rs:528`).
 
 Steps 3–5 and 7–8 are the expensive parts; step 6 is the part that makes the
 next run cheap.

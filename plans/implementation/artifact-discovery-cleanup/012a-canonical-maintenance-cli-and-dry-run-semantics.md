@@ -1,6 +1,6 @@
 # M012A — Canonical Maintenance CLI and Dry-Run Semantics
 
-Status: ready
+Status: closed — see `plans/closure/artifact-discovery-cleanup/m012a-status.md`
 
 Repository baseline: `e4e9d92673e5f10548248e23db788c0906760916`
 

@@ -36,7 +36,7 @@ Plus one fully-qualified `crate::domain::elapsed_nanos` (`:1003`, `:1092`).
   (`workspace.rs:1-6`): it never reimplements Cargo's config merge rules, it asks
   Cargo. The only parsing of Cargo output is JSON.
 - **Reporting.** This module produces `PhysicalOutputGroup`; the report-facing
-  `EligibleOutputGroup` is built in `main.rs:471-484`.
+  `EligibleOutputGroup` is built in `main.rs:485-498`.
 
 **The workspace → cleanup edge is one-way, and in this file it is test-only.**
 The production half of `workspace.rs` contains *zero* references to
@@ -49,7 +49,7 @@ So the dependency direction that [the overview](overview.md) calls out is
 cycle and no production import from `workspace` into `cleanup`.
 
 Call sites in the read-only scan: `main.rs:346` (runner), `main.rs:347`
-(`resolve_workspaces`), `main.rs:446` (`build_groups`), `main.rs:454`
+(`resolve_workspaces`), `main.rs:460` (`build_groups`), `main.rs:468`
 (`analyze_groups`).
 
 ---
@@ -593,7 +593,7 @@ the analysis progress bar determinate. The survivor branch also fires
 
 ### Clock handling
 
-`clock_start` and `clock_cutoff` come from the caller; `main.rs:450-452` computes
+`clock_start` and `clock_cutoff` come from the caller; `main.rs:464-466` computes
 `clock_cutoff = scan_start - recency` and turns an overflow into
 `AppError::Config`.
 
@@ -623,7 +623,7 @@ jointly implement for multi-owner groups.
 
 **This module produces only `PhysicalOutputGroup`** (`:1196-1207`), with
 `covering_roots`, `owners: Vec<WorkspaceId>`, and `uncertain`. It never
-constructs `EligibleOutputGroup`; that flattening happens in `main.rs:471-484`,
+constructs `EligibleOutputGroup`; that flattening happens in `main.rs:485-498`,
 which drops `covering_roots` and `uncertain` and maps `owners` to
 `workspace_roots`. The distinction is the scan's report-facing projection versus
 the internal working type.

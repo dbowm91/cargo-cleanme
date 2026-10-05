@@ -1,18 +1,19 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH scan 1 0.1.6 https://github.com/dbowm91/cargo-cleanme "General Commands Manual"
+.TH scan 1 0.2.0 https://github.com/dbowm91/cargo-cleanme "General Commands Manual"
 .SH NAME
-scan
+scan \- Reconcile the machine read\-only: full by default, explicit with ROOT, routine inventory with `\-\-known`
 .SH SYNOPSIS
-\fBscan\fR [\fB\-\-full\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIROOT\fR] 
+\fBscan\fR [\fB\-\-known\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIROOT\fR] 
 .SH DESCRIPTION
+Reconcile the machine read\-only: full by default, explicit with ROOT, routine inventory with `\-\-known`
 .SH OPTIONS
 .TP
-\fB\-\-full\fR
-
+\fB\-\-known\fR
+Routine read\-only inventory over the maintenance scope
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .TP
 [\fIROOT\fR]
-
+Optional bounded root. Makes the scan Explicit and bypasses configured ignore/unignore filters

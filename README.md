@@ -3,15 +3,19 @@
 Find reclaimable Cargo build artifacts and clean them **through Cargo** —
 never by deleting directories.
 
-Scanning is read-only. Cleanup is a separate, explicit operation that previews
-by default and requires `--yes` to delete anything.
-
 ```console
-$ cargo cleanme scan ~/projects
-  8.78 MiB  /home/you/projects/demo-app/target  [private]
+$ cargo cleanme --dry-run
+combined roots /home/you/Projects
 
-  8.78 MiB inventory estimate across 1 inactive Cargo output groups
+Cleaned  …/demo-app  [private]  output …/demo-app/target  before   8.78 MiB  — simulation: no `cargo clean` command was invoked
+
+simulation: 1 would-clean, 0 skipped, 0 failed; estimated would-clean   8.78 MiB; no `cargo clean` command was invoked; 0 filesystem diagnostics
 ```
+
+`cargo cleanme` with no arguments **cleans**. Every deletion is delegated to
+Cargo and gated on a fresh complete ownership proof; `--dry-run` runs the whole
+decision path and removes nothing. Scanning is the separate, always read-only
+operation.
 
 ## Install
 
@@ -56,13 +60,42 @@ exists yet, so nothing here advertises a minimum glibc. See
 
 ## Quickstart
 
+```sh
+cargo cleanme                               # Routine maintenance: clean (Execute)
+cargo cleanme --dry-run                     # Routine maintenance: simulate, zero `cargo clean`
+cargo cleanme scan                          # Full read-only reconciliation of the machine
+cargo cleanme scan --known                  # Routine read-only inventory
+cargo cleanme scan ROOT                     # one explicit bounded scope
+cargo cleanme --format json                 # one versioned JSON document on stdout
+```
+
+### The surface
+
+| Command | What it does | Runs `cargo clean`? |
+|---|---|---|
+| `cargo cleanme` | Routine cleanup over the maintenance scope | yes |
+| `cargo cleanme --dry-run` | Simulation: every gate runs, nothing is removed | **never**, not even preview |
+| `cargo cleanme scan` | Full read-only reconciliation | never |
+| `cargo cleanme scan --known` | Routine read-only inventory | never |
+| `cargo cleanme scan ROOT` | One bounded read-only scope | never |
+| `cargo cleanme clean ROOT` | Cleanup of one explicit root (Execute by default) | yes |
+| `cargo cleanme clean --known` / `--full` | Advanced orchestration | yes |
+| `cargo cleanme clean … --cargo-preview` | Cargo's own `clean --dry-run --verbose`, after the same proof | yes, as a dry run |
+
+**The maintenance scope** is a configured legacy `scan.root` when one is set
+(exclusive, explicit), otherwise bounded seed roots plus active learned roots.
+Rootless `scan` is always Full and ignores `scan.root`, so configuration can
+never silently narrow the reconciliation command.
+
+### Scan output
+
 Scan finds inactive output. It never deletes.
 
-```sh
-cargo cleanme scan ~/projects               # one explicit scope
-cargo cleanme scan                          # Routine: seed + learned roots
-cargo cleanme scan --full                   # exhaustive platform-root walk (takes no ROOT)
-cargo cleanme scan ~/projects --format json # one versioned JSON document on stdout
+```console
+$ cargo cleanme scan ~/projects
+  8.78 MiB  /home/you/projects/demo-app/target  [private]
+
+  8.78 MiB inventory estimate across 1 inactive Cargo output groups
 ```
 
 A group is reported as **`[private]`** only when cargo-cleanme can prove it
@@ -73,43 +106,39 @@ owns those bytes exclusively. `[shared]`, `[external-unproven]`, and
 > guard working.** Anything whose source changed within the last 300 seconds is
 > *active* and protected. Backdate the sources, or wait, and it will appear.
 
-### Clean
+### Clean modes
 
-Three modes, and the two dry-run spellings are deliberately different:
+Three modes, and `dry-run` means one specific thing:
 
-| Command | What it does | Runs `cargo clean`? |
+| Flag | Mode | Runs `cargo clean`? |
 |---|---|---|
-| `cargo cleanme clean PATH` | Cargo preview (default) | yes — as `cargo clean --dry-run --verbose` |
-| `cargo cleanme clean PATH --dryrun` | Simulation | **never**, not even preview |
-| `cargo cleanme clean PATH --yes` | Real cleanup | yes |
-
-Preview and Simulate differ in output, and the difference is visible:
+| *(none)* | Execute | yes |
+| `--dry-run` | Simulation | **never**, not even preview |
+| `--cargo-preview` | Cargo preview | yes, as `cargo clean --dry-run --verbose` |
 
 ```console
-$ cargo cleanme clean ~/projects/demo-app --no-progress
+$ cargo cleanme clean ~/projects/demo-app --cargo-preview --no-progress
 combined scope: 1 root(s) […], 1 manifest(s), 1 resolved workspace(s), 1 CleanupUnit(s), 0 unresolved ownership participant(s)
 Previewed  …/demo-app  [private]  output …/demo-app/target  before   8.78 MiB  — … /warning: no files deleted due to --dry-run/
 
 cargo preview: 1 previewed, 0 skipped, 0 failed; pre-clean estimate   8.78 MiB; no cleanup executed; 0 filesystem diagnostics
 
-$ cargo cleanme clean ~/projects/demo-app --dryrun --no-progress
+$ cargo cleanme clean ~/projects/demo-app --dry-run --no-progress
 Simulated  …/demo-app  [private]  output …/demo-app/target  before   8.78 MiB  — simulation: no `cargo clean` command was invoked
 
 simulation: 1 would-clean, 0 skipped, 0 failed; estimated would-clean   8.78 MiB; no `cargo clean` command was invoked; 0 filesystem diagnostics
 ```
 
-`--dryrun` still runs discovery, resolution, ownership proof, authorization,
+`--dry-run` still runs discovery, resolution, ownership proof, authorization,
 sizing, revalidation, and reporting — it differs *only* in that it stops before
-deleting. That makes it the mode to use when testing a change to the gates.
+spawning anything. That makes it the mode to use when testing a change to the
+gates. `--cargo-preview` is the lower-level debugging view that hands the
+mutation decision to Cargo itself.
 
-To actually delete:
-
-```sh
-cargo cleanme clean ~/projects --yes
-```
+Real cleanup, made explicit:
 
 ```console
-$ cargo cleanme clean ~/projects/demo-app --yes --no-progress
+$ cargo cleanme clean ~/projects/demo-app --no-progress
 Cleaned  …/demo-app  [private]  output …/demo-app/target  before   8.78 MiB  after   0.00 B  observed decrease   8.78 MiB  — Removed 22 files, 8.7MiB total
 
 cleanup: 1 cleaned, 0 skipped, 0 failed; pre-clean estimate   8.78 MiB, post-clean measured   0.00 B, observed decrease   8.78 MiB; 0 filesystem diagnostics
@@ -121,7 +150,7 @@ scope cannot be resolved, **no** cleanup command runs at all and you get a
 typed block instead:
 
 ```console
-$ cargo cleanme clean ~/projects --format json; echo "exit $?"
+$ cargo cleanme --format json; echo "exit $?"
 {
   "scope_blocked": true,
   "scope_reason": "cleanup ownership could not be proven: 1 discovered Cargo manifest did not resolve; no cleanup commands were run",
@@ -135,6 +164,25 @@ exit 1
 
 → [docs/USAGE.md](docs/USAGE.md#cleanup-safety-model) for the full safety
 model, and [docs/USAGE.md](docs/USAGE.md#exit-codes) for exit codes.
+
+### Unattended
+
+```sh
+cargo cleanme --format log                # one bounded line: status, scope, mode, counts
+cargo cleanme scan --format log           # same, read-only Full reconciliation
+```
+
+```console
+$ cargo cleanme --format log
+cargo-cleanme op=clean status=ok scope=routine mode=execute cleaned=7 skipped=3 failed=0 reclaimed_bytes=19778387968 diagnostics=0
+```
+
+`log` exists for schedulers that keep a short history pane: one ASCII line, at
+most 384 bytes, no paths, no progress output. **Anything parsing output should
+parse `--format json`**, which remains the complete versioned contract.
+
+→ [docs/AUTOMATION.md](docs/AUTOMATION.md) for the field list, a worked greggd
+configuration, scheduler-neutral alternatives, and exit-code triage.
 
 ### Config
 
@@ -170,15 +218,32 @@ turn a shared or unproven group into a cleanable one.
 
 | Flag | Effect |
 |---|---|
-| `--format human\|json` | one newline-terminated schema-1 JSON document on stdout in `json` mode |
+| `--format human\|json\|log` | interactive detail; one schema-1 JSON document; or one bounded ASCII line for an unattended scheduler |
+| `--dry-run` | simulate: the whole decision path, zero `cargo clean` processes |
 | `--no-progress` | disable the transient TTY UI (stderr only) |
 | `--stats` | counters and phase timings **on stderr**; stdout stays byte-identical |
 | `--config PATH` | use a specific `config.toml` |
-| `--min-reclaimable-bytes N` | only clean units above this measured size |
-| `--older-than SECONDS` | extra quiet-age requirement; never replaces the recency guard |
-| `--known` / `--full` | clean Routine roots / a fully reconciled inventory |
+| `--min-reclaimable-bytes N` | only clean units above this measured size (`clean`) |
+| `--older-than SECONDS` | extra quiet-age requirement; never replaces the recency guard (`clean`) |
+| `--known` / `--full` | Routine roots / Full reconciliation, on `clean` and `scan` |
 
-`--dry-run`, `--dryrun`, and `--yes` conflict pairwise on purpose.
+`--dry-run`, `--cargo-preview`, and `--yes` conflict pairwise on purpose.
+
+### Upgrading from 0.1.x
+
+Bare `cargo cleanme` changed from a read-only Routine scan to Routine cleanup,
+and `--dry-run` changed from Cargo preview to simulation.
+
+| 0.1.x | Now | Meaning |
+|---|---|---|
+| `cargo cleanme` | `cargo cleanme scan --known` | same old read-only Routine inventory |
+| `cargo cleanme scan --full` | `cargo cleanme scan` | Full reconciliation |
+| `cargo cleanme clean R --dry-run` | `cargo cleanme clean R --cargo-preview` | same Cargo preview |
+| `cargo cleanme clean R --dryrun` | `cargo cleanme clean R --dry-run` | same simulation |
+| `cargo cleanme clean R --yes` | `cargo cleanme clean R` | Execute is now the default |
+
+`--dryrun` and `--yes` still work on `clean` as hidden aliases for the
+pre-1.0 migration period. They print nothing.
 
 ## Exit codes
 
@@ -206,6 +271,7 @@ accept a prerelease. → [docs/UPDATE.md](docs/UPDATE.md).
 | Document | What it covers |
 |---|---|
 | [docs/USAGE.md](docs/USAGE.md) | full command reference, discovery model, cleanup safety model, config, JSON schema, selectors |
+| [docs/AUTOMATION.md](docs/AUTOMATION.md) | bounded log output, scheduler integration, unattended limits and exit-code triage |
 | [docs/INSTALLING.md](docs/INSTALLING.md) | install paths, prebuilt targets, destinations, uninstalling |
 | [docs/UPDATE.md](docs/UPDATE.md) | self-update rules, what it refuses, integrity vs authenticity |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | known defects by version, installer and updater failure modes |

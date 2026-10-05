@@ -8,7 +8,83 @@ command-line, JSON, and release-asset contracts are the stable surface.
 
 ## [Unreleased]
 
+### Changed — BREAKING
+
+- **`cargo cleanme` is now the canonical maintenance command, and it cleans.**
+  Bare invocation was a read-only Routine scan; it is now a Routine cleanup over
+  the maintenance scope through the same combined-root safety engine
+  `clean --known` already used. Every candidate must still prove exclusive
+  ownership of its bytes, and that proof is repeated immediately before each
+  `cargo clean`. Deletion is still always `cargo clean`; cargo-cleanme never
+  removes a directory itself.
+
+  | 0.1.x | Now | Same behaviour? |
+  |---|---|---|
+  | `cargo cleanme` | `cargo cleanme scan --known` | yes |
+  | `cargo cleanme scan --full` | `cargo cleanme scan` | yes |
+  | `cargo cleanme clean R --dry-run` | `cargo cleanme clean R --cargo-preview` | yes |
+  | `cargo cleanme clean R --dryrun` | `cargo cleanme clean R --dry-run` | yes |
+  | `cargo cleanme clean R --yes` | `cargo cleanme clean R` | yes |
+
+  `--dry-run`, `--dryrun`, and `--yes` conflict pairwise on purpose.
+
+- **`--dry-run` now means simulation, not Cargo preview.** `cargo cleanme
+  clean --dry-run` used to invoke `cargo clean --dry-run --verbose`; it now runs
+  the complete decision, proof, and reporting path and spawns **no**
+  `cargo clean` process of any kind. Cargo's own preview is reachable as
+  `cargo cleanme clean --cargo-preview`. Simulation is not a weaker mode: it
+  passes the same completeness and final-proof gates as a real cleanup, so it
+  remains the right mode for testing a change to those gates.
+
+- **`clean` now defaults to Execute.** `--yes` is retained as a hidden alias
+  that prints nothing.
+
+- **Rootless `scan` is now Full and no longer needs `--full`.** A configured
+  `scan.root` is *not* consulted by a rootless scan, so configuration cannot
+  silently narrow the canonical reconciliation command. `scan --full` is
+  retained as a hidden alias for the old spelling. `scan --known` is the
+  read-only Routine inventory, and `scan ROOT` remains the explicit bounded
+  scope. `ROOT` with `--known`/`--full`, and `--known` with `--full`, are usage
+  errors.
+
+- **`--dryrun` and `--yes` are hidden.** Both remain accepted on `clean` as
+  aliases for the canonical `--dry-run` and default Execute modes. They create
+  no fourth mode and print nothing, so an unattended run stays quiet.
+
+### Added
+
+- **`--format log`: one bounded ASCII summary line for unattended runs.** A
+  scan or cleanup emits exactly one line on stdout — `op`, `status`, `scope`,
+  `mode`, a typed `reason=` code when blocked, and counts — at most 384 bytes,
+  with no paths, no Cargo stderr, and no progress output. Progress is disabled
+  and per-diagnostic stderr fan-out is suppressed; `--stats` remains an opt-in
+  stderr override. This is an operational summary, not a machine contract:
+  `--format json` remains the complete versioned one.
+
+  → [docs/AUTOMATION.md](docs/AUTOMATION.md) for the field list, a worked
+  greggd configuration, scheduler-neutral alternatives, and exit-code triage.
+
+- **A typed reason code for a scope block.** A blocked cleanup scope now carries
+  `ownership_unproven` or `incomplete_discovery` alongside the prose a human
+  reads, so an unattended log line can be grepped and alerted on without
+  matching English text. JSON is unchanged and still reports the prose.
+
 ### Fixed
+
+- **A configured `scan.root` made `clean --known` a silent no-op.** With
+  `scan.root` set, the maintenance scope resolved to that root as an explicit
+  override, and cleanup then discarded it and ran with no roots at all,
+  reporting a successful zero-result cleanup of nothing. It now cleans exactly
+  the root the scope resolved to. Bare maintenance, `clean --known`, and
+  `scan --known` all share one scope resolution.
+
+- **`clean --full` returned the scan's exit code silently.** An incomplete Full
+  reconciliation now aborts cleanup with a typed configuration error instead of
+  returning a bare non-zero code that looked like a cleanup failure.
+
+- **`clean --full` could emit two JSON documents on stdout.** The scan run to
+  refresh learned state wrote its report ahead of the cleanup report. It is
+  suppressed again, so one invocation still emits exactly one document.
 
 - **`scan.unignore` re-admitted every sibling under a literally ignored
   directory.** With

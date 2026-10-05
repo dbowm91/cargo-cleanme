@@ -12,6 +12,9 @@ run did the wrong thing.
 | **0.1.1 – 0.1.4** | `update` could replace a binary **Cargo owns**, silently, with exit `0` | **0.1.5** |
 | **0.1.1 – 0.1.2** | `update` could never complete a commit | **0.1.3** |
 
+One breaking change arrived in **0.2.0**, listed separately below, because it
+changes what a bare `cargo cleanme` *does* rather than fixing a defect.
+
 No version is yanked: their other behavior is correct, and yanking would
 misdescribe them. Detection and repair steps for both, plus the reasoning, are
 in [UPDATE.md](UPDATE.md#known-defects-by-version).
@@ -24,6 +27,76 @@ cargo install --list | grep cargo-cleanme     # the version Cargo believes it ow
 ```
 
 If those disagree, run `cargo install cargo-cleanme --locked --force`.
+
+## Upgrading from 0.1.x: bare `cargo cleanme` now cleans
+
+**Applies to 0.1.x only.** Bare `cargo cleanme` was a read-only Routine scan on
+0.1.x. On 0.2.0 it is a Routine **cleanup**, and `--dry-run` on `clean` changed
+from Cargo's own preview to application simulation.
+
+| You wrote | On 0.2.0 it | Same behaviour? |
+|---|---|---|
+| `cargo cleanme` | `cargo cleanme scan --known` | yes |
+| `cargo cleanme scan --full` | `cargo cleanme scan` | yes |
+| `cargo cleanme clean R --dry-run` | `cargo cleanme clean R --cargo-preview` | yes |
+| `cargo cleanme clean R --dryrun` | `cargo cleanme clean R --dry-run` | yes |
+| `cargo cleanme clean R --yes` | `cargo cleanme clean R` | yes |
+
+`--dryrun` and `--yes` still work on `clean`, hidden, mapping to the canonical
+modes. Nothing in your config needs to change.
+
+**If you want the old read-only behaviour unconditionally**, use
+`cargo cleanme scan --known` and put it in the same place you used to run the
+bare command. A configured legacy `scan.root` still wins as an explicit
+override for bare maintenance, so a config that pins `scan.root` keeps cleaning
+exactly what it always pinned.
+
+## Unattended / scheduler runs
+
+→ [docs/AUTOMATION.md](AUTOMATION.md) for the full integration.
+
+### A scheduled run reports `cleaned=0` and nothing happens
+
+Almost always **scope, not a bug**. Check in this order:
+
+1. **Is the scheduler running as you?** The normal Linux greggd service runs as
+   `greggd` with `ProtectHome=true` and generally cannot see your home
+   directory, where the build output is. A successful run with an empty scope
+   looks exactly like a successful run that cleaned something. Use a
+   user-owned/rootless greggd.
+2. **Is the path absolute?** `command = ["cargo-cleanme", …]` does not inherit
+   your interactive `PATH`. Use the full path to the binary.
+3. **Is `scan.root` set?** A configured `scan.root` is an exclusive override: it
+   replaces the Routine scope entirely rather than adding to it.
+4. **Is everything too recent?** Anything modified inside `recency_seconds`
+   (default 300) is protected. A nightly job is far outside that window.
+
+### A scheduled run exits `1` with `status=blocked`
+
+The scope was refused **before** anything was deleted, by design. The `reason=`
+code tells you which:
+
+| `reason=` | Cause | Retry? |
+|---|---|---|
+| `ownership_unproven` | a discovered manifest could not be resolved, so coverage of the scope is unproven | usually no — fix the workspace |
+| `incomplete_discovery` | discovery diagnostics made the ownership universe incomplete | usually no |
+
+Both are *success-shaped* results: a typed blocker, not a crash. See
+[USAGE.md §The three post-edit checks](USAGE.md) for the underlying safety
+model.
+
+### A scheduled run exits `2` with `status=error` and no summary line
+
+The run failed before a report existed — almost always an invalid or unreadable
+`config.toml`, or a root that cannot be used. There is no summary line because
+there is no report to summarise. Re-run it in the foreground without
+`--format log` to get the full message.
+
+### A log line is missing a field you expected
+
+Optional fields are dropped from the tail of the line when including them would
+exceed 384 bytes. `op`, `status`, `scope`, and `mode` are structural and never
+dropped. If you need complete data, use `--format json`.
 
 ## Discovery filters
 

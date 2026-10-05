@@ -2,6 +2,27 @@
 
 `--format json` emits exactly one UTF-8 JSON document followed by a newline. The top-level object contains `schema_version` (currently `1`), `cargo_cleanme_version`, `operation`, `scope`, `mode`, and `result`. `mode` is always present and is `null` for a scan. Human prose and transient progress are not part of this contract. A backwards-incompatible field or meaning change requires a schema-version decision.
 
+## `operation`, `scope`, and `mode`
+
+- `operation` is `scan`, `clean`, `config`, or `update`. Bare `cargo cleanme` emits
+  `clean`; there is no separate `maintenance` operation, because a consumer that
+  had to special-case the front door could not trust the front door.
+- `scope` describes **the scope that was resolved, not the flags that were
+  passed**, for both operations. It is one of `full` (the full platform roots),
+  `explicit` (one bounded root supplied on the command line, or a configured
+  `scan.root` override), or `routine` (seed roots plus active learned roots).
+- `mode` is `execute`, `simulate`, or `preview` for cleanup. `execute` is the
+  default. `simulate` is `--dry-run` and spawns no `cargo clean` process at all.
+  `preview` is `--cargo-preview`: the same complete proof, followed by Cargo's
+  own `clean --dry-run --verbose`.
+
+M012A clarification, schema_version unchanged at 1: cleanup `scope` previously
+emitted `known` for the `--known` spelling. That was a description of argv, not
+of the resolved scope, and it is now `routine` or `explicit` according to what
+`policy::resolve` actually returned — the same vocabulary cleanup already used
+for `full` and `explicit`. No field changed meaning and no field was added or
+removed, so this is a value correction inside v1.
+
 Where this document and the implementation disagree, **the implementation is authoritative** and this document is corrected to match it. A consumer may treat this file as descriptive rather than normative.
 
 The `update` operation reuses `schema_version: 1` without the `EnvelopeV1` shape: it has no `scope`, and its `result` differs. A consumer must not treat `schema_version == 1` as implying the envelope described here.
@@ -31,4 +52,10 @@ Cargo profile selection is supported only for the exact qualified releases 1.89.
 
 Stable policy disposition values are `selected`, `below_minimum_size`, `too_recent_for_policy`, `not_included`, `excluded`, and `selector_estimate_unavailable`. Paths are UTF-8 strings when representable; otherwise the display string uses the platform escaped debug form and is not a reversible identity encoding.
 
-`--stats` is stderr-only and does not change JSON stdout. Progress is disabled for JSON output. The process exits 0 for completed requests with safe per-unit skips, 1 for incomplete cleanup scope or operational cleanup failure, and 2 for fatal invocation/configuration errors. A scan additionally exits 1 when a Full scan hit an unreadable platform root. A failure to persist discovery state is reported on stderr but does not change the exit code, because that state is an optimization only. External schedulers may call `--yes`; cargo-cleanme itself has no scheduler or daemon.
+`--format log` is **not** part of this contract. It emits one bounded ASCII
+summary line for an unattended history pane and drops every per-unit field.
+It shares no serialization code path with this document, adds no field here,
+and never changes `schema_version`. Anything that needs complete data must use
+`--format json`; see `docs/AUTOMATION.md`.
+
+`--stats` is stderr-only and does not change JSON stdout. Progress is disabled for JSON output. The process exits 0 for completed requests with safe per-unit skips, 1 for incomplete cleanup scope or operational cleanup failure, and 2 for fatal invocation/configuration errors. A scan additionally exits 1 when a Full scan hit an unreadable platform root. A failure to persist discovery state is reported on stderr but does not change the exit code, because that state is an optimization only. External schedulers may call bare `cargo cleanme` (Execute) or `cargo cleanme --dry-run` (Simulate); cargo-cleanme itself has no scheduler or daemon.

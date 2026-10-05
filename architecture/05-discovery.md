@@ -26,7 +26,7 @@ categorised; `counters` — which directories were skipped and, by reason, why).
   manifest, never calls `cargo metadata`, and never asks Cargo where an output
   directory is.
 - **Sizing or activity.** No `mtime`, no byte counts —
-  `traverse.rs`/`workspace::analyze_groups` (`main.rs:454-463`).
+  `traverse.rs`/`workspace::analyze_groups` (`main.rs:468-477`).
 - **The inactivity decision.** `Active`/`Inactive`/`Uncertain`
   (`domain.rs:40-44`) is decided after physical grouping, on group ownership
   evidence.
@@ -361,7 +361,7 @@ to hold onto:
   that list is treated as *certainty*: the corresponding learned root becomes
   eligible for retirement, invisibly. The same applies to the two
   `PlatformRoot && Error` checks (`main.rs:383-386` for reconciliation
-  completeness, `main.rs:465-469` → exit 1 at `main.rs:560-562`). Three places
+  completeness, `main.rs:479-483` → exit 1 at `main.rs:574-576`). Three places
   must be edited together.
 
 There is a **stricter** consumer the scan path does not show: `cleanup.rs:795-809`
@@ -441,15 +441,15 @@ walker does not, so a symlinked root used to produce a *successful empty* scan f
 a directory the user asked for. A root that vanishes between `root_is_usable` and
 the walk becomes `Warning` + `Metadata`/`PermissionDenied` (`:511-530`), **not**
 `Error` + `PlatformRoot` — it lands in `uncertainty` but does not set
-`full_incomplete` (`main.rs:465-469`) nor stop reconciliation
+`full_incomplete` (`main.rs:479-483`) nor stop reconciliation
 (`main.rs:383-386`).
 
 **Root vs deep-tree permission errors: distinguished, and it matters.** An
 unstat-able root is `Error` + `PlatformRoot` — the only thing that makes
-`scan --full` exit 1 (`main.rs:465-469` → `:560-562`) and `complete` false
+`scan --full` exit 1 (`main.rs:479-483` → `:560-562`) and `complete` false
 (`main.rs:383-386` → `discovery_state.rs:122-124`). An unreadable subtree is
 `Warning` + `PermissionDenied`/`Metadata` attributed to the root, which only feeds
-`uncertainty` and the diagnostics summary (`main.rs:517-538`). A platform-level
+`uncertainty` and the diagnostics summary (`main.rs:531-552`). A platform-level
 failure blocks Full reconciliation; a deep hole merely makes the scan uncertain.
 
 **TOCTOU.** Every walker error degrades to a `Warning` and the walk continues
@@ -550,7 +550,7 @@ or macOS run executes 17 and a Windows run 15.
 
 1. **Does any new `DiagnosticCategory` mean "I could not see here"?** Then it must
    be added to `main.rs:331-336` *and*, if it should block Full reconciliation, to
-   both `PlatformRoot && Error` checks (`main.rs:383-386`, `main.rs:465-469`).
+   both `PlatformRoot && Error` checks (`main.rs:383-386`, `main.rs:479-483`).
    Missing the first silently converts a hole in the scan into certainty about
    learned roots. Before adding anything at all, check `cleanup.rs:795-809` and
    `cleanup.rs:1613-1618` — those treat *any* non-empty diagnostic vector as a hard

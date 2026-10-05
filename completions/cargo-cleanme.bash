@@ -91,7 +91,7 @@ _cargo() {
             return 0
             ;;
         cargo__subcmd__cargo__subcmd__cleanme)
-            opts="-h -V --config --no-progress --stats --format --help --version scan config clean update"
+            opts="-h -V --config --no-progress --stats --format --dry-run --dryrun --help --version scan config clean update"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -102,7 +102,7 @@ _cargo() {
                     return 0
                     ;;
                 --format)
-                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "human json log" -- "${cur}"))
                     return 0
                     ;;
                 *)
@@ -113,7 +113,7 @@ _cargo() {
             return 0
             ;;
         cargo__subcmd__cargo__subcmd__cleanme__subcmd__clean)
-            opts="-h --known --full --min-reclaimable-bytes --older-than --include --exclude --profile --package --dry-run --dryrun --yes --config --no-progress --stats --format --help"
+            opts="-h --known --full --min-reclaimable-bytes --older-than --include --exclude --profile --package --dry-run --cargo-preview --yes --dryrun --config --no-progress --stats --format --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -148,7 +148,7 @@ _cargo() {
                     return 0
                     ;;
                 --format)
-                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "human json log" -- "${cur}"))
                     return 0
                     ;;
                 *)
@@ -170,7 +170,7 @@ _cargo() {
                     return 0
                     ;;
                 --format)
-                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "human json log" -- "${cur}"))
                     return 0
                     ;;
                 *)
@@ -192,7 +192,7 @@ _cargo() {
                     return 0
                     ;;
                 --format)
-                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "human json log" -- "${cur}"))
                     return 0
                     ;;
                 *)
@@ -214,7 +214,7 @@ _cargo() {
                     return 0
                     ;;
                 --format)
-                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "human json log" -- "${cur}"))
                     return 0
                     ;;
                 *)
@@ -236,7 +236,7 @@ _cargo() {
                     return 0
                     ;;
                 --format)
-                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "human json log" -- "${cur}"))
                     return 0
                     ;;
                 *)
@@ -247,7 +247,7 @@ _cargo() {
             return 0
             ;;
         cargo__subcmd__cargo__subcmd__cleanme__subcmd__scan)
-            opts="-h --full --config --no-progress --stats --format --help"
+            opts="-h --known --full --config --no-progress --stats --format --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -258,7 +258,7 @@ _cargo() {
                     return 0
                     ;;
                 --format)
-                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "human json log" -- "${cur}"))
                     return 0
                     ;;
                 *)
@@ -280,7 +280,7 @@ _cargo() {
                     return 0
                     ;;
                 --format)
-                    COMPREPLY=($(compgen -W "human json" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "human json log" -- "${cur}"))
                     return 0
                     ;;
                 *)

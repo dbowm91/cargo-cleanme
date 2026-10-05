@@ -1,6 +1,6 @@
 ## Artifact Discovery and Cleanup Roadmap
 
-Status: Phase 12 is **ready** under ADR 003. M012A changes the canonical invocation/mode contract without changing what can be cleaned; M012B adds bounded unattended output and greggd integration documentation. Phase 9 and Phase 11 implementation objectives remain closed. C019/C020 and the Phase 11 release-hardening corrections remain unreleased until a future publication.
+Status: Phase 12 is **closed** under ADR 003. M012A and M012B are both implemented and closed with evidence; neither changed what can be cleaned or how ownership is proven. Both are unreleased: `main` is at 0.2.0 and the next publication is the first to carry the breaking bare-invocation change, so it must cross the pre-1.0 minor boundary rather than a 0.1.x patch. Phase 9 and Phase 11 implementation objectives remain closed. C019/C020 and the Phase 11 release-hardening corrections remain unreleased until that same publication.
 
 
 Repository audit baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
@@ -661,7 +661,9 @@ file name on disk) does not hold on APFS — was fixed as a third corrective, an
 
 ## 10H. Phase 12 — Canonical maintenance and unattended operation
 
-Status: **ready**.
+Status: **closed** — M012A and M012B both closed.
+Closure records: `plans/closure/artifact-discovery-cleanup/m012a-status.md`,
+`m012b-status.md`.
 
 Decision:
 
@@ -697,6 +699,28 @@ Purpose:
 - document daily bare Routine maintenance plus weekly Full `scan` under greggd's load threshold/retry/max-wait scheduler;
 - document absolute argv paths and the need for a user-owned/rootless greggd instance when maintaining developer-home Cargo trees;
 - record, but do not cross-repo-block on, Gregg's stale `scan --deep` documentation example.
+
+Outcome:
+
+- M012A closed. Bare `cargo cleanme` is Routine Execute over the maintenance
+  scope through the existing C006 combined-root engine; `--dry-run` is
+  zero-`cargo clean` simulation; Cargo's own dry-run is `--cargo-preview`;
+  `clean` defaults to Execute; rootless `scan` is Full and ignores a configured
+  `scan.root`; `scan --known` is the Routine read-only inventory. One
+  `Invocation` model means bare and advanced cleanup reach the same engine.
+- M012B closed. `--format log` emits one bounded ASCII line per report (≤384
+  bytes, no paths, no Cargo stderr), progress and ordinary diagnostic fan-out
+  are suppressed in that mode, exit codes and JSON are unchanged, and
+  `docs/AUTOMATION.md` documents the greggd integration.
+- Two defects found during M012A implementation and fixed inside it: a configured
+  `scan.root` made `clean --known` a silent no-op, and `clean --full` returned
+  the scan's exit code silently.
+- The destructive proof boundary is unchanged. Learned state is still advisory,
+  unresolved ownership still blocks the complete selected scope, and every
+  CleanupUnit still requires fresh complete ownership/freshness proof
+  immediately before Cargo.
+- Outstanding, and not closable here: publication. The breaking front door ships
+  in the next release.
 
 Dependency: M012B has an interface dependency on M012A's resolved operation/scope/mode vocabulary. Rendering work may proceed in parallel after that vocabulary is fixed.
 

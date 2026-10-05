@@ -1,10 +1,10 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH clean 1 0.1.6 https://github.com/dbowm91/cargo-cleanme "General Commands Manual"
+.TH clean 1 0.2.0 https://github.com/dbowm91/cargo-cleanme "General Commands Manual"
 .SH NAME
 clean \- Preview or execute cleanup of revalidated Cargo build artifacts
 .SH SYNOPSIS
-\fBclean\fR [\fB\-\-known\fR] [\fB\-\-full\fR] [\fB\-\-min\-reclaimable\-bytes\fR] [\fB\-\-older\-than\fR] [\fB\-\-include\fR] [\fB\-\-exclude\fR] [\fB\-\-profile\fR] [\fB\-\-package\fR] [\fB\-\-dry\-run\fR] [\fB\-\-dryrun\fR] [\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIROOT\fR] 
+\fBclean\fR [\fB\-\-known\fR] [\fB\-\-full\fR] [\fB\-\-min\-reclaimable\-bytes\fR] [\fB\-\-older\-than\fR] [\fB\-\-include\fR] [\fB\-\-exclude\fR] [\fB\-\-profile\fR] [\fB\-\-package\fR] [\fB\-\-dry\-run\fR] [\fB\-\-cargo\-preview\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIROOT\fR] 
 .SH DESCRIPTION
 Preview or execute cleanup of revalidated Cargo build artifacts
 .SH OPTIONS
@@ -34,16 +34,13 @@ Ask Cargo to clean one named profile. Selector byte estimates are unknown
 Clean one validated workspace package through qualified Cargo versions
 .TP
 \fB\-\-dry\-run\fR
-Cargo preview: invoke Cargo\*(Aqs own dry\-run (the default mode). Distinct from `\-\-dryrun` (cargo\-cleanme simulation)
+Application simulation: run the full decision/proof/report path but invoke no Cargo clean command. The default mode is Execute
 .TP
-\fB\-\-dryrun\fR
-Application simulation: run the full decision/progress/report path but invoke no Cargo clean command. Distinct from `\-\-dry\-run`
-.TP
-\fB\-\-yes\fR
-Execute Cargo clean after per\-workspace revalidation
+\fB\-\-cargo\-preview\fR
+Cargo preview: after the same complete final proof, invoke Cargo\*(Aqs own `clean \-\-dry\-run \-\-verbose`. Never removes anything
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .TP
 [\fIROOT\fR]
-Optional bounded sandbox root. Omit with \-\-known or \-\-full
+Optional bounded sandbox root. Omit to use the maintenance scope (identical to bare invocation) or select `\-\-known` / `\-\-full`

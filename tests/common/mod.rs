@@ -6,8 +6,8 @@
 #![allow(dead_code)]
 
 use std::io;
-use std::path::Path;
-use std::time::SystemTime;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 /// Set a path's modification time, for a file *or* a directory.
 ///
@@ -99,4 +99,131 @@ pub fn backdate_file(path: &Path, old: SystemTime) {
     if let Err(error) = set_path_modified(path, old) {
         panic!("could not backdate {}: {error}", path.display());
     }
+}
+
+/// One inactive, buildable Cargo project under `parent`.
+///
+/// Backdated everywhere the recency verdict can read, including the workspace
+/// root directory itself: `traverse::workspace_member_activity` includes that
+/// directory's mtime, so a fixture that backdates only its files looks
+/// *active* and would silently prove nothing. Directory timestamps need a
+/// platform-correct handle on Windows (C009), which [`backdate_file`] provides.
+pub fn inactive_project(parent: &Path, name: &str) -> PathBuf {
+    let project = parent.join(name);
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::create_dir_all(project.join("target/debug")).unwrap();
+    std::fs::write(
+        project.join("Cargo.toml"),
+        format!("[package]\nname='{name}'\nversion='0.1.0'\nedition='2021'\n"),
+    )
+    .unwrap();
+    std::fs::write(project.join("Cargo.lock"), "version = 4\n").unwrap();
+    std::fs::write(project.join("src/main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(
+        project.join("target/CACHEDIR.TAG"),
+        "Signature: 8a477f597d28d172789f06886806bc55\n",
+    )
+    .unwrap();
+    let artifact = project.join("target/artifact.bin");
+    std::fs::write(&artifact, vec![7u8; 4096]).unwrap();
+    std::fs::write(project.join("target/debug/app"), vec![0u8; 8192]).unwrap();
+    let old = SystemTime::now() - Duration::from_secs(3600);
+    for file in [
+        project.join("Cargo.toml"),
+        project.join("Cargo.lock"),
+        project.join("src/main.rs"),
+        project.join("target/CACHEDIR.TAG"),
+        artifact.clone(),
+        project.join("target/debug/app"),
+    ] {
+        backdate_file(&file, old);
+    }
+    for directory in [
+        project.clone(),
+        project.join("src"),
+        project.join("target"),
+        project.join("target/debug"),
+    ] {
+        backdate_file(&directory, old);
+    }
+    project
+}
+
+/// Write a Cargo stand-in into `bin` and return its path.
+///
+/// Platform scope: this substitutes a POSIX `/bin/sh` script, which is
+/// deliberately Unix-only. A `#!/bin/sh` file named `cargo` is not a Windows
+/// executable — `CreateProcess` resolves through PATHEXT and will not run it —
+/// so a Windows counterpart would need a compiled stub, not this fixture with a
+/// different extension. Every caller is `#[cfg(unix)]` with the reason recorded
+/// at the call site, so "deliberately scoped" cannot decay into "never
+/// executed" (C009/C012).
+///
+/// The stub logs its first argument to `<temp>/cargo.log` and every argument to
+/// `<temp>/cargo-args.log`, answers `--version`, `locate-project`, and
+/// `metadata`, and deletes `artifact.bin` only for a `clean` that does not
+/// carry `--dry-run`.
+#[cfg(unix)]
+pub fn write_fake_cargo(bin: &Path, temp: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(bin).unwrap();
+    let fake = bin.join("cargo");
+    // Justification for rule 2 of check-fixture-portability.py: a deliberate
+    // POSIX executable stub whose callers are all cfg(unix)-gated.
+    std::fs::write(&fake, r##"#!/bin/sh
+if [ "$1" = "--version" ]; then printf 'cargo %s (fixture)\n' "${CARGO_VERSION:-1.99.0}"; exit 0; fi
+printf '%s\n' "$1" >> "$CARGO_LOG"
+for arg in "$@"; do printf '%s\n' "$arg" >> "$CARGO_ARGS_LOG"; done
+dry=no
+for arg in "$@"; do [ "$arg" = "--dry-run" ] && dry=yes; done
+case "$1" in
+  locate-project|metadata)
+    # Real Cargo refuses a manifest it cannot parse. Without this check the
+    # stub would answer every query, and a fixture built on an unresolvable
+    # manifest would look like a clean one -- the "stub that is not the tool
+    # the subject resolves" defect in a new costume.
+    case "$(head -c 9 "$FIXTURE_ROOT/Cargo.toml" 2>/dev/null)" in
+      '[package]') ;;
+      *) printf 'error: failed to parse manifest at `%s/Cargo.toml`\n' "$FIXTURE_ROOT" >&2; exit 101 ;;
+    esac
+    if [ "$1" = locate-project ]; then
+      printf '{"root":"%s/Cargo.toml"}\n' "$FIXTURE_ROOT"
+    else
+      printf '{"packages":[{"id":"fixture 0.1.0","name":"fixture","version":"0.1.0","manifest_path":"%s/Cargo.toml"}],"workspace_members":["fixture 0.1.0"],"workspace_root":"%s","target_directory":"%s"}\n' "$FIXTURE_ROOT" "$FIXTURE_ROOT" "$FIXTURE_TARGET"
+    fi
+    ;;
+  clean)
+    # A knob for the failure path, so a test can produce a real Cargo failure
+    # rather than asserting on a failure it constructed by hand.
+    if [ -n "$CARGO_FAIL_CLEAN" ]; then
+      printf 'error: failed to remove `%s/target`\n' "$FIXTURE_ROOT" >&2
+      exit 101
+    fi
+    if [ "$dry" = yes ]; then
+      printf 'Removed 4096 files, done.\n'
+    else
+      rm -f "$FIXTURE_TARGET/artifact.bin"
+      printf 'Removed 1 file, done.\n'
+    fi
+    ;;
+  *) exit 2 ;;
+esac
+"##)
+    .unwrap();
+    let mut permissions = std::fs::metadata(&fake).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&fake, permissions).unwrap();
+    std::fs::write(temp.join("cargo.log"), "").unwrap();
+    std::fs::write(temp.join("cargo-args.log"), "").unwrap();
+    fake
+}
+
+/// Count how many logged Cargo invocations used the given subcommand.
+#[cfg(unix)]
+pub fn cargo_calls(log: &Path, subcommand: &str) -> usize {
+    std::fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .filter(|line| *line == subcommand)
+        .count()
 }

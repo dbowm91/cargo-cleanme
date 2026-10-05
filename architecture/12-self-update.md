@@ -76,7 +76,7 @@ Complete inventory. Anything not listed is private.
 instead, when one exists.
 
 `UpdatePlan` (`src/update.rs:247-254`) is the resolved input for one run and the
-whole JSON surface (`src/main.rs:568-594`, `schema_version: 1`). Fields:
+whole JSON surface (`src/main.rs:582-608`, `schema_version: 1`). Fields:
 `from_version`, `to_version`, `target`, `asset`, `tag`, `provenance`. It is
 `Clone`; `run` returns a clone of the pre-commit plan (`:1000`).
 
@@ -557,7 +557,7 @@ was requested; `scripts/post-release-smoke.sh:213-221` rehearses it live.
 
 Consequence worth stating: a dry run on a **Cargo-managed** installation
 *succeeds*, because the gate at `:835` is after the `check_only` return. The
-JSON's `provenance` field carries `"cargo_managed"` (`src/main.rs:588`), so the
+JSON's `provenance` field carries `"cargo_managed"` (`src/main.rs:602`), so the
 information is available, but the exit code is 0. Only a real run refuses.
 
 ---

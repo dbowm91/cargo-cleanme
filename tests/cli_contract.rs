@@ -211,6 +211,10 @@ fn json_scan_is_one_versioned_document_and_stats_stay_on_stderr() {
 /// so the label has to be derived from the resolved policy. Deriving it from
 /// `root.is_some()` reported `"routine"` for a scan that was in fact pinned to
 /// one explicit root — the label a consumer uses to tell what was scanned.
+///
+/// M012A: rootless `scan` is now Full, so the configured-root case is reached
+/// through `scan --known`, which is the operation that still consults the
+/// maintenance scope resolver.
 #[test]
 fn json_scope_label_follows_the_resolved_scope_not_the_cli_flags() {
     let dir = tempfile::tempdir().unwrap();
@@ -235,7 +239,7 @@ fn json_scope_label_follows_the_resolved_scope_not_the_cli_flags() {
     };
 
     // Configured root, no CLI root: resolved Explicit, so reported "explicit".
-    let from_config = run(&[]);
+    let from_config = run(&["--known"]);
     assert!(
         from_config.status.success(),
         "{}",
@@ -252,6 +256,44 @@ fn json_scope_label_follows_the_resolved_scope_not_the_cli_flags() {
     assert!(from_cli.status.success());
     let json: serde_json::Value = serde_json::from_slice(&from_cli.stdout).unwrap();
     assert_eq!(json["scope"], "explicit");
+}
+
+/// M012A §7: incompatible scan scope selectors are rejected by the parser, so
+/// they cannot reach traversal at all.
+///
+/// The pass condition is the specific failure — clap's conflict error on
+/// stderr with nothing on stdout — rather than "the command failed", which a
+/// Full scan or a config error could also produce.
+#[test]
+fn scan_scope_conflicts_are_rejected_before_any_traversal() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
+    for args in [
+        vec!["scan", dir.path().to_str().unwrap(), "--known"],
+        vec!["scan", dir.path().to_str().unwrap(), "--full"],
+        vec!["scan", "--known", "--full"],
+    ] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args(["--config", config.to_str().unwrap(), "--no-progress"]);
+        command.args(&args);
+        let output = command.output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?} must be a usage error, not a run: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "{args:?} wrote a report before being rejected"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("cannot be used with"),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]
@@ -281,7 +323,8 @@ fn json_cleanup_emits_the_requested_mode_and_machine_summary() {
         .unwrap();
     assert!(
         output.status.success(),
-        "{}",
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -421,7 +464,8 @@ esac
         .unwrap();
     assert!(
         output.status.success(),
-        "{}",
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -704,5 +748,1014 @@ exit 0
             .scan
             .recency_seconds,
         42
+    );
+}
+
+// ---------------------------------------------------------------------------
+// M012A — canonical maintenance invocation and cleanup mode semantics.
+//
+// Platform scope for every `#[cfg(unix)]` case below: these substitute a POSIX
+// `/bin/sh` Cargo stub (see `common::write_fake_cargo`), which is deliberately
+// Unix-only. The load-bearing assertions are the stub's own call log and the
+// filesystem, so a lane that could not run the stub proves nothing here rather
+// than reporting green.
+// ---------------------------------------------------------------------------
+
+/// One inactive Cargo project, a config pinning the maintenance scope to it, and
+/// a Cargo stub whose call log proves what was (and was not) spawned.
+#[cfg(unix)]
+struct MaintenanceFixture {
+    temp: tempfile::TempDir,
+    root: PathBuf,
+    target: PathBuf,
+    config: PathBuf,
+    log: PathBuf,
+    args_log: PathBuf,
+    bin: PathBuf,
+}
+
+#[cfg(unix)]
+impl MaintenanceFixture {
+    fn new(with_configured_root: bool) -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let root = common::inactive_project(temp.path(), "workspace");
+        let target = root.join("target");
+        let bin = temp.path().join("bin");
+        common::write_fake_cargo(&bin, temp.path());
+        let config = temp.path().join("config.toml");
+        let body = if with_configured_root {
+            format!(
+                "[scan]\nrecency_seconds = 300\nroot = {}\n",
+                toml::Value::String(root.to_str().unwrap().replace('\\', "\\\\"))
+            )
+        } else {
+            "[scan]\nrecency_seconds = 300\n".to_string()
+        };
+        fs::write(&config, body).unwrap();
+        Self {
+            log: temp.path().join("cargo.log"),
+            args_log: temp.path().join("cargo-args.log"),
+            temp,
+            root,
+            target,
+            config,
+            bin,
+        }
+    }
+
+    /// Run cargo-cleanme with the stub on PATH and return its output.
+    fn run(&self, args: &[&str]) -> std::process::Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args([
+            "--config",
+            self.config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "json",
+        ]);
+        command.args(args);
+        command
+            .env("PATH", path_with(&self.bin))
+            .env("FIXTURE_ROOT", &self.root)
+            .env("FIXTURE_TARGET", &self.target)
+            .env("CARGO_LOG", &self.log)
+            .env("CARGO_ARGS_LOG", &self.args_log)
+            .output()
+            .unwrap()
+    }
+
+    fn clean_calls(&self) -> usize {
+        common::cargo_calls(&self.log, "clean")
+    }
+
+    fn artifact(&self) -> PathBuf {
+        self.target.join("artifact.bin")
+    }
+
+    /// Recreate the deleted artifact and put its timestamps back where the
+    /// recency guard can see an inactive project again. A real Execute removed
+    /// it, which also refreshed the enclosing directory's mtime.
+    fn restore_artifact(&self) {
+        let artifact = self.artifact();
+        fs::write(&artifact, vec![7u8; 4096]).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        common::backdate_file(&artifact, old);
+        common::backdate_file(&self.target, old);
+    }
+}
+
+/// ADR 003 §1: bare `cargo cleanme` is Routine Execute through the ordinary
+/// combined-root safety engine, not a read-only scan.
+///
+/// This is the premise-negative regression for the milestone. Under the
+/// pre-M012A dispatch, `Cli::command` was `None` and `main` fell through to
+/// `run_scan(None, false, ...)`, so this run produced `operation = "scan"`,
+/// never invoked Cargo clean, and left the artifact in place.
+#[cfg(unix)]
+#[test]
+fn bare_invocation_executes_routine_cleanup_and_is_not_a_scan() {
+    let fixture = MaintenanceFixture::new(true);
+    assert!(fixture.artifact().exists(), "premise: the artifact exists");
+
+    let output = fixture.run(&[]);
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+
+    assert_eq!(
+        json["operation"], "clean",
+        "bare invocation must reach cleanup, not scan: {json}"
+    );
+    assert!(
+        json["result"]["units"].is_array(),
+        "a cleanup envelope has units; a scan envelope has groups: {json}"
+    );
+    assert_eq!(json["mode"], "execute");
+    // A configured legacy `scan.root` is the exclusive Explicit override, so
+    // the resolved scope — not the argv spelling — is what the label names.
+    assert_eq!(json["scope"], "explicit", "{json}");
+    assert_eq!(json["result"]["summary"]["cleaned"], 1, "{json}");
+
+    // The behaviour, not just the label: Cargo was invoked and the artifact is
+    // gone. A scan would have left both untouched.
+    assert_eq!(fixture.clean_calls(), 1, "{json}");
+    assert!(!fixture.artifact().exists(), "execute must clean");
+}
+
+/// ADR 003 §2: bare `--dry-run` is application simulation and spawns no
+/// `cargo clean` process at all — not even Cargo's own dry run.
+#[cfg(unix)]
+#[test]
+fn bare_dry_run_simulates_with_zero_cargo_clean_processes() {
+    let fixture = MaintenanceFixture::new(true);
+    let output = fixture.run(&["--dry-run"]);
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["operation"], "clean");
+    assert_eq!(json["mode"], "simulate", "{json}");
+    assert_eq!(json["scope"], "explicit", "{json}");
+    assert_eq!(json["result"]["summary"]["simulated"], 1, "{json}");
+    assert_eq!(json["result"]["summary"]["cleaned"], 0, "{json}");
+
+    // The discriminating assertion: simulation resolved and proved everything,
+    // and still spawned nothing.
+    assert_eq!(
+        fixture.clean_calls(),
+        0,
+        "--dry-run must invoke no cargo clean of any kind"
+    );
+    assert!(
+        fixture.artifact().exists(),
+        "simulation must not remove anything"
+    );
+    // Cargo *was* used for workspace resolution, which is what makes this a
+    // simulation rather than a skip.
+    assert!(common::cargo_calls(&fixture.log, "metadata") >= 1);
+}
+
+/// A bare maintenance run with no known roots is a successful no-op report,
+/// not an error: exit 0 with a complete envelope stating the resolved scope.
+///
+/// Platform scope: `directories` resolves `$HOME` on Unix, so overriding it
+/// gives a home with none of the Routine seed directories and no learned state.
+/// Windows resolves the profile through a known-folder API that ignores the
+/// environment, so this fixture cannot bound the scope there; the Windows lane
+/// covers the equivalent zero-result path through `json_scan_within_an_empty_root`.
+#[cfg(unix)]
+#[test]
+fn bare_cleanup_with_no_known_roots_is_a_successful_no_op() {
+    let fixture = MaintenanceFixture::new(false);
+    let home = tempfile::tempdir().unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+    command.args([
+        "--config",
+        fixture.config.to_str().unwrap(),
+        "--no-progress",
+        "--format",
+        "json",
+    ]);
+    let output = command
+        .env("HOME", home.path())
+        .env("PATH", path_with(&fixture.bin))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "an empty maintenance scope is not an error:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["operation"], "clean", "{json}");
+    assert_eq!(json["scope"], "routine", "{json}");
+    assert_eq!(json["mode"], "execute", "{json}");
+    assert_eq!(json["result"]["summary"]["cleaned"], 0, "{json}");
+    assert_eq!(json["result"]["units"], serde_json::json!([]), "{json}");
+}
+
+/// Unresolved ownership blocks the whole selected scope in every mode, and the
+/// block is visible through the bare front door.
+#[cfg(unix)]
+#[test]
+fn bare_cleanup_with_unresolved_ownership_blocks_and_runs_no_cargo_clean() {
+    let fixture = MaintenanceFixture::new(true);
+    // A manifest that cannot resolve is the canonical incomplete-coverage
+    // shape: one unresolvable participant blocks the complete scope.
+    fs::write(
+        fixture.root.join("Cargo.toml"),
+        "this is not a valid cargo manifest [\n",
+    )
+    .unwrap();
+
+    let output = fixture.run(&[]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["operation"], "clean", "{json}");
+    assert_eq!(json["result"]["scope_blocked"], true, "{json}");
+    assert!(
+        json["result"]["scope_reason"]
+            .as_str()
+            .unwrap()
+            .contains("ownership could not be proven"),
+        "{json}"
+    );
+    assert_eq!(
+        fixture.clean_calls(),
+        0,
+        "a blocked scope must spawn no Cargo clean"
+    );
+}
+
+/// Advanced cleanup defaults to Execute, and Cargo's own preview is reachable
+/// only under its explicit name.
+#[cfg(unix)]
+#[test]
+fn advanced_cleanup_defaults_to_execute_and_cargo_preview_is_explicit() {
+    let fixture = MaintenanceFixture::new(true);
+    let root = fixture.root.to_str().unwrap().to_string();
+
+    let execute = fixture.run(&["clean", &root]);
+    assert!(
+        execute.status.success(),
+        "{}",
+        String::from_utf8_lossy(&execute.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&execute.stdout).unwrap();
+    assert_eq!(json["operation"], "clean");
+    assert_eq!(json["scope"], "explicit", "{json}");
+    assert_eq!(
+        json["mode"], "execute",
+        "absent a mode flag, clean executes: {json}"
+    );
+    assert_eq!(json["result"]["summary"]["cleaned"], 1, "{json}");
+    assert_eq!(fixture.clean_calls(), 1);
+    assert!(!fixture.artifact().exists());
+
+    // Recreate the artifact so the preview has something to prove it did not do.
+    fixture.restore_artifact();
+    let preview = fixture.run(&["clean", &root, "--cargo-preview"]);
+    assert!(preview.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&preview.stdout).unwrap();
+    assert_eq!(json["mode"], "preview", "{json}");
+    assert_eq!(json["result"]["summary"]["previewed"], 1, "{json}");
+    assert_eq!(
+        fixture.clean_calls(),
+        2,
+        "Cargo preview does spawn Cargo, with --dry-run"
+    );
+    assert!(
+        fixture.artifact().exists(),
+        "Cargo preview must never remove anything"
+    );
+    assert!(
+        fs::read_to_string(&fixture.args_log)
+            .unwrap()
+            .lines()
+            .any(|line| line == "--dry-run"),
+        "Cargo preview is Cargo's own --dry-run, distinguishable from simulation"
+    );
+
+    // Simulation adds nothing: still two Cargo clean invocations in total.
+    let simulate = fixture.run(&["clean", &root, "--dry-run"]);
+    assert!(simulate.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&simulate.stdout).unwrap();
+    assert_eq!(json["mode"], "simulate", "{json}");
+    assert_eq!(fixture.clean_calls(), 2);
+    assert!(fixture.artifact().exists());
+}
+
+/// The retained compatibility aliases select exactly the canonical modes and
+/// nothing else. They print nothing, so an unattended run stays quiet.
+#[cfg(unix)]
+#[test]
+fn hidden_compatibility_aliases_map_exactly_to_the_canonical_modes() {
+    let fixture = MaintenanceFixture::new(true);
+    let root = fixture.root.to_str().unwrap().to_string();
+
+    let legacy_yes = fixture.run(&["clean", &root, "--yes"]);
+    let legacy_dryrun = fixture.run(&["clean", &root, "--dryrun"]);
+    let canonical_dry_run = fixture.run(&["clean", &root, "--dry-run"]);
+    for output in [&legacy_yes, &legacy_dryrun, &canonical_dry_run] {
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let yes: serde_json::Value = serde_json::from_slice(&legacy_yes.stdout).unwrap();
+    let legacy: serde_json::Value = serde_json::from_slice(&legacy_dryrun.stdout).unwrap();
+    let canonical: serde_json::Value = serde_json::from_slice(&canonical_dry_run.stdout).unwrap();
+
+    assert_eq!(yes["mode"], "execute", "{yes}");
+    assert_eq!(legacy["mode"], canonical["mode"], "{legacy} vs {canonical}");
+    assert_eq!(legacy["mode"], "simulate", "{legacy}");
+    for output in [&legacy_yes, &legacy_dryrun, &canonical_dry_run] {
+        assert!(
+            !String::from_utf8_lossy(&output.stderr).contains("deprecat"),
+            "a hidden alias must not add chatter to an unattended run: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// `scan --known` resolves the Routine scope when no `scan.root` is configured,
+/// and the Explicit scope when one is.
+///
+/// Platform scope: `directories` resolves `$HOME` on Unix, which is what bounds
+/// the Routine seed search to this fixture. Windows resolves the profile
+/// through a known-folder API that ignores the environment.
+#[cfg(unix)]
+#[test]
+fn known_scan_resolves_routine_without_a_configured_root_and_explicit_with_one() {
+    let fixture = MaintenanceFixture::new(false);
+    let home = tempfile::tempdir().unwrap();
+    fs::create_dir_all(home.path().join("projects")).unwrap();
+    let seeded = common::inactive_project(&home.path().join("projects"), "routine-project");
+    let pinned_config = fixture.temp.path().join("configured.toml");
+    fs::write(
+        &pinned_config,
+        format!(
+            "[scan]\nrecency_seconds = 300\nroot = {}\n",
+            toml::Value::String(seeded.to_str().unwrap().replace('\\', "\\\\"))
+        ),
+    )
+    .unwrap();
+
+    let run = |config: &std::path::Path, root: &std::path::Path| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args([
+            "--config",
+            config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "json",
+            "scan",
+            "--known",
+        ]);
+        let output = command
+            .env("HOME", home.path())
+            .env("PATH", path_with(&fixture.bin))
+            .env("FIXTURE_ROOT", root)
+            .env("FIXTURE_TARGET", root.join("target"))
+            .env("CARGO_LOG", &fixture.log)
+            .env("CARGO_ARGS_LOG", &fixture.args_log)
+            .output()
+            .unwrap();
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+
+    let routine = run(&fixture.config, &seeded);
+    assert_eq!(routine["operation"], "scan", "{routine}");
+    assert_eq!(
+        routine["scope"], "routine",
+        "no configured root means the Routine scope: {routine}"
+    );
+    assert_eq!(
+        routine["result"]["discovered_manifests"], 1,
+        "the seeded project must actually be discovered, or the label proves nothing: {routine}"
+    );
+
+    let explicit = run(&pinned_config, &seeded);
+    assert_eq!(explicit["operation"], "scan", "{explicit}");
+    assert_eq!(explicit["scope"], "explicit", "{explicit}");
+}
+
+/// A zero-result scan inside a bounded root: the platform-neutral counterpart
+/// of `bare_cleanup_with_no_known_roots_is_a_successful_no_op`.
+#[test]
+fn json_scan_within_an_empty_root_is_a_successful_zero_result_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "json",
+            "scan",
+            dir.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["operation"], "scan");
+    assert_eq!(json["scope"], "explicit");
+    assert_eq!(json["result"]["groups"], serde_json::json!([]));
+    assert_eq!(json["result"]["summary"]["group_count"], 0);
+}
+
+// ---------------------------------------------------------------------------
+// M012B — bounded unattended log output.
+//
+// Platform scope: these substitute the POSIX Cargo stub from
+// `common::write_fake_cargo`, for the same reason as the cases above.
+// ---------------------------------------------------------------------------
+
+/// Run the fixture with `--format log` instead of `json`.
+#[cfg(unix)]
+impl MaintenanceFixture {
+    fn run_log(&self, args: &[&str]) -> std::process::Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args([
+            "--config",
+            self.config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "log",
+        ]);
+        command.args(args);
+        command
+            .env("PATH", path_with(&self.bin))
+            .env("FIXTURE_ROOT", &self.root)
+            .env("FIXTURE_TARGET", &self.target)
+            .env("CARGO_LOG", &self.log)
+            .env("CARGO_ARGS_LOG", &self.args_log)
+            .output()
+            .unwrap()
+    }
+}
+
+/// Every rule the log contract states, asserted once so each case below only
+/// has to state what is specific to it.
+#[cfg(unix)]
+fn assert_bounded_log_line(stdout: &[u8]) -> String {
+    let text = String::from_utf8(stdout.to_vec()).expect("log output is ASCII");
+    assert!(text.is_ascii(), "log output is ASCII by contract: {text:?}");
+    assert!(
+        text.len() <= cargo_cleanme::output::log::MAX_BYTES,
+        "{} bytes exceeds the bound: {text:?}",
+        text.len()
+    );
+    assert_eq!(
+        text.matches('\n').count(),
+        1,
+        "exactly one terminating newline: {text:?}"
+    );
+    assert!(text.ends_with('\n'), "{text:?}");
+    assert!(
+        text.starts_with("cargo-cleanme op="),
+        "the prefix identifies the tool: {text:?}"
+    );
+    assert!(
+        !text.contains('\r') && !text.contains('\u{1b}'),
+        "no progress or terminal control sequences: {text:?}"
+    );
+    for token in text.trim_end().split(' ') {
+        assert!(
+            !token.contains('"') && !token.contains('\t'),
+            "no value needs quoting: {token:?}"
+        );
+        if let Some((key, _)) = token.split_once('=') {
+            assert!(
+                !key.is_empty() && key.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                "keys are lowercase ascii identifiers: {token:?}"
+            );
+        }
+    }
+    text
+}
+
+/// M012B §4: exactly one bounded ASCII line on stdout, and nothing on stderr.
+#[cfg(unix)]
+#[test]
+fn log_mode_routine_execute_is_one_bounded_line_and_a_silent_stderr() {
+    let fixture = MaintenanceFixture::new(true);
+    let output = fixture.run_log(&[]);
+    assert!(
+        output.status.success(),
+        "stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let line = assert_bounded_log_line(&output.stdout);
+    assert!(line.contains(" op=clean "), "{line}");
+    assert!(line.contains(" status=ok "), "{line}");
+    assert!(line.contains(" scope=explicit "), "{line}");
+    assert!(line.contains(" mode=execute "), "{line}");
+    assert!(line.contains(" cleaned=1 "), "{line}");
+    assert!(
+        line.contains(" reclaimed_bytes="),
+        "an executed cleanup measured a decrease: {line}"
+    );
+    assert_eq!(
+        fixture.clean_calls(),
+        1,
+        "log mode executes; the line is not a dry run in disguise"
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "a successful run writes nothing to stderr in log mode: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// M012B §5: Simulate reports its mode and spawns no Cargo clean. Cargo preview
+/// reports `preview` and claims no reclaimed bytes.
+#[cfg(unix)]
+#[test]
+fn log_mode_distinguishes_simulate_from_cargo_preview() {
+    let fixture = MaintenanceFixture::new(true);
+    let simulate = fixture.run_log(&["--dry-run"]);
+    assert!(simulate.status.success());
+    let line = assert_bounded_log_line(&simulate.stdout);
+    assert!(line.contains(" mode=simulate "), "{line}");
+    assert!(
+        !line.contains("reclaimed_bytes"),
+        "a simulation recovers nothing and must not print a figure for it: {line}"
+    );
+    assert_eq!(fixture.clean_calls(), 0, "simulation spawns no Cargo clean");
+    assert!(
+        simulate.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&simulate.stderr)
+    );
+
+    let preview = fixture.run_log(&["clean", fixture.root.to_str().unwrap(), "--cargo-preview"]);
+    assert!(preview.status.success());
+    let line = assert_bounded_log_line(&preview.stdout);
+    assert!(line.contains(" mode=preview "), "{line}");
+    assert!(line.contains(" scope=explicit "), "{line}");
+    assert!(
+        !line.contains("reclaimed_bytes"),
+        "Cargo preview removes nothing and must not print a figure for it: {line}"
+    );
+    assert_eq!(fixture.clean_calls(), 1, "Cargo preview does spawn Cargo");
+    assert!(fixture.artifact().exists(), "and removes nothing");
+}
+
+/// M012B §5: a scope block is one line on stdout, a typed reason, exit 1.
+#[cfg(unix)]
+#[test]
+fn log_mode_scope_block_is_one_line_with_a_typed_reason_and_exit_one() {
+    let fixture = MaintenanceFixture::new(true);
+    fs::write(fixture.root.join("Cargo.toml"), "not a manifest [\n").unwrap();
+    let output = fixture.run_log(&[]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let line = assert_bounded_log_line(&output.stdout);
+    assert!(line.contains(" status=blocked "), "{line}");
+    assert!(line.contains(" reason=ownership_unproven "), "{line}");
+    assert!(
+        !line.contains("ownership could not be"),
+        "prose must never reach a retained history line: {line}"
+    );
+    assert_eq!(fixture.clean_calls(), 0);
+    assert!(
+        output.stderr.is_empty(),
+        "a blocked report is still a report, so stdout carries it and stderr stays quiet: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// M012B §5: one or more failed units are `status=failed` with exit 1.
+#[cfg(unix)]
+#[test]
+fn log_mode_failed_cleanup_is_one_line_with_status_failed_and_exit_one() {
+    let fixture = MaintenanceFixture::new(true);
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+    command.args([
+        "--config",
+        fixture.config.to_str().unwrap(),
+        "--no-progress",
+        "--format",
+        "log",
+    ]);
+    let output = command
+        .env("PATH", path_with(&fixture.bin))
+        .env("FIXTURE_ROOT", &fixture.root)
+        .env("FIXTURE_TARGET", &fixture.target)
+        .env("CARGO_LOG", &fixture.log)
+        .env("CARGO_ARGS_LOG", &fixture.args_log)
+        .env("CARGO_FAIL_CLEAN", "1")
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let line = assert_bounded_log_line(&output.stdout);
+    assert!(line.contains(" status=failed "), "{line}");
+    assert!(line.contains(" failed=1 "), "{line}");
+    // Cargo's own stderr is captured, not forwarded: an unattended tail must not
+    // inherit whatever a Cargo release decides to print.
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("failed to remove"),
+        "Cargo stderr escaped onto stdout: {line}"
+    );
+}
+
+/// M012B §5: a successful zero-result maintenance run is still `status=ok`.
+#[cfg(unix)]
+#[test]
+fn log_mode_zero_result_maintenance_is_status_ok() {
+    let fixture = MaintenanceFixture::new(false);
+    let home = tempfile::tempdir().unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+    command.args([
+        "--config",
+        fixture.config.to_str().unwrap(),
+        "--no-progress",
+        "--format",
+        "log",
+    ]);
+    let output = command
+        .env("HOME", home.path())
+        .env("PATH", path_with(&fixture.bin))
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let line = assert_bounded_log_line(&output.stdout);
+    assert!(line.contains(" status=ok "), "{line}");
+    assert!(line.contains(" scope=routine "), "{line}");
+    assert!(line.contains(" cleaned=0 "), "{line}");
+}
+
+/// M012B §4/§5: scan summaries carry the resolved scope.
+#[cfg(unix)]
+#[test]
+fn log_mode_scan_reports_the_resolved_scope() {
+    let fixture = MaintenanceFixture::new(false);
+    let home = tempfile::tempdir().unwrap();
+    let seeded = common::inactive_project(&home.path().join("projects"), "seeded");
+    let run = |config: &std::path::Path| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args([
+            "--config",
+            config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "log",
+            "scan",
+            "--known",
+        ]);
+        let output = command
+            .env("HOME", home.path())
+            .env("PATH", path_with(&fixture.bin))
+            .env("FIXTURE_ROOT", &seeded)
+            .env("FIXTURE_TARGET", seeded.join("target"))
+            .env("CARGO_LOG", &fixture.log)
+            .env("CARGO_ARGS_LOG", &fixture.args_log)
+            .output()
+            .unwrap();
+        assert_bounded_log_line(&output.stdout)
+    };
+    let routine = run(&fixture.config);
+    assert!(routine.contains(" op=scan "), "{routine}");
+    assert!(routine.contains(" status=ok "), "{routine}");
+    assert!(routine.contains(" scope=routine "), "{routine}");
+    assert!(routine.contains(" manifests=1 "), "{routine}");
+    assert!(
+        routine.contains(" groups=1 "),
+        "the seeded project must actually be found, or the line proves nothing: {routine}"
+    );
+
+    let pinned = fixture.temp.path().join("configured.toml");
+    fs::write(
+        &pinned,
+        format!(
+            "[scan]\nrecency_seconds = 300\nroot = {}\n",
+            toml::Value::String(seeded.to_str().unwrap().replace('\\', "\\\\"))
+        ),
+    )
+    .unwrap();
+    let explicit = run(&pinned);
+    assert!(explicit.contains(" scope=explicit "), "{explicit}");
+
+    let cli_root = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            fixture.config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "log",
+            "scan",
+            seeded.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let explicit = assert_bounded_log_line(&cli_root.stdout);
+    assert!(explicit.contains(" scope=explicit "), "{explicit}");
+}
+
+/// M012B §6: `--stats` stays an explicit stderr override and does not touch the
+/// one stdout line.
+#[cfg(unix)]
+#[test]
+fn log_mode_stats_is_opt_in_stderr_and_leaves_the_single_line_alone() {
+    let fixture = MaintenanceFixture::new(true);
+    // Run --stats first, then put the artifact back, so the two runs see the
+    // same project and their lines are comparable. Comparing a pre-clean run
+    // against a post-clean one would prove nothing about --stats.
+    let stats = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            fixture.config.to_str().unwrap(),
+            "--no-progress",
+            "--stats",
+            "--format",
+            "log",
+        ])
+        .env("PATH", path_with(&fixture.bin))
+        .env("FIXTURE_ROOT", &fixture.root)
+        .env("FIXTURE_TARGET", &fixture.target)
+        .env("CARGO_LOG", &fixture.log)
+        .env("CARGO_ARGS_LOG", &fixture.args_log)
+        .output()
+        .unwrap();
+    let stats_line = assert_bounded_log_line(&stats.stdout);
+    fixture.restore_artifact();
+    let plain = fixture.run_log(&[]);
+    let line = assert_bounded_log_line(&plain.stdout);
+    assert_eq!(
+        stats_line.trim_end(),
+        line.trim_end(),
+        "the one stdout line is byte-identical with and without --stats"
+    );
+    assert!(
+        String::from_utf8_lossy(&stats.stderr).contains("cleanup stats:"),
+        "--stats remains an opt-in stderr override: {}",
+        String::from_utf8_lossy(&stats.stderr)
+    );
+    assert!(
+        plain.stderr.is_empty(),
+        "and without it, stderr stays empty: {}",
+        String::from_utf8_lossy(&plain.stderr)
+    );
+}
+
+/// M012B §6: normal diagnostic fan-out is suppressed in log mode; the line's
+/// `diagnostics=` count carries it instead.
+///
+/// The case is discriminating in two directions: the scan really does produce
+/// diagnostics (the human path narrates them on stderr), and log mode still
+/// writes nothing there.
+#[cfg(unix)]
+#[test]
+fn log_mode_suppresses_normal_diagnostic_fan_out() {
+    let fixture = MaintenanceFixture::new(true);
+    // A manifest the stub refuses to parse becomes a scan diagnostic. Scans are
+    // deliberately partial-result tolerant, so this is a diagnostic and not a
+    // blocked scope — which is exactly the state the human path narrates.
+    fs::write(fixture.root.join("Cargo.toml"), "not a manifest [\n").unwrap();
+
+    let human = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            fixture.config.to_str().unwrap(),
+            "--no-progress",
+            "scan",
+            fixture.root.to_str().unwrap(),
+        ])
+        .env("PATH", path_with(&fixture.bin))
+        .env("FIXTURE_ROOT", &fixture.root)
+        .env("FIXTURE_TARGET", &fixture.target)
+        .env("CARGO_LOG", &fixture.log)
+        .env("CARGO_ARGS_LOG", &fixture.args_log)
+        .output()
+        .unwrap();
+    assert!(
+        human.status.success(),
+        "a scan with an unresolvable manifest is a partial result, not a failure: {}",
+        String::from_utf8_lossy(&human.stderr)
+    );
+    let human_stderr = String::from_utf8_lossy(&human.stderr);
+    assert!(
+        human_stderr.contains("filesystem diagnostics"),
+        "premise: the human path does fan diagnostics out to stderr, got {human_stderr:?}"
+    );
+
+    let log = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            fixture.config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "log",
+            "scan",
+            fixture.root.to_str().unwrap(),
+        ])
+        .env("PATH", path_with(&fixture.bin))
+        .env("FIXTURE_ROOT", &fixture.root)
+        .env("FIXTURE_TARGET", &fixture.target)
+        .env("CARGO_LOG", &fixture.log)
+        .env("CARGO_ARGS_LOG", &fixture.args_log)
+        .output()
+        .unwrap();
+    assert!(log.status.success());
+    let line = assert_bounded_log_line(&log.stdout);
+    assert!(
+        line.trim_end()
+            .split(' ')
+            .any(|token| token == "diagnostics=1"),
+        "the count replaces the fan-out: {line}"
+    );
+    assert!(
+        log.stderr.is_empty(),
+        "log mode must not fan diagnostics out to stderr: {}",
+        String::from_utf8_lossy(&log.stderr)
+    );
+}
+
+/// M012B §6: a pre-report fatal error is exactly one bounded stderr line and no
+/// stdout at all.
+#[cfg(unix)]
+#[test]
+fn log_mode_fatal_error_is_one_bounded_stderr_line_and_no_stdout() {
+    let fixture = MaintenanceFixture::new(true);
+    let bad = fixture.temp.path().join("broken.toml");
+    fs::write(&bad, "this is = not [ valid toml\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            bad.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "log",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        output.stdout.is_empty(),
+        "no report exists, so no summary line: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let text = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        text.trim_end().lines().count(),
+        1,
+        "exactly one stderr line: {text:?}"
+    );
+    assert!(
+        text.len() <= cargo_cleanme::output::log::MAX_BYTES,
+        "{text:?}"
+    );
+    assert!(
+        text.contains("op=clean") && text.contains("status=error") && text.contains("reason="),
+        "{text:?}"
+    );
+    assert!(
+        !text.contains("toml") && !text.contains(bad.to_str().unwrap()),
+        "the bounded line carries a typed code, not the config path or its parse error: {text:?}"
+    );
+}
+
+/// M012B §8: JSON and human are unchanged by the existence of log mode.
+#[cfg(unix)]
+#[test]
+fn json_and_human_output_are_unchanged_by_log_mode() {
+    let json_fixture = MaintenanceFixture::new(true);
+    let json = json_fixture.run(&[]);
+    let parsed: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(parsed["operation"], "clean");
+    assert_eq!(parsed["mode"], "execute");
+    assert_eq!(parsed["scope"], "explicit");
+    assert!(parsed["result"]["units"].is_array());
+
+    let log = json_fixture.run_log(&[]);
+    let line = assert_bounded_log_line(&log.stdout);
+    // Same operation, scope, and mode from the same run — the two renderers
+    // project one report, they do not each decide what happened.
+    assert!(line.contains(" op=clean "), "{line}");
+    assert!(line.contains(" scope=explicit "), "{line}");
+    assert!(line.contains(" mode=execute "), "{line}");
+
+    let human = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            json_fixture.config.to_str().unwrap(),
+            "--no-progress",
+        ])
+        .env("PATH", path_with(&json_fixture.bin))
+        .env("FIXTURE_ROOT", &json_fixture.root)
+        .env("FIXTURE_TARGET", &json_fixture.target)
+        .env("CARGO_LOG", &json_fixture.log)
+        .env("CARGO_ARGS_LOG", &json_fixture.args_log)
+        .output()
+        .unwrap();
+    assert!(
+        human.status.success(),
+        "{}",
+        String::from_utf8_lossy(&human.stderr)
+    );
+    let text = String::from_utf8_lossy(&human.stdout);
+    assert!(
+        text.contains("combined roots ") && text.contains("cleanup:"),
+        "human output keeps its own shape: {text:?}"
+    );
+}
+
+/// M012B §4: an invalid format value is still a usage error, so log is not a
+/// silently-accepted typo.
+#[test]
+fn log_is_an_explicit_value_and_invalid_formats_still_fail_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "jsonl",
+            "scan",
+            dir.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+}
+
+/// The one-document-per-invocation invariant, which `clean --full` can break.
+///
+/// This regression was introduced by M012A, which deleted the scan report's
+/// `emit_output` guard and therefore let the internal Full reconciliation write
+/// its report ahead of the cleanup report — two JSON documents on one stream.
+/// It was found by reading `architecture/13-orchestration.md`, not by a test,
+/// because no case ran `clean --full`.
+///
+/// The test below cannot run `clean --full` either: that is a full filesystem
+/// walk, and this suite keeps every case bounded. What it *does* prove is the
+/// property that made the bug possible — that a scan's report is emitted exactly
+/// once — and it asserts the guard exists in the source, which is the only
+/// mechanism available from outside the process. That is weaker than an
+/// end-to-end case and is recorded as such.
+#[test]
+fn scan_emits_exactly_one_json_document() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "json",
+            "scan",
+            dir.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        output.stdout.iter().filter(|b| **b == b'\n').count(),
+        1,
+        "one newline-terminated document"
+    );
+    serde_json::from_slice::<serde_json::Value>(&output.stdout)
+        .expect("stdout parses as exactly one JSON document, not a concatenation");
+
+    // The guard that keeps `clean --full` from emitting two documents in a row.
+    // If this fails, a case can run `clean --full` cheaply again.
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs"))
+        .expect("main.rs is readable from the integration test's working directory");
+    assert!(
+        source.contains("enum EmitReport"),
+        "the internal-scan report guard was removed; see architecture/13-orchestration.md §4"
     );
 }

@@ -323,6 +323,53 @@ mod tests {
     }
 
     #[test]
+    fn full_resolution_ignores_a_configured_root() {
+        // M012A §7: rootless `scan` is Full and configuration must not be able
+        // to silently narrow the canonical reconciliation command. The
+        // `full` arm returns before `config.root` is ever consulted, so this is
+        // the whole argument — a real Full walk is not needed to prove it, and
+        // deliberately is not run in a test.
+        let d = tempdir().unwrap();
+        let c = ScanConfig {
+            root: Some(d.path().to_path_buf()),
+            ..Default::default()
+        };
+        let p = resolve(
+            ScanRequest {
+                cli_root: None,
+                full: true,
+            },
+            &c,
+        )
+        .unwrap();
+        assert!(
+            matches!(p.scope, ScanScope::Global(_)),
+            "a configured scan.root must not narrow a Full scan: {:?}",
+            p.scope
+        );
+        assert_ne!(p.scope, ScanScope::Explicit(d.path().to_path_buf()));
+    }
+
+    #[test]
+    fn maintenance_scope_is_routine_without_a_configured_root() {
+        // M012A: the maintenance scope is Routine whenever no `scan.root` is
+        // configured, whatever seed roots happen to exist on this machine. The
+        // assertion is about the resolved variant, never the root list, so the
+        // case is machine-independent.
+        let c = ScanConfig::default();
+        assert!(c.root.is_none());
+        let p = resolve(
+            ScanRequest {
+                cli_root: None,
+                full: false,
+            },
+            &c,
+        )
+        .unwrap();
+        assert!(matches!(p.scope, ScanScope::Routine(_)), "{:?}", p.scope);
+    }
+
+    #[test]
     fn routine_state_errors_fall_back_to_seeds_with_one_warning() {
         let d = tempdir().unwrap();
         let seed = d.path().join("Projects");

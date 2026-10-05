@@ -1,6 +1,6 @@
 # M012B — Bounded Unattended Log Output and greggd Integration
 
-Status: ready
+Status: closed — see `plans/closure/artifact-discovery-cleanup/m012b-status.md`
 
 Repository baseline: `e4e9d92673e5f10548248e23db788c0906760916`
 

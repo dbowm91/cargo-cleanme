@@ -78,7 +78,7 @@ belongs to `output.rs`, which maps domain structs to DTOs by hand.
 | `Vanished` | A path disappeared between discovery and inspection. |
 | `Metadata` | Metadata could not be established. |
 | `InvalidEntry` | A directory entry is malformed (bad name, wrong file type). |
-| `PlatformRoot` | A root is a filesystem root or otherwise not a real project root; at `Error` severity this makes a Full scan incomplete (`main.rs:384-386`, `main.rs:466-469`). |
+| `PlatformRoot` | A root is a filesystem root or otherwise not a real project root; at `Error` severity this makes a Full scan incomplete (`main.rs:384-386`, `main.rs:480-483`). |
 | `CandidateUncertain` | A *candidate* was dropped or refused: source-tree overlap, filesystem-root target, unmeasurable output. |
 
 `DiagnosticSeverity::as_str(self) -> &'static str` (`domain.rs:59-65`) maps to
@@ -239,7 +239,7 @@ Same idea at two stages, and the field differences are the point.
 that survived the gates, and is the *candidate* form: it carries `covering_roots`
 (the minimal outermost canonical roots, used for measurement and per-group
 authorization, `domain.rs:206-207`) and an `uncertain: bool`.
-`EligibleOutputGroup` is the *report* form, built by the map at `main.rs:474-484`
+`EligibleOutputGroup` is the *report* form, built by the map at `main.rs:488-498`
 and the equivalent in `tests/end_to_end.rs:174-183`.
 
 Two asymmetries are worth stating. First, `owners: Vec<WorkspaceId>` becomes
@@ -303,7 +303,7 @@ which is why `category` is a closed enum:
    contributes nothing. This vector decides whether the learned-root state file
    may be trusted and reconciled.
 3. **Scan incompleteness** — a `PlatformRoot` diagnostic at `Error` severity
-   makes a Full scan `full_incomplete` (`main.rs:384-386`, `main.rs:466-469`),
+   makes a Full scan `full_incomplete` (`main.rs:384-386`, `main.rs:480-483`),
    suppressing state-destroying reconciliation.
 4. **Durable uncertainty** — the `Uncertain` ownership class exists so
    candidate-level uncertainty becomes a *property attached to a group*, not
@@ -333,7 +333,7 @@ the destructive boundary (`cleanup.rs:1702` and `cleanup.rs:1829` call
 reason: proof work is kept separate from initial discovery counters "so
 `--stats` cannot hide it" (`domain.rs:267-268`). Accordingly `main.rs:250-255`
 prints **four** lines for `cleanup --stats` — `stats_line`, `timings_line`,
-`proof_stats_line`, `proof_timings_line` — while `main.rs:545-549` prints two
+`proof_stats_line`, `proof_timings_line` — while `main.rs:559-563` prints two
 for a plain scan.
 
 `merge_proof` is one-directional: six specific fields are copied into `proof_*`
@@ -461,11 +461,11 @@ in `src/`, 6 of them in `merge_proof` (`domain.rs:342-357`).
 (both `SystemTime`, where clamping to the epoch is intended) and
 `cleanup.rs:1128`, `proof.pre_bytes.saturating_sub(after)` — clamping to `0` when
 output *grew* between proof and verification, the only safe reading.
-`checked_sub` appears 20 times but only **4** in production code (`main.rs:451`,
+`checked_sub` appears 20 times but only **4** in production code (`main.rs:465`,
 `cleanup.rs:1022`, `cleanup.rs:1312`, `cleanup.rs:2002`); the other 16 are
 `start.checked_sub(…).unwrap()` inside test modules. The production uses are all
 `SystemTime` cutoff computations mapping to `AppError::Config` — see
-`main.rs:450-452`, "recency window exceeds system time range". `checked_add`
+`main.rs:464-466`, "recency window exceeds system time range". `checked_add`
 appears only at `traverse.rs:108`, `117`, `205`, `214`, where overflow is not
 silently clamped but sets `stats.uncertain = true` and aborts the walk. Byte
 accumulation in hot paths is `saturating_add` (`workspace.rs:1126-1127`,
@@ -548,7 +548,7 @@ The integration surfaces that exercise this vocabulary:
    whether it belongs in the uncertainty filter at `main.rs:333-336` (a
    `matches!` that will *not* warn); and decide whether it makes a scan
    incomplete in the `PlatformRoot` + `Error` sense at `main.rs:384-386` /
-   `main.rs:466-469`. If it is a new way for the walk to be incomplete and it is
+   `main.rs:480-483`. If it is a new way for the walk to be incomplete and it is
    absent from the `main.rs` filter, an incomplete Full scan is treated as
    complete and may delete learned roots it never observed.
 2. **Adding an `OutputOwnershipClass` variant.** It needs a `label()` arm at
@@ -576,7 +576,7 @@ The integration surfaces that exercise this vocabulary:
    contract?** Neither type is `Serialize`. A new field changes nothing on the
    wire until `output.rs` maps it (`output.rs:104-154`), and that mapping is the
    only place a stable name can be given. Separately, `visited_entries` is
-   written at `main.rs:487` and read nowhere — if you add a report field, decide
+   written at `main.rs:501` and read nowhere — if you add a report field, decide
    who reads it.
 7. **Is `PhysicalOutputGroup.uncertain` still meaningful?** It is `false` at the
    only construction site (`workspace.rs:1206`) because uncertainty is decided by

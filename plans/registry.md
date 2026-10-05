@@ -30,22 +30,21 @@ Immutability policy enabled: `2026-10-05T13:34:38Z` (repository-level, not owner
 
 | Subsystem | Status | Roadmap | Current milestone | Blocker |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | ready / Phase 12 open | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | M012A, M012B | none. ADR 003 is accepted. M012A is the command/mode contract change; M012B is bounded unattended output + greggd documentation. Existing C019/C020 corrections remain unreleased. |
+| Artifact discovery and cleanup | closed / Phase 12 complete | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | M012A and M012B both closed | none blocking. No plan is open in this subsystem. The breaking bare-invocation change is implemented and unreleased: `main` is at 0.2.0, so the next publication must cross the pre-1.0 minor boundary. Existing C019/C020 corrections ship in that same release. |
 | Distribution, release, and update | closed / Phase 11 complete, pending a published release | `plans/subsystems/distribution-release-update-roadmap.md` | M011A, M011B, M011C, C018 all closed | No plan is blocked. **The next release from `main` is the first covered by immutability**, and it is the first thing that can supply the outstanding hosted evidence for M011A, M011B, M011C, and C018. |
 
 ## Open work
 
-Three kinds of thing are open. Phase 12 now has two ready implementation
-handoffs under ADR 003. The Phase 11 hardening milestone set is closed; its
-outstanding items are **evidences that require a published release**, which no
-plan in this repository can supply without a human publishing one. Separately,
-the pre-existing testing/verification documentation debt recorded during C019
-remains open.
+Two kinds of thing are open. **No implementation plan is open in any
+subsystem.** Phase 12 closed with M012A and M012B; the Phase 11 hardening
+milestone set is closed. What remains is **evidence that requires a published
+release**, which no plan in this repository can supply without a human
+publishing one, plus a documentation debt recorded during C019.
 
 | Item | Status | Plan / record | Note |
 |---|---|---|---|
-| M012A — canonical maintenance CLI and dry-run semantics | **ready** | `plans/implementation/artifact-discovery-cleanup/012a-canonical-maintenance-cli-and-dry-run-semantics.md` | Bare `cargo cleanme` becomes Routine Execute through the existing combined-root proof; `--dry-run` becomes zero-Cargo-clean simulation; rootless `scan` becomes Full; advanced cleanup remains available. First release carrying this destructive-default break must cross a pre-1.0 minor boundary, not a 0.1.x patch. |
-| M012B — bounded unattended log output and greggd integration | **ready** | `plans/implementation/artifact-discovery-cleanup/012b-unattended-log-output-and-greggd-integration.md` | Add explicit `--format log`, one deterministic ASCII summary <=384 bytes, and document daily Routine cleanup + weekly Full scan under user-owned/rootless greggd load gating. Interface-depends on M012A's operation/mode vocabulary. |
+| M012A — canonical maintenance CLI and dry-run semantics | **closed** | `plans/closure/artifact-discovery-cleanup/m012a-status.md` | Bare `cargo cleanme` is Routine Execute through the existing combined-root proof; `--dry-run` is zero-Cargo-clean simulation; rootless `scan` is Full and ignores a configured `scan.root`; `clean` defaults to Execute. `main` is at 0.2.0, so the destructive-default break now structurally cannot ship as a 0.1.x patch. Two defects were found and fixed inside the milestone: a configured `scan.root` made `clean --known` a silent no-op, and `clean --full` returned the scan's exit code silently. |
+| M012B — bounded unattended log output and greggd integration | **closed** | `plans/closure/artifact-discovery-cleanup/m012b-status.md` | `--format log` emits one bounded deterministic ASCII line (<=384 bytes, no paths, no Cargo stderr) with a typed block-reason code; progress and ordinary diagnostic fan-out are suppressed in that mode; JSON and exit codes unchanged; `docs/AUTOMATION.md` documents the greggd integration. A stale `scan --deep` example in Gregg's docs is a non-blocking downstream handoff. |
 | C019 — exact unignore sibling containment corrective | **closed** | `plans/closure/artifact-discovery-cleanup/c019-status.md` | Corrects M002: a literal ignored ancestor plus an exact unignore re-admitted unrelated siblings, so `ignore = […/archived]` with one `unignore` beneath it discovered every project in the archived subtree. Now one `Filters::disposition` decides `Included`/`Pruned`/`PassThrough`/`ReIncluded`, and inherited exclusion is proven by testing the path's ancestry. Unreleased. |
 | `architecture/14-testing-and-verification.md` §5 contract-checker table | **open — needs a plan** | recorded in `plans/closure/artifact-discovery-cleanup/c019-status.md` §12 | Characterises 4 of 17 scripts, and its `check-release-contract.py` row describes a contract M010A replaced. Documentation-only, low severity; the guards it under-describes are wired into CI and each take a `--self-test`. |
 | C020 — Windows concurrent first-use config creation race | **closed** | `plans/closure/artifact-discovery-cleanup/c020-status.md` | Corrects `config::create_initial`. The staging name was never unique within a process — threads shared the pid and the starting `attempt` — so every concurrent first use collided, and Windows spells that collision `PermissionDenied` rather than `AlreadyExists`. Fixed with a process-wide nonce, so the collision is removed rather than tolerated. Unreleased. |
@@ -70,10 +69,11 @@ outstanding evidences at once. Two constraints make the order matter:
 ## Published state
 
 Seven releases are published as GitHub releases and on crates.io, none yanked:
-**v0.1.0, v0.1.1, v0.1.2, v0.1.3, v0.1.4, v0.1.5, v0.1.6**. Phase 11 now
-requires a future qualification release for C018/M011A-M011C closure evidence,
-but planning deliberately does not assign its version before implementation
-selects the release boundary.
+**v0.1.0, v0.1.1, v0.1.2, v0.1.3, v0.1.4, v0.1.5, v0.1.6**. `main` is at
+**0.2.0** and unreleased; 0.2.0 is the first version that could carry ADR 003's
+breaking bare-invocation change, the C019 and C020 corrections, and the
+bounded `--format log` surface. Phase 11 still requires that publication for
+C018/M011A–M011C closure evidence.
 
 Not every published version is defect-free, and the registry is where that is
 recorded rather than hidden:
@@ -88,7 +88,7 @@ recorded rather than hidden:
 
 ## Current destructive safety boundary
 
-The proof boundary is stable; ADR 003 changes the public invocation front door, not these safety properties. Until M012A lands, main still has the historical `--yes` / `--dryrun` dispatch described by the current implementation. After M012A, the canonical spellings change but the proof below must remain identical.
+The proof boundary is stable; ADR 003 changed the public invocation front door, not these safety properties. M012A has landed: the canonical spellings changed and every property below is unchanged, with the 71-test `cleanup.rs` suite and the C003/C004/C006 property tests still green.
 
 - Cargo resolves workspace/output configuration; cargo-cleanme does not infer
   unresolved output paths.
@@ -102,16 +102,17 @@ The proof boundary is stable; ADR 003 changes the public invocation front door, 
   non-symlink, marker-qualified, and stable under fresh complete combined
   ownership-graph revalidation.
 - `cleanup.allowed_output_roots` never manufactures ownership proof.
-- zero-mutation Simulation shares the same completeness and final-proof gates as Execute; current main spells it `--dryrun`, while M012A makes canonical `--dry-run` carry that meaning.
+- zero-mutation Simulation shares the same completeness and final-proof gates as Execute; canonical `--dry-run` carries that meaning and `--cargo-preview` is the distinct Cargo-level view.
 - `--stats` is the qualification and debug surface.
 
 Defined in ADR 001 plus milestones M004, M005, M007, M008A and correctives
 C002–C004, C006. Performance work must not weaken any of it.
 
-## Phase 12 accepted direction
+## Phase 12 accepted direction (implemented)
 
-ADR 003 intentionally supersedes the historical front-door semantics without
-weakening cleanup safety:
+ADR 003 intentionally superseded the historical front-door semantics without
+weakening cleanup safety. All eight points below are implemented and closed in
+`m012a-status.md` and `m012b-status.md`:
 
 - bare `cargo cleanme` -> Routine Execute;
 - bare `cargo cleanme --dry-run` -> Routine Simulate with zero `cargo clean` subprocesses;
@@ -122,8 +123,9 @@ weakening cleanup safety:
 - `--format log` is a bounded operator-history surface; JSON remains the complete machine contract;
 - scheduling/load policy stays external, with greggd documented as a first-class example.
 
-The implementation must preserve C003/C004/C006 ownership/freshness proof and
-must not ship the bare destructive default as a `0.1.x` patch release.
+C003/C004/C006 ownership and freshness proof is preserved. The bare destructive
+default cannot ship as a `0.1.x` patch: `Cargo.toml` reads `0.2.0`, so the
+boundary is structural rather than a promise in a document.
 
 ## The lesson this repository keeps re-learning
 

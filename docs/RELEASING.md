@@ -182,6 +182,34 @@ that does not match the plan means **do not publish**.
 
 ## Before you publish the crate
 
+### Breaking-invocation gate (0.2.0 and later)
+
+**0.2.0 changes what a bare `cargo cleanme` does.** It was a read-only Routine
+scan on the 0.1.x line; it is a Routine **cleanup**. Any release carrying
+ADR 003 must satisfy all three, and a human must confirm them — they are not
+checkable by a script in this repository:
+
+1. **`Cargo.toml` `version` is `>= 0.2.0`.** The destructive default cannot ship
+   as a `0.1.x` patch. If the tree still says `0.1.x` while the front door
+   cleans, stop.
+2. **`CHANGELOG.md` has a `Changed — BREAKING` section** naming the bare
+   invocation change and the `--dry-run` semantics change, with a 0.1.x → new
+   mapping table a user can act on.
+3. **The migration table is visible outside the changelog.** A breaking default
+   that only appears in a changelog is a breaking default users hit before they
+   read it. `README.md` and `docs/TROUBLESHOOTING.md` must both carry it, and
+   `docs/TROUBLESHOOTING.md` must keep its "Upgrading from 0.1.x" section.
+
+Verify locally before publishing:
+
+```sh
+grep -n '^version' Cargo.toml | head -1
+grep -c 'Changed — BREAKING' CHANGELOG.md
+grep -c 'Upgrading from 0.1.x' docs/TROUBLESHOOTING.md README.md
+```
+
+### The package check
+
 `cargo package --locked` and `cargo publish --locked --dry-run` must both
 succeed, and you must have looked at what is inside the package:
 

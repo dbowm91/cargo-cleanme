@@ -1,12 +1,12 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH cargo-cleanme 1 0.1.6 https://github.com/dbowm91/cargo-cleanme "General Commands Manual"
+.TH cargo-cleanme 1 0.2.0 https://github.com/dbowm91/cargo-cleanme "General Commands Manual"
 .SH NAME
-cargo\-cleanme \- Find inactive Cargo artifacts and safely preview their cleanup
+cargo\-cleanme \- Clean inactive Cargo build artifacts through Cargo, or reconcile the machine read\-only
 .SH SYNOPSIS
-\fBcargo\-cleanme\fR [\fB\-\-config\fR] [\fB\-\-no\-progress\fR] [\fB\-\-stats\fR] [\fB\-\-format\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIsubcommands\fR]
+\fBcargo\-cleanme\fR [\fB\-\-config\fR] [\fB\-\-no\-progress\fR] [\fB\-\-stats\fR] [\fB\-\-format\fR] [\fB\-\-dry\-run\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIsubcommands\fR]
 .SH DESCRIPTION
-Find inactive Cargo artifacts and safely preview their cleanup
+Clean inactive Cargo build artifacts through Cargo, or reconcile the machine read\-only
 .PP
 INVOCATION
              After installation the binary is invoked by Cargo as an external
@@ -30,7 +30,7 @@ Disable transient progress UI (useful for benchmarks and debugging)
 Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `\-\-no\-progress \-\-stats` is the canonical benchmark/debug combination
 .TP
 \fB\-\-format\fR \fI<FORMAT>\fR [default: human]
-Select human\-readable output or the versioned JSON automation contract
+Select human\-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers
 .br
 
 .br
@@ -40,7 +40,12 @@ Select human\-readable output or the versioned JSON automation contract
 human
 .IP \(bu 2
 json
+.IP \(bu 2
+log: One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract: complete consumers use `json`
 .RE
+.TP
+\fB\-\-dry\-run\fR
+Simulate routine maintenance: run every decision, proof, and reporting step, but invoke no `cargo clean` process at all
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
@@ -50,6 +55,7 @@ Print version
 .SH SUBCOMMANDS
 .TP
 cargo\-cleanme\-scan(1)
+Reconcile the machine read\-only: full by default, explicit with ROOT, routine inventory with `\-\-known`
 .TP
 cargo\-cleanme\-config(1)
 .TP
@@ -59,4 +65,4 @@ Preview or execute cleanup of revalidated Cargo build artifacts
 cargo\-cleanme\-update(1)
 Update this cargo\-cleanme to the latest stable published release
 .SH VERSION
-v0.1.6
+v0.2.0

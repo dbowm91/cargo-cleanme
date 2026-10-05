@@ -20,24 +20,48 @@ quickstart; this document has the detail.
 
 | Command | Effect |
 |---|---|
-| `cargo cleanme scan [ROOT]` | read-only inventory of inactive output |
-| `cargo cleanme clean [ROOT]` | preview (default), simulate, or execute cleanup |
+| *(none)* | **Routine cleanup** over the maintenance scope |
+| `--dry-run` | Routine cleanup simulated end to end, zero `cargo clean` processes |
+| `cargo cleanme scan [ROOT]` | Full read-only reconciliation (no ROOT), or one explicit scope |
+| `cargo cleanme scan --known` | Routine read-only inventory of the maintenance scope |
+| `cargo cleanme clean [ROOT] [--known\|--full]` | advanced cleanup: execute (default), simulate, or Cargo preview |
 | `cargo cleanme config path\|show\|edit` | locate, print, or edit the config |
 | `cargo cleanme update [--dry-run]` | self-update to the latest stable release |
 
-`cargo cleanme …` and `cargo cleanme …` are the same binary and behave
-identically. `scan --full` and `clean --full` take **no** `ROOT`; they operate
-on the platform roots.
+`cargo cleanme …` and `cargo cleanme-cleanme …` are the same binary and behave
+identically. `scan` with no `ROOT` and `clean --full` take **no** `ROOT`; the
+scan form walks the platform roots, and the cleanup form reconciles them first.
+
+### The maintenance scope
+
+Bare invocation, `clean --known`, and `scan --known` all resolve the scope the
+same way:
+
+1. a configured legacy `scan.root`, if set, is an **exclusive explicit
+   override** — nothing else is searched and cleanup targets exactly that root;
+2. otherwise the **Routine scope**: bounded seed roots under your home plus
+   active learned roots from prior Full reconciliations.
+
+Rootless `scan` is **always** Full and deliberately ignores `scan.root`, so a
+configured root can never silently narrow the canonical reconciliation command.
+`scan ROOT` remains the explicit per-invocation override, and any explicit
+effective scope bypasses the configured `ignore`/`unignore` filters.
+
+Learned roots are **search hints only**. Complete manifest coverage and fresh
+ownership proof are rebuilt before anything is cleaned.
 
 ### scan
 
 ```sh
-cargo cleanme scan                 # Routine: seed + learned roots
+cargo cleanme scan                 # Full: exhaustive platform-root walk
 cargo cleanme scan ~/projects      # one explicit scope
-cargo cleanme scan --full          # exhaustive platform-root walk
+cargo cleanme scan --known         # Routine read-only inventory
+cargo cleanme scan --known --format json
 cargo cleanme scan ~/p --no-progress --stats
-cargo cleanme scan ~/p --format json
 ```
+
+`scan --full` remains accepted as a hidden alias for no-root `scan`.
+`ROOT` with `--known` or `--full`, and `--known` with `--full`, are usage errors.
 
 Output is deterministic: size-descending, with a stable path tie-break, and a
 deduplicated inventory total. It is an **estimate of reclaimable bytes**, never
@@ -50,19 +74,36 @@ as skipped. `--stats` shows this as `active_skipped=N`.
 ### clean
 
 ```sh
-cargo cleanme clean ~/projects                 # Cargo preview
-cargo cleanme clean ~/projects --dry-run       # explicit Cargo preview
-cargo cleanme clean ~/projects --dryrun        # simulation, no cargo clean
-cargo cleanme clean ~/projects --yes           # execute
-cargo cleanme clean --known --dryrun           # Routine roots only
-cargo cleanme clean --full --dryrun            # reconcile Full, then simulate
+cargo cleanme                                     # Routine cleanup (Execute)
+cargo cleanme --dry-run                           # Routine cleanup, zero cargo clean
+cargo cleanme clean ~/projects                    # explicit root (Execute)
+cargo cleanme clean ~/projects --dry-run          # simulation, no cargo clean
+cargo cleanme clean ~/projects --cargo-preview    # Cargo's own dry-run, after the same proof
+cargo cleanme clean --known --dry-run             # maintenance scope only
+cargo cleanme clean --full --dry-run              # reconcile Full, then simulate
 cargo cleanme clean ~/projects --min-reclaimable-bytes 104857600
 cargo cleanme clean --known --older-than 2592000 --exclude '**/archived'
 ```
 
-`--dry-run`, `--dryrun`, and `--yes` conflict pairwise. The two dry-run
-spellings are intentionally different and are **not** aliases; the CLI contract
-will be reconciled explicitly rather than silently aliased.
+`--dry-run`, `--cargo-preview`, and `--yes` conflict pairwise: they select
+three different modes and never silently precedence-resolve.
+
+`clean` with no scope selector resolves the maintenance scope, exactly as bare
+invocation does — there is one cleanup code path, not two.
+
+### Migration from 0.1.x
+
+| 0.1.x | Now | Same thing? |
+|---|---|---|
+| `cargo cleanme` (read-only Routine scan) | `cargo cleanme scan --known` | yes |
+| `cargo cleanme scan --full` | `cargo cleanme scan` | yes |
+| `cargo cleanme clean R --dry-run` (Cargo preview) | `cargo cleanme clean R --cargo-preview` | yes |
+| `cargo cleanme clean R --dryrun` (simulation) | `cargo cleanme clean R --dry-run` | yes |
+| `cargo cleanme clean R --yes` (execute) | `cargo cleanme clean R` | yes |
+
+`--dryrun` and `--yes` remain accepted on `clean` as **hidden** aliases for the
+pre-1.0 migration period. They select the same canonical modes as `--dry-run`
+and the default respectively, print nothing, and create no fourth mode.
 
 ### config
 
@@ -88,7 +129,7 @@ the editor exits and rejects an invalid file.
 Explicit CLI roots take precedence over `scan.root`. Either explicit scope
 bypasses the user ignore/unignore search filters. Routine and Full honor them.
 
-A never-learned unusual location stays undiscovered until `scan --full` or an
+A never-learned unusual location stays undiscovered until `scan` (Full) or an
 explicit scan visits it.
 
 ## Discovery model
@@ -169,14 +210,19 @@ Read-only scans stay partial-result tolerant; that asymmetry is deliberate.
 
 ### Mode semantics
 
-| Mode | Flag | What runs |
-|---|---|---|
-| Preview | default / `--dry-run` | everything, then `cargo clean --dry-run --verbose` |
-| Simulate | `--dryrun` | everything, then **nothing** — no `cargo clean` at all |
-| Execute | `--yes` | everything, then `cargo clean` |
+| Mode | Flag | Machine `mode` | What runs |
+|---|---|---|---|
+| Execute | *(default)*; `--yes` is a hidden alias | `execute` | everything, then `cargo clean` |
+| Simulate | `--dry-run`; `--dryrun` is a hidden alias | `simulate` | everything, then **nothing** — no `cargo clean` at all |
+| Cargo preview | `--cargo-preview` | `preview` | everything, then `cargo clean --dry-run --verbose` |
 
-`--dryrun` is not a weaker mode. It shares the same completeness and final-proof
-gates as Execute, so use it when testing a change to those gates.
+**dry run means simulation.** One conventional spelling, one meaning: nothing is
+mutated and nothing is spawned that could mutate.
+
+Simulation is not a weaker mode. It shares the same completeness and final-proof
+gates as Execute, so use it when testing a change to those gates. Cargo preview
+is the lower-level debugging view: it hands the decision to Cargo itself, so its
+`mode` stays `preview` and it never reports reclaimed bytes.
 
 ### Policy filters
 
@@ -348,6 +394,33 @@ line. Field-level detail is normative in
 `update --format json` is the one exception to the envelope and is the only
 untested output surface; see [docs/UPDATE.md](UPDATE.md).
 
+### Output formats
+
+| `--format` | Shape | Use it when |
+|---|---|---|
+| `human` (default) | tables, per-unit rows, diagnostic detail | a person is reading |
+| `json` | exactly one schema-1 document on stdout | software needs complete, per-unit data |
+| `log` | exactly one bounded ASCII line on stdout | a scheduler retains a short history tail |
+
+**Parse JSON, not log.** Log is an operational summary: it drops per-unit detail
+entirely, prints no paths, and omits optional fields from the tail to stay
+inside a 384-byte bound. It is never selected automatically — a non-TTY stdout
+still gets `human`.
+
+```console
+$ cargo cleanme --format log
+cargo-cleanme op=clean status=ok scope=routine mode=execute cleaned=7 skipped=3 failed=0 reclaimed_bytes=19778387968 diagnostics=0
+```
+
+In log mode a successful run writes that one line to stdout and nothing to
+stderr: progress is disabled regardless of TTY, and per-diagnostic fan-out is
+replaced by the `diagnostics=` count. `--stats` stays an opt-in stderr
+override. A failure raised *before* any report exists writes no stdout and one
+bounded stderr line carrying a typed `reason=` code.
+
+→ [docs/AUTOMATION.md](AUTOMATION.md) for the full field list, the scheduling
+integration, and exit-code triage.
+
 ## Cleanup selectors
 
 `clean --profile NAME` delegates profile selection to Cargo on exact qualified
@@ -413,14 +486,14 @@ Discovery state is machine-local JSON and is normally self-managed.
 
 - Routine scans fall back to seed/configured roots when state is missing or
   unusable.
-- A successful `scan --full` replaces corrupt or obsolete state **after**
+- A successful rootless `scan` (Full) replaces corrupt or obsolete state **after**
   reconciliation completes. An incomplete Full scan leaves it untouched.
 - State written by a **newer** schema is preserved, and that version must be
   upgraded before it can be reconciled.
 - A persistence failure is reported on stderr and never changes the exit code.
 - Deleting discovery state is **not** the normal recovery procedure.
 
-`scan --full` on a typical workstation reports permission-denied diagnostics
+A rootless `scan` (Full) on a typical workstation reports permission-denied diagnostics
 for platform roots it cannot read. Those are expected, and they are why a
 Full scan can be "incomplete" while still returning a usable report.
 

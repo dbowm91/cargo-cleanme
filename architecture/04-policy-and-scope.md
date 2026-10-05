@@ -21,7 +21,7 @@ enumeration (`:126-188`); root normalization, dedup and containment collapse
 **Does not own:** filesystem traversal (`discovery.rs`), manifest → workspace
 resolution (`workspace.rs`), activity classification (`traverse.rs`), state
 reconciliation and atomic publish (`discovery_state.rs`), the cleanup root list
-(`main.rs:113-153`), and the user-facing scope *label* (`main.rs:501-507`).
+(`main.rs:113-153`), and the user-facing scope *label* (`main.rs:515-521`).
 
 **Actual dependency set.** A grep for `crate::` in `policy.rs` yields exactly
 five modules:
@@ -464,7 +464,7 @@ subtree to be scanned twice.
    known; no cleanup commands were run" and returns **0**. Setting `scan.root`
    is therefore not orthogonal to `--known`.
 9. **The JSON `scope` field is derived from CLI flags, not from the resolved
-   policy** (`main.rs:496-508`): `full ? "full" : explicit_scope ? "explicit" :
+   policy** (`main.rs:510-522`): `full ? "full" : explicit_scope ? "explicit" :
    "routine"`, where `explicit_scope = root.is_some()` (`main.rs:296`). A scan
    driven by a *configured* `scan.root` resolves to `ScanScope::Explicit` but
    reports `"routine"`. Do not use the JSON label to infer the resolved scope.
@@ -514,7 +514,7 @@ Integration: `tests/end_to_end.rs:124` is the only test that calls
 `policy::resolve` end to end, and it uses a **configured** root with
 `cli_root: None` (`end_to_end.rs:120-123`). `tests/cli_contract.rs:202` asserts
 the JSON `scope` field equals `"explicit"` — but per §7.9 that string comes from
-`main.rs:503`, so it does not exercise the resolved scope.
+`main.rs:517`, so it does not exercise the resolved scope.
 
 **Honest gaps** — scope behaviour a reader should not assume is covered:
 

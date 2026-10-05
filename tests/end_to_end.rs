@@ -210,28 +210,6 @@ fn end_to_end_reports_only_inactive_artifact_projects() {
     assert!(output.contains(report::format_bytes(bytes).trim()));
 }
 
-/// An inactive, buildable project under `parent`, backdated so the recency guard
-/// sees it as cleanable.
-fn inactive_project(parent: &std::path::Path, name: &str) -> std::path::PathBuf {
-    let project = parent.join(name);
-    fs::create_dir_all(project.join("src")).unwrap();
-    fs::create_dir_all(project.join("target/debug")).unwrap();
-    fs::write(
-        project.join("Cargo.toml"),
-        format!("[package]\nname='{name}'\nversion='0.1.0'\nedition='2021'\n"),
-    )
-    .unwrap();
-    fs::write(project.join("src/main.rs"), "fn main() {}\n").unwrap();
-    fs::write(
-        project.join("target/CACHEDIR.TAG"),
-        "Signature: 8a477f597d28d172789f06886806bc55\n",
-    )
-    .unwrap();
-    fs::write(project.join("target/debug/app"), vec![0u8; 8192]).unwrap();
-    backdate(&project);
-    project
-}
-
 /// Drive the production pipeline over one policy and return what the report
 /// proves: the rendered text, the discovered manifests, and the ownership class
 /// of every group that survived the whole chain.
@@ -309,8 +287,8 @@ fn a_literal_ignored_ancestor_yields_one_workspace_while_an_explicit_root_yields
     let root = temp.path().to_path_buf();
     let archive = root.join("archive");
     fs::create_dir_all(&archive).unwrap();
-    let keep = inactive_project(&archive, "keep");
-    let other = inactive_project(&archive, "other");
+    let keep = common::inactive_project(&archive, "keep");
+    let other = common::inactive_project(&archive, "other");
     // Canonical spelling: the walker compares canonical paths, and on macOS the
     // temp root is reached through a symlink.
     let canonical_root = fs::canonicalize(&root).unwrap();
