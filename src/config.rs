@@ -283,7 +283,29 @@ fn create_initial(path: &Path) -> Result<(), AppError> {
             .open(&temp);
         let mut f = match created {
             Ok(f) => f,
+            // Losing this race is not a failure; it is why the loop exists.
+            // Two spellings mean the name was taken, and they are not
+            // interchangeable:
+            //
+            // - `AlreadyExists` is the OS saying the name was taken *at the
+            //   moment of the call*. That answer is authoritative even though
+            //   the file may be gone by the time we look: the winner can
+            //   publish and unlink its staging file before the loser inspects
+            //   the path. Probing `temp.exists()` instead of reading the kind
+            //   regresses exactly this case -- observed as
+            //   `AlreadyExists ... File exists (os error 17)` escaping on
+            //   Linux, macOS, and the 1.89 lane.
+            // - `PermissionDenied` is Windows' spelling when the name is
+            //   reserved by a thread that has not finished creating it, since
+            //   the reservation precedes the metadata commit. Observed on
+            //   `windows-latest` as
+            //   `creating a staging file failed: Access is denied. (os error 5)`.
+            //   Here the kind says nothing, so the name itself is the evidence.
+            //
+            // A genuine permissions problem leaves the name free, so it still
+            // hard-fails on both platforms.
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) if temp.exists() => continue,
             Err(e) => return Err(AppError::Io(step_error("creating a staging file", e))),
         };
         let write_result: std::io::Result<()> = (|| {
