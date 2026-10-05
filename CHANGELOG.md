@@ -6,9 +6,57 @@ All notable changes to cargo-cleanme are documented here. The format follows
 stance: the `0.x` line may make breaking changes in any release, and the
 command-line, JSON, and release-asset contracts are the stable surface.
 
-## [Unreleased]
+## [0.1.3] - 2026-10-05
+
+This release carries two defect fixes found after v0.1.2 was published. Both were
+found by the post-release corrective line's own evidence work, not by a user
+report: the relative-root defect by a release validator that had been green on
+every CI lane, and the self-update defect by the live updater rehearsal.
 
 ### Fixed
+
+- **`cargo cleanme update` could never complete a real commit.** The identity
+  check ran the downloaded candidate with no arguments, so it compared the
+  binary's default routine-scan report against a version string that can never
+  match. The check therefore always failed — and, before failing, performed a
+  filesystem scan of the whole machine. The transaction aborted safely every
+  time: the live binary was left untouched and the error named the reason, so
+  nothing was ever corrupted. But the feature had never worked in any published
+  version, including `0.1.2`.
+
+  Fixed by invoking the candidate with `--version`, which is bounded and
+  produces exactly the identity the validator requires.
+
+  The commit-path test fixture could not detect this: its candidate stub printed
+  the identity for *any* invocation, so it could not tell a correct `--version`
+  call from the argv-less one production actually made. The stub now answers only
+  for `--version` and writes to stderr otherwise, exactly as the real binary
+  does, so dropping the argument again turns the commit-path tests red. A fixture
+  that accepts every input asserts nothing about the input.
+
+- **A relative scan root resolved zero Cargo workspaces.** `cargo cleanme scan
+  some/dir` reported no groups and exited 0, because the relative manifest path
+  was passed to Cargo with the child's working directory set to that manifest's
+  own parent, so the path did not resolve. The absolute spelling of the same
+  directory was correct. The failure direction was fail-safe — a degraded scan
+  reports *less* reclaimable space, so `clean` deleted less, never more — but it
+  could read as a false all-clear.
+
+  Relative and absolute roots now produce identical counters, groups, and bytes.
+  The workaround noted in the `0.1.2` notes is no longer needed.
+
+### Upgrading
+
+Self-update works from this release onward. If you are on `0.1.1` or `0.1.2`,
+`cargo cleanme update` cannot reach any version, so upgrade with Cargo:
+
+```sh
+cargo install cargo-cleanme --locked --force
+```
+
+or download the `0.1.3` asset for your platform from the release page.
+
+## [Unreleased]
 
 - **`cargo cleanme update` could never complete a real commit.** The identity
   check ran the downloaded candidate with no arguments, so it compared the

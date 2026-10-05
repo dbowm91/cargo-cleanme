@@ -138,8 +138,9 @@ Check each of these:
 - `update --dry-run` reports already-current rather than offering a downgrade.
 
 Use an **absolute** path for the bounded scan. An explicitly relative root
-resolves zero Cargo workspaces in 0.1.2 — a known defect tracked as C015 — and
-the scan will report no groups while looking healthy.
+resolved zero Cargo workspaces through 0.1.2 — tracked as C015, fixed in 0.1.3 —
+so on an older version the scan reports no groups while looking healthy. The two
+spellings are equivalent from 0.1.3 onward, but the absolute form costs nothing.
 
 Then exercise the public installers on all three platforms against the real
 release, and exercise `cargo cleanme update` from a draft release to the new
