@@ -237,11 +237,26 @@ fn require_absolute(p: &Path, field: &str) -> Result<(), AppError> {
         Ok(())
     }
 }
+/// Name the step that failed without changing the error's kind.
+///
+/// Every branch in `create_initial` decides what to do next by inspecting
+/// `e.kind()` — `AlreadyExists` means a concurrent writer won and is success,
+/// everything else is a failure. Wrapping an error to add context must
+/// therefore preserve its kind exactly, or the race handling below silently
+/// stops recognising its own benign outcome.
+///
+/// It is also the only way a diagnostic can say *which* call failed. A bare
+/// `AppError::Io` reports the kind and the OS message but not the step, and on
+/// Windows two different calls can report the same kind.
+fn step_error(step: &str, e: std::io::Error) -> std::io::Error {
+    std::io::Error::new(e.kind(), format!("{step} failed: {e}"))
+}
+
 fn create_initial(path: &Path) -> Result<(), AppError> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
-        fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent).map_err(|e| step_error("creating the config directory", e))?;
     }
     let parent = path
         .parent()
@@ -269,16 +284,18 @@ fn create_initial(path: &Path) -> Result<(), AppError> {
         let mut f = match created {
             Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(AppError::Io(e)),
+            Err(e) => return Err(AppError::Io(step_error("creating a staging file", e))),
         };
         let write_result: std::io::Result<()> = (|| {
-            f.write_all(CONFIG_TEMPLATE.as_bytes())?;
-            f.sync_all()?;
+            f.write_all(CONFIG_TEMPLATE.as_bytes())
+                .map_err(|e| step_error("writing the staging file", e))?;
+            f.sync_all()
+                .map_err(|e| step_error("flushing the staging file", e))?;
             drop(f);
             // Creating the final link is atomic and never overwrites a
             // concurrent winner. Both names are siblings on the same volume.
-            fs::hard_link(&temp, path)?;
-            fs::remove_file(&temp)?;
+            fs::hard_link(&temp, path).map_err(|e| step_error("publishing the config", e))?;
+            fs::remove_file(&temp).map_err(|e| step_error("removing the staging file", e))?;
             Ok(())
         })();
         if let Err(e) = write_result {
@@ -531,18 +548,36 @@ mod tests {
     }
     #[test]
     fn concurrent_first_use_creates_one_complete_template() {
+        // The premise has to be *likely*, not merely possible. A single
+        // 8-thread round against one directory hit the race roughly one run in
+        // three on Windows, which is not a premise a guard can rest on: the
+        // defect it guards is invisible on the runs that pass. Repeated rounds
+        // against a fresh nested directory each time give every losing thread
+        // many more chances to observe the destination while it is being
+        // created, on every platform.
+        const WORKERS: usize = 16;
+        const ROUNDS: usize = 24;
         let d = tempfile::tempdir().unwrap();
-        let p = d.path().join("nested/config.toml");
-        let path = p.clone();
-        let workers: Vec<_> = (0..8)
-            .map(|_| {
-                let path = path.clone();
-                std::thread::spawn(move || load_or_create(&path).unwrap())
-            })
-            .collect();
-        for worker in workers {
-            assert_eq!(worker.join().unwrap().scan.recency_seconds, 300);
+        for round in 0..ROUNDS {
+            let p = d.path().join(format!("round{round}/config.toml"));
+            let workers: Vec<_> = (0..WORKERS)
+                .map(|_| {
+                    let path = p.clone();
+                    std::thread::spawn(move || load_or_create(&path).unwrap())
+                })
+                .collect();
+            for worker in workers {
+                assert_eq!(
+                    worker.join().unwrap().scan.recency_seconds,
+                    300,
+                    "round {round}: every racer must succeed"
+                );
+            }
+            assert_eq!(
+                fs::read(&p).unwrap(),
+                CONFIG_TEMPLATE.as_bytes(),
+                "round {round}: one complete template, never a partial one"
+            );
         }
-        assert_eq!(fs::read(&p).unwrap(), CONFIG_TEMPLATE.as_bytes());
     }
 }
