@@ -245,9 +245,14 @@ by C013's own failure semantics became a separate corrective — see §8C.
 
 Plan: `plans/implementation/distribution-release-update/c014-v0.1.2-live-update-and-release-reproducibility-corrective.md`
 
-Status: **open**. Publication is complete; the live rehearsal is not.
+Status: **closed**. Closure: `plans/closure/distribution-release-update/c014-status.md`.
 
-C014 used v0.1.2 as a deliberately small qualification release. It closes M010D's partial live-updater evidence and the two release-process weaknesses recorded during v0.1.1 publication.
+C014 began with v0.1.2 as a deliberately small qualification release and was
+deliberately held open when that release's live updater rehearsal failed. The
+evidence line subsequently opened C016 and C017 rather than absorbing those
+defects. C014 finally closed after the published v0.1.5 -> v0.1.6 rehearsal
+proved both the self-managed commit path and Cargo-managed refusal, with the
+five-target hosted smoke green.
 
 Required outcomes:
 
@@ -261,11 +266,12 @@ Required outcomes:
 
 A failure after immutable publication must be handled by yanking/annotating and a new corrective/version, never by replacing v0.1.2 bytes.
 
-This is the case C014's own rehearsal produced. `v0.1.1` and `v0.1.2` are
-immutable and both ship an updater that cannot complete a commit, so the fix
-ships as `v0.1.3` under C016. Neither release is yanked: the transaction aborts
-safely and loudly without mutating the live binary, so yanking would
-misdescribe a release that is otherwise safe to install.
+C014's first live rehearsal produced the C016 defect: `v0.1.1` and `v0.1.2`
+ship an updater that cannot complete a commit, fixed in v0.1.3. A later
+Cargo-managed rehearsal produced C017, fixed in v0.1.5. The proving
+v0.1.5 -> v0.1.6 rehearsal and five-target hosted smoke close C014's original
+live-evidence requirement. Historical affected releases remain recorded rather
+than rewritten.
 
 ## 8C. C015 — Relative scan root Cargo resolution
 
