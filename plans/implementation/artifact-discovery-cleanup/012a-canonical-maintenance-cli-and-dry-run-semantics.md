@@ -64,7 +64,7 @@ The product mechanics needed for Routine Execute already exist. The work is prim
 
 ## 4. Invariants
 
-- Bare Routine cleanup selects roots using the same Routine policy currently used by `clean --known`.
+- Bare maintenance selects roots using the same non-Full maintenance policy currently used by `clean --known`: a configured legacy `scan.root` remains an exclusive Explicit override; otherwise bounded seed + learned roots form Routine scope.
 - The selected roots are canonicalized/deduplicated/collapsed exactly as the existing combined-root cleanup path requires.
 - Learned roots are search hints only; complete manifest coverage and fresh ownership proof are rebuilt before cleanup.
 - Unresolved ownership blocks all cleanup commands in Execute, Simulate, and Cargo Preview.
@@ -125,7 +125,7 @@ Reject incompatible combinations deterministically before traversal:
 - ROOT + compatibility `--full`;
 - `--known` + `--full`.
 
-A configured legacy `scan.root` requires an explicit decision. Recommended contract: an explicit configured root remains authoritative only when the user invokes `scan --known` or a rootless operation that intentionally resolves Routine/configured policy; bare `scan` must remain Full and must not silently become explicit merely because `scan.root` exists. If preserving `scan.root` would make rootless Full ambiguous, document/deprecate that legacy key rather than letting config change the meaning of the canonical Full command.
+A configured legacy `scan.root` remains authoritative for bare maintenance and `scan --known`, where it resolves the scope as Explicit. Rootless `scan` MUST force Full and ignore configured `scan.root`; configuration may not silently narrow the canonical Full reconciliation command. `scan ROOT` remains the explicit CLI override. Preserve the existing rule that an explicit effective scope bypasses discovery ignore/unignore filters.
 
 ## 8. Work package D — Preserve advanced cleanup scope and policy
 
@@ -147,9 +147,9 @@ Review `output.rs` and `plans/output-schema-v1.md`.
 
 Required behavior:
 
-- bare maintenance emits operation=`clean`, scope=`routine`, mode=`execute` or `simulate`;
-- `scan` emits operation=`scan`, scope=`full`;
-- `scan --known` emits scope=`routine`;
+- bare maintenance emits operation=`clean`, mode=`execute` or `simulate`, and scope derived from the resolved maintenance policy (`routine` normally, `explicit` when legacy configured `scan.root` wins);
+- rootless `scan` emits operation=`scan`, scope=`full` regardless of configured `scan.root`;
+- `scan --known` emits scope=`routine` without a configured root and `explicit` when configured `scan.root` wins;
 - Explicit ROOT continues to emit scope=`explicit`;
 - `--cargo-preview` maps to the existing preview/result semantics without reusing the word dry-run in a way that conflates simulation.
 
@@ -181,17 +181,18 @@ At minimum add/adjust tests proving:
 4. bare cleanup with unresolved ownership blocks and runs zero Cargo clean;
 5. `scan` with no ROOT resolves Full even when learned state exists;
 6. `scan ROOT` remains Explicit;
-7. `scan --known` resolves Routine;
-8. scan scope conflicts fail at invocation time;
-9. `clean ROOT` defaults Execute;
-10. `clean ROOT --dry-run` simulates with zero Cargo clean;
-11. `clean ROOT --cargo-preview` invokes Cargo dry-run but never real cleanup;
-12. hidden compatibility aliases, if retained, map exactly to canonical modes;
-13. direct and Cargo external-subcommand argv remain equivalent;
-14. JSON operation/scope/mode fields match the resolved intent;
-15. selector and minimum-size fail-closed behavior is unchanged;
-16. current ownership/atomicity/final-proof regressions remain green;
-17. a premise-negative test demonstrably fails against the old bare-read-only dispatch.
+7. `scan --known` resolves Routine without configured `scan.root` and Explicit with it;
+8. rootless `scan` remains Full even when `scan.root` is configured;
+9. scan scope conflicts fail at invocation time;
+10. `clean ROOT` defaults Execute;
+11. `clean ROOT --dry-run` simulates with zero Cargo clean;
+12. `clean ROOT --cargo-preview` invokes Cargo dry-run but never real cleanup;
+13. hidden compatibility aliases, if retained, map exactly to canonical modes;
+14. direct and Cargo external-subcommand argv remain equivalent;
+15. JSON operation/scope/mode fields match the resolved intent;
+16. selector and minimum-size fail-closed behavior is unchanged;
+17. current ownership/atomicity/final-proof regressions remain green;
+18. a premise-negative test demonstrably fails against the old bare-read-only dispatch.
 
 Cross-platform fixture premises must be explicit. Do not claim Windows execution for a POSIX shell stub.
 
