@@ -27,13 +27,14 @@ M008 planning baseline: `3ee9699a0b0d987287d08e427195284e08d079f7`
 
 | Subsystem | Status | Roadmap | Current milestone | Blocker |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | ready / Phase 11 hardening | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | M011D Cargo selector qualification lifecycle | none; evidence-lifecycle hardening only, no selector support expansion |
+| Artifact discovery and cleanup | ready / Phase 11 hardening | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | C019 exact-unignore sibling containment corrective | none; C019 is the immediate filter-correctness handoff, M011D remains ready in parallel |
 | Distribution, release, and update | ready / Phase 11 hardening | `plans/subsystems/distribution-release-update-roadmap.md` | C018 provenance uncertainty fail-closed | C018 is the immediate safety handoff; M011A-M011C are also ready and can proceed in parallel, with operational closure tied to a future release |
 
 ## Open work
 
 | Item | Status | Plan | Note |
 |---|---|---|---|
+| C019 — exact unignore sibling containment corrective | **ready** | `plans/implementation/artifact-discovery-cleanup/c019-exact-unignore-sibling-containment-corrective.md` | Corrects M002: a literal ignored ancestor plus an exact unignore currently re-enters unrelated siblings. Restore pass-through ancestry without broadening the exception subtree. |
 | C018 — self-update provenance uncertainty fail-closed | **ready** | `plans/implementation/distribution-release-update/c018-self-update-provenance-uncertainty-fail-closed.md` | Immediate safety handoff. Positive Cargo-manager evidence that cannot be interpreted must become `UnprovableOwnership`, never self-managed ownership; mutating refusals move before remote acquisition. |
 | M011A — immutable release attestation + verification | **ready** | `plans/implementation/distribution-release-update/011a-immutable-release-attestation-and-verification.md` | Enable/verify immutable GitHub releases and their release attestations without hand-editing Eggpack-generated CI. Operational closure requires the first covered future release. |
 | M011B — staged-release validation workflow gate | **ready** | `plans/implementation/distribution-release-update/011b-staged-release-validation-workflow-gate.md` | Product-owned read-only workflow runs `validate-staged-release.py` automatically after a trusted Eggpack candidate-build/stage run. Stop and move upstream to Eggpack if exact source/tag binding cannot be made safe. |
@@ -41,9 +42,10 @@ M008 planning baseline: `3ee9699a0b0d987287d08e427195284e08d079f7`
 | M011D — Cargo selector qualification lifecycle | **ready** | `plans/implementation/artifact-discovery-cleanup/011d-cargo-selector-qualification-lifecycle.md` | Guard the exact runtime selector allowlist with real-Cargo qualification evidence and a dedicated compatibility workflow; exploratory future Cargo versions never auto-promote support. |
 | C010 — `CurlConfig::user_agent` seam in `eggup-curl` | **proposed** | `plans/implementation/distribution-release-update/c010-eggup-curl-user-agent-seam.md` | Bounded upstream request. It cannot be closed from this repository, and nothing here waits on it: `eggup-eggfetch` already provides the seam. No closure record, by design. |
 
-C018 is the next safety-critical handoff. M011A-M011D are independently
-implementation-ready and may proceed in parallel where they do not consume the
-same release event. The first future release after these changes is expected to
+C018 and C019 are the two immediate correctness/safety handoffs. C019 is
+independent of the updater line and may proceed in parallel with C018.
+M011A-M011D remain independently implementation-ready where they do not consume
+the same release event. The first future release after these changes is expected to
 supply operational evidence for C018 and M011A-M011C; no release number is
 pre-authorized by planning.
 
