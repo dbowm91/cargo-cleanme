@@ -1,6 +1,6 @@
 # C020 — Windows concurrent first-use config creation can fail closed
 
-Status: ready
+Status: closed — see [`plans/closure/artifact-discovery-cleanup/c020-status.md`](../../closure/artifact-discovery-cleanup/c020-status.md)
 
 Subsystem: artifact discovery and cleanup
 Corrects: `config::create_initial` (`src/config.rs:240-302`), first shipped in the

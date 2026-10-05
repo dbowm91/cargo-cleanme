@@ -5,7 +5,8 @@ Plan: [`plans/implementation/artifact-discovery-cleanup/c020-windows-concurrent-
 Corrects: `config::create_initial` (`src/config.rs:254-341`). No prior closure
 record claimed this path was race-correct on Windows.
 
-Implementation commit: `408c2a8`
+Implementation commits: `408c2a8` (diagnostics + first fix),
+`4e2e3f6` (the fix), `fcc9eee` (architecture rewrite)
 Release tag carrying the correction: **none yet** — see §9.
 
 ## 1. Executive finding
@@ -101,49 +102,70 @@ diff is what caught it: `git show 28324ba:src/config.rs` had no `AlreadyExists`
 arm, while the worktree did. Worth recording because the symptom — a fix that
 appears not to work — pointed at the code, and the actual cause was the commit.
 
-## 5. The fix
+## 5. The first fix, and why it was not enough
+
+The obvious repair was to recognise the taken name by asking the filesystem
+rather than by matching an error kind — the shape the plan's requirement 2 asked
+for. It was wrong twice.
+
+Run `37346722132` attempt 1 was green on all nine lanes; attempt 2 — the same
+commit, `408c2a8`, Windows only — failed at the same step with the same
+signature. `Err(_) if temp.exists() => continue` is racy for **both** spellings:
+the winner of the publication unlinks its staging file, so a loser that probes
+afterwards reads the name free and the real failure escapes. Attempt 1 being
+green is exactly the evidence a single run cannot provide.
+
+That made the underlying defect legible. The staging name was never unique among
+everything that can create a config at once:
 
 ```rust
-Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-Err(_) if temp.exists() => continue,
-Err(e) => return Err(AppError::Io(step_error("creating a staging file", e))),
+temp_name.push(format!(".tmp.{}.{}", std::process::id(), attempt));
 ```
 
-Two signals for one benign outcome, because the two platforms do not agree:
+The pid separates *processes*. Threads inside one process shared both the pid
+and the starting `attempt`, so **every** concurrent first use was a collision —
+on all platforms, and only Windows reported it as a hard error, because only
+Windows spells the collision `PermissionDenied`.
 
-- `AlreadyExists` is the OS saying the name was taken **at the moment of the
-  call**. Authoritative even though the file may be gone by the time we look,
-  so the kind stays the discriminator here.
-- `PermissionDenied` is Windows' spelling when the name is reserved by a thread
-  that has not finished creating it. The kind says nothing, so the filesystem is
-  the evidence.
+## 6. The fix
 
-A genuine permissions problem leaves the name free and still hard-fails on both
-platforms.
+Remove the collision rather than recognise a lost one:
 
-Two supporting changes, both of which earn their place:
+- `STAGING_NONCE` (`src/config.rs:253`), a process-wide `AtomicU64` folded into
+  the staging name (`:293-296`). Two threads no longer contend for a name at all,
+  so the intra-process race disappears instead of being tolerated. With nothing
+  else competing, `PermissionDenied` once again means what it says, and a genuine
+  permissions problem hard-fails.
+- The `attempt` suffix stays for the case the nonce cannot cover: a stale
+  `.tmp.` file left by a crashed process whose pid the OS later reuses. That is a
+  real name collision, and `AlreadyExists` is the authoritative answer (`:318`).
+- The **publish** step is the mirror image, and is decided by the filesystem
+  (`:350-352`): `path.is_file()`. The destination is never unlinked, so unlike
+  the staging name this probe is stable — and it is the only file that can exist
+  at that path, published solely by hard-linking a written and synced staging
+  file, so a regular file there is always a complete template. The non-file
+  refusal (`:355-359`) is untouched: "exists" must not become "acceptable".
 
-- `step_error` (`:245-253`) names the call that failed while preserving
-  `ErrorKind` **exactly**. Everything below decides by inspecting the kind, so a
-  "helpful" wrapper that changed the kind would silently stop the race handling
-  recognising its own outcome. It also turned an unactionable `Io(Os { … })`
-  into a diagnostic that names the step, which is what made §3 and §4 possible.
-- The test premise, as above.
+Supporting change: `step_error` (`:255-257`) names the call that failed while
+preserving `ErrorKind` **exactly**, because every branch below decides by
+inspecting the kind — a wrapper that changed it would silently stop the race
+handling recognising its own outcome. It turned an unactionable
+`Io(Os { code: 5 })` into
+`creating a staging file failed: Access is denied. (os error 5)`, which is what
+made §3 and §4 possible at all.
 
-## 6. What this did not change
+## 6a. What was not changed
 
 The single-winner publication mechanism is untouched: `hard_link` is still the
-primitive, a config is still never replaced, the template is still verbatim, the
-non-file-destination refusal (`:329-334`) still refuses, and
-`malformed_config_is_not_replaced_automatically` still holds. No parsing,
-retention, path-validation, template, discovery, or cleanup behaviour changed.
+primitive, a config is still never replaced, the template is still verbatim, and
+the non-file-destination refusal still refuses. No parsing, retention,
+path-validation, template, discovery, or cleanup behaviour changed.
 
-One thing the evidence **did not** establish, recorded so nobody inherits it as
-a fact: across 24 rounds of 16 threads on `windows-latest`, `hard_link` never
-reported `PermissionDenied`. That is an observation, not a proof the platform
-cannot do it. `architecture/03-config-and-editor.md` now says what to do if a
-future run sees `publishing the config failed: Access is denied` — discriminate
-on "a regular-file destination now exists", never on an error-kind list.
+One thing the evidence did **not** establish, recorded so nobody inherits it as
+fact: `hard_link` losing the publication race was never observed reporting
+`PermissionDenied`. It is handled anyway, because the discriminator there is
+reliable — but "handled defensively" is not "observed to happen", and
+`architecture/03-config-and-editor.md` says so.
 
 ## 7. Local verification
 
@@ -157,7 +179,9 @@ python3 scripts/check-doc-citations.py        16 documents clean PASS
 
 ## 8. Hosted CI
 
-Run `37346722132` at `408c2a8` — all nine jobs green:
+Run `37347758658` at `4e2e3f6` (the nonce fix) — all nine lanes green. Run
+`37347945989` at `fcc9eee` (the documentation rewrite; identical code) — all
+nine lanes green.
 
 | Lane | Result |
 |---|---|
@@ -169,18 +193,37 @@ Run `37346722132` at `408c2a8` — all nine jobs green:
 | `generated-docs` | success |
 | `benchmark` | success |
 
-### 8.1 Premise negative
+### 8.1 One green run is not the evidence; seven are
+
+`37346722132` attempt 1 was green on all nine lanes and attempt 2 — same commit,
+Windows only — failed. That is the whole reason §5 exists, so the fixed code was
+re-run rather than trusted:
+
+| Run | Commit | `checks (windows-latest)` |
+|---|---|---|
+| `37346722132` attempt 1 | `408c2a8` | success |
+| `37346722132` attempt 2 | `408c2a8` | **failed** — first fix incomplete |
+| `37347945989` attempt 1 | `fcc9eee` | success |
+| `37347945989` attempts 2–7 | `fcc9eee` | success ×6 |
+
+Seven consecutive green Windows runs of the strengthened premise — 16 workers ×
+24 rounds each, 2 688 racing thread-pairs per run — against the one failure that
+preceded them. The contrast is the evidence: the same premise, the same runner,
+the same commit shape, before and after.
+
+### 8.2 Premise negative
 
 | Run | Commit | What it tested | Result |
 |---|---|---|---|
-| `37344874226` | `15a41b1` | step names + strengthened premise, **no fix** | windows failure — `PermissionDenied` at the staging step |
+| `37344874226` | `15a41b1` | step names + strengthened premise, **no fix** | windows failure — `creating a staging file failed: Access is denied. (os error 5)` |
 | `37345415865` | `3ef2521` | `temp.exists()` probe only | msrv + macOS failure — `AlreadyExists` escaping |
-| `37346137043` | `28324ba` | mis-amended blob (identical to `3ef2521`) | msrv + macOS failure — identical signature |
-| `37346722132` | `408c2a8` | the fix | all lanes green |
+| `37346137043` | `28324ba` | mis-amended blob, identical to `3ef2521` | msrv + macOS failure — identical signature |
+| `37346722132` a2 | `408c2a8` | kind + probe | windows failure — `PermissionDenied` leaking through the probe |
+| `37347758658` | `4e2e3f6` | the nonce fix | all lanes green |
 
-The premise negative is a Windows run, not a Linux surrogate, which is what the
-plan required. Rows 2 and 3 are the regressed variant, kept because "the obvious
-fix makes it worse on three platforms" is part of the finding.
+The premise negative is a Windows run, not a Linux surrogate. Rows 2–4 are the
+two intermediate fixes, kept because "the obvious repair regresses three lanes
+and then leaks on Windows anyway" is part of the finding.
 
 ## 9. Release status
 
@@ -204,10 +247,10 @@ None is in `config.rs`, and none is caused by this change.
 | Criterion | Status |
 |---|---|
 | Failing call identified on Windows from evidence, not inference | met — §3, `creating a staging file failed: Access is denied. (os error 5)` |
-| Lost race treated as success, expressed as filesystem state rather than an enumerated error list | met, with one correction — §4, §5. The kind is authoritative for `AlreadyExists`; the filesystem is the evidence only where the kind says nothing |
+| Lost race treated as success, and decided by the right evidence | met — §5, §6. The kind is authoritative where the syscall answered "taken *then*"; the filesystem is the evidence only where a probe is stable. The staging name is removed from the question by the nonce, and the destination is probed because it is never unlinked |
 | Non-file destination still refused | met — `:329-334`, untouched |
 | Windows exercised under a premise that makes the race likely, shown to change the outcome | met — §3 (fails before) and §8 (green after) |
-| Green on Linux, macOS, and Windows | met — §8 |
+| Green on Linux, macOS, and Windows | met — §8, and seven consecutive Windows runs at §8.1 |
 | `architecture/03-config-and-editor.md` describes the actual mechanism and failure mode | met — rewritten, including the case this evidence did *not* establish |
 
 ## 12. Disposition
@@ -215,10 +258,19 @@ None is in `config.rs`, and none is caused by this change.
 **Closed.**
 
 The defect is confirmed, the failing call is known from a Windows run rather than
-an argument, the fix is narrow, and the premise negative is a failure of this
-code on the platform where it fails. Two intermediate states are recorded because
-both would otherwise have shipped: a fix aimed at the wrong call, and a fix that
-met the plan's stated requirement while regressing three lanes.
+an argument, and the fix removes the collision instead of tolerating it. Three
+intermediate states are recorded because each would otherwise have shipped, each
+disguised as progress:
+
+1. a fix aimed at the wrong call (`fs::hard_link`, from an inference);
+2. a fix that met the plan's stated requirement — recognise the benign outcome by
+   filesystem state — while regressing Linux, macOS, and the 1.89 lane;
+3. a fix that passed all nine lanes on its first hosted run and then failed on
+   the repeat, proving that one green run of a strengthened premise is not
+   evidence.
+
+The premise negative is a failure of this code on the platform where it fails,
+and the fix is green on seven consecutive Windows runs of that same premise.
 
 The correction is unreleased; finding 2 of C019 remains the reason the next
 release from `main` matters.
