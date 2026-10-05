@@ -44,7 +44,7 @@ The canonical command is:
 cargo cleanme
 ~~~
 
-It selects the current Routine root set (bounded seed roots plus active learned roots, with configured policy), constructs the complete combined cleanup ownership universe, performs the same C003/C004/C006 fresh proof used by advanced cleanup, and executes eligible Cargo cleanup units.
+It selects the normal maintenance scope: a configured legacy `scan.root` remains an exclusive Explicit override when present; otherwise the scope is the Routine root set of bounded seed roots plus active learned roots. It constructs the complete combined cleanup ownership universe, performs the same C003/C004/C006 fresh proof used by advanced cleanup, and executes eligible Cargo cleanup units.
 
 Bare invocation does not delete directories directly. It delegates deletion only through Cargo after every existing ownership, authorization, activity, marker, policy, and final-proof gate passes.
 
@@ -102,11 +102,13 @@ cargo cleanme scan ROOT
 
 remains an Explicit bounded read-only scan.
 
-The old no-root Routine read-only inventory remains available for advanced inspection as:
+The old non-Full maintenance-scope read-only inventory remains available for advanced inspection as:
 
 ~~~text
 cargo cleanme scan --known
 ~~~
+
+`scan --known` uses the same maintenance-scope resolver as bare cleanup: a configured legacy `scan.root` resolves Explicit; otherwise seed + learned roots resolve Routine. Rootless `scan` always means Full and must ignore `scan.root` so configuration cannot silently narrow the canonical reconciliation command.
 
 The historical `scan --full` spelling may remain as a hidden compatibility alias for no-root `scan` during the pre-1.0 migration period.
 
