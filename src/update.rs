@@ -408,27 +408,41 @@ pub fn classify_provenance_in(current_exe: &Path, cargo_home: Option<PathBuf>) -
     };
     let _ = target;
 
-    if let Some(cargo_root) = cargo_bin_root_containing(current_exe, cargo_home.as_deref()) {
-        match cargo_recorded_version(&cargo_root, PRODUCT) {
-            Some(version) => {
-                return Provenance::CargoManaged {
-                    bin_root: cargo_root,
-                    version,
-                };
-            }
-            None => {
-                // A file in a Cargo root that Cargo does not record is not
-                // positively owned by anything, and is certainly not
-                // positively owned by us.
-                return Provenance::UnprovableOwnership {
+    // An explicitly supplied Cargo home is authoritative when the executable
+    // really is inside it. Being in a Cargo root that records nothing about
+    // this package is itself a reason to refuse, not a reason to adopt the
+    // file: the whole premise of `CargoManaged` is that Cargo's bookkeeping
+    // must not be made to lie.
+    if let Some(home) = cargo_home.as_deref() {
+        let bin_root = home.join("bin");
+        if current_exe.parent() == Some(bin_root.as_path()) {
+            return match cargo_recorded_version(&bin_root, PRODUCT, binary_name(current_exe)) {
+                Some(version) => Provenance::CargoManaged { bin_root, version },
+                None => Provenance::UnprovableOwnership {
                     detail: format!(
                         "{} is inside the Cargo bin root {} but Cargo records no installed \
                          package named {PRODUCT} there",
                         current_exe.display(),
-                        cargo_root.display()
+                        bin_root.display()
                     ),
-                };
-            }
+                },
+            };
+        }
+    }
+
+    // Otherwise look for a Cargo root anywhere above the executable. This is the
+    // `cargo install --root DIR` shape, which is what every hermetic install
+    // script, CI job, and container image uses -- and where the process
+    // `CARGO_HOME` is frequently *not* where the running binary came from.
+    //
+    // Claiming a root requires Cargo's own record to name this package and
+    // this binary. A directory that merely looks like an install root is not
+    // evidence of anything, so the published installer's `/usr/local/bin` and
+    // `~/.local/bin` keep resolving to the self-managed path.
+    for bin_root in cargo_bin_roots_above(current_exe) {
+        if let Some(version) = cargo_recorded_version(&bin_root, PRODUCT, binary_name(current_exe))
+        {
+            return Provenance::CargoManaged { bin_root, version };
         }
     }
 
@@ -443,27 +457,90 @@ pub fn classify_provenance_in(current_exe: &Path, cargo_home: Option<PathBuf>) -
     }
 }
 
-/// The Cargo bin root that `path` lives in, if any.
+/// How many directories above the running executable are considered as
+/// possible Cargo installation roots.
 ///
-/// This is a *location* test only. It never grants ownership on its own; the
-/// caller must still find a recorded Cargo package there.
-fn cargo_bin_root_containing(path: &Path, cargo_home: Option<&Path>) -> Option<PathBuf> {
-    let root = cargo_home?.join("bin");
-    if path.parent() == Some(root.as_path()) {
-        return Some(root);
-    }
-    None
+/// Cargo lays an installation out as `ROOT/bin/<exe>` with `ROOT/.crates.toml`,
+/// so the owning root is the executable's grandparent. Container images and
+/// hermetic test harnesses nest that a level or two deeper. The bound exists to
+/// stop a deep path from turning classification into a filesystem crawl.
+///
+/// Under-detection is the dangerous direction here: a Cargo-owned file that is
+/// misread as self-managed gets *replaced*, while a false positive only costs a
+/// refusal that names the manager command. So this is deliberately generous.
+const CARGO_ROOT_SEARCH_DEPTH: usize = 4;
+
+/// The file name of the running executable, as Cargo's record would spell it.
+fn binary_name(path: &Path) -> &str {
+    path.file_name().and_then(|n| n.to_str()).unwrap_or("")
 }
 
-/// The version Cargo's `.crates.toml` records for `package`, if any.
-fn cargo_recorded_version(bin_root: &Path, package: &str) -> Option<String> {
-    let cargo_home = bin_root.parent()?;
-    let record = std::fs::read_to_string(cargo_home.join(".crates.toml")).ok()?;
+/// Cargo bin roots that could own `path`, nearest ancestor first.
+///
+/// Every ancestor of the executable is a candidate *bin* directory and its
+/// parent is the candidate *root*, because that is the only layout Cargo writes.
+/// This is a *location* test only; it never grants ownership on its own, and the
+/// caller must still find this package recorded in the root's `.crates.toml`.
+fn cargo_bin_roots_above(path: &Path) -> Vec<PathBuf> {
+    let Some(bin_dir) = path.parent() else {
+        return Vec::new();
+    };
+    bin_dir
+        .ancestors()
+        .take(CARGO_ROOT_SEARCH_DEPTH + 1)
+        .filter_map(Path::parent)
+        .map(|root| root.join("bin"))
+        .collect()
+}
+
+/// The version Cargo's `.crates.toml` records for `package` installed into
+/// `bin_root`, if that record also names `binary` as an installed executable.
+///
+/// The schema is Cargo's current one, which is a flat table under `v1` keyed by
+/// the full spec string:
+///
+/// ```toml
+/// [v1]
+/// "cargo-cleanme 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)" = ["cargo-cleanme"]
+/// ```
+///
+/// Requiring `binary` in the value list is what makes this a statement about
+/// *this file* rather than about a package that merely shares a Cargo home.
+fn cargo_recorded_version(bin_root: &Path, package: &str, binary: &str) -> Option<String> {
+    let cargo_root = bin_root.parent()?;
+    let record = std::fs::read_to_string(cargo_root.join(".crates.toml")).ok()?;
     let value: toml::Value = toml::from_str(&record).ok()?;
-    let entry = value.get("packages")?.get(package)?;
-    // Cargo writes the newest installed version as `vers`.
-    let version = entry.get("vers").and_then(toml::Value::as_str)?;
-    Some(version.to_owned())
+    let table = value.get("v1")?.as_table()?;
+    for (spec, executables) in table {
+        // A spec string is "<name> <version> (<source>)". The source may itself
+        // contain spaces, so the parenthesised tail is removed from the right
+        // before the leading two fields are split off.
+        //
+        // A malformed entry is skipped rather than fatal: `.crates.toml` is
+        // Cargo's file, not ours, and one unparseable key must not prevent the
+        // entries after it from being read.
+        let Some((head, _source)) = spec.rsplit_once(')') else {
+            continue;
+        };
+        let mut fields = head.split_whitespace();
+        let Some(name) = fields.next() else {
+            continue;
+        };
+        if name != package {
+            continue;
+        }
+        let Some(version) = fields.next() else {
+            continue;
+        };
+        let Some(names) = executables.as_array() else {
+            continue;
+        };
+        if !names.iter().any(|name| name.as_str() == Some(binary)) {
+            continue;
+        }
+        return Some(version.to_owned());
+    }
+    None
 }
 
 // --------------------------------------------------------------- version check
@@ -1290,6 +1367,100 @@ mod tests {
 
     // ------------------------------------------------------------- provenance
 
+    /// A `.crates.toml` in the schema cargo actually writes.
+    ///
+    /// Captured from cargo 1.99.0 after
+    /// `cargo install cargo-cleanme --version 0.1.3 --locked --root DIR`:
+    ///
+    /// ```toml
+    /// [v1]
+    /// "cargo-cleanme 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)" = ["cargo-cleanme"]
+    /// ```
+    ///
+    /// These tests used to hand-write `[packages.cargo-cleanme]` with a `vers`
+    /// field. No cargo emits that any more, so the parser was being checked
+    /// against its own assumption and agreed with itself. The schema is built
+    /// here by a function rather than pasted per-test so that it is asserted in
+    /// one place, and `the_crates_toml_we_parse_is_the_one_cargo_writes` pins
+    /// the rendering against captured real output.
+    fn real_crates_toml(package: &str, version: &str, executables: &[&str]) -> String {
+        let names = executables
+            .iter()
+            .map(|name| format!("\"{name}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "[v1]\n\"{package} {version} \
+             (registry+https://github.com/rust-lang/crates.io-index)\" = [{names}]\n"
+        )
+    }
+
+    /// A Cargo-managed installation as `cargo install --root DIR` builds it.
+    ///
+    /// Returns the live binary and the root Cargo recorded it in. The point of
+    /// the helper is that `cargo_root` is *not* the process `CARGO_HOME`: the
+    /// binary is in `<root>/bin` and the record is in `<root>/.crates.toml`.
+    fn cargo_root_install(dir: &Path, version: &str) -> PathBuf {
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let live = bin.join(PRODUCT);
+        std::fs::write(&live, live_stub()).unwrap();
+        std::fs::write(
+            dir.join(".crates.toml"),
+            real_crates_toml(PRODUCT, version, &[PRODUCT]),
+        )
+        .unwrap();
+        live
+    }
+
+    #[test]
+    fn the_crates_toml_we_parse_is_the_one_cargo_writes() {
+        // Verbatim cargo 1.99.0 output, not a rendering of our own assumption.
+        let captured = "[v1]\n\"cargo-cleanme 0.1.3 \
+            (registry+https://github.com/rust-lang/crates.io-index)\" = [\"cargo-cleanme\"]\n";
+        assert_eq!(
+            real_crates_toml(PRODUCT, "0.1.3", &[PRODUCT]),
+            captured,
+            "our fixture drifted from the bytes cargo writes"
+        );
+
+        // And it must survive a real round trip through the parser.
+        let dir = tempfile::tempdir().unwrap();
+        let live = cargo_root_install(dir.path(), "0.1.3");
+        assert_eq!(
+            cargo_recorded_version(dir.path().join("bin").as_path(), PRODUCT, PRODUCT).as_deref(),
+            Some("0.1.3")
+        );
+        assert!(matches!(
+            classify_provenance_in(&live, None),
+            Provenance::CargoManaged { .. }
+        ));
+    }
+
+    #[test]
+    fn a_cargo_root_install_is_refused_even_when_it_is_not_the_cargo_home() {
+        // The published defect: `cargo install --root DIR` puts the binary in a
+        // root that is not the process CARGO_HOME. Reading only $CARGO_HOME/bin
+        // missed it, and the binary was then classified as self-managed and
+        // *replaced* -- overwriting a file Cargo owns and leaving
+        // `cargo install --list` reporting a version that is no longer there.
+        let dir = tempfile::tempdir().unwrap();
+        let live = cargo_root_install(dir.path(), "0.1.3");
+
+        // A CARGO_HOME that is somewhere else entirely, as in the rehearsal.
+        let elsewhere = tempfile::tempdir().unwrap();
+        let provenance = classify_provenance_in(&live, Some(elsewhere.path().to_path_buf()));
+        assert!(
+            matches!(provenance, Provenance::CargoManaged { .. }),
+            "a --root installation was not recognised as Cargo-managed: {provenance:?}"
+        );
+        assert_eq!(
+            provenance.remediation().as_deref(),
+            Some("cargo install cargo-cleanme --locked --force"),
+            "the manager command is the only correct answer for a Cargo-owned file"
+        );
+    }
+
     #[test]
     fn cargo_managed_installation_is_refused_with_the_manager_command() {
         let dir = tempfile::tempdir().unwrap();
@@ -1300,7 +1471,7 @@ mod tests {
         std::fs::write(&live, live_stub()).unwrap();
         std::fs::write(
             cargo_home.join(".crates.toml"),
-            "[packages.cargo-cleanme]\nvers = \"0.1.0\"\n",
+            real_crates_toml(PRODUCT, "0.1.0", &[PRODUCT]),
         )
         .unwrap();
 
@@ -1337,7 +1508,7 @@ mod tests {
         // Cargo's root, but no record for this package.
         std::fs::write(
             cargo_home.join(".crates.toml"),
-            "[packages.some-other-tool]\nvers = \"3.0.0\"\n",
+            real_crates_toml("some-other-tool", "3.0.0", &["sot"]),
         )
         .unwrap();
 
@@ -1351,6 +1522,104 @@ mod tests {
             }
             other => panic!("expected UnprovableOwnership, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn the_published_installer_layout_is_not_mistaken_for_a_cargo_root() {
+        // The ancestor walk is the other half of the fix, and its failure mode
+        // is over-detection: a binary the published installer placed in
+        // `~/.local/bin` (or `/usr/local/bin`) must still be self-managed.
+        //
+        // The neighbouring record below is deliberately pessimistic, because a
+        // lenient fixture proves nothing here: with a record that mentions
+        // nothing relevant, the correct answer and the broken answer are both
+        // "self-managed" and the test cannot fail. It therefore plants the one
+        // near miss that could by itself cause a wrongful claim -- a record for
+        // a *different package* that installs a binary carrying our name. (The
+        // mirror-image trap, our package installing a different binary, is
+        // `a_cargo_record_that_omits_this_binary_does_not_claim_this_file`.)
+        // Requiring both a package match and a binary match survives both.
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join(".local").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let live = bin.join(PRODUCT);
+        std::fs::write(&live, live_stub()).unwrap();
+
+        std::fs::write(
+            home.path().join(".crates.toml"),
+            real_crates_toml("some-other-tool", "1.0.0", &[PRODUCT]),
+        )
+        .unwrap();
+
+        assert!(
+            matches!(
+                classify_provenance_in(&live, None),
+                Provenance::VerifiableSelfManaged { .. }
+            ),
+            "an installer placement was wrongly claimed by a neighbouring Cargo record"
+        );
+    }
+
+    #[test]
+    fn a_cargo_record_that_omits_this_binary_does_not_claim_this_file() {
+        // The record names the package but not the executable we are running.
+        // Two `cargo install --root` layouts can share a root, and the value
+        // list is what ties a record to a specific file.
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let live = bin.join(PRODUCT);
+        std::fs::write(&live, live_stub()).unwrap();
+        std::fs::write(
+            dir.path().join(".crates.toml"),
+            real_crates_toml(PRODUCT, "0.1.3", &["cargo-cleanme-elsewhere"]),
+        )
+        .unwrap();
+
+        assert!(
+            !matches!(
+                classify_provenance_in(&live, None),
+                Provenance::CargoManaged { .. }
+            ),
+            "a record for a different binary was used to claim this one"
+        );
+    }
+
+    #[test]
+    fn a_malformed_crates_toml_entry_does_not_hide_the_entry_after_it() {
+        // `.crates.toml` is Cargo's file. One key we cannot parse -- a future
+        // spec shape, say -- must not stop us reading the rest, or a Cargo
+        // installation would quietly become unprovable and, on the pre-fix
+        // detection, adoptable.
+        //
+        // The bad key has to land *inside* the `[v1]` table. An earlier draft of
+        // this test put it above the header, which made it a root-level key the
+        // parser never looks at: the test passed against code that aborted the
+        // scan on the first bad entry. That is the blind-fixture shape this
+        // subsystem has now paid for five times, so the splice is explicit and
+        // the premise-negative in the closure record is the proof it lands.
+        let dir = tempfile::tempdir().unwrap();
+        let live = {
+            let bin = dir.path().join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            let live = bin.join(PRODUCT);
+            std::fs::write(&live, live_stub()).unwrap();
+            live
+        };
+        // No version and no parenthesised source: unparseable as a spec string.
+        let malformed = format!("\"{PRODUCT}\" = [\"{PRODUCT}\"]\n");
+        let record = real_crates_toml(PRODUCT, "0.1.3", &[PRODUCT]);
+        assert!(record.starts_with("[v1]\n"), "fixture shape changed");
+        let spliced = record.replacen("[v1]\n", &format!("[v1]\n{malformed}"), 1);
+        std::fs::write(dir.path().join(".crates.toml"), spliced).unwrap();
+
+        assert!(
+            matches!(
+                classify_provenance_in(&live, None),
+                Provenance::CargoManaged { .. }
+            ),
+            "an unparseable leading entry hid the real record"
+        );
     }
 
     #[test]

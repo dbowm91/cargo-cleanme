@@ -211,10 +211,17 @@ require "$([[ -z "$staging_residue" ]] && echo true || echo false)" \
   "the updater left staging behind: $staging_residue"
 
 printf '\nself-managed: update --dry-run must report already-current\n'
-dry=$("$SELF_BIN" update --config "$SELF_DIR/config.toml" --dry-run --no-progress 2>&1) \
-  || fail "update --dry-run failed after a successful update: $dry"
-require "$(grep -qi 'already current' <<<"$dry" && echo true || echo false)" \
-  "update --dry-run did not report already-current: $dry"
+# "Already current" is deliberately *not* a success exit: the tool exits 2 so a
+# script cannot mistake "nothing to do" for "updated". So the assertion here is
+# the message, and a non-zero exit carrying that message is the expected
+# outcome, not a failure. Asserting exit 0 would have reported a working
+# updater as broken.
+dry=$("$SELF_BIN" update --config "$SELF_DIR/config.toml" --dry-run --no-progress 2>&1) && dry_rc=0 || dry_rc=$?
+require "$(grep -qi 'already at the latest stable version' <<<"$dry" && echo true || echo false)" \
+  "update --dry-run did not report already-current (exit $dry_rc): $dry"
+require "$(grep -q "$TO_VERSION" <<<"$dry" && echo true || echo false)" \
+  "the already-current report does not name v$TO_VERSION: $dry"
+note "already-current reported (exit $dry_rc, which is the documented 'nothing to do' status)"
 
 # ------------------------------------------------ scenario: cargo-managed ----
 if [[ "$SKIP_CARGO_MANAGED" == "1" ]]; then
@@ -224,21 +231,28 @@ else
   printf '\ncargo-managed: install exact v%s into an isolated root\n' "$FROM_VERSION"
   # --version pins the exact published version; --root keeps every byte inside
   # this invocation's temporary directory, so no system installation is touched.
+  # `cargo install` has no --no-progress flag; passing one aborts the install.
   if ! command -v cargo >/dev/null 2>&1; then
     fail "cargo is required for the cargo-managed scenario"
   fi
   CARGO_HOME="$WORK/cargo-home" cargo install "$PRODUCT" --version "$FROM_VERSION" \
-    --locked --root "$MANAGED_ROOT" --no-progress \
+    --locked --root "$MANAGED_ROOT" \
     || fail "could not install the published v$FROM_VERSION through Cargo"
   MANAGED_BIN="$MANAGED_ROOT/bin/$PRODUCT$ASSET_SUFFIX"
   [[ -x "$MANAGED_BIN" ]] || fail "cargo install did not place a binary at $MANAGED_BIN"
 
   managed_before=$(digest_of "$MANAGED_BIN")
-  require "$([[ "$managed_before" == "$FROM_DIGEST" ]] && echo true || echo false)" \
-    "the Cargo-installed binary digest is not the published v$FROM_VERSION asset digest"
+  # A Cargo installation is a *local rebuild* of the published source, so its
+  # bytes are deliberately not the release asset's: the release asset is built
+  # on the release runners. The first version of this harness asserted the two
+  # digests were equal, which is false by construction, and it failed on a
+  # perfectly correct install. What matters here is that the managed binary
+  # reports the right version and that its bytes do not change across the
+  # refusal, so the digest is recorded rather than compared to the asset.
   managed_version=$("$MANAGED_BIN" --version | awk '{print $2}')
   require "$([[ "$managed_version" == "$FROM_VERSION" ]] && echo true || echo false)" \
     "the Cargo-installed binary reports $managed_version, expected $FROM_VERSION"
+  note "Cargo-managed install reports $managed_version (local build, sha256 ${managed_before:0:12}, not the release asset)"
 
   managed_output=$("$MANAGED_BIN" update --config "$MANAGED_ROOT/config.toml" --no-progress 2>&1) && \
     managed_rc=0 || managed_rc=$?
