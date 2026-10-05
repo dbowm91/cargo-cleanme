@@ -260,13 +260,28 @@ else
     "update succeeded on a Cargo-managed installation; it must refuse"
   require "$(grep -qi 'cargo_managed\|cargo install' <<<"$managed_output" && echo true || echo false)" \
     "the refusal did not identify Cargo ownership: $managed_output"
-  require "$(grep -q "$TO_VERSION" <<<"$managed_output" && echo true || echo false)" \
-    "the remediation does not name v$TO_VERSION: $managed_output"
+  # The remediation is the *manager command*, asserted exactly.
+  #
+  # This assertion used to require the refusal to name v$TO_VERSION, which is
+  # not satisfiable by a correct refusal: `Provenance::CargoManaged::remediation`
+  # returns `cargo install cargo-cleanme --locked --force`, and deliberately so.
+  # That command resolves to the newest published release on its own, which is
+  # the whole point of handing a Cargo user back to their package manager; a
+  # version-pinned reinstall would be the wrong instruction for someone who ran
+  # `update` in order to get the newer version.
+  #
+  # The bug was latent rather than obvious because the cargo-managed scenario
+  # had never previously reached this line: before the C017 fix the binary
+  # succeeded and the harness failed one assertion earlier. Asserting the exact
+  # command is also stronger than looking for a version substring, which any
+  # message mentioning the release would satisfy.
+  require "$(grep -q 'cargo install '"$PRODUCT"' --locked --force' <<<"$managed_output" && echo true || echo false)" \
+    "the remediation is not the manager command: $managed_output"
 
   managed_after=$(digest_of "$MANAGED_BIN")
   require "$([[ "$managed_after" == "$managed_before" ]] && echo true || echo false)" \
     "the Cargo-managed binary changed after a refusal ($managed_before -> $managed_after)"
-  note "refused as Cargo-managed, remediation names v$TO_VERSION, bytes untouched"
+  note "refused as Cargo-managed, remediation is the manager command, bytes untouched"
 fi
 
 printf '\npost-release-smoke: PASSED (%s v%s -> v%s)\n' "$TARGET" "$FROM_VERSION" "$TO_VERSION"
