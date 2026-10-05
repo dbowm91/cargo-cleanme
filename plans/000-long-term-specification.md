@@ -209,19 +209,19 @@ Machine-learned project/root inventory is NOT stored in config.toml. It is versi
 
 ## 9. Scope and filter precedence
 
-Discovery intent is resolved in this order:
+ADR 003 separates the canonical Full scan front door from the non-Full maintenance-scope resolver.
+
+For read-only `scan`:
 
 ~~~text
-explicit CLI scan root
-    >
-explicit --full request
-    >
-configured scan.root (legacy exclusive scope)
-    >
-Routine adaptive roots
+CLI ROOT -> Explicit
+--known  -> configured scan.root if present, otherwise Routine adaptive roots
+no ROOT / no --known -> Full
 ~~~
 
-A CLI root and `--full` are mutually exclusive.
+A retained compatibility `--full` spelling is equivalent to rootless Full and conflicts with ROOT/`--known`. Rootless Full ignores configured `scan.root`; configuration MUST NOT silently narrow the canonical reconciliation command.
+
+For bare maintenance, configured `scan.root` remains a legacy exclusive Explicit override; otherwise the bounded Routine adaptive roots are selected.
 
 If an explicit CLI root or configured scan.root is effective, ignore/unignore search filters are bypassed and the explicit scope itself is the search sandbox.
 
@@ -231,7 +231,7 @@ Internal safety pruning such as no symlink traversal, VCS metadata exclusion, an
 
 ## 10. Routine and Full scan semantics
 
-Routine discovery is the bounded adaptive root set used by canonical bare maintenance and by explicit `scan --known` read-only inspection. It is shallow in scope but recursively complete beneath each selected root.
+Routine discovery is the bounded adaptive root set used by canonical bare maintenance when no legacy configured `scan.root` overrides it, and by `scan --known` under the same condition. It is shallow in scope but recursively complete beneath each selected root.
 
 Routine roots consist of conservative existing platform/user seed directories plus active learned developer roots from machine-local discovery state. Broad roots such as the filesystem root, a drive root, the user's home directory itself, /Users, or /home MUST NOT become routine roots merely because they contain a Rust project.
 
