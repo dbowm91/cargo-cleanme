@@ -517,3 +517,57 @@ published-release evidence for C018/M011A/M011B/M011C.
 
 
 Destructive work MUST NOT be pulled forward merely to make the tool feel complete.
+
+## Phase 13 — 0.2.0 release qualification and publication
+
+Status: **ordered handoff**.
+
+0.2.0 is already selected in `Cargo.toml`, but publication is deliberately
+split from feature implementation.
+
+Sequence:
+
+1. **C022 — pre-release machine-contract hardening** (**ready**)
+   - pin `update --format json` schema/stream behavior with direct tests;
+   - add `check-installer-contract.py --self-test` with premise-negative
+     mutations;
+   - wire the self-test into CI, release drift, and `release-check.sh`;
+   - no product/release semantics change.
+
+2. **M013 — 0.2.0 publication and Phase 11 operational closure**
+   (**blocked on C022**)
+   - freeze one exact release commit and `v0.2.0` tag;
+   - run the complete release gate;
+   - stage all five targets through Eggpack;
+   - require automatic staged validation before human publication;
+   - publish GitHub and crates.io from the same tag/source identity;
+   - verify immutable release attestation and downloaded asset digests;
+   - require automatic five-target public update smoke;
+   - obtain C018 real Cargo-managed refusal evidence;
+   - reconcile C018/M011A/M011B/M011C and record the release receipt.
+
+Hard constraints:
+
+- no staging before C022 closure;
+- no publication on incomplete/cancelled/red hosted evidence;
+- no bypass of automatic staged validation;
+- no replacement of assets/tags after immutable publication;
+- crates.io publication must come from a detached checkout of the exact tag;
+- failures after publication remain recorded and require a new patch release
+  when bytes/product behavior are defective.
+
+Plans:
+
+- `plans/implementation/distribution-release-update/c022-pre-release-machine-contract-hardening.md`
+- `plans/implementation/distribution-release-update/013-0.2.0-publication-and-phase11-operational-closure.md`
+
+Exit condition:
+
+- C022 closed;
+- v0.2.0 public on GitHub and crates.io from one exact source;
+- immutable release+asset attestation verified;
+- automatic staged validation and five-target post-release smoke green;
+- C018 real Cargo-managed refusal evidence complete;
+- M011A/M011B/M011C conditional operational evidence reconciled;
+- M013 release receipt closed.
+
