@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: Phase 10 and post-release correctives C013-C017 are **closed**. Phase 11 hardening is **closed**: C018, M011A, M011B, and M011C are all closed (`plans/closure/distribution-release-update/`). Four outstanding evidences require the next published release and no plan in this repository can supply them. C010 remains an upstream request (`proposed`) that nothing here waits on.
+Status: Phase 10 and post-release correctives C013-C017 are **closed**. Phase 11 implementation is **closed**: C018, M011A, M011B, and M011C have closure records, with four operational evidences still requiring the next published release. Phase 13 now owns that path: C022 is ready and M013 is blocked on C022. C010 remains an upstream request (`proposed`) that nothing here waits on.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 
@@ -444,7 +444,7 @@ release attestation      validation workflow    smoke automation
 
 Plan: `plans/implementation/distribution-release-update/c018-self-update-provenance-uncertainty-fail-closed.md`
 
-Status: **ready**.
+Status: **closed for implementation; published-release evidence outstanding**.
 
 C018 corrects the residual C017 ownership boundary. Cargo-manager evidence that
 is present but unreadable, malformed, or otherwise ambiguous must not collapse
@@ -460,7 +460,7 @@ Cargo evidence that bytes and manager bookkeeping remain unchanged.
 
 Plan: `plans/implementation/distribution-release-update/011a-immutable-release-attestation-and-verification.md`
 
-Status: **ready**.
+Status: **conditionally closed; first real attested release evidence outstanding**.
 
 M011A enables GitHub immutable releases for future publications and makes the
 platform's immutable-release attestation/asset verification part of release
@@ -476,7 +476,7 @@ provenance, SBOM attestation, or updater enforcement crosses into Eggpack Phase
 
 Plan: `plans/implementation/distribution-release-update/011b-staged-release-validation-workflow-gate.md`
 
-Status: **ready**.
+Status: **conditionally closed; first real automatic staged-draft evidence outstanding**.
 
 M011B makes `scripts/validate-staged-release.py` a hosted publication
 prerequisite. A product-owned, read-only workflow observes successful trusted
@@ -492,7 +492,7 @@ than modifying generated YAML.
 
 Plan: `plans/implementation/distribution-release-update/011c-published-release-smoke-automation.md`
 
-Status: **ready**.
+Status: **conditionally closed; first real release-event smoke evidence outstanding**.
 
 M011C preserves the existing five-target real updater rehearsal but adds an
 automatic stable `release.published` path. It deterministically selects the
