@@ -32,7 +32,7 @@ Immutability policy enabled: `2026-10-05T13:34:38Z` (repository-level, not owner
 
 | Subsystem | Status | Roadmap | Current milestone | Blocker |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | closed | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | none | No plan is blocked. C021 is closed, so 0.2.0 may be staged as publication-ready; the release itself follows `docs/RELEASING.md` and is not authorized by any plan. |
+| Artifact discovery and cleanup | closed | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | none | Phase 12 and C019-C021 are closed. No artifact-discovery work blocks release; the remaining pre-0.2.0 gate is distribution-owned C022. |
 | Distribution, release, and update | ready / pre-0.2.0 hardening | `plans/subsystems/distribution-release-update-roadmap.md` | C022 pre-release machine-contract hardening | M013 publication is blocked on C022 closure. Phase 11 implementation remains closed; its remaining operational evidence is consumed by M013. |
 
 ## Open work
