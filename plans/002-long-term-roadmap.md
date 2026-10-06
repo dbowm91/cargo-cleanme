@@ -338,9 +338,7 @@ them without rewriting immutable history.
 
 ## Phase 11 — Hardening, release trust, and qualification automation
 
-Status: **closed for implementation.** C018, C019, and M011A-M011D are implemented/closed; M011A-M011C and C018 still require the already-recorded future published-release operational evidence. This phase hardens the already-shipped product before new
-feature expansion. It does not reopen Phase 10 and does not widen the destructive
-cleanup boundary.
+Status: **closed for implementation.** C018, C019, and M011A-M011D are implemented. v0.2.0 supplied the real release evidence for C018/M011A/M011B; M011C remains conditional because its automatic release-trigger run failed and only manual recovery went green. C023 now owns the next automatic-smoke evidence together with the v0.2.1 safety patch.
 
 Implementation sequence / parallelism:
 
@@ -362,11 +360,10 @@ Implementation sequence / parallelism:
    profile/package support to repeatable real-Cargo evidence and keeps future
    versions fail-closed until deliberately qualified.
 
-C018, C019, and M011A-M011D may be implemented in parallel where their files do
-not conflict. The first future release after the relevant implementations supplies
-operational closure evidence for C018 and M011A-M011C; planning does not reserve
-a version number in advance. M011D closes independently on its hosted
-qualification matrix.
+C018, C019, and M011A-M011D were implemented in parallel where their files did
+not conflict. v0.2.0 supplied C018/M011A/M011B operational evidence. M011C's
+automatic trigger remains outstanding and is carried into C023/v0.2.1. M011D
+closed independently on its hosted qualification matrix.
 
 Hard constraints:
 
@@ -419,11 +416,10 @@ The public front door changed while the existing destructive
 ownership/freshness boundary remained intact. `Cargo.toml` is now 0.2.0, so
 the breaking bare-invocation change cannot ship as a 0.1.x patch.
 
-Post-phase release-readiness corrective: **C021 ready** —
-`plans/implementation/artifact-discovery-cleanup/c021-pre-release-test-and-verification-evidence-reconciliation.md`.
-C021 does not reopen Phase 12; it reconciles a flaky updater-test premise,
-verification-inventory drift, changelog completeness, and the final hosted
-pre-release baseline before 0.2.0 staging.
+Post-phase release-readiness corrective C021 is **closed**:
+`plans/closure/artifact-discovery-cleanup/c021-status.md`.
+Its evidence supported the v0.2.0 release. C023 is the subsequent
+post-publication safety corrective.
 
 Decision:
 
@@ -491,23 +487,22 @@ Phase 10 distribution/release + C013-C017 [closed]
              |                |               |                  |
              v                v               v                  v
 C018 provenance        M011A immutable  M011B staged      M011C published
-fail-closed [ready]    release trust    validation gate   smoke automation
-                       [ready]          [ready]           [ready]
+fail-closed [closed]   release trust    validation gate   smoke automation
+                       [closed]         [closed]           [conditional]
 
-C019 exact-unignore sibling containment [ready; independent corrective]
-M011D Cargo selector qualification lifecycle [ready; independent evidence line]
+C019 exact-unignore sibling containment [closed]
+M011D Cargo selector qualification lifecycle [closed]
 
-First future qualification release:
-  carries C018 + supplies M011A/M011B/M011C operational evidence
-                                              |
-                                              v
 ADR 003 -> M012A canonical CLI [closed] -> M012B unattended log/docs [closed]
                                               |
                                               v
-                                C021 pre-release evidence [ready]
+                                C021 pre-release evidence [closed]
                                               |
                                               v
-                                  first 0.2.0 release
+                                  v0.2.0 [published/affected]
+                                              |
+                                              v
+                                  C023 -> v0.2.1 safety patch
 ~~~
 
 Phase 12 is implemented and C021 is closed. The first release carrying M012A's
