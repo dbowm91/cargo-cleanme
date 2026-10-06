@@ -1858,8 +1858,16 @@ fn json_update_refusal_emits_no_document_and_exits_non_zero() {
 /// process's stdout.
 #[test]
 fn the_json_update_branch_prints_only_the_tested_seam() {
-    let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs"))
+    let raw = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs"))
         .expect("main.rs is readable from the integration test's working directory");
+    // Normalize before slicing. A Windows checkout has CRLF, so a `\n}\n`
+    // search finds nothing there and this case fails with "run_update is a
+    // top-level function" on a function that is top-level on every platform.
+    // That is the C012 shape: the lane that reports the failure is not the
+    // lane whose environment the subject was written for. This exact
+    // assumption was the first thing the Windows lane caught in C022's own
+    // work, one release after it caught the C021 analogue.
+    let source = raw.replace("\r\n", "\n");
     let start = source.find("fn run_update(").expect("run_update exists");
     let body = &source[start..];
     let end = body
