@@ -582,7 +582,7 @@ Plan:
 
 - `plans/implementation/distribution-release-update/013-0.2.0-publication-and-phase11-operational-closure.md`
 
-Status: **closed** — receipt in `plans/closure/distribution-release-update/013-status.md`.
+Status: **historical closure recorded; current state corrected by C023** — receipt in `plans/closure/distribution-release-update/013-status.md`. The receipt itself records that automatic M011C criterion 9 was not met; subsequent post-release safety findings make C023 the active disposition.
 
 M013 is the canonical operator handoff for the 0.2.0 release. It consumes the
 existing release machinery rather than reimplementing it:
