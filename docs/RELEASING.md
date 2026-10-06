@@ -79,10 +79,20 @@ Publication requires **all four** of these, in order:
    upstream run id, inventory count, measured glibc floors, installer result.
 4. **Then publish the draft.**
 
-**The validation workflow does not publish.** It holds `contents: read` and
-nothing else, and contains no publication command. A compromised or buggy
-validation job must never hold publication authority — and equally, its failure
-must never be worked around by a job that can publish.
+**The validation workflow does not publish.** It declares `contents: write`
+and no other capability, and contains no publication command — a rule
+`check-staged-validation-contract.py` enforces, matching `gh release`
+publish verbs, a mutating `gh api` or `curl` call against the releases
+endpoint, `cargo publish`, and `git push --tags`.
+
+It needs **write** scope for a reason that is worth stating rather than
+rediscovering: GitHub serves draft releases only to identities with push
+access, so a read-only token cannot fetch the draft the validator exists to
+check. M013 found this by running it. The consequence is that the guarantee
+is no longer "the job is incapable of publishing" but "the file contains
+nothing that publishes" — a weaker but enforceable claim, and the one the
+guard now checks. Equally, the workflow's failure must never be worked
+around by a job that can publish.
 
 **There is no bypass.** If the validation workflow runs late, or GitHub has an
 outage, the release waits. Do not publish on the grounds that validation was

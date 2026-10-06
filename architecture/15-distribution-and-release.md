@@ -855,7 +855,7 @@ keeping the human publication action where it was**.
 
 | Workflow | Subscribes to | Owns | Cannot |
 | --- | --- | --- | --- |
-| `validate-staged-release.yml` | `workflow_run` on `Eggpack candidate builds` | The hosted enforcement point for `validate-staged-release.py` (§7.3) | Publish. Holds `contents: read` only. |
+| `validate-staged-release.yml` | `workflow_run` on `Eggpack candidate builds` | The hosted enforcement point for `validate-staged-release.py` (§7.3) | Publish. Holds `contents: write` — see below. |
 | `post-release-smoke.yml` | `release: published`, plus manual dispatch | The real self-update transaction across all five targets | Mutate anything outside its own job directory |
 | `qualify-cargo-selectors.yml` | weekly, dispatch, and path-filtered push/PR | Real-Cargo evidence for the selector support claim | Edit the support allowlist, or change a verdict |
 

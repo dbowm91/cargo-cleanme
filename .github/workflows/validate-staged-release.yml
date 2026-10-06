@@ -19,10 +19,16 @@ name: Validate staged release
 # re-downloads and re-validates every byte: cached prior success is not evidence
 # about bytes that may have changed.
 #
-# Least privilege, deliberately. `contents: read` and nothing else, no
-# publication command anywhere in this file, and no long-lived credential. A
-# compromised or buggy validation job must never hold publication authority --
-# publication stays a separate human action after both this and Eggpack are green.
+# Least privilege, as far as GitHub's model allows it. This job needs to READ a
+# draft release, and GitHub serves drafts only to identities with push access, so
+# `contents: read` cannot do that job and `contents: write` is the narrowest
+# permission that can. There is no read-only-draft permission to reach for.
+#
+# What still prevents publication is this file containing no publication
+# command, and `check-staged-validation-contract.py` enforces exactly that --
+# including `gh release publish`, `curl ... PATCH`, and `cargo publish`. There
+# is no long-lived credential here. Publication stays a separate human action
+# after both this and Eggpack are green.
 
 on:
   workflow_run:
@@ -43,8 +49,23 @@ on:
         required: false
         type: string
 
+# `contents: write` is required, and it was read until M013 found out
+# otherwise. GitHub documents that "only users with push access will receive
+# listings for draft releases", and `gh release download` cannot fetch a draft
+# the caller cannot see -- so a `contents: read` token validates nothing: step
+# 5/6 would fail with "could not download the draft assets" on every run,
+# which is what run 37416030378 was heading for.
+#
+# The capability is held, so the guard that mattered is now enforced instead
+# of assumed: `check-staged-validation-contract.py` rejects ANY publication
+# command anywhere in this file -- `gh release publish/create/edit/delete/
+# upload`, a `curl ... PATCH` against the releases API, or `cargo publish`.
+# Publication was always supposed to be a separate human action; before, that
+# rested on the job being unable to, and now it rests on the file being
+# checked. The trade is recorded in M013's closure record and in this
+# repository's release-process notes, not absorbed.
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: validate-staged-release-${{ github.event.workflow_run.head_branch || inputs.tag || github.run_id }}

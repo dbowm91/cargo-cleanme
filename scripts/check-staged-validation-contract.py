@@ -53,10 +53,35 @@ IDENTITY_CHECK = "check-release-identity.py"
 # alternative -- scanning for the bare word `publish` -- also matches the
 # workflow's own comments explaining that it must never publish, which would
 # make this check reject the very file that documents the constraint.
+# Every way this file could actually publish. Since M011B the validation job
+# holds `contents: write` -- GitHub serves drafts only to push-level
+# identities, so read scope cannot fetch the draft at all -- which moves the
+# guarantee from "this job cannot publish" to "this file does not publish".
+# The second is the one that can be enforced, so it is enforced completely:
+# the direct CLI, the API under any verb spelling, and the registry.
 PUBLICATION = re.compile(
     r"\bgh\s+release\s+(?:publish|create|edit|delete|upload)\b"
     r"|\bcurl\b[^\n]*releases[^\n]*-(?:X-HTTP-Method-Override:\s*)?PATCH"
+    # `gh api` puts the verb and the path in either order, and the first
+    # version of this rule only matched one of them -- which is why the
+    # self-test's API case fails rather than passing.
+    r"|\bgh\s+api\b[^\n]*(?:-X\s*(?:POST|PATCH|PUT|DELETE)\b[^\n]*releases"
+    r"|releases[^\n]*-X\s*(?:POST|PATCH|PUT|DELETE)\b)"
+    r"|\bcargo\s+publish\b"
+    r"|\bgit\s+push\b[^\n]*--tags\b"
 )
+# A YAML comment is not executed, so it cannot publish anything. This file's own
+# comments name the forbidden commands in order to explain why they are
+# forbidden, and scanning comments would reject the documentation of the rule
+# along with violations of it -- a guard that cannot state its own rule.
+YAML_COMMENT = re.compile(r"(?m)^\s*#.*$")
+
+
+def executed_lines(workflow: str) -> str:
+    """The workflow with its full-line YAML comments removed."""
+    return YAML_COMMENT.sub("", workflow)
+
+
 PENDING_REVISION = re.compile(r"\$\{\{[^}]*\}\}")
 UPCASE = re.compile(r"\$UPSTREAM_(?:CONCLUSION|EVENT)\}|\$\{UPSTREAM_[A-Z_]+\}")
 
@@ -213,11 +238,18 @@ def check(workflow: str) -> list[str]:
             "run was accepted, not that it succeeded"
         )
 
-    if re.search(r"contents:\s*write", workflow):
-        problems.append(
-            "the validation workflow holds `contents: write`; validating a draft requires no "
-            "write scope, and holding one would hand a buggy job publication capability"
-        )
+    # The job must READ a draft release, and GitHub serves drafts only to
+    # identities with push access, so `contents: read` cannot do that and the
+    # narrowest scope that can is `contents: write`. That was discovered the
+    # hard way during M013: the read scope made the validator structurally
+    # unable to fetch the artifact it exists to validate.
+    #
+    # So the invariant is no longer "this job cannot publish" -- it cannot be
+    # expressed, since the job must hold write. It is "this file does not
+    # publish", which is enforceable and is enforced below. The remaining
+    # permissions stay forbidden: a read-and-validate job has no business with
+    # actions, id-token (which would let it mint a credential), packages, or
+    # deployments.
     permissions_block = re.search(r"^permissions:\s*\n((?:\s+.*\n)*)", workflow, re.MULTILINE)
     if permissions_block is None:
         problems.append(
@@ -225,22 +257,24 @@ def check(workflow: str) -> list[str]:
             "explicit scope can inherit the repository default, which may be read/write"
         )
     else:
-        if "contents: read" not in permissions_block.group(1):
+        declared = permissions_block.group(1)
+        if not re.search(r"^\s+contents:\s*(?:read|write)\s*$", declared, re.MULTILINE):
             problems.append(
-                "the validation workflow does not narrow `contents` to read; the inherited "
-                "default may be read/write"
+                "the validation workflow does not narrow `contents` explicitly to read or "
+                "write; an undeclared scope inherits the repository default"
             )
         for capability in ("actions:", "id-token:", "packages:", "deployments:"):
-            if capability in permissions_block.group(1):
+            if capability in declared:
                 problems.append(
                     f"the validation workflow requests `{capability}`; least privilege for a "
-                    "read-and-validate job is `contents: read` and nothing else"
+                    "read-and-validate job is `contents` and nothing else"
                 )
 
-    if PUBLICATION.search(workflow):
+    if PUBLICATION.search(executed_lines(workflow)):
         problems.append(
             "the validation workflow contains a publication command; publication is a separate "
-            "human action and this job must never hold that authority"
+            "human action, and since the job must hold `contents: write` to read a draft, the "
+            "absence of such a command is the only thing keeping publication out of its hands"
         )
 
     # The checkout must bind to the upstream head SHA. Checking out the default
@@ -448,10 +482,17 @@ def self_test() -> int:
         control(f"control: the {trigger} trigger mutation applied", injected, workflow)
         expect(f"a {trigger} trigger is rejected", check(injected), True)
 
-    # Write scope and publication.
-    wrote = workflow.replace("  contents: read\n", "  contents: write\n", 1)
-    control("control: the write-scope mutation applied", wrote, workflow)
-    expect("contents: write is rejected", check(wrote), True)
+    # Scope and publication. `contents: write` is required now (GitHub serves
+    # drafts only to push-level identities), so the cases that matter are the
+    # ones it replaced: an undeclared scope, a forbidden extra capability, and
+    # every shape this file could use to publish.
+    undeclared = workflow.replace("permissions:\n  contents: write\n", "", 1)
+    control("control: the undeclared-scope mutation applied", undeclared, workflow)
+    expect("an undeclared permissions scope is rejected", check(undeclared), True)
+
+    extra = workflow.replace("  contents: write\n", "  contents: write\n  id-token: write\n", 1)
+    control("control: the extra-capability mutation applied", extra, workflow)
+    expect("an id-token capability is rejected", check(extra), True)
 
     published = workflow.replace(
         "      # The draft is the authority being validated",
@@ -461,6 +502,27 @@ def self_test() -> int:
     )
     control("control: the publication mutation applied", published, workflow)
     expect("a publication command is rejected", check(published), True)
+
+    # With write scope held, an API-level publish must be caught too: it needs
+    # no `gh release` verb to work, and that is exactly the gap a verb-based
+    # rule would leave.
+    api_publish = workflow.replace(
+        "      # The draft is the authority being validated",
+        "      - run: gh api -X POST repos/dbowm91/cargo-cleanme/releases\n"
+        "      # The draft is the authority being validated",
+        1,
+    )
+    control("control: the API-publication mutation applied", api_publish, workflow)
+    expect("an API-level publication is rejected", check(api_publish), True)
+
+    registry = workflow.replace(
+        "      # The draft is the authority being validated",
+        "      - run: cargo publish --locked\n"
+        "      # The draft is the authority being validated",
+        1,
+    )
+    control("control: the registry-publication mutation applied", registry, workflow)
+    expect("a registry publication is rejected", check(registry), True)
 
     # Default-branch checkout: the quietest failure in this file.
     ref_line = next(
