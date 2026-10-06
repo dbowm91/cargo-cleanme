@@ -1802,8 +1802,15 @@ fn stage_runnable_binary(destination: &std::path::Path) {
         permissions.set_mode(0o755);
         fs::set_permissions(destination, permissions).unwrap();
     }
-    std::fs::File::open(destination)
-        .expect("the staged binary reopens")
+    // Opened for **writing**, not reading: on Windows `sync_all` is
+    // `FlushFileBuffers`, which fails with `PermissionDenied` on a read-only
+    // handle. `write(true)` without `truncate(true)` leaves the bytes alone,
+    // and the handle is dropped at the end of this statement, so nothing holds
+    // the file open by the time the case executes it.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(destination)
+        .expect("the staged binary reopens for flush")
         .sync_all()
         .expect("the staged binary is flushed before it is executed");
 }
