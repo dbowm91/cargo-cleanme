@@ -1777,6 +1777,37 @@ fn cargo_recorded_binary_name() -> &'static str {
     }
 }
 
+/// Write the built binary to `destination` so that it can be executed
+/// immediately, on every host.
+///
+/// `fs::copy` is deliberately not used. On Linux it goes through
+/// `copy_file_range`, and executing the destination straight afterwards can
+/// fail with `ETXTBSY` ("Text file busy") because the inode is still open for
+/// writing. That is not hypothetical: the `msrv` job of CI run 37408907268 hit
+/// it here, on a runner whose `/tmp` is overlayfs, while the same test was green
+/// on all three OS lanes and on twelve consecutive local runs. A plain
+/// read-then-write has no such window, and `sync_all` makes "these bytes are on
+/// disk" an enforced premise rather than an assumption.
+///
+/// The exec bit is set explicitly instead of inherited, so the staged file is
+/// runnable whether or not the source mode survived the copy.
+fn stage_runnable_binary(destination: &std::path::Path) {
+    let bytes =
+        fs::read(env!("CARGO_BIN_EXE_cargo-cleanme")).expect("the built binary is readable");
+    fs::write(destination, &bytes).expect("stage the built binary");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(destination).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(destination, permissions).unwrap();
+    }
+    std::fs::File::open(destination)
+        .expect("the staged binary reopens")
+        .sync_all()
+        .expect("the staged binary is flushed before it is executed");
+}
+
 /// A staged copy of the built binary inside a directory shaped like
 /// `cargo install --root DIR`, with Cargo's own record file beside it.
 ///
@@ -1789,7 +1820,7 @@ fn cargo_managed_installation(dir: &std::path::Path) -> std::path::PathBuf {
     let bin = dir.join("bin");
     fs::create_dir_all(&bin).unwrap();
     let staged = bin.join(cargo_recorded_binary_name());
-    fs::copy(env!("CARGO_BIN_EXE_cargo-cleanme"), &staged).unwrap();
+    stage_runnable_binary(&staged);
     fs::write(
         dir.join(".crates.toml"),
         format!(
