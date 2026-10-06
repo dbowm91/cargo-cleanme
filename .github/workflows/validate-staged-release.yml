@@ -141,6 +141,27 @@ jobs:
           echo "tag=$derived" >> "$GITHUB_OUTPUT"
           echo "exact tag: $derived"
 
+      # The checkout above is bound to the upstream run's exact head SHA, which
+      # is the binding this milestone exists to enforce -- and it is also why
+      # the tag is absent locally. `actions/checkout` fetches one commit, not
+      # the repository's tags, so `refs/tags/<tag>` does not exist and
+      # `check-release-identity.py` cannot prove anything:
+      #
+      #   tag v0.2.0 does not exist in this repository
+      #
+      # Fetching the tag does not weaken the proof. The gate immediately below
+      # compares `tag^{commit}` against this checkout's HEAD and fails if they
+      # differ, so what this step provides is a *subject to be verified*, not a
+      # fact to be trusted -- and it is fetched under the name derived from the
+      # checkout, never a name taken from the event payload.
+      - name: Fetch the exact tag so the identity gate can prove the binding
+        env:
+          TAG: ${{ steps.identity.outputs.tag }}
+        run: |
+          git fetch --no-tags --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG"
+          echo "fetched $TAG -> $(git rev-parse "refs/tags/$TAG^{commit}")"
+          echo "this checkout -> $(git rev-parse HEAD^{commit})"
+
       # Re-prove the tag/source binding with the existing exact-identity gate
       # rather than trusting the derivation above on its own. This is the same
       # check the release contract enforces locally, and it is what makes a
