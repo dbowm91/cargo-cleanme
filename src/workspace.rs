@@ -2959,13 +2959,20 @@ mod tests {
         // no diagnostic, because the inner's *own* output was outside the
         // covering root and so was refused -- which does not protect its source.
         let d = tempfile::tempdir().unwrap();
-        let outer_root = d.path().join("outer");
+        // `workspace_with_output` canonicalizes every root, member and target,
+        // so `covering` holds canonical paths. On macOS the temporary directory
+        // sits under a symlinked prefix (`/var` -> `/private/var`), so a group
+        // built from `d.path()` was compared against a spelling production
+        // never produces and the case failed on the shape rather than on the
+        // invariant. Derive every path from the canonical root.
+        let base = std::fs::canonicalize(d.path()).unwrap();
+        let outer_root = base.join("outer");
         let outer_out = outer_root.join("out");
         let inner_root = outer_out.join("inner");
         std::fs::create_dir_all(inner_root.join("src")).unwrap();
         std::fs::write(inner_root.join("src/lib.rs"), b"fn main(){}").unwrap();
         // The inner workspace's own output lives outside the covering root.
-        let inner_out = d.path().join("inner-target");
+        let inner_out = base.join("inner-target");
         std::fs::create_dir_all(&inner_out).unwrap();
 
         let outer = workspace_with_output(

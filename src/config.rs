@@ -598,12 +598,21 @@ mod tests {
         // the user named stopped matching, and two trees they never named
         // started being pruned.
         let d = tempfile::tempdir().unwrap();
-        let real = d.path().join("real[abc]");
+        // Production canonicalizes a pattern's prefix before splicing it, so
+        // the candidate it is matched against is always the *canonical*
+        // spelling. On macOS the temporary directory sits under a symlinked
+        // prefix (`/var` -> `/private/var`), so `tempdir()` and
+        // `fs::canonicalize` disagree about the first path segment and the
+        // fixture tested two different directories. Deriving every path from
+        // the canonical root is what makes this case test the same thing on
+        // every lane.
+        let base = fs::canonicalize(d.path()).unwrap();
+        let real = base.join("real[abc]");
         fs::create_dir_all(&real).unwrap();
         for sibling in ["reala", "realb"] {
-            fs::create_dir_all(d.path().join(sibling)).unwrap();
+            fs::create_dir_all(base.join(sibling)).unwrap();
         }
-        let link = d.path().join("link");
+        let link = base.join("link");
         symlink(&real, &link).unwrap();
         assert_ne!(
             link.display().to_string(),
@@ -612,7 +621,7 @@ mod tests {
              or the rewrite never has a bracketed name to splice"
         );
 
-        let config = d.path().join("config.toml");
+        let config = base.join("config.toml");
         fs::write(
             &config,
             format!(
@@ -633,7 +642,7 @@ mod tests {
         // ...and nothing else.
         for sibling in ["reala", "realb"] {
             assert!(
-                !matcher.is_match(format!("{}/{}/proj", d.path().display(), sibling)),
+                !matcher.is_match(format!("{}/{}/proj", base.display(), sibling)),
                 "{} must not be pruned by {}",
                 sibling,
                 ignore[0]
@@ -645,9 +654,9 @@ mod tests {
             canonical_pattern_prefix(&format!("{}/*", link.display()), PatternKind::Literal);
         assert_eq!(literal, format!("{}/*", real.display()));
         // A spelling with no portable escape is left exactly as written.
-        let braces = d.path().join("a{b}c");
+        let braces = base.join("a{b}c");
         fs::create_dir_all(&braces).unwrap();
-        let brace_link = d.path().join("bracelink");
+        let brace_link = base.join("bracelink");
         symlink(&braces, &brace_link).unwrap();
         let written = format!("{}/*", brace_link.display());
         assert_eq!(
