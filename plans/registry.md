@@ -33,15 +33,15 @@ Immutability policy enabled: `2026-10-05T13:34:38Z` (repository-level, not owner
 | Subsystem | Status | Roadmap | Current milestone | Blocker |
 |---|---|---|---|---|
 | Artifact discovery and cleanup | closed | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | none | Phase 12 and C019-C021 are closed. No artifact-discovery work blocks release; the remaining pre-0.2.0 gate is distribution-owned C022. |
-| Distribution, release, and update | ready / pre-0.2.0 hardening | `plans/subsystems/distribution-release-update-roadmap.md` | C022 pre-release machine-contract hardening | M013 publication is blocked on C022 closure. Phase 11 implementation remains closed; its remaining operational evidence is consumed by M013. |
+| Distribution, release, and update | ready / publication | `plans/subsystems/distribution-release-update-roadmap.md` | M013 0.2.0 publication and Phase 11 operational closure | C022 is closed, so M013 is unblocked. Phase 11 implementation remains closed; its remaining operational evidence is consumed by M013. |
 
 ## Open work
 
-Two implementation handoffs now order the 0.2.0 boundary. **C022 is ready** and
-owns the two bounded machine-contract gaps carried out of C021. **M013 is
-blocked on C022** and then owns staging, publication, attestation, smoke, and
-the remaining C018/M011A-M011C operational evidence. Phase 12 and Phase 11
-implementation remain closed.
+One implementation handoff remains on the 0.2.0 boundary. **C022 is closed** —
+it owned the two bounded machine-contract gaps carried out of C021. **M013 is
+ready** and owns staging, publication, attestation, smoke, and the remaining
+C018/M011A-M011C operational evidence. Phase 12 and Phase 11 implementation
+remain closed.
 
 | Item | Status | Plan / record | Note |
 |---|---|---|---|
@@ -50,8 +50,8 @@ implementation remain closed.
 | C019 — exact unignore sibling containment corrective | **closed** | `plans/closure/artifact-discovery-cleanup/c019-status.md` | Corrects M002: a literal ignored ancestor plus an exact unignore re-admitted unrelated siblings, so `ignore = […/archived]` with one `unignore` beneath it discovered every project in the archived subtree. Now one `Filters::disposition` decides `Included`/`Pruned`/`PassThrough`/`ReIncluded`, and inherited exclusion is proven by testing the path's ancestry. Unreleased. |
 | C020 — Windows concurrent first-use config creation race | **closed** | `plans/closure/artifact-discovery-cleanup/c020-status.md` | Corrects `config::create_initial`. The staging name was never unique within a process — threads shared the pid and the starting `attempt` — so every concurrent first use collided, and Windows spells that collision `PermissionDenied` rather than `AlreadyExists`. Fixed with a process-wide nonce, so the collision is removed rather than tolerated. Unreleased. |
 | C021 — pre-release test and verification-evidence reconciliation | **closed** | `plans/closure/artifact-discovery-cleanup/c021-status.md` | Release-blocking cleanup pass for 0.2.0, implemented on `bf99aa4` from `f3dfd7a`. The updater staging-cleanup flake was **proven** and was worse than reported: the assertion scanned the process-wide temp directory, so a sibling test's live staging path could fail it and it could not pass for its own reason either. Evidence is now fixture-owned, with a deliberate-own-leak negative control and a live-foreign-path concurrency control; no sleeps, retries, or serialization; production update code unchanged. The 17-script inventory is now machine-checked by `check-doc-citations.py` for exact set parity plus uniqueness — it found the real drift on its first run. Changelog now covers C018 and C020. Hosted: CI 37376843721 all 9 jobs green, drift 37375751351 green, selector 37375754785 green including the exploratory lane. **The Windows lane caught a defect in C021's own change** (a unix-only test helper tripping `-D dead_code`) that local Linux verification could not see. |
-| C022 — pre-release machine-contract hardening | **ready** | `plans/implementation/distribution-release-update/c022-pre-release-machine-contract-hardening.md` | Pins the untested update JSON machine contract and gives `check-installer-contract.py` a failing-direction self-test wired into every release gate. Must close before 0.2.0 staging. |
-| M013 — 0.2.0 publication and Phase 11 operational closure | **blocked on C022** | `plans/implementation/distribution-release-update/013-0.2.0-publication-and-phase11-operational-closure.md` | Exact-tag release plan: Eggpack draft -> automatic staged validation -> human publication -> crates.io from tag -> immutable attestation -> automatic five-target smoke -> C018/M011A-M011C evidence reconciliation. |
+| C022 — pre-release machine-contract hardening | **closed** | `plans/closure/distribution-release-update/c022-status.md` | Pins the update JSON machine contract (the one non-envelope surface, previously untested) and gives `check-installer-contract.py` a failing-direction self-test wired into every release gate, removing the last checker exception in the repository. No product behaviour changed. **Three hosted failures, all in C022's own new test code, none reproducible locally**: a CRLF assumption (Windows), an `ETXTBSY` staging race on overlayfs (`msrv`), and a read-only flush handle that made the second fix Unix-only (Windows again). It took four pushes to close. |
+| M013 — 0.2.0 publication and Phase 11 operational closure | **ready** | `plans/implementation/distribution-release-update/013-0.2.0-publication-and-phase11-operational-closure.md` | Exact-tag release plan: Eggpack draft -> automatic staged validation -> human publication -> crates.io from tag -> immutable attestation -> automatic five-target smoke -> C018/M011A-M011C evidence reconciliation. Unblocked by C022's closure record. |
 | C010 — `CurlConfig::user_agent` seam in `eggup-curl` | **proposed** | `plans/implementation/distribution-release-update/c010-eggup-curl-user-agent-seam.md` | Bounded upstream request. It cannot be closed from this repository, and nothing here waits on it: `eggup-eggfetch` already provides the seam. No closure record, by design. |
 | C018 — self-update provenance uncertainty fail-closed | **closed** | `plans/closure/distribution-release-update/c018-status.md` | Outstanding: work package 9 — a default-Cargo-home and `--root` real installation refused by a *released* binary, bytes unchanged. |
 | M011A — immutable release attestation + verification | **closed (conditional)** | `plans/closure/distribution-release-update/m011a-status.md` | Outstanding: verification of a real attested `cargo-cleanme` release. Policy enabled and verified live; v0.1.0–v0.1.6 remain mutable and are not described as attested. |
@@ -63,7 +63,7 @@ implementation remain closed.
 that will carry an attestation, and it is the first chance to supply four
 outstanding evidences at once. Three constraints make the order matter:
 
-1. **C022 must close before staging.** It owns the two release-adjacent
+1. **C022 is closed; staging may begin.** It owned the two release-adjacent
    verification gaps that C021 deliberately did not absorb: update JSON contract
    coverage and a failing-direction self-test for the installer contract checker.
 2. **M013 owns the release once C022 closes.** Do not improvise a second release
@@ -75,9 +75,14 @@ outstanding evidences at once. Three constraints make the order matter:
 4. The release is **immutable once published**. A defect found in published bytes
    cannot be repaired by replacing an asset; it needs a patch version. The
    post-publication smoke is the last point at which that is cheap.
-5. **Do not skip the hosted lanes because local verification was green.** C021's
-   own first push passed everything local and failed the Windows lane on
-   `-D dead_code`. The lanes are not ceremony around a verdict you already have.
+5. **Do not skip the hosted lanes because local verification was green.** This
+   is now the repository's strongest and best-evidenced rule, because it fired
+   twice in a row. C021's first push passed everything local and failed the
+   Windows lane on `-D dead_code`. C022 needed **four** pushes: its first three
+   failed hosted on a CRLF assumption, an `ETXTBSY` staging race, and a fix
+   that assumed Unix — none of which reproduced in 23 local attempts, and the
+   local ladder was green at every one of those moments. The lanes are not
+   ceremony around a verdict you already have.
 
 ## Published state
 

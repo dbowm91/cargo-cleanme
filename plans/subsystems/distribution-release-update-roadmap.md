@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: Phase 10 and post-release correctives C013-C017 are **closed**. Phase 11 implementation is **closed**: C018, M011A, M011B, and M011C have closure records, with four operational evidences still requiring the next published release. Phase 13 now owns that path: C022 is ready and M013 is blocked on C022. C010 remains an upstream request (`proposed`) that nothing here waits on.
+Status: Phase 10 and post-release correctives C013-C017 are **closed**. Phase 11 implementation is **closed**: C018, M011A, M011B, and M011C have closure records, with four operational evidences still requiring the next published release. Phase 13 now owns that path: C022 is **closed** and M013 is **ready**. C010 remains an upstream request (`proposed`) that nothing here waits on.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 
@@ -530,10 +530,10 @@ Dependency:
 C021 pre-release evidence reconciliation [closed]
                     |
                     v
-C022 machine-contract hardening [ready]
+C022 machine-contract hardening [closed]
                     |
                     v
-M013 v0.2.0 publication + Phase 11 operational closure [blocked on C022]
+M013 v0.2.0 publication + Phase 11 operational closure [ready]
                     |
                     +--> C018 released Cargo provenance evidence
                     +--> M011A immutable attestation evidence
@@ -546,20 +546,30 @@ M013 v0.2.0 publication + Phase 11 operational closure [blocked on C022]
 Plan:
 
 - `plans/implementation/distribution-release-update/c022-pre-release-machine-contract-hardening.md`
+- closure: `plans/closure/distribution-release-update/c022-status.md`
 
-Status: **ready**.
+Status: **closed** (`560a158`, `6c4195c`, `3bf8f3a`, `705cd65`; CI 37410115511, drift 37410115515).
 
-C022 closes the two bounded release-edge gaps C021 intentionally carried
+C022 closed the two bounded release-edge gaps C021 intentionally carried
 forward:
 
-- `update --format json` has a production serializer but no contract/stream
-  test; and
-- `check-installer-contract.py` is the only contract checker without a
-  failing-direction `--self-test`.
+- `update --format json` had a production serializer and no contract/stream
+  test. `update_json` moved from a private function of the binary into
+  `output.rs`, and `update_json_stream` now returns the exact bytes the JSON
+  path writes, so four cases pin the production document and its stream and a
+  real-binary case pins the failure shape. **No product behaviour changed.**
+- `check-installer-contract.py` was the only contract checker without a
+  failing-direction `--self-test`. It now takes a fixture root and the recorded
+  exec bit, and its self-test requires a rejection *for the intended
+  diagnostic* across twelve cases, wired into CI, release-drift, and
+  `release-check.sh` before the check itself.
 
-The corrective must add evidence without changing updater/installer behavior,
-wire the installer checker self-test into CI/release-drift/release-check, and
-finish on green hosted evidence. It publishes nothing.
+Three hosted failures landed in C022's own work before it closed — a CRLF
+assumption in a test that reads `main.rs`, an `ETXTBSY` staging race on the
+`msrv` runner, and a read-only flush handle that made the second of those fixes
+Unix-only. None reproduced locally in 23 attempts, and the local ladder was
+green throughout; it took four pushes to close. All are recorded in the closure
+record rather than fixed quietly. C022 published nothing.
 
 ### 12.2 M013 — 0.2.0 publication and Phase 11 operational closure
 
@@ -567,7 +577,7 @@ Plan:
 
 - `plans/implementation/distribution-release-update/013-0.2.0-publication-and-phase11-operational-closure.md`
 
-Status: **blocked on C022**.
+Status: **ready** (unblocked by C022's closure record).
 
 M013 is the canonical operator handoff for the 0.2.0 release. It consumes the
 existing release machinery rather than reimplementing it:

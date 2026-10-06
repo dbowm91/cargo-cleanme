@@ -528,15 +528,18 @@ split from feature implementation.
 
 Sequence:
 
-1. **C022 — pre-release machine-contract hardening** (**ready**)
-   - pin `update --format json` schema/stream behavior with direct tests;
+1. **C022 — pre-release machine-contract hardening** (**closed**,
+   `plans/closure/distribution-release-update/c022-status.md`)
+   - pin `update --format json` schema/stream behavior with direct tests —
+     done, by moving the serializer out of the binary so the tests can reach
+     the production one;
    - add `check-installer-contract.py --self-test` with premise-negative
-     mutations;
-   - wire the self-test into CI, release drift, and `release-check.sh`;
-   - no product/release semantics change.
+     mutations — done, twelve cases, each also asserting the rejection reason;
+   - wire the self-test into CI, release drift, and `release-check.sh` — done;
+   - no product/release semantics change — confirmed.
 
 2. **M013 — 0.2.0 publication and Phase 11 operational closure**
-   (**blocked on C022**)
+   (**ready**)
    - freeze one exact release commit and `v0.2.0` tag;
    - run the complete release gate;
    - stage all five targets through Eggpack;

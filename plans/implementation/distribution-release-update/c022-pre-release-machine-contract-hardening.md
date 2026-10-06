@@ -1,8 +1,13 @@
 # C022 - Pre-Release Machine-Contract Hardening
 
-Status: ready
+Status: closed
+
+Closure record:
+[`plans/closure/distribution-release-update/c022-status.md`](../../closure/distribution-release-update/c022-status.md)
 
 Repository baseline: `f3d0d9c8c435063bb67940b8dd1c95605141e0e7`
+Implementation commits: `560a158`, `6c4195c`, `3bf8f3a`
+Final head: `3bf8f3a`
 
 Corrects findings from:
 

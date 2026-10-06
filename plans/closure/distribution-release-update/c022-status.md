@@ -13,8 +13,11 @@ Those records are preserved unedited; this one corrects them forward.
 
 Repository baseline: `f3d0d9c8c435063bb67940b8dd1c95605141e0e7`
 Implementation commit: `560a158`
-Fix commit: `6c4195c` (a defect in C022's own work, found by the hosted Windows
-lane — §8.1)
+Fix commits: `6c4195c` (hosted Windows lane — §8.1), `3bf8f3a` (hosted `msrv`
+job — §8.2), `705cd65` (hosted Windows lane again — §8.3). All three were
+defects in C022's own work, all three found by a hosted lane that local
+verification could not see.
+Final head: `705cd65`
 Release tag carrying the work: **none yet** — 0.2.0 is unreleased; see §9.
 
 ---
@@ -294,14 +297,29 @@ tell a broken guard from a guard with nothing to check.
 
 ## 8. Hosted evidence
 
+**Four pushes were needed, and three of them failed hosted — every failure in
+this plan's own test code.** The local ladder was green at every one of those
+moments. That is the single most important thing in this record, and it is why
+the plan's final-head criterion was not waived or restated to match the first
+green result.
+
 | Workflow | Run | Head | Result |
 |---|---|---|---|
-| CI | 37408556261 | `560a158` | **failure** — Windows lane; see §8.1 |
+| CI | 37408556261 | `560a158` | **failure** — `checks (windows-latest)`; §8.1 |
 | Release drift guard | 37408556202 | `560a158` | success |
-| CI | 37408907268 | `6c4195c` | see §8.2 |
-| Release drift guard | 37408907321 | `6c4195c` | see §8.2 |
+| CI | 37408907268 | `6c4195c` | **failure** — `msrv`; §8.2 |
+| Release drift guard | 37408907321 | `6c4195c` | success |
+| CI | 37409315255 | `3bf8f3a` | **failure** — `checks (windows-latest)`; §8.3 |
+| Release drift guard | 37409315243 | `3bf8f3a` | success |
+| CI | 37410115511 | `705cd65` | **success**, all 9 jobs; §8.5 |
+| Release drift guard | 37410115515 | `705cd65` | **success**; §8.5 |
 
-### 8.1 The first push failed, in C022's own work
+The release-drift guard was green on every head, including every head that
+carried the new `--self-test` step — so the guard this plan added has been
+running in the workflow that watches release authority since the first push
+that contained it.
+
+### 8.1 First push: a CRLF assumption
 
 `560a158` passed the whole local ladder and failed hosted CI on
 `checks (windows-latest)`: `the_json_update_branch_prints_only_the_tested_seam`
@@ -319,10 +337,9 @@ that binary passed, and the library suite reported **270** passed.
 This is C021's finding repeating one release later, and it is why the plan
 refused to treat a green local ladder as sufficient. Fixed in `6c4195c` by
 normalizing CRLF before slicing, with the reason in a comment so the next reader
-knows why the normalization is load-bearing rather than cosmetic.
-
-The fix was verified by re-running the exact slicing the test performs against
-a CRLF-converted `main.rs`: unnormalized, the terminator is not found;
+knows why the normalization is load-bearing rather than cosmetic. The fix was
+verified by re-running the exact slicing the test performs against a
+CRLF-converted `main.rs`: unnormalized, the terminator is not found;
 normalized, it is. That is a check of the mechanism, not a rerun of the same
 green test.
 
@@ -331,21 +348,119 @@ It has rules for literal path separators, POSIX shebangs, and hardcoded `/tmp`,
 but no rule for a test that reads a source file and slices it. That is a gap in
 the guard's coverage, not a regression in it, and it is §11 finding 1.
 
-### 8.2 Final-head result
+### 8.2 Second push: a staging race that would not reproduce
 
-**Run 37408907268 — CI — head `6c4195c`.** See §8.4 for the job table.
+`6c4195c` fixed the Windows lane and passed it — all three `checks` lanes and
+all three `installers` lanes green. The failure moved to `msrv`:
 
-## 8.3 Release drift guard
+```text
+---- json_update_refusal_emits_no_document_and_exits_non_zero stdout ----
+thread '...' panicked at tests/cli_contract.rs:1822:10:
+called `Result::unwrap()` on an `Err` value:
+  Os { code: 26, kind: ExecutableFileBusy, message: "Text file busy" }
+```
 
-**Run 37408907321 — head `6c4195c`.** See §8.4.
+The panic is in `spawn`, not in the subject. The case stages the built binary
+and executes it immediately; on Linux `fs::copy` goes through
+`copy_file_range`, and exec'ing a destination whose inode is still open for
+writing returns `ETXTBSY`.
 
-## 8.4 Job detail
+**It did not reproduce locally at all.** Attempts recorded before concluding
+anything:
 
-Populated from the final-head runs; see §8.5.
+| Attempt | Result |
+|---|---|
+| `cargo test --test cli_contract json_update_refusal`, 12 consecutive runs | 12/12 green |
+| the full `cli_contract` binary, `--test-threads=12`, 10 consecutive runs | 10/10 green, 0 `Text file busy` |
+| `cargo +1.89 test --locked --all-targets` (the failing toolchain) | green |
 
-## 8.5 Hosted run table
+The hosted Ubuntu runner's `/tmp` is overlayfs, which is where the writeback
+window opens. **Not reproducing a defect locally is the situation C021's record
+exists to warn about**, so it is written down rather than quietly relabelled a
+runner flake.
 
-See §8.4 and §8.6.
+Fixed in `3bf8f3a` by removing the pattern instead of retrying it: read the
+bytes, write them with a plain read/write (no `copy_file_range`), set the exec
+bit explicitly rather than inheriting it, and flush before returning. No sleep,
+no retry, no serialization — the premise the case needs is "these bytes are on
+disk and nothing holds them open", and it is now enforced rather than hoped
+for.
+
+### 8.3 Third push: the fix itself was Unix-only
+
+`3bf8f3a` fixed the `msrv` job — it is green in run 37409315255 — and passed
+every `checks` lane on macOS and Linux. It failed `checks (windows-latest)`
+again, on the case it had just changed:
+
+```text
+thread 'json_update_refusal_emits_no_document_and_exits_non_zero' panicked at
+  tests\cli_contract.rs:1808:10:
+the staged binary is flushed before it is executed:
+  Os { code: 5, kind: PermissionDenied, message: "Access is denied." }
+```
+
+The §8.2 fix flushed via `File::open`, which is read-only. On Windows `sync_all`
+is `FlushFileBuffers`, and that requires `GENERIC_WRITE` on the handle; it
+returns `PermissionDenied` on a read-only one. **The fix for a Linux-only
+writeback window was itself Unix-only**, and the lane that caught it was the same
+lane that caught §8.1.
+
+Fixed in `705cd65` by opening with `write(true)` and not `truncate(true)`, so
+the staged bytes are untouched. The handle is still dropped before the case
+executes the file.
+
+### 8.4 The pattern, stated plainly
+
+Three of this plan's own test additions failed on three different hosted
+conditions that local Linux verification rated green, and **all three were in
+code written to satisfy this plan**:
+
+1. a CRLF assumption in a test that reads `main.rs` (§8.1);
+2. a `copy_file_range` writeback window that opens on overlayfs (§8.2);
+3. a read-only flush handle — a fix that assumed Unix (§8.3).
+
+None was a product defect, and none was in shipped code. They are all
+fixture defects, which is the C012 shape, in the one milestone whose entire
+purpose was adding evidence.
+
+The sharpest version of the lesson is the third one. A failure that only appears
+after the fix for the previous failure has landed is a failure a "fix, verify,
+re-run" loop does not converge on by reasoning alone — it needs a lane that
+disagrees. Two of these three were on the **Windows** lane, and C021's own
+record already contained a Windows-lane defect. The hosted matrix is not
+ceremony around a verdict you already have locally; on this plan it was the only
+thing standing between three broken tests and a green closure record.
+
+### 8.5 Final-head result
+
+**Run 37410115511 — CI — `success`, all 9 jobs, no cancellations, head
+`705cd65`.**
+
+| Job | Result |
+|---|---|
+| `checks` (ubuntu-latest) | success |
+| `checks` (macos-latest) | success |
+| `checks` (windows-latest) | success — **the lane that failed on `560a158` and `3bf8f3a`** |
+| `installers` (ubuntu-latest) | success |
+| `installers` (macos-latest) | success |
+| `installers` (windows-latest) | success |
+| `generated-docs` | success |
+| `benchmark` | success |
+| `msrv` | success — **the job that failed on `6c4195c`** |
+
+**Run 37410115515 — Release drift guard — `success`, head `705cd65`.**
+
+Every job obtained a runner and executed every step; nothing was cancelled and
+nothing was skipped. Acceptance criterion 10 is satisfiable from these runs and
+not from the local ladder — §8.1 through §8.3 are the proof of that, and every
+failure was in this plan's own work.
+
+The `generated-docs` job is the CI job that runs the new
+`check-installer-contract.py --self-test`. It was green on **every** head,
+including the very first push — the guard this plan added was never itself red.
+All three failures were in the Rust test additions, which is the opposite of
+where a reader might expect a new plan to break first.
+
 
 ## 9. Release status
 
@@ -379,8 +494,28 @@ release that does not exist.
 | 1 | **Low** | `check-fixture-portability.py` scans `tests/**/*.rs` but has no rule for a test that reads a source file and slices it on an assumed line ending. It is the guard whose entire purpose is "a fixture that cannot run on the lane reporting it green", and C022's own Windows failure is that exact class. Adding the rule means deciding what a source-reading fixture may assume about line endings, which is a guard-design question, not a C022 change. |
 | 2 | **Low** | The installer asset-name guard proves product-then-target ordering, not full template equality with the contract expansion (§4.2). Pre-existing; widening it means parsing shell expression shapes. |
 | 3 | **Informational** | A successful `update --format json` document is proved at the seam and not end-to-end (§3.2). Tracked as R3 in `architecture/14-testing-and-verification.md`; M013's post-release smoke is where it becomes observable. |
+| 4 | **Informational** | `staged_cargo_cleanme()` (`tests/cli_contract.rs:13`) still stages with `fs::copy`. C022 replaced that pattern only in its own helper, because C022 is what failed. The same `copy_file_range` window exists in the four external-subcommand cases and is untested on a filesystem that opens it. Not fixed here: changing a shared fixture used by cases this plan did not author is a wider change than C022 authorises, and the four cases passed on every hosted lane including the one that failed here. |
 
 No medium-or-higher finding remains inside C022's scope.
+
+### 11.1 Defects found in C022's own work
+
+Three, all in this plan's new test code, all found by hosted lanes:
+
+1. **§8.1** — a CRLF assumption in a test that reads `main.rs`. Fixed in
+   `6c4195c`.
+2. **§8.2** — an `ETXTBSY` race between staging a binary and executing it, on a
+   runner whose `/tmp` is overlayfs and which could not be reproduced locally in
+   23 attempts. Fixed in `3bf8f3a`.
+3. **§8.3** — a read-only flush handle in that fix, i.e. a fix for a Linux-only
+   window that was itself Unix-only. Fixed in `705cd65`.
+
+They are recorded here rather than fixed silently. A plan that finds a defect
+records it; it does not absorb it into a green summary. And the fact that this
+plan's own tests failed three times on lanes that local verification rated green
+is the strongest available evidence for the plan's own refusal to treat a green
+local ladder as sufficient — and the reason C022 needed four pushes instead of
+one.
 
 ## 12. Acceptance criteria
 
@@ -395,7 +530,7 @@ No medium-or-higher finding remains inside C022's scope.
 | 7 | self-test wired before the checker in CI, release-drift, `release-check.sh` | §5 table; §7 gate output ordering |
 | 8 | verification documentation no longer calls the checker un-self-tested | §6 — `AGENTS.md`, §5 note 5, note 14, `docs/RELEASING.md` |
 | 9 | local full release gate green | §7 — `bash scripts/release-check.sh` passed |
-| 10 | final-head hosted CI and release-drift green | §8 |
+| 10 | final-head hosted CI and release-drift green | §8.5 — CI **37410115511** and drift **37410115515**, both on `705cd65`, after three failed heads |
 | 11 | no medium-or-higher finding inside scope | §11 |
 
 ## 13. Downstream handoff
