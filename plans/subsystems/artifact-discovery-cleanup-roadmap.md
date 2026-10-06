@@ -606,7 +606,7 @@ capability/corrective plan.
 
 ## 10G. C019 — Exact unignore sibling-containment corrective
 
-Status: **ready**.
+Status: **closed**.
 
 Plan:
 
@@ -719,8 +719,8 @@ Outcome:
   unresolved ownership still blocks the complete selected scope, and every
   CleanupUnit still requires fresh complete ownership/freshness proof
   immediately before Cargo.
-- Outstanding, and not closable here: publication. The breaking front door ships
-  in the next release.
+- Publication occurred in v0.2.0. Post-publication C023 now owns two destructive
+  defects found in that release and the v0.2.1 safety patch.
 
 Dependency: M012B has an interface dependency on M012A's resolved operation/scope/mode vocabulary. Rendering work may proceed in parallel after that vocabulary is fixed.
 
@@ -879,4 +879,4 @@ The implementation should specifically verify:
 
 ## 14. Completion definition
 
-The initial read-only boundary was reached when M001-M003 closed with evidence that cargo-cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004-M007 and C001-C007 establish Cargo-mediated cleanup, complete ownership/freshness proof, adaptive discovery, and combined-root orchestration. Scans remain read-only; ADR 003/Phase 12 intentionally changes bare invocation from a scan front door to Routine cleanup without changing that proof boundary. Phase 9 remains closed for current objectives: M008A/B policy and reporting, profile support from M008C, and package support from M008D. Profile support is limited to exact qualified releases 1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0, 1.98.1, and 1.99.0; package support is limited to exact Cargo 1.98.1 and 1.99.0. Selector estimates remain unknown and unqualified Cargo versions fail closed. C019 restored M002 exact-unignore sibling containment without changing the destructive safety boundary, and closed; M011D closed the selector evidence lifecycle and its hosted gate now actually executes. Both corrections are unreleased, so the next release from `main` is the first that carries either. C021, the pre-release evidence corrective, is closed; 0.2.0 staging is unblocked. Distribution/release Phase 11 work is tracked by `plans/subsystems/distribution-release-update-roadmap.md`.
+The initial read-only boundary was reached when M001-M003 closed with evidence that cargo-cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004-M007 and C001-C007 establish Cargo-mediated cleanup, complete ownership/freshness proof, adaptive discovery, and combined-root orchestration. Scans remain read-only; ADR 003/Phase 12 intentionally changes bare invocation from a scan front door to Routine cleanup without changing that proof boundary. Phase 9 remains closed for current objectives: M008A/B policy and reporting, profile support from M008C, and package support from M008D. Profile support is limited to exact qualified releases 1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0, 1.98.1, and 1.99.0; package support is limited to exact Cargo 1.98.1 and 1.99.0. Selector estimates remain unknown and unqualified Cargo versions fail closed. C019 and C020 shipped in v0.2.0; C021 closed the pre-release evidence pass. Post-release C023 is now the active safety corrective because immutable v0.2.0 was found to violate dry-run and global source-disjointness invariants. Distribution/release publication/yank work is tracked by `plans/subsystems/distribution-release-update-roadmap.md`.
