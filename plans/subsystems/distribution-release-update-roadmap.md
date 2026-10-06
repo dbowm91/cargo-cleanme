@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: **Phase 13 is closed.** C022 closed; M013 published **0.2.0** from tag `95629ae`. Phase 10, post-release correctives C013-C017, and Phase 11 implementation are closed, and C018/M011A/M011B now carry that release's evidence. **M011C remains conditionally closed**: its five-target lanes are green, but the *automatic* `release: published` trigger has never been observed green. C010 remains an upstream request (`proposed`) that nothing here waits on.
+Status: **corrective required — C023 ready.** C022 closed and M013 published immutable **0.2.0** from tag `95629ae`, but M013's automatic M011C acceptance criterion was not met and post-release interrogation found two destructive product defects in the published bytes. C023 owns the v0.2.1 safety patch, 0.2.0 yank/disclosure, automatic-smoke evidence, and planning reconciliation. C010 remains an independent upstream request.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 
@@ -518,7 +518,7 @@ remains available for recovery/historical transitions.
 
 ## 12. Phase 13 — 0.2.0 pre-release hardening and publication
 
-Status: **active planning / ordered handoff**.
+Status: **corrective required after publication — C023 ready**.
 
 Phase 13 does not add a new product feature. It takes the already-implemented
 0.2.0 tree through the last bounded verification hardening and then through the
@@ -614,4 +614,38 @@ The following remain explicit follow-ups rather than hidden release blockers:
   roadmap concern.
 
 None may be used to waive a failed release qualification gate.
+
+### 12.4 C023 — v0.2.0 destructive-safety patch-release corrective
+
+Status: **ready / immediate**.
+
+Plan:
+
+- `plans/implementation/distribution-release-update/c023-v0.2.0-destructive-safety-patch-release-corrective.md`
+
+Affected release:
+
+- immutable `v0.2.0`, source `95629ae28223e975faf1e8ed99ca3e6f83d6f724`.
+
+Post-release interrogation proved two destructive defects in those bytes:
+
+1. `cargo cleanme --dry-run clean ROOT` could discard the root-level dry-run
+   and execute a real `cargo clean`.
+2. an output covering root owned by one workspace could contain another
+   resolved workspace's source tree and still be treated as `PrivateBounded`,
+   allowing Cargo cleanup to remove the neighbour's source.
+
+The fixes are present on `main`, but the current baseline
+`eaa7bba1cd70513a7bf48a99d7d9ffe19334a539` is not release-qualified:
+CI #284 fails on macOS because a new discovery test helper passes
+`std::fs::FileType` where `dua_core::FileType` is required; the Ubuntu and
+Windows check lanes were cancelled after that failure.
+
+C023 requires published-0.2.0 premise reproduction in disposable fixtures,
+cross-platform qualification of the fixes, an immutable v0.2.1 patch release,
+a green **automatic** M011C five-target smoke, public-binary safety
+requalification, crates.io 0.2.0 yank, and explicit reconciliation of the M013
+historical closure without erasing its failed evidence.
+
+Ordinary roadmap work must not advance ahead of C023.
 
