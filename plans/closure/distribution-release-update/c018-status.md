@@ -309,3 +309,57 @@ to `unix`. The rule requires a filesystem write in the same function on purpose 
 and formats it, which is portable, and the first version of the rule flagged it
 as a false positive. The rule fires on the reverted `update.rs` gate and stays
 quiet on the fixed tree, which is the only evidence that matters.
+
+---
+
+## Release evidence satisfied — published v0.2.0 (M013, 2026-10-06)
+
+The outstanding item on this record was real-release provenance evidence: the
+updater's refusal is only meaningful against an installation that is genuinely
+Cargo-managed **and** has a newer version actually available. Both premises are
+now real.
+
+Starting installation: `cargo-cleanme 0.1.6`, installed from crates.io through
+normal `cargo install --locked`, in two places — the default Cargo home and an
+explicit `--root`. Updater under test: the published 0.1.6 binary. Newer version
+available: crates.io served `0.2.0` for the whole of both runs (verified by
+`cargo search` immediately before), so neither refusal can be mistaken for
+"already current".
+
+### Default Cargo home
+
+```text
+before: e0388afd7a6df6d2cf3c35c9f53b0dadae98b2da424a02d1dd9f7e451c035e70
+cargo-cleanme: self-update refused: cargo-cleanme is cargo_managed; run this instead:
+  cargo install cargo-cleanme --locked --force
+update exit=2
+after:  e0388afd7a6df6d2cf3c35c9f53b0dadae98b2da424a02d1dd9f7e451c035e70
+```
+
+`cargo install --list` still reports `cargo-cleanme v0.1.6`, and
+`cargo-cleanme --version` still reports 0.1.6.
+
+### Explicit `--root`
+
+Installed with `cargo install cargo-cleanme --version 0.1.6 --locked --root
+/tmp/m013-c018-root`, then exercised identically. Same refusal, same exit 2,
+same byte-identical result, and `cargo install --list --root /tmp/m013-c018-root`
+remains coherent at v0.1.6.
+
+### Against each requirement
+
+| Requirement | Evidence |
+|---|---|
+| refuses replacement for Cargo-managed ownership | exit 2, `self-update refused: cargo-cleanme is cargo_managed` |
+| bytes remain unchanged | sha256 identical before and after, in both homes |
+| Cargo bookkeeping remains unchanged | `cargo install --list` still v0.1.6 |
+| refusal names the correct Cargo action | `cargo install cargo-cleanme --locked --force` |
+| locally forbidden provenance causes no release-asset mutation | `release-manifest.json` still binds `95629ae`; no asset was added, replaced, or removed |
+| not confused with "already current" | 0.1.6 start, 0.2.0 served by crates.io throughout |
+
+One environment change is disclosed rather than hidden: satisfying the default
+home case required installing 0.1.6 into `~/.cargo/bin`, which replaced a
+pre-existing `cargo-cleanme 0.1.0` there. 0.1.0 predates the `update`
+subcommand entirely (`error: unrecognized subcommand 'update'`), so it could
+not have served as the subject. Reinstating 0.1.0 is
+`cargo install cargo-cleanme --version 0.1.0`.

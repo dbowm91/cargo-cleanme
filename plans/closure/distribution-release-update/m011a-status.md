@@ -151,3 +151,56 @@ C010–C017 all followed.
 **Downstream effect:** this unblocks nothing that was blocked, and M011C is
 already implemented. It does **not** unblock C018's release evidence, which
 needs a published release carrying the provenance fix.
+
+---
+
+## Operationally closed — published v0.2.0 (M013, 2026-10-06)
+
+The stop condition on this record was that a real attested `cargo-cleanme`
+release had to be verified. It has been.
+
+### Policy state
+
+```text
+verify-release-attestation: immutable releases are enabled for dbowm91/cargo-cleanme (enforced_by_owner=False)
+  Releases published from here on carry a signed attestation; releases published before this point remain mutable and must not be described as attested
+```
+
+### Release-level verification
+
+```text
+verify-release-attestation: v0.2.0 is immutable and carries a valid release attestation
+  attested release subject: pkg:github/dbowm91/cargo-cleanme@v0.2.0 (15 asset digest(s))
+```
+
+### Downloaded-asset verification
+
+All 15 contracted assets were downloaded from the published release into a
+clean directory and verified against the attestation:
+
+```text
+verify-release-attestation: v0.2.0 is immutable and its 15 asset digest(s) match GitHub's signed attestation
+  attested release subject: pkg:github/dbowm91/cargo-cleanme@v0.2.0 (15 asset digest(s))
+```
+
+Published at `2026-10-06T05:34:06Z`, release id `RE_kwDOU5PV0M4YGdDL`.
+
+### One invocation note worth keeping
+
+`verify-release-attestation.py` runs `check-release-identity.py` **from the
+current checkout**, and that gate compares the tag against `HEAD`. Running it
+from a working tree that has moved past the tag therefore fails with
+
+```text
+[source_identity] tag v0.2.0 points at 95629ae28223, not the revision being released (4f8c4f0f87e6)
+```
+
+which reads like a release-identity defect and is not one. It is the correct
+refusal of a check run from the wrong source. **Verify a release from a
+checkout of its own tag** — `git worktree add /tmp/… v0.2.0` — which is
+already the documented procedure for publication. Verified that way here, from
+`95629ae28223e975faf1e8ed99ca3e6f83d6f724`, exit 0.
+
+This is recorded as an unresolved *documentation* finding rather than a defect:
+nothing stopped a maintainer from doing the wrong thing, and the failure text
+does not say where to run it from.

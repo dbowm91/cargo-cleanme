@@ -222,6 +222,16 @@ def wait_for_crates_io(
     if target_version is None:
         raise TransitionError(f"{target!r} is not a plain stable vX.Y.Z tag")
 
+    # The crates.io per-version endpoint takes a **version number**, not a tag:
+    # `/api/v1/crates/<name>/<version>`. Passing the tag asked for
+    # `.../cargo-cleanme/v0.2.0` and crates.io answered **HTTP 400**, so every
+    # automatic smoke polled a URL that can never succeed until its deadline and
+    # then failed. The path is built from the validated parse rather than by
+    # stripping the first character, so a future tag-shape change cannot
+    # reintroduce it silently.
+    major, minor, patch = target_version
+    version_path = f"{major}.{minor}.{patch}"
+
     started = clock()
     deadline = started + deadline_seconds
     backoff = initial_backoff
@@ -231,7 +241,7 @@ def wait_for_crates_io(
     while True:
         attempts += 1
         try:
-            payload = _fetch_json(CRATES_IO_API + f"/{target}", opener=opener)
+            payload = _fetch_json(f"{CRATES_IO_API}/{version_path}", opener=opener)
         except TransitionError as error:
             # A transient 404 or outage is the normal case here, because
             # publication is ordered GitHub-first. It is recorded and retried
@@ -249,7 +259,7 @@ def wait_for_crates_io(
                     last = f"crates.io advertises {target} but it is yanked"
                 elif prerelease:
                     last = f"crates.io advertises {target} as a non-stable channel"
-                elif number != target[1:]:
+                elif number != version_path:
                     last = (
                         f"crates.io answered for {target!r} with version {number!r}; the "
                         "authority must echo the exact release tag"
@@ -259,7 +269,7 @@ def wait_for_crates_io(
                         "target": target,
                         "attempts": attempts,
                         "waited_seconds": round(clock() - started, 3),
-                        "source": CRATES_IO_API,
+                        "source": f"{CRATES_IO_API}/{version_path}",
                     }
             else:
                 last = "crates.io returned a response without a version object"
@@ -498,6 +508,35 @@ def self_test() -> int:
                 }
             ).encode()
         )
+
+    # Every other case here injects an opener that ignores the URL it is handed,
+    # which is precisely why a wrong URL could ship green: all of them would
+    # have passed against `/cargo-cleanme/v0.1.7` just as happily. This one
+    # records what was actually requested and checks the path. crates.io's
+    # per-version endpoint takes a version number, not a tag -- a tag answers
+    # HTTP 400 -- so this case is the one that can fail for the reason that
+    # matters.
+    requested: list[str] = []
+
+    def records_url(request, timeout=None):
+        requested.append(request.full_url if hasattr(request, "full_url") else str(request))
+        return _Response(
+            json.dumps({"version": {"num": "0.1.7", "yanked": False, "channel": "stable"}}).encode()
+        )
+
+    wait_for_crates_io(
+        "v0.1.7",
+        deadline_seconds=5,
+        sleep=lambda _s: None,
+        clock=lambda: 0.0,
+        opener=records_url,
+    )
+    polled = requested[0] if requested else ""
+    if polled == f"{CRATES_IO_API}/0.1.7" and not polled.endswith("/v0.1.7"):
+        print("  ok   the crates.io wait requests a version number, not a tag")
+    else:
+        failures.append("the crates.io wait requests a version number, not a tag")
+        print(f"  FAIL the crates.io wait requests a version number, not a tag: {polled!r}")
 
     result = wait_for_crates_io(
         "v0.1.7",

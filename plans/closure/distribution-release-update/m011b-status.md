@@ -125,3 +125,109 @@ for *publishing* the next release, in the sense that `docs/RELEASING.md` now
 requires a green validation run before publication — but publication was already
 a human action, so no plan is newly unblocked by it. M011A and M011C are
 independent of this workflow and are closed on their own terms.
+
+---
+
+## Operationally closed — first real execution exposed three defects (M013, 2026-10-06)
+
+The outstanding item on this record was "a real future Eggpack draft
+automatically triggers it". It now has, and the interesting part is that the
+automatic path had **never executed before** — because M011B was correctly left
+conditionally closed pending this evidence, the first time it fired it was
+broken, and it stayed broken in two more places behind the first.
+
+### The automatic handoff, and what it found
+
+| Upstream Eggpack run | Automatic validation run | Outcome |
+|---|---|---|
+| [37410883861](https://github.com/dbowm91/cargo-cleanme/actions/runs/37410883861) | [37412345424](https://github.com/dbowm91/cargo-cleanme/actions/runs/37412345424) | failure — defect 1 |
+| [37412611160](https://github.com/dbowm91/cargo-cleanme/actions/runs/37412611160) | [37414511616](https://github.com/dbowm91/cargo-cleanme/actions/runs/37414511616) | staging refused to re-stage — Eggpack working correctly |
+| [37414619399](https://github.com/dbowm91/cargo-cleanme/actions/runs/37414619399) | [37416030378](https://github.com/dbowm91/cargo-cleanme/actions/runs/37416030378) | failure — defect 2 |
+| [37416668628](https://github.com/dbowm91/cargo-cleanme/actions/runs/37416668628) | **[37418179489](https://github.com/dbowm91/cargo-cleanme/actions/runs/37418179489)** | **success** |
+
+**Defect 1 — the manual-tag cross-check ran on the automatic path.** `inputs.tag`
+exists only under `workflow_dispatch`, so on `workflow_run` it is empty, and an
+unconditional `derived != MANUAL_TAG` failed every automatic run with
+
+```text
+the requested tag '' does not match the version in the checked-out source ('v0.2.0')
+```
+
+before deriving or validating a single byte. Fixed in `4aa5360`: the comparison
+is scoped to the dispatch path, and a non-empty tag on the automatic path is now
+rejected rather than ignored.
+
+**Defect 2 — a SHA checkout has no tag to prove the binding against.** The
+checkout is pinned to the upstream `head_sha`, which is exactly the binding this
+milestone exists to enforce; but `actions/checkout` fetches one commit and not
+the repository's tags, so `check-release-identity.py` reported
+
+```text
+tag v0.2.0 does not exist in this repository; a release must name an existing exact tag
+```
+
+Fixed in `ceecec7` by fetching the derived tag before the identity re-proof. This
+does not weaken the check: the gate compares `tag^{commit}` against this
+checkout's `HEAD` and fails on any difference, so the fetch supplies a subject to
+be verified rather than a fact to be trusted. Proved against the real remote — a
+depth-1 SHA checkout has zero local tags, and after the fetch
+`refs/tags/v0.2.0^{commit}` equals `HEAD` equals `95629ae…` with
+`git status --porcelain` still empty.
+
+**Defect 3 — `contents: read` cannot read a draft.** GitHub documents that
+"only users with push access will receive listings for draft releases", so the
+validator structurally could not fetch the artifact it exists to validate. This
+was a conflict between two committed decisions rather than a typo, escalated to
+the repository owner, who directed that the job be granted the scope it needs.
+`4f8c4f0` grants `contents: write` and replaces the capability ban with the
+behaviour ban that can be enforced: `check-staged-validation-contract.py` now
+rejects **any** publication command in the file — `gh release`
+publish/create/edit/delete/upload, a mutating `gh api` or `curl` call against
+the releases endpoint, `cargo publish`, `git push --tags` — while `actions`,
+`id-token`, `packages`, and `deployments` remain forbidden.
+
+Two flaws in that rewrite were caught by the guard's own failing-direction
+self-test rather than by inspection: the new rule rejected the workflow's own
+comments (prose naming a forbidden command tripped the check — a YAML comment
+cannot execute, so comments are stripped first), and the `gh api` rule matched
+only verb-after-path, so `gh api -X POST repos/…/releases` passed. Both orderings
+are now rejected and `gh release view` still allowed. The self-test is 37 cases.
+
+### The passing run
+
+Every step of [37418179489](https://github.com/dbowm91/cargo-cleanme/actions/runs/37418179489)
+succeeded:
+
+```text
+[1/6] inventory (15 assets)
+  release-manifest.json
+  5 contracted binaries + 5 sidecars + manifest + 2 installers
+[2/6] sidecar integrity
+[3/6] release-manifest.json agreement
+  manifest binds source revision 95629ae28223 to tag v0.2.0
+  manifest agrees with the bytes for 5 asset(s)
+[4/6] contract agreement
+[5/6] static Linux ABI evidence (not runtime)
+  aarch64-unknown-linux-gnu: requires at most GLIBC_2.17.0 (static ELF evidence)
+  x86_64-unknown-linux-gnu: requires at most GLIBC_2.17.0 (static ELF evidence)
+[6/6] real installer qualification on this host
+PASSED: the staged draft matches the release contract
+```
+
+The upstream-run guard, tag derivation, tag fetch, and identity re-proof all
+passed ahead of it. The event was the trusted `workflow_run` completion of a
+`workflow_dispatch` upstream run, and the checkout was bound to that run's
+`head_sha`.
+
+Worth noting: the glibc floor came back **2.17.0 on both Linux targets**, so the
+contract's advertised floor is measured and verified rather than asserted.
+
+### Closure status
+
+**Operationally closed.** Implementation, static guarantees, documentation, and
+the hosted end-to-end run against a real staged draft all now exist. Limitation
+2 on this record (the `github.sha` fallback in `ref:`) still holds for the
+*manual* dispatch path and is unchanged.
+
+**Downstream effect:** nothing downstream is newly unblocked by this alone; what
+it unblocked was `v0.2.0`'s publication, which M013 performed.
