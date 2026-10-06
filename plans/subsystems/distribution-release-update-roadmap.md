@@ -515,3 +515,88 @@ remains available for recovery/historical transitions.
 - SHA-256 remains local integrity evidence even after release attestation is
   added.
 - C010 remains independent; no Phase 11 item waits for `eggup-curl`.
+
+## 12. Phase 13 — 0.2.0 pre-release hardening and publication
+
+Status: **active planning / ordered handoff**.
+
+Phase 13 does not add a new product feature. It takes the already-implemented
+0.2.0 tree through the last bounded verification hardening and then through the
+first immutable/attested publication.
+
+Dependency:
+
+~~~text
+C021 pre-release evidence reconciliation [closed]
+                    |
+                    v
+C022 machine-contract hardening [ready]
+                    |
+                    v
+M013 v0.2.0 publication + Phase 11 operational closure [blocked on C022]
+                    |
+                    +--> C018 released Cargo provenance evidence
+                    +--> M011A immutable attestation evidence
+                    +--> M011B automatic staged-validation evidence
+                    +--> M011C automatic five-target smoke evidence
+~~~
+
+### 12.1 C022 — Pre-release machine-contract hardening
+
+Plan:
+
+- `plans/implementation/distribution-release-update/c022-pre-release-machine-contract-hardening.md`
+
+Status: **ready**.
+
+C022 closes the two bounded release-edge gaps C021 intentionally carried
+forward:
+
+- `update --format json` has a production serializer but no contract/stream
+  test; and
+- `check-installer-contract.py` is the only contract checker without a
+  failing-direction `--self-test`.
+
+The corrective must add evidence without changing updater/installer behavior,
+wire the installer checker self-test into CI/release-drift/release-check, and
+finish on green hosted evidence. It publishes nothing.
+
+### 12.2 M013 — 0.2.0 publication and Phase 11 operational closure
+
+Plan:
+
+- `plans/implementation/distribution-release-update/013-0.2.0-publication-and-phase11-operational-closure.md`
+
+Status: **blocked on C022**.
+
+M013 is the canonical operator handoff for the 0.2.0 release. It consumes the
+existing release machinery rather than reimplementing it:
+
+1. freeze and qualify one exact 0.2.0 release commit;
+2. tag `v0.2.0` and prove tag/source/version/changelog identity;
+3. dispatch Eggpack and stage the draft;
+4. require the automatic M011B staged validator on that exact source;
+5. human-inspect the draft;
+6. publish the immutable GitHub release;
+7. publish crates.io from a detached checkout of the exact tag;
+8. verify M011A release+asset attestation;
+9. require the automatic M011C five-target `v0.1.6 -> v0.2.0` smoke;
+10. gather C018 real default-Cargo-home and `--root` refusal evidence;
+11. reconcile all closure records and the registry.
+
+Publication remains the irreversible boundary. A pre-publication failure stops
+the release. A post-publication defect produces a corrective/new patch release;
+published immutable bytes/tags are never replaced.
+
+### 12.3 Deferred findings that do not block M013
+
+The following remain explicit follow-ups rather than hidden release blockers:
+
+- the 257 opaque bare line citations in `architecture/12-self-update.md`;
+- hosted-job cancellation/concurrency policy;
+- C010's optional upstream `eggup-curl` User-Agent seam;
+- independent signing/SLSA/SBOM work, which remains an Eggpack authenticity
+  roadmap concern.
+
+None may be used to waive a failed release qualification gate.
+
