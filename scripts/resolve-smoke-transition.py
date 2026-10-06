@@ -41,6 +41,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import re
 import sys
@@ -108,6 +109,36 @@ def contracted_asset(triple: str) -> str:
     )
 
 
+def yanked_versions(*, opener=urllib.request.urlopen) -> set[tuple[int, int, int]]:
+    """Every published version crates.io currently marks yanked.
+
+    A yank stops *default* resolution; an explicitly pinned
+    `cargo install pkg@<version>` of a yanked release still succeeds. What
+    matters here is that a rehearsal source has to be installable, and the
+    yanked set is the only public record of which published versions the
+    registry will not hand to a plain `cargo install`.
+    """
+    try:
+        payload = _fetch_json(CRATES_IO_API, opener=opener)
+    except TransitionError:
+        # Absence of this signal must not silently widen the candidate set back
+        # to "the greatest tag below the target", which is the behaviour this
+        # exists to correct. Report none as yanked and let the candidate walk
+        # fail with its own message if nothing below the target is usable.
+        return set()
+    versions = payload.get("versions") if isinstance(payload, dict) else None
+    if not isinstance(versions, list):
+        return set()
+    yanked: set[tuple[int, int, int]] = set()
+    for entry in versions:
+        if not isinstance(entry, dict) or not entry.get("yanked"):
+            continue
+        match = re.match(r"^(\d+)\.(\d+)\.(\d+)$", str(entry.get("num") or ""))
+        if match:
+            yanked.add((int(match.group(1)), int(match.group(2)), int(match.group(3))))
+    return yanked
+
+
 def _fetch_json(url: str, *, opener=urllib.request.urlopen) -> object:
     if not url.startswith("https://"):
         # Not a defensive nicety: the version authority must not be readable or
@@ -164,9 +195,24 @@ def enumerate_releases(*, opener=urllib.request.urlopen) -> list[dict]:
 
 
 def select_predecessor(
-    target: str, triple: str, *, opener=urllib.request.urlopen, releases=None
+    target: str,
+    triple: str,
+    *,
+    opener=urllib.request.urlopen,
+    releases=None,
+    yanked: set[tuple[int, int, int]] | None = None,
 ) -> str:
-    """The greatest stable release strictly below `target` that ships the asset."""
+    """The greatest stable release below `target` that ships the asset and is installable.
+
+    `yanked` is the set of versions crates.io currently marks yanked, and those
+    are skipped. A yanked version is precisely the one a rehearsal cannot
+    install, and C023 found this the hard way: yanking 0.2.0 for the safety
+    defect it carried made the automatic five-lane smoke fail on every lane
+    with "cannot install package, it has been yanked", while the updater it was
+    there to test was perfectly fine. The safety decision was right and the
+    rehearsal still had to be truthful, so it now starts from a release that
+    actually exists on the registry.
+    """
     target_version = parse_stable_tag(target)
     if target_version is None:
         raise TransitionError(
@@ -179,17 +225,21 @@ def select_predecessor(
     if releases is None:
         releases = enumerate_releases(opener=opener)
 
+    skipped_yanked = yanked or set()
     candidates = [
         release
         for release in releases
-        if release["version"] < target_version and asset in release["assets"]
+        if release["version"] < target_version
+        and asset in release["assets"]
+        and release["version"] not in skipped_yanked
     ]
     if not candidates:
         # A broken predecessor is exactly what a transition test should expose,
         # so it is never skipped. The only tolerated state is a genuine first
         # release, which the caller handles explicitly.
         raise TransitionError(
-            f"no stable cargo-cleanme release below {target} ships {asset!r} for {triple}; a "
+            f"no installable stable cargo-cleanme release below {target} ships {asset!r} "
+            f"for {triple}; a "
             "transition cannot be tested without a real previous-version binary, and skipping "
             "a known-bad predecessor would hide the very defect this smoke exists to find"
         )
@@ -301,7 +351,9 @@ def resolve(*, target: str, triple: str, previous: str | None, opener=urllib.req
             )
         return {"from": previous, "to": target, "source": "manual"}
     return {
-        "from": select_predecessor(target, triple, opener=opener),
+        "from": select_predecessor(
+            target, triple, opener=opener, yanked=yanked_versions(opener=opener)
+        ),
         "to": target,
         "source": "resolved",
     }
@@ -660,6 +712,73 @@ def self_test() -> int:
         "a floating target is refused",
         lambda: resolve(target="latest", triple=triple, previous=None),
         "plain stable",
+    )
+
+    # A yanked predecessor cannot be installed, so a rehearsal that selects one
+    # fails on every lane before the updater it exists to test ever runs. C023
+    # hit exactly that when yanking 0.2.0. Both directions are pinned: the
+    # yanked version is skipped, and a target whose only predecessor is yanked
+    # is a stated failure rather than a silent widening.
+    yanked_only_top = [
+        {"tag": "v0.2.0", "version": (0, 2, 0), "assets": [asset]},
+        {"tag": "v0.1.9", "version": (0, 1, 9), "assets": [asset]},
+    ]
+    expect(
+        "a yanked predecessor is skipped for the next installable one",
+        []
+        if select_predecessor(
+            "v0.2.1",
+            triple,
+            releases=yanked_only_top,
+            yanked={(0, 2, 0)},
+        )
+        == "v0.1.9"
+        else ["selected a version crates.io will not install"],
+        False,
+    )
+    expect(
+        "no yanked set at all keeps the greatest release below the target",
+        []
+        if select_predecessor("v0.2.1", triple, releases=yanked_only_top) == "v0.2.0"
+        else ["the unfiltered path changed"],
+        False,
+    )
+    expect_error(
+        "a target whose only predecessor is yanked fails, naming the real reason",
+        lambda: select_predecessor(
+            "v0.2.1",
+            triple,
+            releases=[{"tag": "v0.2.0", "version": (0, 2, 0), "assets": [asset]}],
+            yanked={(0, 2, 0)},
+        ),
+        "no installable stable cargo-cleanme release below",
+    )
+
+    yanked_page = {
+        "versions": [
+            {"num": "0.2.1", "yanked": False},
+            {"num": "0.2.0", "yanked": True},
+            {"num": "0.1.9", "yanked": False},
+            {"num": "0.1.6-rc1", "yanked": True},
+        ]
+    }
+    def yanked_opener(url, timeout=None):
+        return io.BytesIO(json.dumps(yanked_page).encode("utf-8"))
+
+    expect(
+        "crates.io yanked versions are read as version triples",
+        []
+        if yanked_versions(opener=yanked_opener) == {(0, 2, 0)}
+        else ["the yanked set did not match the published versions"],
+        False,
+    )
+    def offline_opener(url, timeout=None):
+        raise urllib.error.URLError("network is unreachable")
+
+    expect(
+        "an unreachable crates.io yields no yanked versions rather than raising",
+        [] if yanked_versions(opener=offline_opener) == set() else ["an outage must not crash"],
+        False,
     )
 
     if failures:
