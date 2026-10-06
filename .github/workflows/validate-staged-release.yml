@@ -99,10 +99,25 @@ jobs:
       # Bind the exact tag. For an automatic run it is derived from the trusted
       # checkout's own version, so a tag is never accepted on the strength of
       # the event payload alone.
+      #
+      # The cross-check against the operator's typed tag belongs to the MANUAL
+      # path only. `inputs.tag` exists solely under `workflow_dispatch`, so on
+      # the automatic path it is always empty -- and comparing a derived tag to
+      # an empty input failed every automatic run with
+      #
+      #   the requested tag '' does not match the version in the
+      #   checked-out source ('v0.2.0')
+      #
+      # before deriving or validating a single byte. M011B was left
+      # conditionally closed pending this run's evidence, so the automatic
+      # handoff had never actually fired; its first execution was this bug.
+      # Guarding the manual path is still the point of the input: a mistyped
+      # tag must not validate a different release.
       - name: Derive the exact release tag from the trusted checkout
         id: identity
         env:
           MANUAL_TAG: ${{ inputs.tag }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           derived=$(python3 - <<'PY'
           import re, pathlib
@@ -113,8 +128,14 @@ jobs:
           print(f"v{match.group(1)}")
           PY
           )
-          if [[ "$derived" != "$MANUAL_TAG" ]]; then
-            echo "::error::the requested tag '$MANUAL_TAG' does not match the version in the checked-out source ('$derived')"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "$derived" != "$MANUAL_TAG" ]]; then
+              echo "::error::the requested tag '$MANUAL_TAG' does not match the version in the checked-out source ('$derived')"
+              exit 1
+            fi
+          elif [[ -n "$MANUAL_TAG" ]]; then
+            echo "::error::a tag input was supplied on the automatic path;" \
+                 "the tag is derived from the trusted checkout, never taken from a payload"
             exit 1
           fi
           echo "tag=$derived" >> "$GITHUB_OUTPUT"
