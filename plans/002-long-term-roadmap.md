@@ -505,11 +505,11 @@ ADR 003 -> M012A canonical CLI [closed] -> M012B unattended log/docs [closed]
                                   C023 -> v0.2.1 safety patch
 ~~~
 
-Phase 12 is implemented and C021 is closed. The first release carrying M012A's
-bare destructive default is 0.2.0. Phase 13 now owns its remaining release
-gates: C022 must close before staging, then M013 carries the exact release
-through publication and finishes the outstanding C018/M011A/M011B/M011C
-operational evidence.
+Phase 12 is implemented and C021/C022 are closed. v0.2.0 was published through
+M013 and supplied C018/M011A/M011B evidence, but its automatic M011C run failed
+and post-release interrogation found two destructive defects in the immutable
+bytes. C023 now owns the v0.2.1 safety patch and the remaining automatic-smoke
+evidence.
 
 
 Destructive work MUST NOT be pulled forward merely to make the tool feel complete.
