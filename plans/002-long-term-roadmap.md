@@ -620,3 +620,33 @@ C023 has priority over ordinary roadmap work. M013's historical closure record
 is preserved, but Phase 13 is not treated as fully complete until the corrective
 closes. A manual smoke does not substitute for the missing automatic M011C
 evidence.
+
+### Post-v0.2.1 planning reconciliation — C025
+
+Status: **ready / immediate planning**.
+
+Plan:
+
+- `plans/implementation/distribution-release-update/c025-post-v0.2.1-planning-status-reconciliation.md`
+
+C025 is a control-surface correction after the v0.2.1 safety release. It does
+not reopen Phase 12, C023, or M013 and does not implement C024.
+
+Authoritative current state for reconciliation:
+
+~~~text
+v0.2.0                published / immutable / crates.io yanked
+v0.2.1                published / immutable / attested / safety-qualified
+C023                  conditionally closed
+automatic v0.2.1 smoke fired / failed
+manual five-target    v0.1.6 -> v0.2.1 green
+M011C                 conditionally closed
+C024                  open / ready substantive corrective
+C025                  ready planning/status reconciliation
+~~~
+
+C025 must remove future-tense publication/yank text and false
+"automatic-smoke green" claims while preserving every historical run result.
+After C025 closes, C024 remains the active product handoff and the next release
+remains the first opportunity to obtain a green automatic M011C run.
+
