@@ -32,14 +32,14 @@ on:
   workflow_dispatch:
     inputs:
       from_version:
-        description: Published version to start from
+        description: Published version to start from, without the leading v
         required: true
-        default: '0.1.1'
+        default: '0.1.6'
         type: string
       to_version:
-        description: Published version to update to
+        description: Published version to update to, without the leading v
         required: true
-        default: '0.1.2'
+        default: '0.2.0'
         type: string
 
 permissions:
@@ -98,12 +98,24 @@ jobs:
             # default budget is finite and exhausting it is a failure, not a
             # skip.
             python3 scripts/resolve-smoke-transition.py --wait-crates-io --to "$TAG" \
-              | tee -o "$GITHUB_OUTPUT" resolve.log
+              | tee resolve.log
           else
+            # The resolver takes tags, not version numbers, and refuses anything
+            # that is not a plain stable `vX.Y.Z`. The dispatch inputs are
+            # documented as version numbers because that is what a human types,
+            # so the prefix is added here rather than making the caller remember
+            # it -- the previous default pair ('0.1.1', '0.1.2') would have been
+            # rejected by its own workflow.
             python3 scripts/resolve-smoke-transition.py \
-              --to "$MANUAL_TO" --previous "$MANUAL_FROM" \
-              | tee -o "$GITHUB_OUTPUT" resolve.log
+              --to "v$MANUAL_TO" --previous "v$MANUAL_FROM" \
+              | tee resolve.log
           fi
+          # `tee -o` is not an option on GNU coreutils `tee` ("tee: invalid
+          # option -- 'o'"), so the earlier form could never have written the
+          # step outputs. tee captures the log; the log is appended to
+          # GITHUB_OUTPUT separately, which is what the output expression above
+          # reads.
+          cat resolve.log >> "$GITHUB_OUTPUT"
           {
             echo ""
             echo "## Resolved transition"
