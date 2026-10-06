@@ -1,7 +1,9 @@
 # C023 — v0.2.0 destructive-safety patch-release corrective: closure record
 
-Status: **closed**, with the publication evidence recorded in §12 and three
-findings recorded rather than fixed in §11.
+Status: **conditionally closed**, with the publication evidence recorded in §12
+and **five** findings recorded rather than fixed in §11. Acceptance criterion 11 —
+a green automatic `release: published` five-lane smoke — is explicitly not met;
+see §15 for the disposition and §14 for the matrix.
 
 Plan: [`c023-v0.2.0-destructive-safety-patch-release-corrective.md`](../../implementation/distribution-release-update/c023-v0.2.0-destructive-safety-patch-release-corrective.md)
 Baseline: `eaa7bba1cd70513a7bf48a99d7d9ffe19334a539`
@@ -533,15 +535,34 @@ and remains immutable; its assets and tag were never replaced.
 
 ## 13. Reconciliation
 
-- `plans/registry.md` — C023 closed; the two artifact-roadmap rows move off
-  "corrective required"; M013 marked corrected-by-C023 rather than reopened;
-  M011C upgraded to a confirmed-green automatic trigger.
+- `plans/registry.md` — C023 conditionally closed; the two artifact-roadmap rows
+  move off "corrective required"; M013 marked corrected-by-C023 rather than
+  reopened; **M011C remains conditionally closed** — the automatic trigger is
+  demonstrated but was never observed green, because the v0.2.1 automatic run
+  fired and failed (§12.6). It is not upgraded to confirmed-green.
 - `plans/closure/distribution-release-update/013-status.md` — an **appended**
   corrective note. Not reopened, nothing retracted.
 - `plans/subsystems/artifact-discovery-cleanup-roadmap.md` and
-  `plans/subsystems/distribution-release-update-roadmap.md` — C023 closed, C024
-  opened.
+  `plans/subsystems/distribution-release-update-roadmap.md` — C023 conditionally
+  closed, C024 opened.
 - `plans/002-long-term-roadmap.md` — Phase 13 corrected by C023.
+- `plans/closure/distribution-release-update/m011c-status.md` — a v0.2.1
+  addendum recording the automatic failure and the manual green recovery.
+
+### 13A. C025 reconciliation note (2026-10-06)
+
+The **first line of this record said `Status: closed` and this section claimed
+M011C was "upgraded to a confirmed-green automatic trigger"**. Both were
+contradicted by evidence already in the same file: §12.6 records that the
+automatic v0.2.1 run **37507738147 fired and failed on all five lanes**, and §14
+already marked criterion 11 **not met**.
+
+C025 (`plans/implementation/distribution-release-update/c025-post-v0.2.1-planning-status-reconciliation.md`)
+corrects the summary, not the evidence. The header now uses the repository's
+normative vocabulary, §13 no longer claims a M011C upgrade, and the §11 finding
+count is five, derived from the five numbered headings rather than from a
+remembered number. No run id, conclusion, digest, date, or acceptance-matrix
+cell was altered, and the disposition in §15 is unchanged in substance.
 
 ## 14. Acceptance criteria
 
@@ -565,7 +586,7 @@ and remains immutable; its assets and tag were never replaced.
 
 ## 15. Disposition
 
-**Closed, with acceptance criterion 11 explicitly not met.**
+**Conditionally closed**, with acceptance criterion 11 explicitly not met.
 
 Both destructive defects shipped in 0.2.0 are fixed, qualified by tests that
 were shown to fail against the old behaviour, and published as 0.2.1 with
@@ -593,3 +614,9 @@ Two findings are handed on rather than absorbed:
   deeper question — whether a release-evidence path should be able to depend on
   a version the same corrective decided to yank — belongs with whoever changes
   the rehearsal policy next.
+
+Of the five findings in §11, only 11.1 is an open medium corrective (C024).
+11.2 is unreachable defence in depth with a recorded exhaustive proof, and
+11.3–11.5 are untested properties whose existing evidence does not warrant
+opening an implementation plan on its own. They are not release blockers and are
+not silently promoted.

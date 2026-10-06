@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: **C025 planning reconciliation ready.** C022 is closed; M013's v0.2.0 publication was corrected by C023; C023 is **conditionally closed** with immutable v0.2.1 published, attested, safety-qualified, and crates.io v0.2.0 yanked. The automatic v0.2.1 `release: published` smoke fired but failed, so M011C remains conditional. C024 is the next substantive product corrective; C025 owns only the stale planning/status prose. C010 remains an independent upstream request.
+Status: **conditionally closed**, with one named qualification outstanding. C022 is closed; M013's v0.2.0 publication was corrected by C023; C023 published immutable v0.2.1, attested it, and yanked crates.io 0.2.0, but its acceptance criterion 11 is not met — the automatic v0.2.1 `release: published` smoke **fired and failed on all five lanes**. M011C is therefore **not** discharged: it has the same missing evidence, and the next release is the first opportunity to obtain it. There is no active release corrective. C024 is the next substantive product corrective and is cross-listed here only because it was opened by C023 and lives in this plan directory — it is a discovery/matching decision, not distribution behaviour. C010 remains an independent upstream request.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 
@@ -492,7 +492,18 @@ than modifying generated YAML.
 
 Plan: `plans/implementation/distribution-release-update/011c-published-release-smoke-automation.md`
 
-Status: **conditionally closed; first real release-event smoke evidence outstanding**.
+Closure: `plans/closure/distribution-release-update/m011c-status.md`
+
+Status: **conditionally closed.** The automatic trigger is **proven** — it has
+now fired unprompted on two real publications (v0.2.0 run `37419183947`, v0.2.1
+run `37507738147`) — and the five-target transaction is **green via manual
+recovery** (`37420625111` for v0.2.0, `37508262225` for `v0.1.6 -> v0.2.1`).
+A green run *under the automatic trigger* is **not yet proven**: both automatic
+runs failed. The v0.2.1 failure was C023's own yank reaching the harness —
+`select_predecessor` consulted GitHub release suitability but not crates.io
+installability, so it chose a yanked v0.2.0 that no lane could install. Fixed in
+`cfdc910`, self-test corrected in `b0b41fc`, both landed. No automatic run for
+v0.2.1 can be recreated; the next publication supplies the missing evidence.
 
 M011C preserves the existing five-target real updater rehearsal but adds an
 automatic stable `release.published` path. It deterministically selects the
@@ -518,7 +529,7 @@ remains available for recovery/historical transitions.
 
 ## 12. Phase 13 — 0.2.0 pre-release hardening and publication
 
-Status: **published; corrected by C023.**
+Status: **published; corrected by C023, which is conditionally closed.**
 
 Phase 13 does not add a new product feature. It takes the already-implemented
 0.2.0 tree through the last bounded verification hardening and then through the
@@ -543,7 +554,9 @@ M013 v0.2.0 publication + Phase 11 operational closure [closed]
                     +--> M011A immutable attestation evidence [satisfied]
                     +--> M011B automatic staged-validation evidence [satisfied]
                     +--> M011C automatic five-target smoke evidence
-                         [lanes green; automatic trigger still conditional]
+                         [OUTSTANDING: automatic trigger fired for v0.2.0 and
+                         failed; v0.2.1's automatic run also fired and failed.
+                         Green evidence is manual-recovery only]
 ~~~
 
 ### 12.1 C022 — Pre-release machine-contract hardening
@@ -617,7 +630,9 @@ None may be used to waive a failed release qualification gate.
 
 ### 12.4 C023 — v0.2.0 destructive-safety patch-release corrective
 
-Status: **ready / immediate**.
+Status: **conditionally closed** — accepted closure record:
+`plans/closure/distribution-release-update/c023-status.md`. Acceptance criterion
+11, a green **automatic** M011C five-target smoke, is explicitly **not met**.
 
 Plan:
 
@@ -626,6 +641,9 @@ Plan:
 Affected release:
 
 - immutable `v0.2.0`, source `95629ae28223e975faf1e8ed99ca3e6f83d6f724`.
+
+*The text below is the plan as it was written before implementation. It is kept
+as history. What actually happened is in the closure record, not here.*
 
 Post-release interrogation proved two destructive defects in those bytes:
 
@@ -647,32 +665,50 @@ a green **automatic** M011C five-target smoke, public-binary safety
 requalification, crates.io 0.2.0 yank, and explicit reconciliation of the M013
 historical closure without erasing its failed evidence.
 
-Ordinary roadmap work is unblocked now that C023 is closed. C024, the one medium finding it recorded, should be taken before the next release rather than during one.
+Ordinary roadmap work is unblocked now that C023 is conditionally closed. C024, the one medium finding it recorded, should be taken before the next release rather than during one.
+
+**What the plan asked for versus what happened.** Everything below was
+delivered: both defects were reproduced against the immutable 0.2.0 binary,
+cross-platform qualification, an immutable and attested v0.2.1, public-binary
+safety requalification, and the crates.io 0.2.0 yank. One requirement was not:
+the green **automatic** M011C smoke, because WP-L's yank removed the rehearsal
+source the resolver had already chosen. v0.2.1 is published, attested, and
+safety-qualified; v0.2.0 is yanked and disclosed in four user-facing documents;
+the automatic smoke fired and failed; the resolver that failed it is fixed and
+self-tested. See §12.6 of the closure record and §11.4 above.
 
 ### 12.5 C025 — Post-v0.2.1 planning and status reconciliation
 
-Status: **ready / immediate planning**.
+Status: **closed** — closure record:
+`plans/closure/distribution-release-update/c025-status.md`.
 
 Plan:
 
 - `plans/implementation/distribution-release-update/c025-post-v0.2.1-planning-status-reconciliation.md`
 
-C025 is a documentation/control-surface corrective. It changes no Rust code,
+C025 was a documentation/control-surface corrective. It changed no Rust code,
 release bytes, glob semantics, updater behavior, yank state, or workflow
 behavior.
 
-It exists because current summaries disagree with the accepted evidence:
+It existed because current summaries disagreed with the accepted evidence:
 
-- C023 is conditionally closed, but several current-status sentences call it
+- C023 is conditionally closed, but several current-status sentences called it
   simply closed or still ready;
-- the automatic v0.2.1 smoke fired and failed, but several summaries call it
-  observed-green and say M011C is discharged;
-- the M011C closure record has not yet incorporated the v0.2.1
+- the automatic v0.2.1 smoke fired and failed, but several summaries called it
+  observed-green and said M011C was discharged;
+- the M011C closure record had not incorporated the v0.2.1
   automatic-failure/manual-green evidence;
-- the canonical roadmap still describes completed v0.2.1 publication/yank work
+- the canonical roadmap still described completed v0.2.1 publication/yank work
   in future tense.
 
-C024 remains open/ready in parallel and is the next substantive product
-corrective. C025 must preserve C024's status and must not invent a new release
-or upgrade M011C without a future observed-green automatic run.
+**Resolution:** C023's header now reads conditionally closed and agrees with its
+own disposition; its finding count is five, derived from §11's headings rather
+than remembered; §13 no longer claims a M011C upgrade; M011C carries the
+v0.2.1 addendum and is still conditionally closed; this roadmap, the cleanup
+roadmap, `plans/registry.md`, and `plans/002-long-term-roadmap.md` all state the
+same current state. No failed run was rewritten as passing and no historical
+evidence was edited.
+
+C024 was left untouched and remains open/ready — it is the next substantive
+product corrective.
 

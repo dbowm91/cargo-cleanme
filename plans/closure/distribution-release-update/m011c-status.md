@@ -2,7 +2,7 @@
 
 Plan: `plans/implementation/distribution-release-update/011c-published-release-smoke-automation.md`
 
-Disposition: **conditionally closed — implementation complete; operational closure requires a real `release: published` event**
+Disposition: **conditionally closed — implementation complete; operational closure requires a real `release: published` event.** Two such events have now occurred (v0.2.0 and v0.2.1); both automatic runs **failed**, and both were recovered green through the manual rehearsal surface. See the v0.2.1 addendum at the end of this record.
 
 Implementation commit: the `phase11-hardening` branch commit that extends
 `.github/workflows/post-release-smoke.yml` and adds
@@ -226,3 +226,83 @@ stated rather than smoothed over: the *automatic* trigger has never been
 observed green, because the one time it fired it hit three defects, and a
 release event cannot be re-raised. The next publication is the first real test
 of whether the fixes hold.
+
+---
+
+## v0.2.1 addendum — automatic run failed again, manual recovery green (2026-10-06)
+
+C023 published **v0.2.1** on 2026-10-06. This section appends that evidence. It
+does not retract anything above, and it does not upgrade the disposition.
+
+### Run 37507738147 — the automatic trigger fired again, and failed again
+
+The `release: published` event fired **without operator action**, which is the
+property this milestone was written for and which is now demonstrated twice.
+It then failed **on all five lanes**, with the same shape on each:
+
+```
+error: cannot install package `cargo-cleanme`, it has been yanked from registry `crates-io`
+```
+
+**The cause was not the updater.** WP-L of the C023 plan required yanking
+crates.io v0.2.0 — the correct safety decision, made a few hours before v0.2.1
+existed. `select_predecessor` consulted GitHub release suitability but never
+asked crates.io whether the selected version was **installable**, so it chose
+v0.2.0 as the rehearsal source and every lane then discovered it could not
+install it. The harness was reporting on a transition it could not perform; the
+product it was meant to qualify never ran a line.
+
+This is the same class of failure as the three defects above, and it was found
+by the automatic path precisely because the automatic path runs on real events.
+
+### The resolver fix
+
+`scripts/resolve-smoke-transition.py` now reads the crates.io yanked set and
+selects the greatest **installable** release below the target — which is what
+WP-L's own resolution asks for. Commit `cfdc910afc732a50353158cd0ca6bf074b9ff29d`.
+
+The associated self-test correction is `b0b41fcb34da0a0bece4f7763a9781a3c1123a2f`:
+two pre-existing cases asserted the message fragment `no stable cargo-cleanme
+release below`, and correcting it to `no installable stable …` broke both. CI
+caught it four minutes after a local run I had read with `tail -10` and called
+green — the same partial-read failure C023 §12.7 records.
+
+Deliberately **not** done: un-yanking v0.2.0 so the harness could reach it.
+
+### Run 37508262225 — the green evidence, from the manual rehearsal surface
+
+Dispatched with `from_version=0.1.6`, `to_version=0.2.1`:
+
+| Lane | Transition | Result |
+|---|---|---|
+| `x86_64-unknown-linux-gnu` | `v0.1.6` -> `v0.2.1` | success |
+| `aarch64-unknown-linux-gnu` | `v0.1.6` -> `v0.2.1` | success |
+| `x86_64-apple-darwin` | `v0.1.6` -> `v0.2.1` | success |
+| `aarch64-apple-darwin` | `v0.1.6` -> `v0.2.1` | success |
+| `x86_64-pc-windows-msvc` | `v0.1.6` -> `v0.2.1` | success |
+
+### Three independent properties
+
+| # | Property | State |
+|---|---|---|
+| 1 | Automatic trigger wiring fires on a real publication | **proven** — twice, unprompted (37419183947 for v0.2.0, 37507738147 for v0.2.1) |
+| 2 | The five-target product/update transaction works against published bytes | **green via manual recovery** (37420625111, 37508262225) |
+| 3 | A five-target run under the **automatic** trigger is observed green | **not yet proven** — both automatic runs failed; property 1 does not satisfy property 3 |
+
+### Disposition
+
+**Remains conditionally closed.** The original milestone named a
+`release: published` event launching the five-target workflow automatically *and*
+all five lanes passing. Property 3 is that qualification, and it is unmet.
+
+**No green automatic run for v0.2.1 exists or can be recreated.** The event fires
+once per release and v0.2.1 has been published. The next release is the first
+opportunity to obtain that evidence, with the fixed resolver and no operator
+action — but it is an **operational dependency on a future event**, not a reason
+to write a new implementation plan, and not a reason to upgrade this record
+because the trigger itself was proven.
+
+The distinction this milestone exists to protect survives intact: a run that was
+**skipped**, a run that **failed**, and a run that **passed** must never be
+confusable in a closure record. Two automatic failures and two manual greens are
+recorded as exactly that.

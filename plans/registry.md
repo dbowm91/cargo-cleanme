@@ -35,14 +35,17 @@ Immutability policy enabled: `2026-10-05T13:34:38Z` (repository-level, not owner
 | Subsystem | Status | Roadmap | Current milestone | Blocker |
 |---|---|---|---|---|
 | Artifact discovery and cleanup | **released in 0.2.1; C024 open** | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | C024 Windows glob canonicalization corrective | Both destructive defects are fixed, qualified by tests shown to fail against the old behaviour, and published as 0.2.1. C024 owns one medium finding the requalification surfaced: the canonical-glob rewrite is a no-op on Windows. |
-| Distribution, release, and update | **planning reconciliation / C025 ready** | `plans/subsystems/distribution-release-update-roadmap.md` | C025 post-v0.2.1 planning/status reconciliation | C023 is conditionally closed: v0.2.1 is published/attested/safety-qualified and v0.2.0 is yanked, but the automatic v0.2.1 smoke fired and failed. M011C remains conditional. C024 remains the substantive product corrective in parallel. |
+| Distribution, release, and update | **no active release corrective; M011C conditional** | `plans/subsystems/distribution-release-update-roadmap.md` | none | C023 is conditionally closed: v0.2.1 is published/attested/safety-qualified and crates.io 0.2.0 is yanked, but acceptance criterion 11 — a green **automatic** five-lane smoke — is not met, because the automatic v0.2.1 run fired and failed against the yank C023 itself performed. M011C remains conditional on the same missing evidence; the next release must produce a green automatic smoke to discharge it. |
 
 ## Open work
 
-**C025 is the immediate planning/control-surface handoff.** It reconciles stale
-post-v0.2.1 status prose without changing product code, release state, C023
-evidence, or C024 semantics. C024 remains open/ready in parallel and is the next
-substantive product corrective.
+**C024 is the next implementation handoff.** It is the one medium finding C023's own
+requalification surfaced, and it is deliberately *not* a release blocker: the
+canonical-glob rewrite is a no-op on Windows, so an `exclude` naming a
+bracketed directory does not match it. It is a pre-existing gap, not a
+regression; it fails toward under-matching, which is default behaviour rather
+than a new hazard; and fixing it is a matching-semantics decision, not a
+safety patch. It should be taken before the next release, not during one.
 
 **C023 is closed, conditionally.** Both destructive defects that shipped in
 0.2.0 are fixed and published as 0.2.1, whose published binary passes both
@@ -58,17 +61,19 @@ evidence for `v0.1.6 -> v0.2.1` comes from the manual rehearsal surface. No
 green *automatic* run for v0.2.1 exists and none can: `release: published`
 fires once per release. The next release produces one with no action required.
 
-**C024 is the next handoff.** It is the one medium finding C023's own
-requalification surfaced, and it is deliberately *not* a release blocker: the
-canonical-glob rewrite is a no-op on Windows, so an `exclude` naming a
-bracketed directory does not match it. It is a pre-existing gap, not a
-regression; it fails toward under-matching, which is default behaviour rather
-than a new hazard; and fixing it is a matching-semantics decision, not a
-safety patch. It should be taken before the next release, not during one.
+**M011C is a conditional evidence dependency, not an open implementation
+item.** Its own record now carries the v0.2.1 addendum, and it separates three
+things that are easy to conflate: the automatic trigger is **proven** to fire,
+the five-target transaction is **green via manual recovery**, and a green run
+*under the automatic trigger* is **not yet proven**. Only the third was ever the
+named qualification, and only a future publication can satisfy it. It is an
+operational dependency per `plans/003-planning-process.md` §8 — it does not
+justify writing a new M011C implementation plan, and it does not justify
+upgrading the record now.
 
 | Item | Status | Plan / record | Note |
 |---|---|---|---|
-| M012A — canonical maintenance CLI and dry-run semantics | **closed** | `plans/closure/artifact-discovery-cleanup/m012a-status.md` | Bare `cargo cleanme` is Routine Execute through the existing combined-root proof; `--dry-run` is zero-Cargo-clean simulation; rootless `scan` is Full and ignores a configured `scan.root`; `clean` defaults to Execute. the destructive-default break shipped at the 0.2.0 minor boundary; current `main` is 0.2.1. Two defects were found and fixed inside the milestone: a configured `scan.root` made `clean --known` a silent no-op, and `clean --full` returned the scan's exit code silently. |
+| M012A — canonical maintenance CLI and dry-run semantics | **closed** | `plans/closure/artifact-discovery-cleanup/m012a-status.md` | Bare `cargo cleanme` is Routine Execute through the existing combined-root proof; `--dry-run` is zero-Cargo-clean simulation; rootless `scan` is Full and ignores a configured `scan.root`; `clean` defaults to Execute. The destructive-default break shipped at the 0.2.0 minor boundary; current `main` is 0.2.1. Two defects were found and fixed inside the milestone: a configured `scan.root` made `clean --known` a silent no-op, and `clean --full` returned the scan's exit code silently. |
 | M012B — bounded unattended log output and greggd integration | **closed** | `plans/closure/artifact-discovery-cleanup/m012b-status.md` | `--format log` emits one bounded deterministic ASCII line (<=384 bytes, no paths, no Cargo stderr) with a typed block-reason code; progress and ordinary diagnostic fan-out are suppressed in that mode; JSON and exit codes unchanged; `docs/AUTOMATION.md` documents the greggd integration. A stale `scan --deep` example in Gregg's docs is a non-blocking downstream handoff. |
 | C019 — exact unignore sibling containment corrective | **closed** | `plans/closure/artifact-discovery-cleanup/c019-status.md` | Corrects M002: a literal ignored ancestor plus an exact unignore re-admitted unrelated siblings. Shipped in v0.2.0 and retained in the C023 v0.2.1 corrective line. |
 | C020 — Windows concurrent first-use config creation race | **closed** | `plans/closure/artifact-discovery-cleanup/c020-status.md` | Corrects `config::create_initial`. Fixed with a process-wide nonce so concurrent first-use staging names cannot collide. Shipped in v0.2.0 and retained in the C023 v0.2.1 corrective line. |
@@ -76,7 +81,7 @@ safety patch. It should be taken before the next release, not during one.
 | C022 — pre-release machine-contract hardening | **closed** | `plans/closure/distribution-release-update/c022-status.md` | Pins the update JSON machine contract (the one non-envelope surface, previously untested) and gives `check-installer-contract.py` a failing-direction self-test wired into every release gate, removing the last checker exception in the repository. No product behaviour changed. **Three hosted failures, all in C022's own new test code, none reproducible locally**: a CRLF assumption (Windows), an `ETXTBSY` staging race on overlayfs (`msrv`), and a read-only flush handle that made the second fix Unix-only (Windows again). It took four pushes to close. |
 | M013 — 0.2.0 publication and Phase 11 operational closure | **closed / corrected by C023** | `plans/closure/distribution-release-update/013-status.md` | Historical receipt preserved and not reopened. Its automatic M011C criterion was not met, and post-release interrogation then found two destructive defects in the immutable bytes. An appended corrective note records this; no claim in the record is retracted. |
 | C023 — v0.2.0 destructive-safety patch-release corrective | **closed (conditional)** | `plans/closure/distribution-release-update/c023-status.md` | Both published destructive defects reproduced against the immutable 0.2.0 binary and fixed; every shipped change requalified by a test shown to fail against the old behaviour; v0.2.1 published immutably and attested; the **published 0.2.1 binary** passes both safety fixtures; crates.io 0.2.0 yanked and disclosed in four documents. Five findings recorded rather than fixed, one handed to C024. **The single unmet criterion is WP-J**: no observed-green *automatic* five-lane smoke for v0.2.1, because the automatic run fired and failed against the yank C023 itself performed, and the event cannot be re-raised. The resolver that caused it is fixed and self-tested; green five-lane evidence exists from the manual rehearsal surface. |
-| C025 — post-v0.2.1 planning/status reconciliation | **ready / immediate planning** | `plans/implementation/distribution-release-update/c025-post-v0.2.1-planning-status-reconciliation.md` | Documentation/control-surface corrective. Reconcile C023 to conditional closure, keep M011C conditional, append v0.2.1 smoke evidence to M011C, remove false automatic-green claims, and leave C024 as the active product handoff. |
+| C025 — post-v0.2.1 planning/status reconciliation | **closed** | `plans/closure/distribution-release-update/c025-status.md` | Documentation/control-surface corrective. Closed as a control-surface repair, not a product milestone: C023 reconciled to conditional closure with a five-finding count derived from its own §11, M011C's v0.2.1 automatic-failure/manual-green addendum appended, and every false automatic-green summary corrected. **No Rust changed, no release performed, no failed run rewritten as passing**, and C024 remains the open product handoff. |
 | C024 — Windows glob canonicalization corrective | **open / ready** | `plans/implementation/distribution-release-update/c024-windows-glob-canonicalization-corrective.md` | Medium. `escape_glob_literal` returns `None` for `\`, every canonical Windows path contains one, so `canonical_pattern_prefix` is a no-op on Windows and an `exclude` naming a bracketed directory does not match it. Pre-existing, not destructive, and a matching-semantics decision rather than a patch. |
 | C010 — `CurlConfig::user_agent` seam in `eggup-curl` | **proposed** | `plans/implementation/distribution-release-update/c010-eggup-curl-user-agent-seam.md` | Bounded upstream request. It cannot be closed from this repository, and nothing here waits on it: `eggup-eggfetch` already provides the seam. No closure record, by design. |
 | C018 — self-update provenance uncertainty fail-closed | **closed** | `plans/closure/distribution-release-update/c018-status.md` | None outstanding. Published 0.1.6 refused in both the default Cargo home and `--root` with 0.2.0 available; bytes byte-identical before and after, bookkeeping still v0.1.6. |
@@ -88,9 +93,23 @@ safety patch. It should be taken before the next release, not during one.
 **Read this before the next release.** C023's safety patch, **v0.2.1**, is
 published, immutable, attested, and passes both destructive safety fixtures.
 Its automatic five-lane `release: published` smoke **fired but failed** because
-the resolver selected yanked v0.2.0; that resolver is fixed on `main`. The next
-release is the first opportunity to obtain the still-missing green automatic
-M011C evidence.
+the resolver selected yanked v0.2.0; that resolver is fixed on `main`
+(`cfdc910`). The next release is the first opportunity to obtain the
+still-missing green automatic M011C evidence, so:
+
+- **Start from a green full hosted baseline** — all three OS lanes observed
+  green, none cancelled, and the release-drift and selector gates green.
+- **Use the existing immutable release pipeline unchanged.** Eggpack ->
+  automatic staged validation -> human publish -> crates.io from a detached
+  checkout of the exact tag -> attestation verification.
+- **The publication will trigger M011C automatically.** Nothing has to be
+  remembered or dispatched; that part is proven, twice.
+- **The resolver must select an installable, non-yanked predecessor.** It now
+  consults crates.io's yanked set; a release that yanks its own immediate
+  predecessor is exactly the case that broke it, and the next release should
+  not assume a predecessor is installable without that check.
+- **Record a green automatic five-target run before M011C is upgraded.**
+  Manual recovery does not discharge this.
 
 1. **Do not tag while current CI is red, and do not accept a cancelled lane as
    evidence.** C023's baseline had Ubuntu and Windows cancelled behind a macOS
@@ -113,8 +132,14 @@ M011C evidence.
 
 ## Published state
 
-Nine releases are published as GitHub releases and on crates.io.
-**v0.2.0 is yanked**; every other version is not.
+Nine releases are published as GitHub releases and on crates.io. **v0.2.0 is
+yanked**; the other eight are not.
+
+Rechecked live against the crates.io API on 2026-10-06: `total: 9`, and
+`yanked` is `true` for `0.2.0` alone — `0.2.1` through `0.1.0` all report
+`yanked: false`. The yank is visible in that record as an explicit `yank`
+audit action at `2026-10-06T16:21:49Z`. GitHub reports nine corresponding
+releases, with v0.2.1 and v0.2.0 both `immutable: true`.
 
 **v0.2.0 is the first immutable release and it carried two destructive defects:**
 pre-subcommand `--dry-run` may execute a real cleanup, and a covering output
@@ -180,10 +205,10 @@ weakening cleanup safety. All eight points below are implemented and closed in
 - scheduling/load policy stays external, with greggd documented as a first-class example.
 
 C003/C004/C006 ownership and freshness proof is preserved. The bare destructive
-default cannot ship as a `0.1.x` patch: `Cargo.toml` reads `0.2.0`, so the
-boundary is structural rather than a promise in a document. C021, the
-pre-release evidence corrective that had to close before that 0.2.0 tree was
-staged, is closed.
+default cannot ship as a `0.1.x` patch: `Cargo.toml` has read `0.2.0` or later
+ever since (it is `0.2.1`), so the boundary is structural rather than a promise
+in a document. C021, the pre-release evidence corrective that had to close
+before that 0.2.0 tree was staged, is closed.
 
 ## The lesson this repository keeps re-learning
 

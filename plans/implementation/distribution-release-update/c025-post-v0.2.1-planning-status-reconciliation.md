@@ -1,6 +1,7 @@
 # C025 — Post-v0.2.1 Planning and Status Reconciliation
 
-Status: ready
+Status: closed — see
+[`plans/closure/distribution-release-update/c025-status.md`](../../closure/distribution-release-update/c025-status.md)
 
 Repository baseline: `35905c5841effadcdb32e3ad4b5f396e4e9096ef`
 

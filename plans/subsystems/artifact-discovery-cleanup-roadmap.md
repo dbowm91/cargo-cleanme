@@ -719,8 +719,10 @@ Outcome:
   unresolved ownership still blocks the complete selected scope, and every
   CleanupUnit still requires fresh complete ownership/freshness proof
   immediately before Cargo.
-- Publication occurred in v0.2.0. Post-publication C023 now owns two destructive
-  defects found in that release and the v0.2.1 safety patch.
+- Publication occurred in v0.2.0. Post-publication, C023 found two destructive
+  defects in that release and fixed both in the published and attested v0.2.1;
+  crates.io 0.2.0 is yanked and disclosed. C023 is conditionally closed and no
+  destructive-safety blocker from it remains open.
 
 Dependency: M012B has an interface dependency on M012A's resolved operation/scope/mode vocabulary. Rendering work may proceed in parallel after that vocabulary is fixed.
 
@@ -796,11 +798,19 @@ contention, not a product defect, and no CI policy change was made on that basis
 
 ## 10J. C023 — v0.2.0 destructive-safety patch corrective
 
-Status: **ready / immediate**.
+Status: **conditionally closed** — accepted closure record:
+`plans/closure/distribution-release-update/c023-status.md`. Both destructive
+invariants below are restored and shipped in v0.2.1; the published v0.2.1 binary
+passes both safety fixtures. C023's one unmet criterion is distribution-side
+(acceptance criterion 11, a green **automatic** M011C five-lane smoke), not a
+cleanup-safety one.
 
 Cross-subsystem plan:
 
 - `plans/implementation/distribution-release-update/c023-v0.2.0-destructive-safety-patch-release-corrective.md`
+
+*The requirements below are retained as written before implementation. What
+actually happened is in the closure record.*
 
 C023 corrects two published destructive violations of this subsystem's durable
 boundary:
@@ -818,6 +828,22 @@ C023 requires premise-negative reproduction against published v0.2.0,
 end-to-end regression tests, complete hosted qualification, and a v0.2.1 patch
 release. The distribution/release roadmap owns publication/yank/attestation and
 M011C automatic-smoke closure; this roadmap owns the destructive invariants.
+
+**Outcome, in this subsystem's terms.** Both invariants are restored and
+qualified by tests shown to fail against the old behaviour:
+
+- canonical `--dry-run` spawns zero `cargo clean` processes across every
+  accepted spelling, including the pre-subcommand form Cargo itself passes;
+- a `PrivateBounded` classification is refused when any resolved workspace's
+  source tree lies inside the cleaned region, and the final preflight catches it
+  independently of the classifier.
+
+**No destructive-safety blocker from C023 remains open.** The one corrective it
+handed on, **C024** (Windows glob canonicalization is a no-op), is a
+matching-semantics defect that fails toward *under*-matching — the directory is
+cleaned as though no `exclude` had been written — so it is not a violation of
+either invariant above, and it is not release-blocking. It is the next
+substantive product handoff for this subsystem.
 
 ## 11. Cross-cutting reliability concerns
 
@@ -879,4 +905,4 @@ The implementation should specifically verify:
 
 ## 14. Completion definition
 
-The initial read-only boundary was reached when M001-M003 closed with evidence that cargo-cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004-M007 and C001-C007 establish Cargo-mediated cleanup, complete ownership/freshness proof, adaptive discovery, and combined-root orchestration. Scans remain read-only; ADR 003/Phase 12 intentionally changes bare invocation from a scan front door to Routine cleanup without changing that proof boundary. Phase 9 remains closed for current objectives: M008A/B policy and reporting, profile support from M008C, and package support from M008D. Profile support is limited to exact qualified releases 1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0, 1.98.1, and 1.99.0; package support is limited to exact Cargo 1.98.1 and 1.99.0. Selector estimates remain unknown and unqualified Cargo versions fail closed. C019 and C020 shipped in v0.2.0; C021 closed the pre-release evidence pass. Post-release C023 is now the active safety corrective because immutable v0.2.0 was found to violate dry-run and global source-disjointness invariants. Distribution/release publication/yank work is tracked by `plans/subsystems/distribution-release-update-roadmap.md`.
+The initial read-only boundary was reached when M001-M003 closed with evidence that cargo-cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004-M007 and C001-C007 establish Cargo-mediated cleanup, complete ownership/freshness proof, adaptive discovery, and combined-root orchestration. Scans remain read-only; ADR 003/Phase 12 intentionally changes bare invocation from a scan front door to Routine cleanup without changing that proof boundary. Phase 9 remains closed for current objectives: M008A/B policy and reporting, profile support from M008C, and package support from M008D. Profile support is limited to exact qualified releases 1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0, 1.98.1, and 1.99.0; package support is limited to exact Cargo 1.98.1 and 1.99.0. Selector estimates remain unknown and unqualified Cargo versions fail closed. C019 and C020 shipped in v0.2.0; C021 closed the pre-release evidence pass. Post-release C023 is conditionally closed: immutable v0.2.0 was found to violate the dry-run and global source-disjointness invariants, both are fixed in the published v0.2.1, and crates.io 0.2.0 is yanked. C024 (Windows glob canonicalization is a no-op) is the active corrective and the next handoff; it is a matching-semantics defect that under-matches, not a destructive-safety violation. Distribution/release publication/yank work is tracked by `plans/subsystems/distribution-release-update-roadmap.md`.

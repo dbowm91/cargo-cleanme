@@ -338,7 +338,7 @@ them without rewriting immutable history.
 
 ## Phase 11 — Hardening, release trust, and qualification automation
 
-Status: **closed for implementation.** C018, C019, and M011A-M011D are implemented. v0.2.0 supplied the real release evidence for C018/M011A/M011B; M011C remains conditional because its automatic release-trigger run failed and only manual recovery went green. C023 now owns the next automatic-smoke evidence together with the v0.2.1 safety patch.
+Status: **closed for implementation.** C018, C019, and M011A-M011D are implemented. v0.2.0 supplied the real release evidence for C018/M011A/M011B; M011C remains conditional because its automatic release-trigger run failed and only manual recovery went green. **That condition was carried into C023 and v0.2.1 and is still unmet**: the automatic v0.2.1 smoke also fired and failed, and no green *automatic* five-lane run exists for any release. The next publication is the first opportunity to obtain one.
 
 Implementation sequence / parallelism:
 
@@ -361,9 +361,15 @@ Implementation sequence / parallelism:
    versions fail-closed until deliberately qualified.
 
 C018, C019, and M011A-M011D were implemented in parallel where their files did
-not conflict. v0.2.0 supplied C018/M011A/M011B operational evidence. M011C's
-automatic trigger remains outstanding and is carried into C023/v0.2.1. M011D
+not conflict. v0.2.0 supplied C018/M011A/M011B operational evidence. M011D
 closed independently on its hosted qualification matrix.
+
+M011C's automatic trigger has since fired twice on real publications and failed
+twice — for v0.2.0 because of three defects in the automation path, for v0.2.1
+because the resolver selected the v0.2.0 that C023 had just yanked. Both are
+fixed; the five-target transaction is green on the manual rehearsal surface. The
+outstanding qualification is unchanged in kind and is now owed by the next
+publication rather than by an implementation plan.
 
 Hard constraints:
 
@@ -413,13 +419,16 @@ Exit condition:
 
 Status: **closed.** M012A and M012B are implemented and closed under ADR 003.
 The public front door changed while the existing destructive
-ownership/freshness boundary remained intact. `Cargo.toml` is now 0.2.0, so
-the breaking bare-invocation change cannot ship as a 0.1.x patch.
+ownership/freshness boundary remained intact. `Cargo.toml` has read `0.2.0` or
+later ever since (it is `0.2.1`), so the breaking bare-invocation change
+cannot ship as a 0.1.x patch.
 
 Post-phase release-readiness corrective C021 is **closed**:
 `plans/closure/artifact-discovery-cleanup/c021-status.md`.
-Its evidence supported the v0.2.0 release. C023 is the subsequent
-post-publication safety corrective.
+Its evidence supported the v0.2.0 release. C023, the subsequent
+post-publication safety corrective, is **conditionally closed** — both destructive
+defects are fixed in the published and attested v0.2.1, and its one unmet
+criterion is distribution-side. C024 is the open product handoff.
 
 Decision:
 
@@ -508,18 +517,24 @@ ADR 003 -> M012A canonical CLI [closed] -> M012B unattended log/docs [closed]
 Phase 12 is implemented and C021/C022 are closed. v0.2.0 was published through
 M013 and supplied C018/M011A/M011B evidence, but its automatic M011C run failed
 and post-release interrogation found two destructive defects in the immutable
-bytes. C023 now owns the v0.2.1 safety patch and the remaining automatic-smoke
-evidence.
+bytes. C023 is now conditionally closed: v0.2.1 is published, immutable,
+attested, and safety-qualified, and crates.io v0.2.0 is yanked. Its automatic
+M011C run also fired and failed, so the missing green automatic smoke evidence
+is still outstanding and now belongs to the next publication.
 
 
 Destructive work MUST NOT be pulled forward merely to make the tool feel complete.
 
 ## Phase 13 — 0.2.0 release qualification and publication
 
-Status: **published with corrective required — C023 ready**.
+Status: **published.** v0.2.0 shipped through M013 and was then corrected by
+C023, which is **conditionally closed**: v0.2.1 is published, immutable,
+attested, and safety-qualified, and crates.io v0.2.0 is yanked and disclosed.
+The one unmet requirement — a green **automatic** M011C five-target smoke — is
+still outstanding and now belongs to the next publication.
 
-0.2.0 is already selected in `Cargo.toml`, but publication is deliberately
-split from feature implementation.
+0.2.0 was already selected in `Cargo.toml`; publication is deliberately split
+from feature implementation.
 
 Sequence:
 
@@ -563,19 +578,23 @@ Plans:
 
 Exit condition:
 
-- C022 closed;
-- v0.2.0 public on GitHub and crates.io from one exact source;
-- immutable release+asset attestation verified;
-- automatic staged validation and five-target post-release smoke green;
-- C018 real Cargo-managed refusal evidence complete;
-- M011A/M011B/M011C conditional operational evidence reconciled;
-- M013 release receipt closed.
+- C022 closed — met;
+- v0.2.0 public on GitHub and crates.io from one exact source — met;
+- immutable release+asset attestation verified — met;
+- automatic staged validation green — met; **five-target post-release smoke
+  green — met only on the manual rehearsal surface, not under the automatic
+  trigger**, and that gap is what Phase 13 hands forward;
+- C018 real Cargo-managed refusal evidence complete — met;
+- M011A/M011B conditional operational evidence reconciled — met;
+- M013 release receipt closed — met as history, with an appended corrective note.
 
 
 
 ### Phase 13 corrective — C023 safety patch release
 
-Status: **ready / immediate**.
+Status: **conditionally closed** — accepted closure record:
+`plans/closure/distribution-release-update/c023-status.md`. Acceptance criterion
+11 (a green **automatic** M011C five-target smoke) is explicitly **not met**.
 
 The first 0.2.x publication exposed two safety violations after M013:
 
@@ -591,62 +610,69 @@ Plan:
 
 - `plans/implementation/distribution-release-update/c023-v0.2.0-destructive-safety-patch-release-corrective.md`
 
-Ordered corrective path:
+Current sequence, with each step's actual outcome:
 
 ~~~text
-v0.2.0 immutable/published [affected]
-            |
-            v
-C023 reproduce both affected behaviors
-            |
-            v
-qualify current fixes + repair red macOS CI
-            |
-            v
-complete Linux/macOS/Windows hosted green
-            |
-            v
-v0.2.1 Eggpack -> automatic staged validation -> publish
-            |
-            +--> immutable attestation
-            +--> automatic M011C five-target smoke
-            +--> public-binary safety fixtures
-            |
-            v
-yank crates.io v0.2.0 + reconcile M013/M011C
+Phase 12 implementation [closed]
+        |
+        v
+C021/C022 release-readiness [closed]
+        |
+        v
+M013 v0.2.0 publication [historical; corrected by C023]
+        |
+        v
+C023 v0.2.1 safety patch [conditionally closed]
+        |
+        +--> published/immutable/attested v0.2.1 [done]
+        +--> v0.2.0 crates.io yank [done]
+        +--> public safety fixtures [done]
+        +--> automatic M011C trigger fired [done]
+        +--> automatic M011C green result [outstanding]
+        |
+        v
+C024 Windows glob semantics [ready]
 ~~~
 
-C023 has priority over ordinary roadmap work. M013's historical closure record
-is preserved, but Phase 13 is not treated as fully complete until the corrective
-closes. A manual smoke does not substitute for the missing automatic M011C
-evidence.
+The one line that is not `done` is the reason C023 is conditionally closed and
+not closed. The automatic trigger fired for v0.2.1 exactly as intended — that is
+the `done` line — and then failed on all five lanes, because WP-L's yank of
+v0.2.0 made the rehearsal source the resolver had chosen uninstallable. The
+resolver is fixed and self-tested; a green automatic run for v0.2.1 cannot be
+recreated, because `release: published` fires once per release.
+
+M013's historical closure record is preserved and nothing in it is retracted. A
+manual smoke does not substitute for the missing automatic M011C evidence, and
+that evidence is now owed by the next publication.
 
 ### Post-v0.2.1 planning reconciliation — C025
 
-Status: **ready / immediate planning**.
+Status: **closed** — closure record:
+`plans/closure/distribution-release-update/c025-status.md`.
 
 Plan:
 
 - `plans/implementation/distribution-release-update/c025-post-v0.2.1-planning-status-reconciliation.md`
 
-C025 is a control-surface correction after the v0.2.1 safety release. It does
-not reopen Phase 12, C023, or M013 and does not implement C024.
+C025 was a control-surface correction after the v0.2.1 safety release. It did
+not reopen Phase 12, C023, or M013 and did not implement C024. It changed no
+product code, release state, or release evidence.
 
-Authoritative current state for reconciliation:
+Authoritative current state, as reconciled:
 
 ~~~text
 v0.2.0                published / immutable / crates.io yanked
 v0.2.1                published / immutable / attested / safety-qualified
-C023                  conditionally closed
+C023                  conditionally closed (criterion 11 not met)
 automatic v0.2.1 smoke fired / failed
 manual five-target    v0.1.6 -> v0.2.1 green
 M011C                 conditionally closed
 C024                  open / ready substantive corrective
-C025                  ready planning/status reconciliation
 ~~~
 
-C025 must remove future-tense publication/yank text and false
-"automatic-smoke green" claims while preserving every historical run result.
-After C025 closes, C024 remains the active product handoff and the next release
-remains the first opportunity to obtain a green automatic M011C run.
+C025 removed the future-tense publication/yank text and every false
+"automatic-smoke green" claim from the active surfaces while preserving every
+historical run result. C024 remains the next implementation handoff, and the
+next release remains the first opportunity to obtain a green automatic M011C
+run.
 
