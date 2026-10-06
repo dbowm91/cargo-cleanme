@@ -25,12 +25,12 @@ This was a **matching-semantics corrective**, not a safety patch — the defect
 never deleted the wrong bytes, it failed to *match* what the user wrote. It
 changed one function's contract in `src/config.rs` and nothing else:
 
-- `escape_glob_literal` (`src/config.rs:244-276`) no longer rejects `\`. It is
+- `escape_glob_literal` (`src/config.rs:275-307`) no longer rejects `\`. It is
   now reachable only where a `\` is a *file-name* character rather than a
   separator, and it doubles it.
-- A new `glob_spelling` / `glob_spelling_with` (`src/config.rs:218-242`)
+- A new `glob_spelling` / `glob_spelling_with` (`src/config.rs:219-250`)
   normalizes the canonical spelling to `/` **before** the escape.
-- `canonical_pattern_prefix` (`src/config.rs:292-335`) calls them in that order
+- `canonical_pattern_prefix` (`src/config.rs:337-382`) calls them in that order
   for `PatternKind::Glob`, and splices `PatternKind::Literal` (`scan.unignore`)
   exactly as before.
 
@@ -107,9 +107,9 @@ test's `a{b}c` case.
 
 | Criterion | Where satisfied | Evidence |
 |---|---|---|
-| **1.** A Windows-lane test proves a bracketed directory name is matched literally and its unescaped reading is not | `a_bracketed_canonical_spelling_is_matched_literally_on_windows`, `src/config.rs:860` | Builds a real `real[abc]` directory and `reala`/`realb` siblings, a **junction** alias (`cmd /c mklink /J`, no elevation), writes a `\`-spelled `config.toml`, reads it through `load`, and asserts (a) the rewritten pattern, (b) the named tree matches, (c) both siblings do not, and (d) the *unescaped* reading fails both — the premise is asserted in the same test, not assumed. See §5 for the lane result |
-| **2.** Unix behaviour is unchanged; the existing Unix test still passes and is still discriminating | `a_canonical_spelling_cannot_inject_glob_characters`, `src/config.rs:643` | **Unchanged file bytes** — the diff to that test is empty. It still passes, and mutation C (§4) shows it fails the moment bracket escaping is removed. Its `#[cfg(unix)]` comment, which recorded *why* the gate is honest, still holds and now has a Windows case of its own |
-| **3.** `escape_glob_literal`'s `None` arm is unreachable on every supported platform, **or** its remaining inputs are documented and tested individually | `src/config.rs:246-252` (doc), `src/config.rs:250` (`'{' \| '}'`) | The remaining input pair is `{`/`}`, documented in the function's doc comment as the reason `None` exists at all, and tested by the pre-existing Unix case at `:699-705`. The `\` input is no longer in the `None` set — it moved to the escape, and the Unix case that proves the doubled spelling compiles to a literal `\` is `a_backslash_in_a_canonical_directory_name_is_spliced_as_a_escape` (`:817`) |
+| **1.** A Windows-lane test proves a bracketed directory name is matched literally and its unescaped reading is not | `a_bracketed_canonical_spelling_is_matched_literally_on_windows`, `src/config.rs:960` | Builds a real `real[abc]` directory and `reala`/`realb` siblings, a **junction** alias (`cmd /c mklink /J`, no elevation), writes a `\`-spelled `config.toml`, reads it through `load`, and asserts (a) the rewritten pattern, (b) the named tree matches, (c) both siblings do not, and (d) the *unescaped* reading fails both — the premise is asserted in the same test, not assumed. See §5 for the lane result |
+| **2.** Unix behaviour is unchanged; the existing Unix test still passes and is still discriminating | `a_canonical_spelling_cannot_inject_glob_characters`, `src/config.rs:690` | **Unchanged file bytes** — the diff to that test is empty. It still passes, and mutation C (§4) shows it fails the moment bracket escaping is removed. Its `#[cfg(unix)]` comment, which recorded *why* the gate is honest, still holds and now has a Windows case of its own |
+| **3.** `escape_glob_literal`'s `None` arm is unreachable on every supported platform, **or** its remaining inputs are documented and tested individually | `src/config.rs:283-286` (doc), `src/config.rs:301` (`'{' \| '}'`) | The remaining input pair is `{`/`}`, documented in the function's doc comment as the reason `None` exists at all, and tested by the pre-existing Unix case at `:753-763`. The `\` input is no longer in the `None` set — it moved to the escape, and the Unix case that proves the doubled spelling compiles to a literal `\` is `a_backslash_in_a_canonical_directory_name_is_spliced_as_a_escape` (`:917`) |
 | **4.** `docs/USAGE.md` states the rule and its platform scope | "Patterns are matched against canonical paths, and canonicalized first" | States that directory names are matched **literally, not as globs**, that the user does not escape brackets themselves, the `{`/`}` case where the rewrite is skipped, and the two `globset` defaults that do apply (case-sensitive; `*` crosses separators; a `\` in a Windows pattern is a `/`) |
 | **5.** All three hosted lanes green, with the Windows lane **observed** rather than cancelled | §4, §6 | Run `37516727455` on `0a7a596`: every job `success`, including `checks (windows-latest)`, which ran `a_bracketed_canonical_spelling_is_matched_literally_on_windows` and reported `292 passed; 0 failed`. Three earlier runs failed and are recorded in §4 rather than omitted |
 
@@ -123,13 +123,13 @@ run — the same failure direction as the defect C024 was opened for.
 | # | Refusal | Why it is wrong on Windows | Found by |
 |---|---|---|---|
 | 1 | `escape_glob_literal` returned `None` for any `\` | every canonical Windows path contains one, so the splice never ran | the defect itself (C023 §11.1) |
-| 2 | `fs::canonicalize` answers `\\?\C:\…`, whose `?` is a glob metacharacter | the split at the first `* ? [ {` landed **inside** the prefix, so the rewrite declined again — and a prefix that survived would demand a candidate no walk produces, because `discovery` deliberately walks each root's own spelling | run `37514729530`, `config.rs:754` and `:904` |
-| 3 | `prefix.ends_with('\\')` refused the pattern | on Unix that is a dangling escape; on Windows `\` is a **separator**, so `C:\dev\proj\*` has a prefix ending in one, and the guard refused the rewrite for every `\`-spelled pattern | run `37516147002`, `config.rs:985` |
+| 2 | `fs::canonicalize` answers `\\?\C:\…`, whose `?` is a glob metacharacter | the split at the first `* ? [ {` landed **inside** the prefix, so the rewrite declined again — and a prefix that survived would demand a candidate no walk produces, because `discovery` deliberately walks each root's own spelling | run `37514729530` on `4fba120`, `config.rs:754` and `:904` **as that commit stood** |
+| 3 | `prefix.ends_with('\\')` refused the pattern | on Unix that is a dangling escape; on Windows `\` is a **separator**, so `C:\dev\proj\*` has a prefix ending in one, and the guard refused the rewrite for every `\`-spelled pattern | run `37516147002` on `0aba2ea`, `config.rs:985` **as that commit stood** |
 
 Refusal 2 was a **real defect in the fix itself**, not only in the fixture: it
 would have made the rewrite a no-op on exactly the inputs that exhibit it, which
 is the failure mode C024 exists to remove. It is fixed by `dereference`
-(`src/config.rs:265-275`), which drops the verbatim prefix — a property of how
+(`src/config.rs:252-273`), which drops the verbatim prefix — a property of how
 the platform spells a path rather than of anything the user wrote, so removing it
 cannot change a user's pattern.
 

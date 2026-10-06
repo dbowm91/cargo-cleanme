@@ -428,7 +428,8 @@ Post-phase release-readiness corrective C021 is **closed**:
 Its evidence supported the v0.2.0 release. C023, the subsequent
 post-publication safety corrective, is **conditionally closed** — both destructive
 defects are fixed in the published and attested v0.2.1, and its one unmet
-criterion is distribution-side. C024 is the open product handoff.
+criterion is distribution-side. C024 is **closed** (fixed, unreleased), so no
+implementation plan is open.
 
 Decision:
 
@@ -631,7 +632,7 @@ C023 v0.2.1 safety patch [conditionally closed]
         +--> automatic M011C green result [outstanding]
         |
         v
-C024 Windows glob semantics [ready]
+C024 Windows glob semantics [done — closed, unreleased]
 ~~~
 
 The one line that is not `done` is the reason C023 is conditionally closed and
@@ -667,12 +668,12 @@ C023                  conditionally closed (criterion 11 not met)
 automatic v0.2.1 smoke fired / failed
 manual five-target    v0.1.6 -> v0.2.1 green
 M011C                 conditionally closed
-C024                  open / ready substantive corrective
+C024                  closed substantive corrective (unreleased)
 ~~~
 
 C025 removed the future-tense publication/yank text and every false
 "automatic-smoke green" claim from the active surfaces while preserving every
-historical run result. C024 remains the next implementation handoff, and the
-next release remains the first opportunity to obtain a green automatic M011C
-run.
+historical run result. C024 has since been taken and is closed, fixed but
+unreleased; the next release carries that fix and remains the first opportunity
+to obtain a green automatic M011C run.
 
