@@ -510,10 +510,11 @@ ADR 003 -> M012A canonical CLI [closed] -> M012B unattended log/docs [closed]
                                   first 0.2.0 release
 ~~~
 
-Phase 12 is implemented. The first release carrying M012A's bare destructive
-default is 0.2.0 and must not be staged as publication-ready until C021 closes.
-That release also supplies the first opportunity to finish the outstanding
-published-release evidence for C018/M011A/M011B/M011C.
+Phase 12 is implemented and C021 is closed. The first release carrying M012A's
+bare destructive default is 0.2.0. Phase 13 now owns its remaining release
+gates: C022 must close before staging, then M013 carries the exact release
+through publication and finishes the outstanding C018/M011A/M011B/M011C
+operational evidence.
 
 
 Destructive work MUST NOT be pulled forward merely to make the tool feel complete.
