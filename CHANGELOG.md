@@ -8,6 +8,8 @@ command-line, JSON, and release-asset contracts are the stable surface.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-06
+
 ### Changed — BREAKING
 
 - **`cargo cleanme` is now the canonical maintenance command, and it cleans.**
@@ -570,4 +572,5 @@ published yet.
 - No runtime release-artifact qualification has run; the exact release bytes
   are qualified when the first release workflow is dispatched.
 
+[0.2.0]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.0
 [0.1.0]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.1.0
