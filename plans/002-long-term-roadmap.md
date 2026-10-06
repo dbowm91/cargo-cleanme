@@ -521,7 +521,7 @@ Destructive work MUST NOT be pulled forward merely to make the tool feel complet
 
 ## Phase 13 — 0.2.0 release qualification and publication
 
-Status: **ordered handoff**.
+Status: **published with corrective required — C023 ready**.
 
 0.2.0 is already selected in `Cargo.toml`, but publication is deliberately
 split from feature implementation.
@@ -576,3 +576,52 @@ Exit condition:
 - M011A/M011B/M011C conditional operational evidence reconciled;
 - M013 release receipt closed.
 
+
+
+### Phase 13 corrective — C023 safety patch release
+
+Status: **ready / immediate**.
+
+The first 0.2.x publication exposed two safety violations after M013:
+
+- a root-level `--dry-run` accepted before `clean` could be discarded and
+  execute a real Cargo cleanup;
+- a covering output root could contain another resolved workspace's source tree
+  and still be treated as private.
+
+Because v0.2.0 is immutable, the repair is a new patch release rather than an
+asset replacement.
+
+Plan:
+
+- `plans/implementation/distribution-release-update/c023-v0.2.0-destructive-safety-patch-release-corrective.md`
+
+Ordered corrective path:
+
+~~~text
+v0.2.0 immutable/published [affected]
+            |
+            v
+C023 reproduce both affected behaviors
+            |
+            v
+qualify current fixes + repair red macOS CI
+            |
+            v
+complete Linux/macOS/Windows hosted green
+            |
+            v
+v0.2.1 Eggpack -> automatic staged validation -> publish
+            |
+            +--> immutable attestation
+            +--> automatic M011C five-target smoke
+            +--> public-binary safety fixtures
+            |
+            v
+yank crates.io v0.2.0 + reconcile M013/M011C
+~~~
+
+C023 has priority over ordinary roadmap work. M013's historical closure record
+is preserved, but Phase 13 is not treated as fully complete until the corrective
+closes. A manual smoke does not substitute for the missing automatic M011C
+evidence.
