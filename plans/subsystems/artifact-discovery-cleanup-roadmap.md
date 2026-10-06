@@ -1,6 +1,6 @@
 ## Artifact Discovery and Cleanup Roadmap
 
-Status: Phase 12 implementation remains **closed** under ADR 003. Its first published realization, immutable v0.2.0, carried two destructive defects; **C023 is conditionally closed**, both defects are fixed and shipped in v0.2.1, and crates.io 0.2.0 is yanked and disclosed. **C024** is the next substantive product corrective for Windows glob canonicalization. **C025** is a parallel planning-only reconciliation pass and does not change cleanup or matching semantics.
+Status: Phase 12 implementation remains **closed** under ADR 003. Its first published realization, immutable v0.2.0, carried two destructive defects; **C023 is conditionally closed**, both defects are fixed and shipped in v0.2.1, and crates.io 0.2.0 is yanked and disclosed. **C024** is the next substantive product corrective for Windows glob canonicalization, and the only open implementation plan in this subsystem. **C025** is closed; it was a planning-only reconciliation that changed no cleanup or matching semantics.
 
 
 Repository audit baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
