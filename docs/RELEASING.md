@@ -44,7 +44,8 @@ the fixture-portability and architecture-citation guards, `cargo package
 Each static guard runs its own `--self-test` first. That ordering is
 deliberate: a guard that has quietly stopped detecting its defect shape is
 worse than no guard, so the gate proves each one can still fail before trusting
-it to pass.
+it to pass. This includes the installer-contract check, whose `--self-test` was
+added in C022 — before it, this paragraph was a claim the gate did not honour.
 
 The Eggpack revision is pinned in `release/eggpack/github-policy.json`. Install
 that exact revision; a different one may render a different workflow.

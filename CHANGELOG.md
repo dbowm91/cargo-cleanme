@@ -155,6 +155,23 @@ command-line, JSON, and release-asset contracts are the stable surface.
   ambiguous `PermissionDenied` as "try again". Every racer succeeds and the
   published bytes are one complete template.
 
+### Fixed (test and release evidence only)
+
+- **`cargo cleanme update --format json` had no contract evidence at all.**
+  It is the one machine-readable surface that does not use the shared envelope,
+  and nothing asserted its schema, its dry-run/changed semantics, its provenance
+  code, or its stdout shape. The document is unchanged — this is the test and
+  the seam, not a schema change — but it is now pinned, and the binary prints
+  the same bytes the tests hold.
+
+- **The installer-contract release guard could not prove it could fail.** Every
+  other contract checker shipped a `--self-test` that requires it to reject a
+  broken input; this one had no argument parsing at all, so its green was a
+  statement about the current tree and never about itself. It now runs against
+  isolated fixtures and must reject each defect class it claims to guard, for
+  the intended reason. CI, the release-drift guard, and `release-check.sh` all
+  run that self-test before the check. No installer or release contract changed.
+
 ## [0.1.6] - 2026-10-05
 
 This release changes no product behavior. It exists so that the fix shipped in

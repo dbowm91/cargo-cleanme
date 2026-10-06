@@ -109,6 +109,8 @@ jobs:
         run: python3 scripts/check-staged-validation-contract.py
       - name: Staged-validation guard rejects a mis-bound workflow
         run: python3 scripts/check-staged-validation-contract.py --self-test
+      - name: Installer-wrapper guard rejects a wrapper that drifted from the contract
+        run: python3 scripts/check-installer-contract.py --self-test
       - name: Check installer wrappers match the contract
         run: python3 scripts/check-installer-contract.py
       # M011C: the smoke is now automatic, so the things that keep "automatic"

@@ -80,6 +80,10 @@ else
 fi
 
 echo "release-check: installer wrappers match the contract"
+# C022: the failing direction first. A release gate that trusts a green wrapper
+# check is only as strong as that check's ability to reject a drifted wrapper,
+# and until this self-test existed nothing demonstrated it.
+python3 scripts/check-installer-contract.py --self-test
 python3 scripts/check-installer-contract.py
 
 echo "release-check: post-release smoke matrix is bound to the release contract"

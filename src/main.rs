@@ -85,7 +85,13 @@ fn run(cli: Cli) -> Result<i32, AppError> {
 fn run_update(dry_run: bool, format: OutputFormat) -> Result<i32, AppError> {
     let plan = cargo_cleanme::update::update(dry_run)?;
     if format == OutputFormat::Json {
-        println!("{}", update_json(&plan, dry_run));
+        // The stream, trailing newline included, comes from the library seam the
+        // contract tests drive, so "one JSON document on stdout" is a property
+        // this function holds rather than a convention it happens to follow.
+        print!(
+            "{}",
+            cargo_cleanme::output::update_json_stream(&plan, dry_run)
+        );
     } else if dry_run {
         println!(
             "cargo-cleanme: {} -> {} available for {}",
@@ -731,30 +737,4 @@ fn run_scan(
         return Ok(1);
     }
     Ok(0)
-}
-
-/// One stable JSON object for `update`, matching the schema_version discipline
-/// every other machine-readable surface in this CLI already follows.
-fn update_json(plan: &cargo_cleanme::update::UpdatePlan, dry_run: bool) -> String {
-    let mut document = serde_json::Map::new();
-    document.insert("schema_version".into(), serde_json::json!(1));
-    document.insert(
-        "cargo_cleanme_version".into(),
-        serde_json::json!(env!("CARGO_PKG_VERSION")),
-    );
-    document.insert("operation".into(), serde_json::json!("update"));
-    document.insert("dry_run".into(), serde_json::json!(dry_run));
-    document.insert(
-        "result".into(),
-        serde_json::json!({
-            "from_version": plan.from_version,
-            "to_version": plan.to_version,
-            "target": plan.target,
-            "asset": plan.asset,
-            "tag": plan.tag,
-            "provenance": plan.provenance.code(),
-            "changed": !dry_run,
-        }),
-    );
-    serde_json::Value::Object(document).to_string()
 }

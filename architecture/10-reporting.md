@@ -6,7 +6,7 @@
 > `plans/output-schema-v1.md` to match. The analysis below is retained as the
 > record of what diverged and why.
 
-Covers `src/report.rs` (195 lines) and `src/output.rs` (671 lines) together. They
+Covers `src/report.rs` (195 lines) and `src/output.rs` (851 lines) together. They
 are two projections of the same data, and the contrast is the point: the human
 renderer predates the machine contract; the DTO layer exists to protect it.
 `output.rs` now carries a third surface — the `log` module (§7), a bounded
@@ -27,14 +27,25 @@ ownership, decides a policy disposition, nor performs I/O.
 | Encoding | hand-rolled `format!` | `#[derive(Serialize)]` only — **no serializer** |
 | I/O | none | none |
 
-`output.rs` derives `Serialize` but never calls `serde_json`; its `log` module
-builds strings by `write!` and also never serialises. Encoding and the trailing
-newline are owned by `main.rs`: `serde_json::to_string` plus `println!` for the
-two envelope surfaces (`main.rs:649-660` scan, `main.rs:358-365` cleanup), the
-hand-rolled `update_json` plus `println!` (`main.rs:88`), and for log mode a
-single `println!` of the returned line (`main.rs:661-665`, `main.rs:366-370`).
-Keeping encoding out of the DTO module means a caller can serialise the same
-envelope to JSON, or anything else, without touching the contract.
+`output.rs` derives `Serialize` for the DTOs and never calls `serde_json` for
+them; its `log` module builds strings by `write!` and also never serialises.
+Encoding and the trailing newline are owned by `main.rs`: `serde_json::to_string`
+plus `println!` for the two envelope surfaces (`main.rs:665-672` scan,
+`main.rs:370-377` cleanup), and for log mode a single `println!` of the returned
+line (`main.rs:673-677`, `main.rs:378-382`). Keeping encoding out of the DTO
+module means a caller can serialise the same envelope to JSON, or anything else,
+without touching the contract.
+
+The `update` document is the one exception, and it became one deliberately in
+C022 rather than by accident. It is not an envelope (an update resolves no scope
+and runs no cleanup mode), so it is assembled as a literal object map and
+encoded inside the module at `output.rs:689`, returning the document alone;
+`update_json_stream` (`output.rs:727`) appends the single newline, and `main.rs`
+prints exactly that (`main.rs:91-94`) with `print!`. The reason it lives in the
+library at all is testability: `update_json` used to be a private function of the
+binary, which meant the only way to assert anything about this surface was to run
+a live update against crates.io. The seam lets the contract tests hold the exact
+bytes, and the stream is a value rather than a `println!` convention.
 
 **What they must not do:** change what was found. That holds outright for
 `output.rs` — it takes `&ScanReport`/`&CleanReport` and cannot mutate. It holds
@@ -306,10 +317,12 @@ resolve to the maintenance scope and both report `scope: "routine"`, unless a
 configured legacy `scan.root` wins as an Explicit override and the label is
 `"explicit"` (`main.rs:317-323`). `"known"` is no longer emitted on any path.
 
-**One more envelope that is not an envelope.** `update_json` (`main.rs:738-760`)
-builds a hand-rolled `serde_json::Map` with `schema_version: 1` and
-`operation: "update"` — but **no `scope`, no `mode`, and a different `result`
-shape**. It shares the version number without sharing the envelope (§8 D8).
+**One more envelope that is not an envelope.** `update_json` (`output.rs:689-717`)
+builds a hand-rolled `serde_json::Map` with `schema_version: 1` (`output.rs:691`)
+and `operation: "update"` (`output.rs:696`) — but **no `scope`, no `mode`, and a
+different `result` shape** (`output.rs:698-714`). It shares the version number
+without sharing the envelope (§8 D8). Since C022 it lives in this module rather
+than in the binary, which is what made it testable at all.
 
 ---
 
@@ -945,11 +958,13 @@ Two qualifications. First, **D1 and D2 are live contract ambiguities, not just
 doc rot**: a consumer written from lines 16 and 25 would implement
 `selector_estimate_bytes` handling and disposition enums that do not match the
 tool. The code has not broken its promise; the document has not been kept in step.
-Second, **`update_json` (`main.rs:738-760`) reuses `schema_version: 1` without the
+Second, **`update_json` (`output.rs:689-717`) reuses `schema_version: 1` without the
 envelope** — no `scope`, no `mode`, different `result` shape. The document scopes
 itself to the scan/cleanup surfaces, so this is not a violation as written, but a
 consumer treating `schema_version == 1` as "the envelope in this document" will
-mis-parse the `update` document. `update_json` also has no tests at all (§10).
+mis-parse the `update` document. C022 added four contract cases for that document
+(`output.rs:732`); it did not change its shape, so the ambiguity is unchanged and
+is still recorded here rather than fixed.
 
 ### Practical consequence for a consumer
 
@@ -1126,7 +1141,7 @@ pinned. It covers `render` and `format_bytes` only — there is no test for a
 multi-line `detail` or a whitespace-only path.
 
 **`output.rs` — 0 tests for the DTO layer; 11 for `log`.** The file *does* have a
-`#[cfg(test)]` module (`output.rs:426-671`), but it lives **inside `pub mod log`**
+`#[cfg(test)]` module (`output.rs:427-670`), but it lives **inside `pub mod log`**
 and tests nothing above it. **No test constructs an `EnvelopeV1`, no test asserts
 a field name, and the `selector_estimate_bytes` inversion (D1) has no test of its
 own** — it is only visible because `tests/cli_contract.rs` happens to run the
@@ -1148,14 +1163,24 @@ all short tokens, and `debug_assert!` at `output.rs:398-405` assumes that), and
 the fact that log mode suppresses the human diagnostic fan-out and progress
 renderer — that lives in `main.rs` and is only tested through the binary.
 
-**`main.rs` — 0 tests.** The task brief anticipated an inline test module here and
-suggested `update_json` was covered by one. **It is not.** `main.rs` has no
-`#[cfg(test)]` and no `mod tests`; `grep -c "#\[test\]" src/main.rs` returns `0`.
-`update_json` (`main.rs:738-760`) is called from one place (`main.rs:88`) and
-referenced nowhere in `tests/`. `UpdatePlan` is defined at `update.rs:247` and
-tested inside `update.rs`'s own module, but the JSON *document* is untested. It
-is also the only machine-readable surface that bypasses `EnvelopeV1`, so the
-least-tested document is the one that diverges most from the shared envelope.
+**`main.rs` — 0 tests, and the C022 note is now half-obsolete.** The task brief
+anticipated an inline test module here and suggested `update_json` was covered by
+one. **It was not.** `main.rs` has no `#[cfg(test)]` and no `mod tests`;
+`grep -c "#\[test\]" src/main.rs` returns `0`. The gap C022 actually closed was
+different from the one this paragraph predicted: the document was not untested
+because it lived in the binary, it was untested because the binary was the only
+place that could serialize it. `update_json` now lives at `output.rs:689` with
+four contract cases at `output.rs:732`, and `main.rs` calls it from one place
+(`main.rs:91-94`). `UpdatePlan` is defined at `update.rs:247` and tested inside
+`update.rs`'s own module.
+
+The document remains the only machine-readable surface that bypasses
+`EnvelopeV1`, so it is still the one that diverges most from the shared
+envelope — but it is no longer the one with the least evidence. What is
+genuinely unpinned is a *successful* run: every success path resolves crates.io
+and replaces bytes, so the hermetic cases prove the failure shape and the stream
+bytes, and the successful live document is only observable through the
+post-release smoke.
 
 **`tests/cli_contract.rs` — pins real JSON shape, partially.** Shape assertions do
 exist, which makes it a genuine contract:
@@ -1247,8 +1272,10 @@ a real document.
    (`main.rs:21-29`) but still writes nothing to stdout. Consider whether a status
    field belongs in a future schema version rather than v1.
 10. **`update_json` reuses `schema_version: 1` without the envelope,
-    `main.rs:732-754`** — no `scope`, no `mode`, different `result` shape, zero
-    tests. Confirm consumers of `schema_version == 1` are scoped per `operation`,
+    `output.rs:689-717`** — no `scope`, no `mode`, different `result` shape. C022
+    gave it four cases (`output.rs:732`) but did **not** reconcile it with the
+    envelope, because that is a schema change needing its own plan and a version
+    bump. Confirm consumers of `schema_version == 1` are scoped per `operation`,
     and that the `update` document should be documented alongside the others.
 11. **Keep byte formatting float-free, `report.rs:29-32`** — any change
     introducing `n as f64` silently breaks `report.rs:152`

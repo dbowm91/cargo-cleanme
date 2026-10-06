@@ -669,3 +669,183 @@ pub mod log {
         }
     }
 }
+
+// ------------------------------------------------------- the update document
+
+/// One stable JSON object for `update`, and exactly the string production
+/// prints.
+///
+/// Deliberately **not** an `EnvelopeV1`. An update resolves no cleanup scope
+/// and runs no cleanup mode, so an envelope would carry two fields that are
+/// always `null` while hiding the fact that `result` is a different projection.
+/// Its shape is schema_version 1, and this document is the only place it is
+/// written: the binary calls it, and the contract tests call it, so a test can
+/// never agree with production by sharing a second serializer.
+///
+/// The body is spelled as a literal object map rather than a derived struct for
+/// the same reason the rest of this module is hand-projected: field presence
+/// and field names are the published contract, and a `#[derive(Serialize)]`
+/// change to an unrelated struct must not be able to move them.
+pub fn update_json(plan: &crate::update::UpdatePlan, dry_run: bool) -> String {
+    let mut document = serde_json::Map::new();
+    document.insert("schema_version".into(), serde_json::json!(1));
+    document.insert(
+        "cargo_cleanme_version".into(),
+        serde_json::json!(env!("CARGO_PKG_VERSION")),
+    );
+    document.insert("operation".into(), serde_json::json!("update"));
+    document.insert("dry_run".into(), serde_json::json!(dry_run));
+    document.insert(
+        "result".into(),
+        serde_json::json!({
+            "from_version": plan.from_version,
+            "to_version": plan.to_version,
+            "target": plan.target,
+            "asset": plan.asset,
+            "tag": plan.tag,
+            // The domain's stable code, never the human remediation prose: a
+            // refusal reason has to be greppable and it has to be the same
+            // token the reason codes already use.
+            "provenance": plan.provenance.code(),
+            // `changed` is derived from the requested mode, never from what the
+            // transaction happened to do. A dry run that reported `changed`
+            // would be claiming bytes it never touched.
+            "changed": !dry_run,
+        }),
+    );
+    serde_json::Value::Object(document).to_string()
+}
+
+/// The exact bytes the `update` JSON path writes to stdout.
+///
+/// `run_update` prints this with `print!` rather than composing the trailing
+/// newline itself, so the document-plus-newline stream contract is a value that
+/// tests can hold and compare byte for byte instead of a convention that only
+/// the `println!` macro's behaviour guarantees. One document, one newline, and
+/// no room for a human status line to be mixed in: a JSON consumer reads this
+/// stream with a parser, not with a grep.
+pub fn update_json_stream(plan: &crate::update::UpdatePlan, dry_run: bool) -> String {
+    format!("{}\n", update_json(plan, dry_run))
+}
+
+#[cfg(test)]
+mod update_tests {
+    use super::update_json_stream;
+    use crate::update::{Provenance, UpdatePlan};
+    use std::path::PathBuf;
+
+    /// A plan with every identity field distinct, so a test that asserts "the
+    /// document equals its input" cannot pass by swapping two fields.
+    fn plan() -> UpdatePlan {
+        UpdatePlan {
+            from_version: "0.1.6".to_owned(),
+            to_version: "0.2.0".to_owned(),
+            target: "x86_64-unknown-linux-gnu".to_owned(),
+            asset: "cargo-cleanme-x86_64-unknown-linux-gnu".to_owned(),
+            tag: "v0.2.0".to_owned(),
+            provenance: Provenance::VerifiableSelfManaged { digest: [7u8; 32] },
+        }
+    }
+
+    fn parse(stream: &str) -> serde_json::Value {
+        serde_json::from_str(stream.trim_end_matches('\n')).expect("the document is one JSON value")
+    }
+
+    #[test]
+    fn the_dry_run_document_pins_the_schema_and_the_identity_fields() {
+        let document = parse(&update_json_stream(&plan(), true));
+        assert_eq!(document["schema_version"], serde_json::json!(1));
+        assert_eq!(document["operation"], serde_json::json!("update"));
+        assert_eq!(
+            document["cargo_cleanme_version"],
+            serde_json::json!(env!("CARGO_PKG_VERSION"))
+        );
+        assert_eq!(document["dry_run"], serde_json::json!(true));
+        assert_eq!(document["result"]["changed"], serde_json::json!(false));
+        let result = &document["result"];
+        assert_eq!(result["from_version"], serde_json::json!("0.1.6"));
+        assert_eq!(result["to_version"], serde_json::json!("0.2.0"));
+        assert_eq!(
+            result["target"],
+            serde_json::json!("x86_64-unknown-linux-gnu")
+        );
+        assert_eq!(
+            result["asset"],
+            serde_json::json!("cargo-cleanme-x86_64-unknown-linux-gnu")
+        );
+        assert_eq!(result["tag"], serde_json::json!("v0.2.0"));
+        assert_eq!(result["provenance"], serde_json::json!("self_managed"));
+    }
+
+    #[test]
+    fn the_mutating_document_is_the_same_shape_with_changed_true() {
+        let dry = parse(&update_json_stream(&plan(), true));
+        let mutating = parse(&update_json_stream(&plan(), false));
+        assert_eq!(mutating["dry_run"], serde_json::json!(false));
+        assert_eq!(mutating["result"]["changed"], serde_json::json!(true));
+        // `changed` and `dry_run` are the only two fields allowed to differ, so
+        // that is asserted as a fact rather than re-listed field by field.
+        let mut dry = dry;
+        dry["dry_run"] = serde_json::json!(false);
+        dry["result"]["changed"] = serde_json::json!(true);
+        assert_eq!(mutating, dry);
+    }
+
+    #[test]
+    fn every_public_provenance_code_is_emitted_as_its_own_stable_token() {
+        let cases = [
+            (
+                Provenance::CargoManaged {
+                    bin_root: PathBuf::from("/cargo/bin"),
+                    version: "0.1.6".into(),
+                },
+                "cargo_managed",
+            ),
+            (
+                Provenance::VerifiableSelfManaged { digest: [0u8; 32] },
+                "self_managed",
+            ),
+            (
+                Provenance::CargoInstallOnlyHost {
+                    triple_hint: "armv7-unknown-linux-gnueabihf".into(),
+                },
+                "cargo_install_only_host",
+            ),
+            (
+                Provenance::UnprovableOwnership {
+                    detail: "no digest matched".into(),
+                },
+                "unprovable_ownership",
+            ),
+        ];
+        for (provenance, code) in cases {
+            let mut plan = plan();
+            plan.provenance = provenance;
+            let document = parse(&update_json_stream(&plan, true));
+            assert_eq!(
+                document["result"]["provenance"],
+                serde_json::json!(code),
+                "the document must carry the domain code, not prose"
+            );
+        }
+    }
+
+    #[test]
+    fn the_stream_is_one_document_plus_exactly_one_newline() {
+        let stream = update_json_stream(&plan(), true);
+        assert!(
+            stream.ends_with('\n'),
+            "the document must be newline-terminated"
+        );
+        assert_eq!(
+            stream.matches('\n').count(),
+            1,
+            "a JSON document has no interior raw newline, so a second one is a second line"
+        );
+        // `serde_json` rejects trailing content after a value, so this is the
+        // assertion that the stream is one document and not one document plus a
+        // status line the parser would have to skip.
+        serde_json::from_str::<serde_json::Value>(&stream)
+            .expect("the whole stream, newline included, must parse as exactly one document");
+    }
+}

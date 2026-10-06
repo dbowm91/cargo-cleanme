@@ -174,7 +174,7 @@ closure records.
 | `docs/` | `RELEASING.md` (operator checklist), `TROUBLESHOOTING.md` (includes known defects by version) |
 | `plans/` | decision records — see §6 |
 | `.skills/` | the six skills — see §2 |
-| `scripts/` | 17 scripts; `check-doc-citations.py` also gates that `architecture/14-testing-and-verification.md` §5 table is exactly these 17, so a new checker cannot ship undocumented. Most take `--self-test`; `check-installer-contract.py` is the one that does not |
+| `scripts/` | 17 scripts; `check-doc-citations.py` also gates that `architecture/14-testing-and-verification.md` §5 table is exactly these 17, so a new checker cannot ship undocumented. All 17 take `--self-test`; C022 removed the last exception |
 | `completions/`, `man/` | **generated** — do not hand-edit; run `generate-docs` |
 | `xtask/` | `generate-docs` source (feature `dev-tools`); excluded from the published crate |
 | `release/eggpack/` | `distribution.toml` is the authority for the release target matrix |

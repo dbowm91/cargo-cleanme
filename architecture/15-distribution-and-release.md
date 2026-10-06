@@ -134,9 +134,13 @@ The two installers are one contract with two implementations, and
 `scripts/check-installer-contract.py` is the machine check that keeps them
 aligned. It parses `release/eggpack/distribution.toml` for the contracted asset
 set, then parses each installer to extract the triples it can select
-(`posix_mapping` at `scripts/check-installer-contract.py:66`,
-`powershell_mapping` at `scripts/check-installer-contract.py:89`) and fails if
-either can select a triple with no published asset.
+(`posix_mapping` at `scripts/check-installer-contract.py:71`,
+`powershell_mapping` at `scripts/check-installer-contract.py:94`) and fails if
+either can select a triple with no published asset. Since C022 the check takes a
+fixture root and the exec bit git recorded rather than reading the repository
+(`check` at `scripts/check-installer-contract.py:125`), which is what lets
+`--self-test` (`:354`) build isolated trees and require a rejection for each
+defect class instead of only reporting that today's tree passes.
 
 ### 3.1 `packaging/install.sh`
 
@@ -193,7 +197,7 @@ shell-appropriate:
   elevation branch exists on both sides (POSIX checks `id -u`, Windows checks the
   Windows principal role) but resolves differently. Only the *asset* and
   *triple* contract is machine-checked between the installers
-  (`scripts/check-installer-contract.py:66-91`), not the destination rule — which
+  (`scripts/check-installer-contract.py:71-97`), not the destination rule — which
   is correct, because the destinations cannot be the same across OSes. What
   *can* be machine-checked and is not: that neither destination is ever inside a
   Cargo root, which is the property §2 depends on.
@@ -924,7 +928,9 @@ the release workflows.
 5. **Does your installer change add a triple, an asset name, or an install
    name?** `scripts/check-installer-contract.py` compares both installers
    against `release/eggpack/distribution.toml`; a change to one without the other
-   fails the contract check.
+   fails the contract check — and the gate runs that check's own `--self-test`
+   first, so a green here means the check can still fail, not merely that it did
+   not.
 6. **Does your installer change touch digest handling?** Three fixture cases
    exist specifically to prove a missing, malformed, or mismatched `.sha256`
    aborts the install (`packaging/tests/test_installers.py:766-782`). If you

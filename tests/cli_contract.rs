@@ -1759,3 +1759,125 @@ fn scan_emits_exactly_one_json_document() {
         "the internal-scan report guard was removed; see architecture/13-orchestration.md §4"
     );
 }
+
+// ---------------------------------------------------------------- update JSON
+
+/// The executable file name Cargo itself would record for this package.
+///
+/// `.crates.toml` records real executable file names, so the Windows entry
+/// carries `.exe` and the POSIX entries do not. Spelling it for the wrong
+/// platform does not produce a refusal -- it produces "Cargo does not claim
+/// this file", which is the opposite conclusion, so a test that hard-coded one
+/// spelling would silently stop testing anything on the other two lanes.
+fn cargo_recorded_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "cargo-cleanme.exe"
+    } else {
+        "cargo-cleanme"
+    }
+}
+
+/// A staged copy of the built binary inside a directory shaped like
+/// `cargo install --root DIR`, with Cargo's own record file beside it.
+///
+/// The copy matters: provenance is classified from the *running executable's*
+/// location, so the refusal can only be produced by a binary that genuinely
+/// sits under a Cargo root. The record is the verbatim `v1` schema cargo
+/// 1.99.0 writes, and the version is deliberately **older** than the crate
+/// version so that the refusal is about ownership and not about being current.
+fn cargo_managed_installation(dir: &std::path::Path) -> std::path::PathBuf {
+    let bin = dir.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let staged = bin.join(cargo_recorded_binary_name());
+    fs::copy(env!("CARGO_BIN_EXE_cargo-cleanme"), &staged).unwrap();
+    fs::write(
+        dir.join(".crates.toml"),
+        format!(
+            "[v1]\n\"cargo-cleanme 0.1.6 \
+             (registry+https://github.com/rust-lang/crates.io-index)\" = [\"{}\"]\n",
+            cargo_recorded_binary_name()
+        ),
+    )
+    .unwrap();
+    staged
+}
+
+/// A JSON update failure must not look like a successful update.
+///
+/// This drives the real binary, not the library seam, and it is deliberately
+/// hermetic: a mutating update over forbidden provenance refuses *before* it
+/// asks the registry anything (C018's ordering fix), so this exercises the
+/// refusal path with no network and no published-release state. That is what
+/// makes the "no document" assertion meaningful -- a run that reached the
+/// registry could fail for an unrelated reason and prove nothing about the
+/// failure shape.
+#[test]
+fn json_update_refusal_emits_no_document_and_exits_non_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let staged = cargo_managed_installation(dir.path());
+
+    let output = Command::new(&staged)
+        .args(["--format", "json", "update"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "a forbidden-provenance update must fail; stdout was {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "a failed update printed {} bytes on stdout: {:?}",
+        output.stdout.len(),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    // Belt and braces: even if a future change emitted something, it must not
+    // be parseable as the success document this plan pins.
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).is_err(),
+        "a failure must never emit a success-shaped JSON document"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cargo install"),
+        "the refusal must name the manager command; stderr was {stderr:?}"
+    );
+}
+
+/// The success stream must reach stdout through the seam the contract tests
+/// drive.
+///
+/// A hermetic *successful* update is not representable: every success path
+/// resolves the version authority from crates.io and then replaces bytes, so a
+/// test would either depend on published release state or need a
+/// production-only network hook. Rather than invent one, this pins the link
+/// that is otherwise unproven -- that the JSON branch of `run_update` prints
+/// exactly the library stream and nothing else -- which is what turns the
+/// library's one-document/one-newline guarantee into a statement about this
+/// process's stdout.
+#[test]
+fn the_json_update_branch_prints_only_the_tested_seam() {
+    let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs"))
+        .expect("main.rs is readable from the integration test's working directory");
+    let start = source.find("fn run_update(").expect("run_update exists");
+    let body = &source[start..];
+    let end = body
+        .find("\n}\n")
+        .expect("run_update is a top-level function");
+    let body = &body[..end];
+
+    assert_eq!(
+        body.matches("print!(").count(),
+        1,
+        "the JSON branch must have exactly one unterminated write to stdout; a \
+         second one is a second fragment on a stream a JSON consumer parses. \
+         (`print!(` cannot match the `println!(` the human branch uses.)"
+    );
+    assert!(
+        body.contains("update_json_stream"),
+        "the JSON branch must print output::update_json_stream, the seam the update \
+         JSON contract tests exercise; see plans/implementation/\
+         distribution-release-update/c022-pre-release-machine-contract-hardening.md §5"
+    );
+}
