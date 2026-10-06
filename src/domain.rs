@@ -379,3 +379,33 @@ impl ScanCounters {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Premise: a counter that wraps is not a large number, it is a *wrong*
+    /// number that still looks plausible. A `Duration` cannot reach u64
+    /// nanoseconds in production, so the fixtures below are unreachable by
+    /// construction — which is the point. The value each one takes under a
+    /// truncating `as u64` cast is the specific false reading the saturating
+    /// conversion exists to prevent.
+    #[test]
+    fn elapsed_nanos_saturates_instead_of_wrapping() {
+        assert_eq!(elapsed_nanos(Duration::ZERO), 0);
+        assert_eq!(elapsed_nanos(Duration::from_secs(3)), 3_000_000_000);
+        // Sub-second precision has to survive too: these counters are summed and
+        // rendered in milliseconds, so a conversion that dropped the remainder
+        // would read as zero elapsed work.
+        assert_eq!(elapsed_nanos(Duration::new(1, 500)), 1_000_000_500);
+
+        // `u64::MAX` seconds is ~584 years. Truncated, it reads as
+        // 2^64 - 10^9 nanoseconds, i.e. about 9.2 seconds — a believable
+        // measurement, which is the failure mode the cast invites.
+        assert_eq!(elapsed_nanos(Duration::new(u64::MAX, 0)), u64::MAX);
+        // 2^63 seconds is exactly 2^63 * 10^9 nanoseconds, and 10^9 carries
+        // nine factors of two, so this duration is a whole multiple of 2^64:
+        // the truncating cast reports *zero* elapsed time for it.
+        assert_eq!(elapsed_nanos(Duration::new(1 << 63, 0)), u64::MAX);
+    }
+}

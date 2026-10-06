@@ -6,7 +6,18 @@ All notable changes to cargo-cleanme are documented here. The format follows
 stance: the `0.x` line may make breaking changes in any release, and the
 command-line, JSON, and release-asset contracts are the stable surface.
 
-## [Unreleased]
+## [0.2.1] - 2026-10-06
+
+### Security
+
+- **0.2.0 is yanked.** Two destructive defects shipped in 0.2.0 and were found
+  by post-release interrogation, not by the tests. It could delete files it did
+  not own, and it reported `status=ok` with exit `0` when it did. Yanking stops
+  new `cargo install` resolution from selecting it; existing installations and
+  lockfiles are unaffected. Every earlier release remains unyanked — their other
+  behaviour was correct, and a yank would have misdescribed them. See
+  [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#known-defects-by-version)
+  for what to check if you ran 0.2.0.
 
 ### Fixed — safety
 

@@ -481,6 +481,23 @@ pub fn show(config: &Config) -> Result<String, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A TOML array element holding exactly one string value.
+    ///
+    /// The fixtures below are built from `Path::display()`, which on Windows
+    /// contains backslashes — and inside a basic TOML string a backslash is an
+    /// escape introducer, so `C:\Users\RUNNER~1\...\real[abc]` does not parse:
+    /// `\U` is a valid escape for a 8-digit unicode escape and the rest is
+    /// not, so the *fixture* failed before the subject could be consulted.
+    /// Handing the value to the `toml` crate lets it choose the representation
+    /// that encodes it legally, which is the approach `tests/cli_contract.rs`
+    /// already uses for the same reason. The path text itself, brackets
+    /// included, is unchanged — the bracket must survive into the parsed
+    /// string, because it is what the canonical rewrite has to escape.
+    fn toml_string(value: &str) -> String {
+        toml::Value::String(value.to_owned()).to_string()
+    }
+
     #[cfg(unix)]
     #[test]
     fn patterns_are_canonicalized_so_exclusions_actually_apply() {
@@ -506,7 +523,9 @@ mod tests {
         fs::write(
             &config,
             format!(
-                "[scan]\nignore = [\"{shell_spelled}\"]\n[cleanup.policy]\nexclude = [\"{shell_spelled}\"]\n"
+                "[scan]\nignore = [{}]\n[cleanup.policy]\nexclude = [{}]\n",
+                toml_string(&shell_spelled),
+                toml_string(&shell_spelled)
             ),
         )
         .unwrap();
@@ -525,7 +544,10 @@ mod tests {
         // keep their spelling (the latter still matches nothing, by definition).
         fs::write(
             &config,
-            format!("[cleanup.policy]\nexclude = [\"{}\"]\n", link.display()),
+            format!(
+                "[cleanup.policy]\nexclude = [{}]\n",
+                toml_string(&link.display().to_string())
+            ),
         )
         .unwrap();
         assert_eq!(
@@ -535,8 +557,8 @@ mod tests {
         fs::write(
             &config,
             format!(
-                "[cleanup.policy]\nexclude = [\"{}/does/not/exist/*\"]\n",
-                link.display()
+                "[cleanup.policy]\nexclude = [{}]\n",
+                toml_string(&format!("{}/does/not/exist/*", link.display()))
             ),
         )
         .unwrap();
@@ -552,8 +574,20 @@ mod tests {
         );
     }
 
+    // Unix-only, and the gate is the subject rather than the fixture. The
+    // premise is a canonical spelling that (a) differs from what the user
+    // wrote, which needs a second name for one directory, and (b) can be
+    // spliced, which `escape_glob_literal` defines as "carries no `\`". Every
+    // canonical path on Windows carries backslashes, so the glob rewrite is a
+    // no-op on that platform and there is nothing here for it to get wrong.
+    // The earlier `#[cfg(not(unix))]` branch sidestepped this by naming the
+    // bracketed directory directly, which voided the premise: the bracket was
+    // then in the *user's* pattern, the rewrite never ran, and the test could
+    // only ever have failed. Reporting that honestly is the point.
+    #[cfg(unix)]
     #[test]
     fn a_canonical_spelling_cannot_inject_glob_characters() {
+        use std::os::unix::fs::symlink;
         // The rewrite validated the *user's* pattern and then spliced in text
         // that had never been validated. A directory named `real[abc]`, reached
         // through a symlink, turned `link/*` into a character class: the tree
@@ -566,18 +600,21 @@ mod tests {
             fs::create_dir_all(d.path().join(sibling)).unwrap();
         }
         let link = d.path().join("link");
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-        #[cfg(not(unix))]
-        let link = {
-            fs::create_dir(&link).unwrap();
-            real.clone()
-        };
+        symlink(&real, &link).unwrap();
+        assert_ne!(
+            link.display().to_string(),
+            real.display().to_string(),
+            "premise: the fixture needs a spelling that is not the canonical one, \
+             or the rewrite never has a bracketed name to splice"
+        );
 
         let config = d.path().join("config.toml");
         fs::write(
             &config,
-            format!("[scan]\nignore = [\"{}/*\"]\n", link.display()),
+            format!(
+                "[scan]\nignore = [{}]\n",
+                toml_string(&format!("{}/*", link.display()))
+            ),
         )
         .unwrap();
         let ignore = load(&config).unwrap().scan.ignore;
@@ -607,13 +644,7 @@ mod tests {
         let braces = d.path().join("a{b}c");
         fs::create_dir_all(&braces).unwrap();
         let brace_link = d.path().join("bracelink");
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&braces, &brace_link).unwrap();
-        #[cfg(not(unix))]
-        let brace_link = {
-            fs::create_dir(&brace_link).unwrap();
-            braces.clone()
-        };
+        symlink(&braces, &brace_link).unwrap();
         let written = format!("{}/*", brace_link.display());
         assert_eq!(
             canonical_pattern_prefix(&written, PatternKind::Glob),
@@ -805,5 +836,220 @@ mod tests {
                 "round {round}: one complete template, never a partial one"
             );
         }
+    }
+
+    /// Make `link`/`linkat` report `ENOSYS` on the calling thread.
+    ///
+    /// `create_initial` publishes by hard-linking a fully written staging file,
+    /// and falls back to `create_new` when `link(2)` says the filesystem has no
+    /// hard links. Nothing else in the process can produce that condition, and
+    /// no filesystem a test can reach does either — see
+    /// `the_config_is_published_on_a_filesystem_without_hard_links`.
+    ///
+    /// A seccomp filter is the one thing that can: it changes what the real
+    /// syscall returns, on the real thread, with no seam in production code.
+    ///
+    /// The filter is per-thread and cannot be removed once installed, so this
+    /// must be called on a thread that is about to exit. Installed on a
+    /// long-lived libtest worker it would silently change every test that
+    /// follows it on that thread.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    mod hard_link_trap {
+        // Declared here rather than taken from a crate: `cargo-cleanme` has no
+        // `libc` dependency and a test-only FFI shim is not a reason to add
+        // one. `sock_filter`/`sock_fprog` are the kernel's own layouts.
+        #[repr(C)]
+        struct SockFilter {
+            code: u16,
+            jt: u8,
+            jf: u8,
+            k: u32,
+        }
+        #[repr(C)]
+        struct SockFprog {
+            len: u16,
+            filter: *const SockFilter,
+        }
+
+        const LD_W_ABS: u16 = 0x20;
+        const JEQ_K: u16 = 0x15;
+        const RET_K: u16 = 0x06;
+        const AUDIT_ARCH_X86_64: u32 = 0xc000_003e;
+        const RET_ALLOW: u32 = 0x7fff_0000;
+        const RET_ERRNO: u32 = 0x0005_0000;
+        const ENOSYS: u32 = 38;
+        const SYS_LINK: u32 = 86;
+        const SYS_LINKAT: u32 = 265;
+        const PR_SET_NO_NEW_PRIVS: i32 = 38;
+        const PR_SET_SECCOMP: i32 = 22;
+        const SECCOMP_MODE_FILTER: i32 = 2;
+
+        unsafe extern "C" {
+            fn prctl(option: i32, ...) -> i32;
+        }
+
+        pub fn install() {
+            // `seccomp_data` is {nr, arch, instruction_pointer, args[6]}, so the
+            // syscall number is the first word and the architecture the second.
+            // Both `link(2)` and the `linkat(2)` glibc actually calls are
+            // trapped: the number differs per architecture, so this test is
+            // x86_64-only rather than wrong on the others.
+            let program = [
+                SockFilter {
+                    code: LD_W_ABS,
+                    jt: 0,
+                    jf: 0,
+                    k: 4,
+                },
+                SockFilter {
+                    code: JEQ_K,
+                    jt: 1,
+                    jf: 0,
+                    k: AUDIT_ARCH_X86_64,
+                },
+                // A match continues below; a foreign architecture is allowed
+                // through, because a filter that wedged the process would be
+                // worse than no filter at all.
+                SockFilter {
+                    code: RET_K,
+                    jt: 0,
+                    jf: 0,
+                    k: RET_ALLOW,
+                },
+                SockFilter {
+                    code: LD_W_ABS,
+                    jt: 0,
+                    jf: 0,
+                    k: 0,
+                },
+                SockFilter {
+                    code: JEQ_K,
+                    jt: 2,
+                    jf: 0,
+                    k: SYS_LINKAT,
+                },
+                SockFilter {
+                    code: JEQ_K,
+                    jt: 1,
+                    jf: 0,
+                    k: SYS_LINK,
+                },
+                SockFilter {
+                    code: RET_K,
+                    jt: 0,
+                    jf: 0,
+                    k: RET_ALLOW,
+                },
+                SockFilter {
+                    code: RET_K,
+                    jt: 0,
+                    jf: 0,
+                    k: RET_ERRNO | ENOSYS,
+                },
+            ];
+            let prog = SockFprog {
+                len: program.len() as u16,
+                filter: program.as_ptr(),
+            };
+            // SAFETY: both calls pass an integer and, for the second, a pointer
+            // to `prog`, which outlives the call. The kernel copies the program
+            // before returning.
+            unsafe {
+                // Without `NO_NEW_PRIVS` a filter needs CAP_SYS_ADMIN, and this
+                // must not require privilege to run.
+                assert_eq!(
+                    prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0),
+                    0,
+                    "could not set NO_NEW_PRIVS: errno {}",
+                    std::io::Error::last_os_error()
+                );
+                assert_eq!(
+                    prctl(
+                        PR_SET_SECCOMP,
+                        SECCOMP_MODE_FILTER,
+                        &prog as *const SockFprog
+                    ),
+                    0,
+                    "could not install the link trap: errno {}",
+                    std::io::Error::last_os_error()
+                );
+            }
+        }
+    }
+
+    /// The no-hard-links filesystem the `create_new` fallback exists for.
+    ///
+    /// `create_initial` publishes with `hard_link`, and takes a `create_new`
+    /// fallback when the filesystem reports hard links are unsupported — FAT32
+    /// and exFAT, several CIFS mounts, WSL's `/mnt/c` drvfs. Before the
+    /// fallback every command on such a filesystem failed at startup, because
+    /// `load_or_create` is on every path.
+    ///
+    /// The condition cannot be staged with a fixture. No writable filesystem in
+    /// a test runner lacks hard links, and the Linux kernel does not report
+    /// that capability as "unsupported" in the first place: a filesystem with
+    /// no `link` method gives `EPERM`, a read-only one `EROFS`, and a
+    /// cross-device link `EXDEV` — `PermissionDenied`, `Other` and
+    /// `CrossesDevices`, never `ErrorKind::Unsupported`. The only errno the
+    /// branch tests for is the one a seccomp filter can produce, so the fixture
+    /// traps `link(2)` on a thread of its own (see `hard_link_trap`).
+    ///
+    /// Two claims, and the first is what the fallback *is*: on such a
+    /// filesystem the config must still be published, completely.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn the_config_is_published_on_a_filesystem_without_hard_links() {
+        let d = tempfile::tempdir().unwrap();
+        let fresh = d.path().join("fresh/config.toml");
+        let raced = d.path().join("raced/config.toml");
+        // A racer's complete config, published a moment earlier.
+        let winner = b"# a concurrent winner\nrecency_seconds = 300\n";
+        fs::create_dir_all(raced.parent().unwrap()).unwrap();
+        fs::write(&raced, winner).unwrap();
+        let probe_src = d.path().join("probe");
+        let probe_dst = d.path().join("probe.link");
+        fs::write(&probe_src, b"probe").unwrap();
+
+        let (published, raced_result) = std::thread::spawn({
+            let probe_src = probe_src.clone();
+            let probe_dst = probe_dst.clone();
+            let raced = raced.clone();
+            let fresh = fresh.clone();
+            move || {
+                hard_link_trap::install();
+                // The premise, checked on this thread and not assumed: if the
+                // trap missed the syscall `std` used, `hard_link` would succeed
+                // and everything below would be testing the primary path.
+                let trapped = std::fs::hard_link(&probe_src, &probe_dst).unwrap_err();
+                assert_eq!(
+                    trapped.kind(),
+                    std::io::ErrorKind::Unsupported,
+                    "premise: link(2) must report the capability as unsupported, got {trapped}"
+                );
+                (create_initial(&fresh), create_initial(&raced))
+            }
+        })
+        .join()
+        .expect("the trapped thread panicked");
+
+        // Without the fallback this is an `AppError::Io` and no config at all,
+        // which is the startup failure the fallback removed.
+        published.unwrap_or_else(|e| panic!("publication must survive the fallback: {e}"));
+        assert_eq!(
+            fs::read(&fresh).unwrap(),
+            CONFIG_TEMPLATE.as_bytes(),
+            "the fallback must write the whole template, not a prefix of it"
+        );
+
+        // The exclusivity the design cannot give up: a loser must not touch a
+        // winner's config. `create_new` is what guarantees it — `create(true)`
+        // would truncate these bytes and report success.
+        raced_result.unwrap_or_else(|e| panic!("a lost race is success, not failure: {e}"));
+        assert_eq!(
+            fs::read(&raced).unwrap(),
+            winner,
+            "the fallback must not overwrite a config another process published"
+        );
+        let _ = fs::remove_file(&probe_src);
     }
 }

@@ -1271,6 +1271,14 @@ mod tests {
         /// Leave this fixture's own staging directory on disk, so the leak
         /// check can be required to reject a genuinely leaked transaction.
         suppress_cleanup: bool,
+        /// Report a staging cleanup that failed, with this detail.
+        ///
+        /// The real transport returns whatever `remove_dir_all` said, so a
+        /// failure needs the removal to actually fail: a directory the fixture
+        /// cannot remove (open handle, foreign owner, read-only parent). That
+        /// is a fixture chore no test should have to stage, and without a knob
+        /// the branch production added for a failed cleanup had no input.
+        cleanup_error: Option<String>,
         responses: Map<String, Vec<u8>>,
         /// URLs that must fail with a transport error rather than 404.
         transport_failures: Vec<String>,
@@ -1289,6 +1297,7 @@ mod tests {
                 created_staging: RefCell::new(Vec::new()),
                 cleanup_calls: RefCell::new(0),
                 suppress_cleanup: false,
+                cleanup_error: None,
                 responses: Map::new(),
                 transport_failures: Vec::new(),
                 absent: Vec::new(),
@@ -1318,6 +1327,18 @@ mod tests {
         /// cannot fail, and this repository does not close tests on those.
         fn leaking_staging(mut self) -> Self {
             self.suppress_cleanup = true;
+            self
+        }
+
+        /// Reach the cleanup callback and have it fail, leaving the staging
+        /// directory behind for the reason a real removal can fail.
+        ///
+        /// The negative control for `a_staging_cleanup_failure_is_not_reported
+        /// as_success`: `leaking_staging` *succeeds* while leaving bytes behind,
+        /// which is a different defect. This one is the transport reporting a
+        /// failure the caller has to carry.
+        fn failing_cleanup(mut self, detail: &str) -> Self {
+            self.cleanup_error = Some(detail.to_owned());
             self
         }
 
@@ -1456,6 +1477,12 @@ mod tests {
                 // Deliberately leave the directory in place so
                 // `leaked_staging` has something real to report.
                 return Ok(());
+            }
+            if let Some(detail) = &self.cleanup_error {
+                // Fail exactly as `remove_dir_all` would, and do not clear the
+                // recorded path: the bytes are still there, which is the fact
+                // production now has to report.
+                return Err(detail.clone());
             }
             std::fs::remove_dir_all(staging).map_err(|e| e.to_string())?;
             *self.staging.borrow_mut() = None;
@@ -2440,6 +2467,59 @@ mod tests {
         let environment = release(base, "0.2.0", candidate_bytes("0.2.0"), None);
         run(&environment, false).expect("update commits");
         environment.assert_no_staging_leak("successful transaction");
+    }
+
+    /// A staging cleanup that fails must reach the caller.
+    ///
+    /// The commit already replaced the executable by the time cleanup runs, so
+    /// the transaction's own outcome is the more important fact and is
+    /// deliberately not masked by a leftover temp directory — but swallowing
+    /// the failure is not the alternative. Up to `MAX_ARTIFACT_BYTES` of
+    /// downloaded bytes can still be sitting there, and a command that reports
+    /// success has then described something that did not happen.
+    ///
+    /// Unix-gated for the reason the other commit-path cases are: the success
+    /// path executes the candidate as a real script.
+    #[cfg(unix)]
+    #[test]
+    fn a_staging_cleanup_failure_is_reported_not_swallowed() {
+        let fx = fixture(&live_stub());
+        let base = FixtureEnvironment::new(fx.live.clone(), "0.1.0");
+        let environment = release(base, "0.2.0", candidate_bytes("0.2.0"), None)
+            .failing_cleanup("Directory not empty");
+        let error = run(&environment, false)
+            .expect_err("a transaction that could not clean up must not report success");
+
+        assert!(
+            environment.cleanup_calls() > 0,
+            "premise: production must have reached the cleanup callback, \
+             otherwise this case proves nothing about a failed cleanup"
+        );
+        let UpdateError::Transaction { detail } = &error else {
+            panic!("expected a transaction error, got {error:?}");
+        };
+        assert!(
+            detail.contains("staging directory") && detail.contains("Directory not empty"),
+            "the failure must name the directory and the reason it survived: {detail}"
+        );
+        assert!(
+            detail.contains(
+                &environment.created_staging.borrow()[0]
+                    .display()
+                    .to_string()
+            ),
+            "the failure must name the directory it could not remove: {detail}"
+        );
+        // The executable *was* replaced: the error is about the leftovers, not
+        // about a failed commit, and the two claims must not be confused.
+        assert_eq!(
+            std::fs::read(&fx.live).unwrap(),
+            candidate_bytes("0.2.0"),
+            "the commit is the more important fact and still happened"
+        );
+        for path in environment.leaked_staging() {
+            let _ = std::fs::remove_dir_all(path);
+        }
     }
 
     /// The negative control for the corrected check.

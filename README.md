@@ -19,6 +19,13 @@ operation.
 
 ## Install
 
+> **Do not install 0.2.0.** It is yanked, and two destructive defects were found
+> in it after release: `--dry-run clean ROOT` — the spelling Cargo itself passes —
+> fell through to a real cleanup, and a workspace whose declared output directory
+> contained another project's source tree was cleaned as `private`, deleting that
+> neighbour's files. Both report success and exit 0. See
+> [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#known-defects-by-version).
+
 ```sh
 cargo install cargo-cleanme --locked
 ```

@@ -6,7 +6,7 @@ per-component deep dives that follow.
 - **What it is:** a Cargo subcommand (`cargo cleanme`) that finds inactive Cargo
   build artifacts on a machine and either reports or safely reclaims them.
 - **Shape:** one binary (`src/main.rs`) over one library (`src/lib.rs`) of 15
-  modules, 17 source files, 21,868 lines of Rust in `src/`, no async runtime
+  modules, 17 source files, 23,068 lines of Rust in `src/`, no async runtime
   of its own, and exactly one binary dependency that matters for safety
   (`cargo metadata`).
 - **Version:** 0.2.0 (unreleased) · **Edition:** 2024 · **MSRV:** 1.89
@@ -92,36 +92,44 @@ it.**
 ## 3. Module index
 
 Line counts are `total`; where a module carries an inline `#[cfg(test)]`
-module, the `prod` half of the split is given. The crate has **299 inline
-`#[test]` functions**, and **39.8% of them live in the two largest modules**
-(`cleanup.rs` 71 + `workspace.rs` 48). Four modules have **zero** tests:
-`main.rs`, `domain.rs`, `error.rs`, `lib.rs`.
+module, the `prod` half of the split is given. The crate has **317 inline
+`#[test]` functions**, and **40.7% of them live in the two largest modules**
+(`cleanup.rs` 72 + `workspace.rs` 57). Three modules have **zero** tests:
+`main.rs`, `error.rs`, `lib.rs`.
 
-Test counts in this table are **declared**, not "how many ran on my machine".
-299 are declared; **298 compile and run on Linux**, because exactly one is
-gated to other platforms
-(`discovery.rs:1268`, `#[cfg(any(target_os = "macos", windows))]`). A further
-21 are `#[cfg(unix)]` (19) or `#[cfg(target_os = "linux")]` (2), so macOS runs
-296 of 299 and Windows 277 of 299. Read the total as coverage
+Test counts in this table are **declared**, not "how many ran on my machine",
+and both the counts and the line counts are re-derived from `src/` rather than
+carried forward. A count copied between documents goes stale silently, and this
+file is the source of truth the deep dives align to. Read the total as coverage
 concentrated in two modules, not as a balance — see
 [14-testing-and-verification](14-testing-and-verification.md) §2.
 
+**`main.rs` still has no tests, and C023 established that this is not a
+neutral fact.** The cleanup progress bar is cleared *before* the fallible
+cleanup call in `main.rs`, and that ordering is unreachable from
+`src/progress.rs`: reverting it leaves every test green, because the bar only
+draws on an attended terminal and the failing-cleanup contract test passes
+`--no-progress`. Pinning it needs a pty harness. It is recorded as an open
+coverage gap in
+[`c023-status.md`](../plans/closure/distribution-release-update/c023-status.md),
+not as a claim that the ordering is verified.
+
 | Module | Lines | Role | Deep dive |
 |---|---:|---|---|
-| [`main.rs`](13-orchestration.md) | 740 | Binary entry: argv → resolved invocation → dispatch → exit code. The only place the scan and cleanup pipelines are stitched together. | [Orchestration](13-orchestration.md) |
-| [`cli.rs`](02-cli.md) | 901 / 380 | Clap surface, resolved-invocation model, `cargo`-subcommand argv normalization, scan-root absolutization. | [CLI](02-cli.md) |
-| [`config.rs`](03-config-and-editor.md) | 632 / 373 | Load/create/validate `config.toml`; embedded template; path resolution. | [Config & editor](03-config-and-editor.md) |
-| [`policy.rs`](04-policy-and-scope.md) | 396 / 247 | Turns a `ScanRequest` + config into an `EffectiveScanPolicy` — the Routine/Full scope decision. | [Policy & scope](04-policy-and-scope.md) |
-| [`discovery.rs`](05-discovery.md) | 1866 / 901 | Finds `Cargo.toml` manifests across a bounded walk, with attribution for what was pruned. | [Discovery](05-discovery.md) |
-| [`discovery_state.rs`](06-discovery-state.md) | 656 / 401 | Persisted "learned roots", uncertainty-aware reconciliation, atomic publish. | [Discovery state](06-discovery-state.md) |
-| [`workspace.rs`](07-workspace.md) | 3918 / 1445 | `cargo metadata` resolution, capability probing, physical grouping, cleanup-unit construction. | [Workspace](07-workspace.md) |
-| [`traverse.rs`](08-traverse.md) | 599 / 469 | Parallel size/recency measurement and source-activity classification. | [Traverse](08-traverse.md) |
-| [`cleanup.rs`](09-cleanup.md) | 6347 / 2392 | Authorization, ownership proof, pre-spawn decision, three clean modes. The heart of the safety story. | [Cleanup](09-cleanup.md) |
+| [`main.rs`](13-orchestration.md) | 782 | Binary entry: argv → resolved invocation → dispatch → exit code. The only place the scan and cleanup pipelines are stitched together. | [Orchestration](13-orchestration.md) |
+| [`cli.rs`](02-cli.md) | 1025 / 398 | Clap surface, resolved-invocation model, `cargo`-subcommand argv normalization, scan-root absolutization. | [CLI](02-cli.md) |
+| [`config.rs`](03-config-and-editor.md) | 1055 / 480 | Load/create/validate `config.toml`; embedded template; path resolution. | [Config & editor](03-config-and-editor.md) |
+| [`policy.rs`](04-policy-and-scope.md) | 464 / 285 | Turns a `ScanRequest` + config into an `EffectiveScanPolicy` — the Routine/Full scope decision. | [Policy & scope](04-policy-and-scope.md) |
+| [`discovery.rs`](05-discovery.md) | 2079 / 916 | Finds `Cargo.toml` manifests across a bounded walk, with attribution for what was pruned. | [Discovery](05-discovery.md) |
+| [`discovery_state.rs`](06-discovery-state.md) | 702 / 405 | Persisted "learned roots", uncertainty-aware reconciliation, atomic publish. | [Discovery state](06-discovery-state.md) |
+| [`workspace.rs`](07-workspace.md) | 4510 / 1525 | `cargo metadata` resolution, capability probing, physical grouping, cleanup-unit construction. | [Workspace](07-workspace.md) |
+| [`traverse.rs`](08-traverse.md) | 624 / 494 | Parallel size/recency measurement and source-activity classification. | [Traverse](08-traverse.md) |
+| [`cleanup.rs`](09-cleanup.md) | 6426 / 2411 | Authorization, ownership proof, pre-spawn decision, three clean modes. The heart of the safety story. | [Cleanup](09-cleanup.md) |
 | [`report.rs`](10-reporting.md) | 195 / 71 | Human-readable rendering of a `ScanReport`; byte formatting. | [Reporting](10-reporting.md) |
-| [`output.rs`](10-reporting.md) | 851 | Versioned machine-readable DTOs (`EnvelopeV1`); the stable JSON contract, including the non-envelope `update` document and its stdout stream; the bounded `--format log` line renderer. | [Reporting](10-reporting.md) |
-| [`progress.rs`](11-progress.md) | 703 / 498 | `ProgressObserver` trait + indicatif renderer; terminal capability detection. | [Progress](11-progress.md) |
-| [`update.rs`](12-self-update.md) | 2644 / 1210 | Eggup-based self-update: provenance classification, version authority, staged replace. | [Self-update](12-self-update.md) |
-| [`domain.rs`](01-domain-and-errors.md) | 381 | The shared vocabulary: reports, ownership classes, counters, diagnostics. Pure data. | [Domain & errors](01-domain-and-errors.md) |
+| [`output.rs`](10-reporting.md) | 941 | Versioned machine-readable DTOs (`EnvelopeV1`); the stable JSON contract, including the non-envelope `update` document and its stdout stream; the bounded `--format log` line renderer. | [Reporting](10-reporting.md) |
+| [`progress.rs`](11-progress.md) | 840 / 508 | `ProgressObserver` trait + indicatif renderer; terminal capability detection. | [Progress](11-progress.md) |
+| [`update.rs`](12-self-update.md) | 2768 / 1235 | Eggup-based self-update: provenance classification, version authority, staged replace. | [Self-update](12-self-update.md) |
+| [`domain.rs`](01-domain-and-errors.md) | 411 | The shared vocabulary: reports, ownership classes, counters, diagnostics. Pure data. | [Domain & errors](01-domain-and-errors.md) |
 | [`error.rs`](01-domain-and-errors.md) | 16 | `AppError` — the six variants the binary can fail with. | [Domain & errors](01-domain-and-errors.md) |
 | [`lib.rs`](01-domain-and-errors.md) | 15 | Module manifest. | [Domain & errors](01-domain-and-errors.md) |
 | [`editor.rs`](03-config-and-editor.md) | 215 / 155 | Resolves `$EDITOR`/`$VISUAL` for `config edit`. | [Config & editor](03-config-and-editor.md) |

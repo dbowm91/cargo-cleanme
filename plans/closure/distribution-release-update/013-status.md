@@ -325,3 +325,48 @@ five-target smoke for 0.2.0 failed and cannot be re-run automatically. It is
 recorded as a failure, the six defects it uncovered were fixed, and the
 documented recovery path produced five green lanes — but a manual rerun is not
 the automatic evidence the plan asked for, and this record does not claim it is.
+---
+
+# Corrective note added by C023 (plan stays closed)
+
+**This record is closed and is not reopened. This note was appended, not edited,
+and it does not change any claim above.**
+
+M013 predicted its own failure mode: *"The next release's first qualification is
+the real test of whether the six defects fixed here are actually fixed, because
+that path will execute for the first time with nothing left to hide behind."*
+That next release's first qualification was the post-release interrogation, and
+it found **two more destructive defects in the 0.2.0 binary that shipped**,
+neither of which M013's tests could have caught:
+
+1. `cargo cleanme --dry-run clean ROOT` — the exact argv Cargo passes to an
+   external subcommand, and the spelling a user types — was accepted and then
+   discarded. Cleanup fell through to its default and ran `cargo clean` for
+   real, printing `Cleaned …` and exiting `0`.
+2. A workspace whose declared output directory contained another resolved
+   workspace's source tree was classified `private` and cleaned. The
+   neighbour's `Cargo.toml`, `Cargo.lock`, `.cargo/config.toml`, and `src/`
+   were deleted. Reproduced against the published binary: 0.2.0 printed
+   `Cleaned … [private]` and exited `0`.
+
+Both are reproduced in [`c023-status.md`](c023-status.md) against the immutable
+published artifact, and both are fixed in 0.2.1.
+
+**What this says about the claims above.** M013's twelve acceptance criteria
+were each backed by a run id or a command output, and those artefacts still say
+what they said. None of them claimed that the *published binary* was free of
+destructive defects — they claimed that a specific publication was performed and
+verified. The defect was in the gap between "the release was published" and "the
+release was interrogated", and that gap is exactly what M011C's automatic smoke
+was supposed to close. It failed open (criterion 9), the failure was recorded
+rather than waved through, and the manual recovery path produced green lanes
+against the *old* behaviour. Green lanes and green publication evidence said
+nothing about this binary's safety, because nothing in either path exercised
+either defect.
+
+**M013 is not reopened; 0.2.0 is not un-published; nothing here retracts a
+claim.** What changed is the *inventory*: 0.2.0 shipped with two destructive
+defects, that fact is now recorded in `CHANGELOG.md`, `docs/TROUBLESHOOTING.md`,
+`README.md`, `docs/INSTALLING.md`, and this repository's public-defect
+disclosure, and 0.2.0 is yanked on crates.io. C023 owns the repair and the
+disclosure.

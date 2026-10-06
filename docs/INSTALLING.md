@@ -1,7 +1,10 @@
 # Installing cargo-cleanme
 
-Seven releases are published as GitHub releases and on crates.io, none yanked.
-Current version: **0.1.6**.
+Seven releases were published as GitHub releases and on crates.io. **0.2.0 is
+yanked**: it could delete files it did not own, and `cargo install` will no
+longer select it for a new installation. See
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md#known-defects-by-version) before
+installing anything at or below that version.
 
 ## Contents
 

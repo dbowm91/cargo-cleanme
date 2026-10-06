@@ -1040,6 +1040,84 @@ mod tests {
         ));
     }
 
+    /// The `/usr/local` exception root is walked by the *production* walk.
+    ///
+    /// [`a_root_inside_a_global_prune_reopens_that_prune`] is the shape of
+    /// defect this commit describes: it asserts on `entry_is_system_pruned`
+    /// over entries collected by a walk whose descend callback is `|_, _|
+    /// true`, so it holds whether or not production ever consults the prune
+    /// list. This one drives [`discover_global_roots`] itself — the production
+    /// descend closure, the production prune counters, the production manifest
+    /// validation — over the macOS root/prune shape with a **non-empty**
+    /// `system_prunes`. No other test in this module passes a non-empty one.
+    ///
+    /// The tree sits under a temp root rather than the literal `/`, so the
+    /// premise is exercised identically on every lane: production compares
+    /// prefixes, never absolute spellings.
+    #[test]
+    fn global_walk_descends_into_a_root_that_reopens_a_system_prune() {
+        let d = tempdir().unwrap();
+        let top = d.path();
+        // macOS lists `/` and `/usr/local` as roots and `/usr` as a global-only
+        // prune. Matched on `parent_path`, that prune also covers every entry
+        // below `/usr/local`, so without the exemption the exception root is
+        // never walked and developer content under it stays invisible.
+        let usr_local = top.join("usr/local");
+        for relative in [
+            // Developer content: must be found, from the `/usr/local` root.
+            "usr/local/bin",
+            "usr/local/src/cargo",
+            // A Cargo home: the re-opened system prune must not re-open this.
+            "usr/local/cargo/registry/src/serde",
+            // The protected region: must stay refused.
+            "usr/System/Library",
+        ] {
+            let dir = top.join(relative);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("Cargo.toml"), "").unwrap();
+        }
+
+        let found = discover_global_roots(
+            &[top.to_path_buf(), usr_local.clone()],
+            &Filters::new(&[], &[]).unwrap(),
+            &[usr_local.join("cargo/registry")],
+            &[],
+            &[top.join("usr"), top.join("usr/System")],
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut 0,
+            &mut 0,
+            &NoopObserver,
+            traverse::worker_threads(),
+            false,
+            false,
+            cfg!(target_os = "linux"),
+            dua_core::Order::ParentFirst,
+        )
+        .unwrap();
+
+        // The exact set, not a containment check: `usr/System` and the registry
+        // appearing here would mean the prune list is not holding.
+        assert_eq!(
+            found.manifests,
+            vec![
+                usr_local.join("bin/Cargo.toml"),
+                usr_local.join("src/cargo/Cargo.toml"),
+            ],
+            "a walk root inside a system prune must be walked; /usr/System and \
+             the Cargo registry must stay refused"
+        );
+        // The reporting half travels with the walk: the re-opened prune must not
+        // inflate the system-prune tally, or `--stats`/JSON claims directories
+        // were skipped that were in fact visited.
+        assert_eq!(
+            found.counters.platform_system_prunes, 1,
+            "only `usr` itself is refused from the top root"
+        );
+        assert_eq!(found.counters.cargo_home_prunes, 1);
+        assert_eq!(found.counters.directories_pruned, 2);
+    }
+
     #[test]
     fn rustup_home_uses_absolute_override_or_platform_home_only() {
         let home = PathBuf::from("/home/tester");

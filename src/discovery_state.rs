@@ -657,4 +657,46 @@ mod tests {
             .collect();
         assert!(leftovers.is_empty());
     }
+
+    /// Premise: the collapse walk starts at the root itself, so an *exact*
+    /// duplicate is a fold rather than a second publication. A workspace with N
+    /// members contributes N observations that all resolve to one root, and a
+    /// parent-only walk folded nesting while publishing the identical path N
+    /// times — the file below the fold is what a duplicate corrupts.
+    #[test]
+    fn duplicate_observations_for_one_workspace_fold_into_one_learned_root() {
+        let workspace = "/work/app";
+        // Two is the smallest case that can duplicate at all; four stands in for
+        // a workspace of the size this actually has to survive.
+        for members in [2usize, 4] {
+            let observations: Vec<ProjectObservation> = (0..members)
+                .map(|i| ProjectObservation {
+                    manifest: format!("{workspace}/member{i}/Cargo.toml").into(),
+                    workspace: Some(workspace.into()),
+                })
+                .collect();
+            let Reconciliation::Publish(state) = reconcile_full(
+                &DiscoveryState::default(),
+                &observations,
+                &[],
+                true,
+                100_000_000,
+                30,
+                None,
+            ) else {
+                panic!("completed Full should publish")
+            };
+            assert_eq!(
+                state.learned_roots,
+                vec![LearnedRoot {
+                    path: "/work".into(),
+                    last_project_seen_at: 100_000_000,
+                }],
+                "{members} observations of one workspace must fold to one root"
+            );
+            // Folding collapses roots, not evidence: every observation is still
+            // a project record, so the fix cannot have cost a manifest.
+            assert_eq!(state.projects.len(), members);
+        }
+    }
 }

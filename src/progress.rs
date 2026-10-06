@@ -731,4 +731,110 @@ mod tests {
         hidden.finish_and_clear();
         assert_eq!(hidden.refresh_count(), 0);
     }
+
+    /// Draw a live cleanup bar, as the cleanup phases do.
+    fn draw_cleanup_bar(renderer: &IndicatifRenderer) {
+        renderer.phase(ScanPhase::CleanupExecute);
+        renderer.units_total(ScanPhase::CleanupExecute, 2);
+        renderer.dirs_visited(3);
+        renderer.reportable_group(Path::new("/tmp/group-a"), 4096);
+        renderer.unit_completed(ScanPhase::CleanupExecute);
+    }
+
+    /// Let the 10 Hz draw target flush; the tests below read what was drawn.
+    fn flush_draw_target() {
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    /// Bars the renderer still holds open.
+    ///
+    /// `BarState::drop` *finishes* a live bar and leaves its line on screen, so
+    /// what matters on the failure path is that none is left live when `?`
+    /// escapes. `coordinated_bar_count` cannot tell the two apart, and neither
+    /// can the drawn frame: the in-memory frame is blank once the renderer is
+    /// dropped whether or not the clear ran, so bar liveness is the only
+    /// observable here that separates cleared from live.
+    fn live_bars(renderer: &IndicatifRenderer) -> usize {
+        std::iter::once(renderer.main.as_ref())
+            .chain(renderer.rows.iter().map(Some))
+            .flatten()
+            .filter(|bar| !bar.is_finished())
+            .count()
+    }
+
+    /// A cleared renderer holds no live bar, so a later error cannot resurrect
+    /// one and the renderer's own drop cannot leave a line behind.
+    ///
+    /// `run_cleanup` binds its fallible cleanup call, takes the bar down, and
+    /// only then applies `?` (`src/main.rs`). That ordering is what keeps the
+    /// failure path clean: with the bar still live, `BarState::drop` finishes
+    /// it and the retained line stays on screen above the `cargo-cleanme: …`
+    /// message.
+    ///
+    /// What this does **not** prove is the ordering itself. That lives in the
+    /// binary target, out of reach from here, and the bar only draws when stderr
+    /// is an attended terminal — a captured test stderr is not one, so even an
+    /// end-to-end run of a failing cleanup drives the *hidden* renderer and
+    /// never reaches this code. Proving the ordering needs a pty harness, which
+    /// this crate has no dependency for. What is proven is the renderer half it
+    /// relies on, and the input that breaks it: a `finish_and_clear` that leaves
+    /// any bar live, or a path that draws again after the clear.
+    #[test]
+    fn finish_and_clear_leaves_no_live_bar_for_a_later_error_or_drop() {
+        let (r, term) = IndicatifRenderer::new_in_memory_for_test();
+        draw_cleanup_bar(&r);
+        flush_draw_target();
+        // Preconditions, or every assertion below is true by construction: the
+        // bar must have drawn for the cleared frame to mean anything, and it
+        // must have been live for "no live bars" to mean anything.
+        assert!(
+            !term.contents().trim().is_empty(),
+            "the cleanup bar must draw before the clear is exercised"
+        );
+        assert_eq!(
+            live_bars(&r),
+            6,
+            "all six coordinated bars are live before the clear"
+        );
+
+        // Mirrors `run_cleanup` on the failure path: the fallible call is bound,
+        // the bar is taken down, and only then is the `?` applied.
+        let cleanup: Result<(), crate::error::AppError> = Err(crate::error::AppError::Io(
+            std::io::Error::other("cleanup failed"),
+        ));
+        r.finish_and_clear();
+        assert_eq!(
+            term.contents().trim(),
+            "",
+            "the clear must take the drawn frame down"
+        );
+        assert_eq!(
+            live_bars(&r),
+            0,
+            "the clear must leave no live bar for drop to finish into a retained line"
+        );
+
+        // The `?` that follows: it must resurrect neither a live bar nor a draw.
+        let refreshes = r.refresh_count();
+        let outcome = cleanup;
+        assert!(outcome.is_err(), "the simulated cleanup must fail");
+        assert_eq!(
+            live_bars(&r),
+            0,
+            "an error raised after the clear must not leave a live bar"
+        );
+        assert_eq!(
+            r.refresh_count(),
+            refreshes,
+            "an error raised after the clear must not redraw"
+        );
+
+        // The error then leaves `run_cleanup`, dropping the renderer. What that
+        // drop draws is not observable from here — the frame is blank after a
+        // drop either way — so the assertions above, not this one, are what hold
+        // the property; this only catches a draw resurrected by the drop itself.
+        drop(r);
+        flush_draw_target();
+        assert_eq!(term.contents().trim(), "");
+    }
 }

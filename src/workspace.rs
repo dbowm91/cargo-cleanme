@@ -1675,6 +1675,233 @@ mod tests {
         }
     }
 
+    /// A runner that fails the chosen Cargo invocation with the configured
+    /// stderr.
+    ///
+    /// `locate-project` has to succeed for the metadata path to be reachable at
+    /// all, so the failing stage is a flag rather than "fail everything": both
+    /// production call sites are driven from one fixture and cannot drift apart.
+    struct FailingCargo {
+        root_manifest: PathBuf,
+        stderr: Vec<u8>,
+        locate_succeeds: bool,
+    }
+
+    impl CargoRunner for FailingCargo {
+        fn run(&self, _cwd: &Path, args: &[std::ffi::OsString]) -> io::Result<ProcessOutput> {
+            let locating = args.first().is_some_and(|a| a == "locate-project");
+            if locating && self.locate_succeeds {
+                let json = serde_json::json!({"root": self.root_manifest});
+                return Ok(ProcessOutput {
+                    success: true,
+                    code: Some(0),
+                    stdout: serde_json::to_vec(&json).unwrap(),
+                    stderr: Vec::new(),
+                });
+            }
+            Ok(ProcessOutput {
+                success: false,
+                code: Some(1),
+                stdout: Vec::new(),
+                stderr: self.stderr.clone(),
+            })
+        }
+    }
+
+    /// stderr/reason pairs shared by both call-site tests: Cargo that said
+    /// nothing, Cargo that complained once, and Cargo that complained far more
+    /// than a diagnostic field can carry.
+    fn cargo_stderr_cases() -> Vec<(Vec<u8>, String)> {
+        vec![
+            (Vec::new(), "cargo wrote nothing to stderr".to_owned()),
+            (
+                b"\n  error: no matching package named 'x'\n  Caused by: registry is offline\n"
+                    .to_vec(),
+                "error: no matching package named 'x'".to_owned(),
+            ),
+            (
+                vec![b'e'; 10_000],
+                format!("{}… (truncated)", "e".repeat(200)),
+            ),
+        ]
+    }
+
+    /// A silent failure has to stay explicable. Before the reason existed the
+    /// report named a missing project and stopped; the fallback keeps the
+    /// diagnostic a sentence rather than a label followed by nothing.
+    #[test]
+    fn cargo_reason_names_the_absence_when_cargo_wrote_nothing() {
+        // Whitespace-only stderr carries no cause either. Reporting it as an
+        // empty reason would read as a truncated message instead of silence.
+        for stderr in [
+            b"".as_slice(),
+            b"\n".as_slice(),
+            b"   \n\t\n  ".as_slice(),
+            b"\r\n\r\n".as_slice(),
+        ] {
+            assert_eq!(
+                cargo_failure_reason(stderr),
+                "cargo wrote nothing to stderr",
+                "{stderr:?} must report the absence of Cargo's output"
+            );
+        }
+    }
+
+    #[test]
+    fn cargo_reason_is_bounded_and_marked_when_stderr_is_long() {
+        // Cargo's stderr is unbounded and the reason is serialized verbatim into
+        // JSON, the log line and the human report. An unmarked cut would read as
+        // Cargo's complete sentence, so the truncation has to be visible.
+        let reason = cargo_failure_reason(&vec![b'x'; 10_000]);
+        assert_eq!(
+            reason,
+            format!("{}… (truncated)", "x".repeat(200)),
+            "the reason is 200 bytes of Cargo's own text plus the marker"
+        );
+        assert!(
+            reason.len() < 10_000,
+            "10_000 bytes of stderr must not be embedded whole"
+        );
+
+        // A first line that is exactly the bound is complete, not truncated:
+        // marking it would claim Cargo said less than it did.
+        let at_bound = "y".repeat(200);
+        assert_eq!(
+            cargo_failure_reason(at_bound.as_bytes()),
+            at_bound,
+            "a line exactly at the bound needs no marker"
+        );
+    }
+
+    #[test]
+    fn cargo_reason_never_splits_a_multi_byte_character() {
+        // Truncation is by byte count and a path is whatever the user typed, so
+        // the bound routinely lands mid-character. Cutting there would either
+        // panic or emit a replacement character inside the user's own path.
+        let stderr = "誤".repeat(200);
+        assert_eq!(stderr.len(), 600, "three bytes per character");
+        let reason = cargo_failure_reason(stderr.as_bytes());
+        let kept = reason
+            .strip_suffix("… (truncated)")
+            .unwrap_or_else(|| panic!("a truncated reason must be marked: {reason}"));
+        assert_eq!(
+            kept,
+            "誤".repeat(66),
+            "66 characters is the longest whole-character prefix within 200 bytes"
+        );
+        assert!(
+            kept.chars().all(|c| c == '誤'),
+            "the kept text is whole characters, not a partial one"
+        );
+
+        // Two-byte characters: 200 is itself a character boundary, so the
+        // walk must stop there -- shaving to 199 bytes would be the same class
+        // of bug as stopping at 200 in the other direction.
+        let two_byte = "é".repeat(200);
+        assert_eq!(two_byte.len(), 400);
+        assert_eq!(
+            cargo_failure_reason(two_byte.as_bytes()),
+            format!("{}… (truncated)", "é".repeat(100)),
+            "an exact boundary is kept whole, not walked past"
+        );
+    }
+
+    #[test]
+    fn cargo_reason_is_the_first_meaningful_line_of_a_noisy_stderr() {
+        // Cargo indents and prefixes its real complaint, and follows it with a
+        // cause chain. A reason carrying the whole stream would put a multi-line
+        // blob into a one-line diagnostic field.
+        assert_eq!(
+            cargo_failure_reason(
+                b"\n\n   \n  error: failed to parse manifest\n  Caused by: a much longer second line\n"
+            ),
+            "error: failed to parse manifest",
+            "leading blank lines and indentation are not part of the reason"
+        );
+
+        // Only the first line is bounded, so a huge *later* line must not leak
+        // into the reason at all.
+        let noisy = format!("\nreal cause\n{}", "noise ".repeat(5_000));
+        assert_eq!(cargo_failure_reason(noisy.as_bytes()), "real cause");
+        assert!(
+            !cargo_failure_reason(noisy.as_bytes()).contains('\n'),
+            "the reason occupies one line"
+        );
+    }
+
+    #[test]
+    fn locate_failure_diagnostic_carries_cargo_stderr() {
+        for (stderr, expected) in cargo_stderr_cases() {
+            let d = tempfile::tempdir().unwrap();
+            let root = d.path().join("ws/Cargo.toml");
+            std::fs::create_dir_all(root.parent().unwrap()).unwrap();
+            std::fs::write(&root, "").unwrap();
+            let runner = FailingCargo {
+                root_manifest: root.clone(),
+                stderr: stderr.clone(),
+                locate_succeeds: false,
+            };
+            let mut counters = ScanCounters::default();
+            let mut diagnostics = vec![];
+            let coverage = resolve_workspaces_with_coverage(
+                std::slice::from_ref(&root),
+                &runner,
+                &mut counters,
+                &mut diagnostics,
+                &NoopObserver,
+            );
+            let wanted = format!("cargo locate-project failed: {expected}");
+            assert!(
+                diagnostics.iter().any(|d| d.message == wanted),
+                "expected {wanted:?}, got {:?}",
+                diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
+            );
+            assert_eq!(coverage.unresolved.len(), 1);
+            assert!(
+                coverage.unresolved[0].reason == wanted,
+                "the participant carries the same reason as the diagnostic: {:?}",
+                coverage.unresolved[0].reason
+            );
+        }
+    }
+
+    #[test]
+    fn metadata_failure_diagnostic_carries_cargo_stderr() {
+        for (stderr, expected) in cargo_stderr_cases() {
+            let d = tempfile::tempdir().unwrap();
+            let root = d.path().join("ws/Cargo.toml");
+            std::fs::create_dir_all(root.parent().unwrap()).unwrap();
+            std::fs::write(&root, "").unwrap();
+            let runner = FailingCargo {
+                root_manifest: root.clone(),
+                stderr: stderr.clone(),
+                locate_succeeds: true,
+            };
+            let mut counters = ScanCounters::default();
+            let mut diagnostics = vec![];
+            let coverage = resolve_workspaces_with_coverage(
+                std::slice::from_ref(&root),
+                &runner,
+                &mut counters,
+                &mut diagnostics,
+                &NoopObserver,
+            );
+            let wanted = format!("cargo metadata failed: {expected}");
+            assert!(
+                diagnostics.iter().any(|d| d.message == wanted),
+                "expected {wanted:?}, got {:?}",
+                diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
+            );
+            assert_eq!(coverage.unresolved.len(), 1);
+            assert_eq!(coverage.unresolved[0].stage, "metadata");
+            assert!(
+                coverage.unresolved[0].reason == wanted,
+                "the participant carries the same reason as the diagnostic: {:?}",
+                coverage.unresolved[0].reason
+            );
+        }
+    }
+
     struct FakeCargo {
         locate_root: PathBuf,
         target: PathBuf,
@@ -2177,6 +2404,143 @@ mod tests {
             assert_eq!(coverage.unresolved.len(), 1);
             assert_eq!(coverage.unresolved[0].stage, "metadata");
         }
+    }
+
+    /// Two observation sources can report one manifest, and the discovered
+    /// list arrives unordered. `dedup_by` compares neighbours, not the whole
+    /// vector, so the duplicate here is separated by a different manifest on
+    /// purpose: it survives untouched unless the list is sorted first, and a
+    /// repeated project in the report would look like two broken ones.
+    #[test]
+    fn repeated_unresolved_manifests_are_sorted_and_reported_once() {
+        let d = tempfile::tempdir().unwrap();
+        let a = d.path().join("a/Cargo.toml");
+        let b = d.path().join("b/Cargo.toml");
+        let c = d.path().join("c/Cargo.toml");
+        for m in [&a, &b, &c] {
+            std::fs::create_dir_all(m.parent().unwrap()).unwrap();
+            std::fs::write(m, "").unwrap();
+        }
+        let runner = FakeCargo {
+            locate_root: a.clone(),
+            target: d.path().join("target"),
+            build: None,
+            members: 1,
+            fail_locate: true,
+            fail_metadata: false,
+            malformed: false,
+        };
+        // Observed out of order, with `a` reported twice.
+        let manifests = vec![b.clone(), a.clone(), a.clone(), c.clone()];
+        let mut counters = ScanCounters::default();
+        let mut diagnostics = vec![];
+        let coverage = resolve_workspaces_with_coverage(
+            &manifests,
+            &runner,
+            &mut counters,
+            &mut diagnostics,
+            &NoopObserver,
+        );
+        assert_eq!(
+            coverage.discovered_manifest_count, 4,
+            "four observations were made; folding the participants must not rewrite that count"
+        );
+        assert_eq!(
+            coverage
+                .unresolved
+                .iter()
+                .map(|p| &p.manifest)
+                .collect::<Vec<_>>(),
+            vec![&a, &b, &c],
+            "one participant per distinct manifest, in canonical order"
+        );
+        let keys: Vec<PathBuf> = coverage
+            .unresolved
+            .iter()
+            .map(|p| canonical_manifest_key(&p.manifest))
+            .collect();
+        let mut ascending = keys.clone();
+        ascending.sort();
+        assert_eq!(
+            keys, ascending,
+            "participants are emitted in canonical identity order, which is what makes adjacent-only dedup sound"
+        );
+        for p in &coverage.unresolved {
+            assert_eq!(p.stage, "locate");
+            assert!(
+                p.reason.contains("cargo locate-project failed"),
+                "a folded participant still names why: {:?}",
+                p.reason
+            );
+        }
+    }
+
+    /// Deduplication is spelling-exact, deliberately. Canonical identity is the
+    /// sort key but not the equality: two spellings of one file are two
+    /// discoveries, and `unresolved_ownership` counts discoveries. Folding them
+    /// here would change that count for one project without saying so, so the
+    /// observable behaviour is pinned rather than left to whichever comparator
+    /// happens to be installed.
+    #[test]
+    fn two_spellings_of_one_unresolved_manifest_stay_separate_participants() {
+        let d = tempfile::tempdir().unwrap();
+        let ws = d.path().join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::write(ws.join("Cargo.toml"), "").unwrap();
+        let direct = ws.join("Cargo.toml");
+        // `Path` equality normalizes away `.`, so a spelling that survives it
+        // needs a real `..`: same file, different `PathBuf`.
+        let indirect = ws.join("..").join("ws").join("Cargo.toml");
+        assert_ne!(
+            direct, indirect,
+            "the fixture needs two distinct spellings of one file"
+        );
+        assert_eq!(
+            canonical_manifest_key(&direct),
+            canonical_manifest_key(&indirect),
+            "the fixture needs both spellings to name one file"
+        );
+        let runner = FakeCargo {
+            locate_root: direct.clone(),
+            target: d.path().join("target"),
+            build: None,
+            members: 1,
+            fail_locate: true,
+            fail_metadata: false,
+            malformed: false,
+        };
+        let manifests = vec![direct.clone(), indirect.clone()];
+        let mut counters = ScanCounters::default();
+        let mut diagnostics = vec![];
+        let coverage = resolve_workspaces_with_coverage(
+            &manifests,
+            &runner,
+            &mut counters,
+            &mut diagnostics,
+            &NoopObserver,
+        );
+        assert_eq!(
+            coverage.unresolved.len(),
+            2,
+            "equal canonical keys are sorted together, not merged: {:?}",
+            coverage.unresolved
+        );
+        // Order-insensitive on purpose: discovery order fixes the order by plain
+        // manifest spelling, and only the merge decision is at stake here.
+        assert!(
+            coverage.unresolved.iter().any(|p| p.manifest == direct),
+            "{:?}",
+            coverage.unresolved
+        );
+        assert!(
+            coverage.unresolved.iter().any(|p| p.manifest == indirect),
+            "{:?}",
+            coverage.unresolved
+        );
+        assert_eq!(
+            coverage.unresolved.len(),
+            coverage.discovered_manifest_count
+        );
     }
 
     #[test]
@@ -3261,6 +3625,96 @@ mod tests {
         assert!(eligible.is_empty(), "recent source must skip deep sizing");
         assert_eq!(counters.groups_measured, 0);
         assert!(counters.active_skipped > 0);
+    }
+
+    /// `stats_line` prints `active_skipped` next to `groups_measured`, so the
+    /// counter has to count groups, not workspaces. One workspace owning two
+    /// output groups is one "active project" to a human and two skipped groups
+    /// to that ratio; the assertion above cannot tell the two apart because its
+    /// fixture has one workspace and one group, where both countings give 1.
+    #[test]
+    fn one_workspace_with_two_groups_counts_one_active_skip_per_group() {
+        let d = tempfile::tempdir().unwrap();
+        let ws_root = d.path().join("ws");
+        std::fs::create_dir_all(&ws_root).unwrap();
+        std::fs::write(ws_root.join("Cargo.toml"), "").unwrap();
+        std::fs::write(ws_root.join("src.rs"), "old").unwrap();
+        // Disjoint roots are two physical groups of one workspace, so the single
+        // recent source file below decides both of them.
+        let target = output_dir(&ws_root.join("target"), 2048);
+        let build = output_dir(&ws_root.join("build"), 1024);
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        backdate_tree(&ws_root, old);
+        std::fs::write(ws_root.join("src.rs"), "recent").unwrap();
+        let ws = make_workspace(
+            &ws_root,
+            Some(std::fs::canonicalize(&target).unwrap()),
+            Some(std::fs::canonicalize(&build).unwrap()),
+            vec![ws_root.clone()],
+        );
+        let groups = build_groups(std::slice::from_ref(&ws));
+        assert_eq!(groups.len(), 2, "distinct siblings do not overlap");
+        assert!(
+            groups.iter().all(|g| g.owners == vec![0]),
+            "one workspace owns both groups: {:?}",
+            groups.iter().map(|g| &g.owners).collect::<Vec<_>>()
+        );
+        let group_count = groups.len() as u64;
+        let start = SystemTime::now() + Duration::from_secs(1);
+        let cutoff = start.checked_sub(Duration::from_secs(300)).unwrap();
+        let mut counters = ScanCounters::default();
+        let mut diags = Vec::new();
+        let observer = TestObserver::new();
+        let outcomes = analyze_groups_detailed(
+            std::slice::from_ref(&ws),
+            groups,
+            start,
+            cutoff,
+            Duration::from_secs(300),
+            &mut counters,
+            &mut diags,
+            &observer,
+        );
+        assert_eq!(
+            outcomes.len() as u64,
+            group_count,
+            "one outcome per group, skipped or not"
+        );
+        assert_eq!(
+            counters.active_skipped, 2,
+            "two skipped groups, not one active workspace: {counters:?}"
+        );
+        assert_eq!(counters.groups_measured, 0);
+        // Conservation for this fixture: both groups had entries and both owners
+        // were certain, so no other gate may claim one. There is no global
+        // identity here -- `missing_output_skipped` is also bumped per workspace
+        // with no existing output, which contributes no group at all.
+        assert_eq!(counters.empty_no_output_skipped, 0);
+        assert_eq!(counters.missing_output_skipped, 0);
+        assert_eq!(counters.uncertain_skipped, 0);
+        assert_eq!(
+            counters.active_skipped + counters.groups_measured,
+            group_count,
+            "every group leaves the pipeline through exactly one gate: {counters:?}"
+        );
+        for outcome in &outcomes {
+            assert_eq!(
+                outcome.skip,
+                Some(GroupSkipReason::ActiveSource),
+                "{outcome:?}"
+            );
+            assert!(outcome.measured.is_none(), "{outcome:?}");
+        }
+        // Progress keeps reporting the workspace once. The counter and the event
+        // are deliberately different quantities, and only the counter reaches
+        // `--stats`; this pins that they are not re-coupled by accident.
+        assert_eq!(
+            observer
+                .active_skipped
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "one active workspace observed, while the counter counts its two groups"
+        );
     }
 
     #[test]

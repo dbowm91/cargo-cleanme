@@ -702,6 +702,61 @@ pub mod log {
             assert_eq!(line, "cargo-cleanme op=clean status=error reason=config");
             assert_ascii_and_bounded(&line);
         }
+
+        /// Premise: `config path` and `config show` exist precisely to put a
+        /// path and the file's text on stdout, and in log mode both used to
+        /// reach that stdout verbatim. The signature admits no path, so the leak
+        /// cannot be proven by passing one: it is proven structurally instead.
+        /// The action is one of three fixed tokens, so *any* path separator in
+        /// the line is a leak, and the whole line is the projection under test.
+        #[test]
+        fn config_line_names_the_action_and_retains_no_path_or_text() {
+            for action in ["path", "show", "edit"] {
+                let line = super::config(action);
+                assert_eq!(
+                    line,
+                    format!("cargo-cleanme op=config status=ok action={action}")
+                );
+                assert_ascii_and_bounded(&line);
+                assert!(!line.contains('/'), "log mode retains no path: {line}");
+                assert!(
+                    !line.chars().any(char::is_control),
+                    "no escape sequence can survive into a history pane: {line:?}"
+                );
+            }
+        }
+
+        /// Premise: `update` used to report the asset it was about to replace, a
+        /// path into a per-run temporary directory. The replacement carries the
+        /// registry's own strings and a target triple instead, so the line is
+        /// pinned field for field and by token count: one more field is a
+        /// re-introduced leak.
+        #[test]
+        fn update_line_carries_the_version_triple_and_nothing_else() {
+            let target = "x86_64-unknown-linux-gnu";
+            let simulated = super::update("0.2.0", "0.2.1", target, true);
+            assert_eq!(
+                simulated,
+                "cargo-cleanme op=update status=ok from=0.2.0 to=0.2.1 target=x86_64-unknown-linux-gnu mode=simulate"
+            );
+            let executed = super::update("0.2.0", "0.2.1", target, false);
+            assert!(executed.contains("mode=execute"), "{executed}");
+            for line in [&simulated, &executed] {
+                assert_ascii_and_bounded(line);
+                // A target triple is not a path, and a version is not either, so
+                // the separator is the cheapest proof that neither appeared.
+                assert!(!line.contains('/'), "log mode retains no path: {line}");
+                assert!(
+                    !line.chars().any(char::is_control),
+                    "no escape sequence can survive into a history pane: {line:?}"
+                );
+                assert_eq!(
+                    line.split_whitespace().count(),
+                    7,
+                    "prefix plus six fields, no more: {line}"
+                );
+            }
+        }
     }
 }
 

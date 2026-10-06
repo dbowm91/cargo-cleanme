@@ -7,7 +7,7 @@ the one architecture deep dive your change touches.
 
 A single Rust crate that finds Cargo build output and cleans it **through
 Cargo**, never by deleting directories. One binary over one library of 15
-modules, 17 source files, 21,868 lines in `src/`. No async runtime of its own.
+modules, 17 source files, 23,068 lines in `src/`. No async runtime of its own.
 `cargo metadata` is the only binary dependency that matters for safety.
 
 Eight releases are published (v0.1.0 through v0.1.6, plus 0.2.0), none yanked.
@@ -72,8 +72,9 @@ python3 scripts/check-doc-citations.py --self-test && python3 scripts/check-doc-
 ```
 
 Focused test: `cargo test --all-features --test cli_contract <test_name>`
-(`tests/` holds `cli_contract.rs` with 9 tests, `end_to_end.rs` with 1, plus
-inline unit tests in `src/`).
+(`tests/` holds `cli_contract.rs` and `end_to_end.rs`, plus inline unit tests in
+`src/`). Current counts live in `architecture/overview.md` §3, which is the source
+of truth — verify them there rather than copying them from here).
 
 If you change the CLI surface, regenerate derived artifacts or the drift gate
 fails (`generate-docs -- --check` in CI):
@@ -169,7 +170,7 @@ closure records.
 | Path | Contents |
 |---|---|
 | `src/` | the crate — 17 files; `main.rs` is the binary, `lib.rs` declares the 15 library modules |
-| `tests/` | `cli_contract.rs` (32 tests), `end_to_end.rs` (2), `common/` |
+| `tests/` | `cli_contract.rs` (36 tests), `end_to_end.rs` (4), `common/` |
 | `architecture/` | `overview.md` + 15 deep dives |
 | `docs/` | `RELEASING.md` (operator checklist), `TROUBLESHOOTING.md` (includes known defects by version) |
 | `plans/` | decision records — see §6 |

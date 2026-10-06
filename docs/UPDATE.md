@@ -60,6 +60,13 @@ project's own release rehearsals, not by a test, and both are fixed. None of
 these versions is yanked, because their other behavior is correct and yanking
 would misdescribe them.
 
+**0.2.0 is a different case and it *is* yanked.** It is not listed here because
+these are updater defects; it is described in
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md#known-defects-by-version), which also
+explains why yanking it is the honest description and retracting it would not
+be. An updater running from a yanked version still works: the registry entry
+remains installed and resolvable by exact version.
+
 ### If you are on 0.1.1 through 0.1.4: check whether `update` replaced a Cargo-managed binary
 
 **This is the only defect in the `0.1.x` line that could change a file it did

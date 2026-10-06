@@ -9,15 +9,56 @@ run did the wrong thing.
 
 | If you are on | Check | Fixed in |
 |---|---|---|
+| **0.2.0** | `--dry-run clean ROOT` **performed a real cleanup** | **0.2.1** (0.2.0 yanked) |
+| **0.2.0** | A region containing another project's **source tree was deleted** | **0.2.1** (0.2.0 yanked) |
 | **0.1.1 – 0.1.4** | `update` could replace a binary **Cargo owns**, silently, with exit `0` | **0.1.5** |
 | **0.1.1 – 0.1.2** | `update` could never complete a commit | **0.1.3** |
 
-One breaking change arrived in **0.2.0**, listed separately below, because it
-changes what a bare `cargo cleanme` *does* rather than fixing a defect.
+**0.2.0 is yanked, and it is the one release where that is the right call.**
+Every earlier defect in this table was a *wrong or incomplete* action; the
+program's other behaviour was correct, and yanking would have misdescribed
+them. 0.2.0 could delete files it did not own, and it did so while reporting
+success and exiting `0`. There is no honest description of 0.2.0 that also says
+"everything else was fine", so it is yanked. Existing installations and
+lockfiles are unaffected — a yank stops new resolution, it does not break what
+you already have.
 
-No version is yanked: their other behavior is correct, and yanking would
-misdescribe them. Detection and repair steps for both, plus the reasoning, are
-in [UPDATE.md](UPDATE.md#known-defects-by-version).
+### If you are on 0.2.0: two things it could do that it should never have done
+
+Both were found by the project's own post-release interrogation and confirmed by
+reproducing them against the published binary. Both are fixed in **0.2.1**.
+
+**1. `cargo cleanme --dry-run clean ROOT` deleted your build artifacts.**
+`--dry-run` before the subcommand is the spelling Cargo itself passes to an
+external subcommand, and it was accepted — then discarded. Cleanup fell through
+to its default, ran `cargo clean` for real, and printed `Cleaned …` with exit
+`0`. The words `--dry-run` were in your command line the whole time.
+
+If you ran 0.2.0 in that form, the damage is bounded to build output; no source
+file was touched. Rebuild with `cargo build`.
+
+**2. A project could have another project's source tree inside its output
+directory.** If workspace A declares an output directory (a redirected
+`build.target-dir`, for instance) and an independently resolved workspace B has
+its sources inside it, A's region was classified `private` and cleaned. B's
+`Cargo.toml`, `Cargo.lock`, `.cargo/config.toml`, and `src/` were deleted along
+with A's artifacts.
+
+Check whether you have this shape before cleaning anything:
+
+```sh
+# every Cargo.toml on this machine, to find neighbours living in someone's output dir
+find ~ -name Cargo.toml -not -path '*/.cargo/registry/*' 2>/dev/null
+```
+
+If a nested project does not exist in your layout, there is nothing to repair.
+
+Until you are on 0.2.1, do not run `cargo cleanme` without `--dry-run`.
+
+One breaking change arrived in **0.2.0**, listed separately below, because it
+changes what a bare `cargo cleanme` *does* rather than fixing a defect. Detection
+and repair steps for the `0.1.x` defects, plus the reasoning, are in
+[UPDATE.md](UPDATE.md#known-defects-by-version).
 
 Quick check for the first one, if you installed with `cargo install --root`:
 
