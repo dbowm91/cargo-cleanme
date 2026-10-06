@@ -1,6 +1,6 @@
 ## Artifact Discovery and Cleanup Roadmap
 
-Status: Phase 12 is **closed** under ADR 003. M012A and M012B are both implemented and closed with evidence; neither changed what can be cleaned or how ownership is proven. C021 pre-release test and verification-evidence reconciliation is **closed** on `bf99aa4`, with its evidence in [`plans/closure/artifact-discovery-cleanup/c021-status.md`](../closure/artifact-discovery-cleanup/c021-status.md). 0.2.0 staging is unblocked; the release itself is not authorized by any plan.
+Status: Phase 12 implementation remains historically **closed** under ADR 003, but its first published realization, immutable v0.2.0, is under **C023 corrective**. Post-release interrogation found a dry-run mutation defect and a cross-workspace source-containment defect. C023 is ready/immediate and owns the v0.2.1 safety patch; ordinary feature work should wait.
 
 
 Repository audit baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
@@ -791,6 +791,33 @@ qualification #5) were diagnosed rather than assumed: every cancelled job
 reports zero executed steps, so they were cancelled while queued for a runner,
 and no job that obtained a runner ever failed. That is runner-capacity
 contention, not a product defect, and no CI policy change was made on that basis.
+
+
+
+## 10J. C023 — v0.2.0 destructive-safety patch corrective
+
+Status: **ready / immediate**.
+
+Cross-subsystem plan:
+
+- `plans/implementation/distribution-release-update/c023-v0.2.0-destructive-safety-patch-release-corrective.md`
+
+C023 corrects two published destructive violations of this subsystem's durable
+boundary:
+
+- canonical `--dry-run` must spawn zero Cargo clean processes, but v0.2.0 can
+  execute cleanup when the flag precedes `clean`;
+- `PrivateBounded` must be disjoint from every resolved source tree in the
+  cleanup universe, but v0.2.0 checked only the group's owner and could delete a
+  neighbouring project's sources.
+
+The baseline fixes strengthen both dispatch and ownership/preflight proof, but
+the baseline is red on macOS CI and is not a release candidate.
+
+C023 requires premise-negative reproduction against published v0.2.0,
+end-to-end regression tests, complete hosted qualification, and a v0.2.1 patch
+release. The distribution/release roadmap owns publication/yank/attestation and
+M011C automatic-smoke closure; this roadmap owns the destructive invariants.
 
 ## 11. Cross-cutting reliability concerns
 
