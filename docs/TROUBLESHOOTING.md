@@ -201,6 +201,15 @@ exclude = ["**/archived/**"]   # does not match a workspace root that IS .../arc
 exclude = ["**/archived"]      # matches
 ```
 
+On **0.2.1 and earlier** an `exclude` naming a directory whose canonical path
+contains `[` or `]` — legal in a Windows file name — silently failed to match
+it, because the canonical rewrite refused every Windows spelling and so spliced
+the name in unescaped: `real[abc]` was read as a character class. That is fixed;
+the directory names in a pattern are now matched literally on every platform,
+and `docs/USAGE.md` documents the rule. Before the fix, work around it with a
+prefix that resolves to a name without brackets, or with `--config` patterns
+written against the canonical path.
+
 ## Installation
 
 ### `install.sh` says the host has no prebuilt binary

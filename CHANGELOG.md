@@ -6,6 +6,36 @@ All notable changes to cargo-cleanme are documented here. The format follows
 stance: the `0.x` line may make breaking changes in any release, and the
 command-line, JSON, and release-asset contracts are the stable surface.
 
+## [Unreleased]
+
+### Fixed — matching
+
+- **Config patterns naming a bracketed directory now match it on Windows.** The
+  canonical rewrite that makes a symlink-spelled `exclude` work was gated on an
+  escape it could not produce: `escape_glob_literal` rejected `\`, and every
+  canonical Windows path contains one, so on Windows the rewrite never ran at
+  all. A directory named `real[abc]` — legal on NTFS — was therefore spliced in
+  unescaped and read as a character class, so the rule stopped matching the tree
+  the user named. It is not destructive (an unmatched `exclude` cleans *more*,
+  the default) but it is the direction that matters when the intent was "never
+  touch this", and it has been true since before 0.1.0.
+
+  The canonical spelling is now normalized to `/` before it is escaped, because
+  that is how `globset` spells a candidate on every platform: `Candidate::new`
+  normalizes candidate separators, and with `backslash_escape` off a `\` in a
+  pattern is compiled to a `/` as well. The same change lets a `\` inside a Unix
+  *file name* be spliced as an escaped backslash instead of refusing the
+  rewrite. A `{` or `}` in a canonical name still has no escapable form and is
+  left as written. `scan.unignore` is a literal path by design and is still
+  spliced unescaped. Existing patterns that contain no backslash and no brace
+  are byte-identical after the rewrite.
+
+  Covered by a Windows-lane test that builds a real bracketed directory, a
+  junction alias, and a `config.toml`, plus an every-lane test that pins the
+  Windows spelling and asserts — in the same test — that the unescaped reading
+  misses the named tree and matches a sibling. `docs/USAGE.md` now states the
+  rule and its platform scope.
+
 ## [0.2.1] - 2026-10-06
 
 ### Security

@@ -232,9 +232,9 @@ implemented: it falls into the human `else`.
 never loads, creates, or validates the file, so it works when the file is absent
 or corrupt — it needs only the *path* to be derivable. **`Show`** (`:106-108`) is
 `config::show(&config::load_or_create(path)?)?` and therefore **creates** the file
-if missing (`src/config.rs:217-222`) — a write side effect. **`Edit`** (`:109-139`)
+if missing (`src/config.rs:337-342`) — a write side effect. **`Edit`** (`:109-139`)
 does `config::ensure_exists` (create-if-absent *without* requiring current contents
-to parse, `src/config.rs:225-230`), resolves `$VISUAL`/`$EDITOR`
+to parse, `src/config.rs:345-349`), resolves `$VISUAL`/`$EDITOR`
 (`src/editor.rs:7-8`), spawns, then three checks.
 
 **`--format` is not honoured for any `Config` arm** — all three print
@@ -719,7 +719,7 @@ Two sites, inconsistent: `:642` and `:364` map to
 wrong *variant* — the user sees `cargo-cleanme: configuration error: cannot
 serialize JSON report: …`, sending them to `config.toml` when the fault is in
 report serialization (it does at least match the existing habit: `config::show`
-does the same at `src/config.rs:370-371`). **M012A removed the third site.** The old
+does the same at `src/config.rs:526-528`). **M012A removed the third site.** The old
 empty-roots cleanup branch used `AppError::Config(e.to_string())` with no
 descriptive prefix; the branch now goes through `emit_cleanup` like every other
 cleanup report (`:211-217`), so the prefix inconsistency is gone with it.
@@ -809,7 +809,7 @@ included.
 
 **Config directory read-only.** Only *creation* fails. `load_or_create` (`:428`,
 `:157`) calls `create_initial`, which does `fs::create_dir_all(parent)?`
-(`src/config.rs:259-262`) → `AppError::Io` via `#[from]` (`src/error.rs:9`) →
+(`src/config.rs:380-383`) → `AppError::Io` via `#[from]` (`src/error.rs:9`) →
 exit 2. If the file exists and is readable, `load` performs no writes and
 everything works. Scope: `scan`, bare invocation, `clean …`, `config show` and
 `config edit` all exit 2; `config path` works (resolves without touching the FS,
@@ -1006,7 +1006,7 @@ to a module are the ones with no coverage.
 8. **Serialization errors use the wrong variant.** `main.rs:659` and `:364`
    produce `configuration error: cannot serialize JSON report: …`, sending the
    user to `config.toml` when the fault is in report serialization
-   (`src/config.rs:370-371` does the same). The third site that omitted the prefix
+   (`src/config.rs:526-528` does the same). The third site that omitted the prefix
    was removed with the old empty-roots branch (§8), so this is now the only
    inconsistency left.
 9. **Redundant root echo.** `main.rs:373-379` and `src/cleanup.rs:277-287` print

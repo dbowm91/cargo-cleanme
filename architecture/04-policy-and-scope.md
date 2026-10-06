@@ -203,7 +203,7 @@ between them — it never merges them:
 | `Bypassed` | Explicit (`:42`) | `(&[][..], &[][..])` at `discovery.rs:328` |
 
 `config.ignore` and `config.unignore` are cloned verbatim from `ScanConfig`
-(`config.rs:44-47`); `resolve` adds no patterns of its own.
+(`config.rs:46-48`); `resolve` adds no patterns of its own.
 
 ### Semantics
 
@@ -242,17 +242,17 @@ between them — it never merges them:
 ### What must be absolute, and why
 
 `scan.root` must be absolute (`require_absolute(p, "scan.root")`,
-`config.rs:110-112`); every `scan.ignore` pattern must be absolute
-(`config.rs:113-119`, message `"ignore pattern must be absolute: {p}"`); every
-`scan.unignore` entry must be absolute (`config.rs:120-122`).
+`config.rs:111-113`); every `scan.ignore` pattern must be absolute
+(`config.rs:114-120`, message `"ignore pattern must be absolute: {p}"`); every
+`scan.unignore` entry must be absolute (`config.rs:121-123`).
 
 Absoluteness is not cosmetic: patterns are matched against the **canonical**
 walk path, so a relative or symlink-spelled pattern would silently match
 nothing. `config::load` rewrites the glob-free literal prefix of every pattern
-to its canonical spelling via `canonical_pattern_prefix` (`config.rs:146-164`,
-`:190-214`), leaving the glob tail verbatim. A pattern naming a non-existent
+to its canonical spelling via `canonical_pattern_prefix` (`config.rs:154-186`,
+`:292-335`), leaving the glob tail verbatim. A pattern naming a non-existent
 path is left untouched — it still means exactly what it says, i.e. it matches
-nothing. Glob *syntax* is validated at load time too (`config.rs:146-149`), so
+nothing. Glob *syntax* is validated at load time too (`config.rs:136-150`), so
 a bad pattern fails at `config::load_or_create` rather than at the first walk.
 
 **What `globset` is for:** it compiles the ignore list once into a `GlobSet`
@@ -467,7 +467,7 @@ subtree to be scanned twice.
    root outside the home directory into Routine scope, and `clean --known` will
    use it.
 5. **A stale configured root is a hard error, not a fallback.** `config::load`
-   validates only that `scan.root` is absolute (`config.rs:110-112`), never
+   validates only that `scan.root` is absolute (`config.rs:111-113`), never
    that it exists. A deleted `scan.root` makes *every* scan and every bare
    invocation fail with `AppError::InvalidRoot` → exit code 2 (`main.rs:9-12`).
    There is no degradation path back to Routine.
@@ -476,10 +476,10 @@ subtree to be scanned twice.
    "no Routine roots are available; run `scan --full` or scan an explicit root".
 7. **`learned_root_retention_days as u16` (`policy.rs:46`) is lossless only
    because of the caller's validation.** `config::load` range-checks it to
-   0–3650 (`config.rs:105-109`), which fits in `u16`; a `ScanConfig` built
+   0–3650 (`config.rs:106-110`), which fits in `u16`; a `ScanConfig` built
    directly — as every test does — bypasses that check, and a value above 65535
    would wrap silently. Same class of issue for `recency_seconds`: `load`
-   rejects 0 (`config.rs:97-101`) because 0 would disable the inactivity guard,
+   rejects 0 (`config.rs:98-102`) because 0 would disable the inactivity guard,
    but `resolve` does not (`policy.rs:22`, `:54`).
 8. **A configured `scan.root` silently disables `clean --known`.**
    `main.rs:133-143` takes only the `Routine` arm and yields `Vec::new()` for any
@@ -582,7 +582,7 @@ the JSON `scope` field equals `"explicit"` — but per §7.9 that string comes f
    verbatim.
 7. **A `u16`/`u32` or range assumption must be traced to `config::load`.**
    `policy.rs:46` narrows `u32 → u16` on the strength of
-   `config.rs:105-109`; `policy.rs:22` relies on `config.rs:97-101` for the
+   `config.rs:106-110`; `policy.rs:22` relies on `config.rs:98-102` for the
    non-zero recency guard. Test-constructed `ScanConfig` values bypass both.
 8. **Any new `AppError` here becomes exit code 2.** `policy.rs:32` and
    `policy.rs:37` are the only sources today; `main.rs:9-12` maps every

@@ -2,18 +2,18 @@
 
 > Component deep dive · part of the [architecture overview](overview.md)
 
-Covers `src/config.rs` (548 lines: 306 production, 14 inline tests), the
+Covers `src/config.rs` (1332 lines: 528 production, 19 inline tests), the
 repository-root `config.toml` (45 lines), and `src/editor.rs` (215 lines,
 2 inline tests).
 
 ## 1. Responsibility
 
 **Owns** — the four config structs, their `serde` attributes and defaults
-(`src/config.rs:11-67`); reading, validating and normalizing a config file
-(`load`, `src/config.rs:89-203`); first-use creation from an embedded template
-(`create_initial`, `src/config.rs:255-342`); which config file an invocation
-means (`ConfigPathResolver`, `src/config.rs:69-87`); the `config show`
-projection (`show`, `src/config.rs:343-345`); editor resolution
+(`src/config.rs:11-68`); reading, validating and normalizing a config file
+(`load`, `src/config.rs:89-204`); first-use creation from an embedded template
+(`create_initial`, `src/config.rs:379-525`); which config file an invocation
+means (`ConfigPathResolver`, `src/config.rs:69-88`); the `config show`
+projection (`show`, `src/config.rs:526-528`); editor resolution
 (`editor::resolve_editor`, `src/editor.rs:7-37`).
 
 **Does not own** — any policy *decision* (`config.rs` validates shape and range;
@@ -27,9 +27,9 @@ interpreted by `cleanup::is_authorized`, `src/cleanup.rs:453-462`; see
 own atomic publish (see [Discovery state](06-discovery-state.md)).
 
 **The template is not the runtime config.** The most load-bearing fact about
-`config.toml`, enforced from both sides: `src/config.rs:10` embeds the repository
+`config.toml`, enforced from both sides: `src/config.rs:11` embeds the repository
 file verbatim at compile time (`include_str!("../config.toml")`), and the only
-reader of those checked-in bytes is `create_initial` (`src/config.rs:322`).
+reader of those checked-in bytes is `create_initial` (`src/config.rs:442`).
 `config.toml:5-8` states it directly — runtime configuration "is resolved from
 the platform application config directory (or `--config PATH`); this repository
 file is a distribution template and is never loaded implicitly from the current
@@ -40,17 +40,17 @@ the binary from inside a checkout therefore does **not** pick up that checkout's
 
 ## 2. The configuration schema
 
-Four structs, all `#[serde(deny_unknown_fields)]` (`src/config.rs:12`, `:20`,
-`:28`, `:39`), so a mistyped key is a parse error rather than a silently ignored
+Four structs, all `#[serde(deny_unknown_fields)]` (`src/config.rs:13`, `:21`,
+`:29`, `:40`), so a mistyped key is a parse error rather than a silently ignored
 setting.
 
 | Section | Field | Type | Default | Meaning |
 |---|---|---|---|---|
-| `[scan]` | `recency_seconds` | `u64` | `300` (`src/config.rs:62-64`, `:54`) | Inactivity window: a candidate must be untouched at least this long. `0` is rejected; values above `u64::MAX / 1_000_000_000` are rejected (`:97-104`). |
+| `[scan]` | `recency_seconds` | `u64` | `300` (`src/config.rs:63-65`, `:42`) | Inactivity window: a candidate must be untouched at least this long. `0` is rejected; values above `u64::MAX / 1_000_000_000` are rejected (`:98-105`). |
 | `[scan]` | `root` | `Option<PathBuf>` | `None` (`:43`, `:55`) | Exclusive scan scope. Must be absolute (`:110-112`). A CLI root takes precedence (`src/policy.rs:30`). |
 | `[scan]` | `ignore` | `Vec<String>` | `[]` (`:44-45`, `:56`) | Absolute glob patterns pruned from global/routine discovery. Compiled with `globset` (`:146-149`) and matched against **canonical** paths (`src/discovery.rs:38-45`). |
 | `[scan]` | `unignore` | `Vec<PathBuf>` | `[]` (`:46-47`, `:57`) | Exact absolute directories re-included beneath ignored trees. Not globs — a component-wise prefix test (`p.starts_with(u)`) resolved by `Filters::disposition` (`src/discovery.rs:68-99`). Must be absolute (`:120-122`). |
-| `[scan]` | `learned_root_retention_days` | `u32` | `30` (`src/config.rs:65-67`, `:58`) | How long a learned developer root survives after the last project observation. `0` disables expiration (`config.toml:14-15`). Accepted range `0..=3650`, enforced in `load` (`:105-109`). |
+| `[scan]` | `learned_root_retention_days` | `u32` | `30` (`src/config.rs:66-68`, `:49`) | How long a learned developer root survives after the last project observation. `0` disables expiration (`config.toml:14-15`). Accepted range `0..=3650`, enforced in `load` (`:106-110`). |
 | `[cleanup]` | `allowed_output_roots` | `Vec<PathBuf>` | `[]` (`:22-23`) | Authorization for already-private output outside the `clean ROOT` sandbox. Must be absolute (`:123-125`). See below. |
 | `[cleanup.policy]` | `min_reclaimable_bytes` | `u64` | `0` (`:30-31`) | Minimum reclaimable size for a group. `--min-reclaimable-bytes` replaces it when supplied (`src/main.rs:157-158`). |
 | `[cleanup.policy]` | `min_inactive_seconds` | `Option<u64>` | `None` (`:32`) | Optional *extra* quiet age on top of the safety recency guard. `--older-than` wins (`src/main.rs:159`). Values above `u64::MAX / 1_000_000_000` are rejected (`:126-132`). |
@@ -60,9 +60,9 @@ setting.
 ### The two defaults that are not `Default::default()`
 
 `Config`, `CleanupConfig` and `CleanupPolicyConfig` derive `Default`
-(`src/config.rs:11`, `:19`, `:27`), so a missing table yields zeroed/empty
+(`src/config.rs:12`, `:20`, `:28`), so a missing table yields zeroed/empty
 values. `ScanConfig` deliberately does **not** derive it: the hand-written
-`impl Default` at `src/config.rs:51-61` restores `recency_seconds = 300` and
+`impl Default` at `src/config.rs:52-62` restores `recency_seconds = 300` and
 `learned_root_retention_days = 30`, which is what makes an absent `[scan]` table
 safe — otherwise a `[cleanup]`-only config would silently get
 `recency_seconds = 0`, which `load` then rejects at `:97-101`.
@@ -78,9 +78,9 @@ one omits the whole table (`:480-486`). Treat that combination as untested.
 
 ### `CONFIG_TEMPLATE`
 
-`pub const CONFIG_TEMPLATE: &str` (`src/config.rs:10`) is a `&'static str`
+`pub const CONFIG_TEMPLATE: &str` (`src/config.rs:11`) is a `&'static str`
 compiled into the binary and written byte-for-byte on first use
-(`f.write_all(CONFIG_TEMPLATE.as_bytes())`, `:275`). Three tests hold it honest:
+(`f.write_all(CONFIG_TEMPLATE.as_bytes())`, `:442`). Three tests hold it honest:
 `bootstrap_bytes_equal_checked_in_template` (`:510-519`) compares it against the
 file actually written, `config_template_matches_repository_file` (`:471-478`)
 against the checked-in `config.toml`, and
@@ -111,45 +111,66 @@ is [overview invariant 2](overview.md#6-cross-cutting-invariants).
 ### Glob syntax assumptions
 
 Every pattern in `include`, `exclude` and `scan.ignore` is compiled with
-`globset::Glob::new` (`src/config.rs:142`, `:147`; recompiled per use at
-`src/discovery.rs:22`, `src/cleanup.rs:1178`), always with default `globset`
+`globset::Glob::new` (`src/config.rs:143`, `:148`; recompiled per use at
+`src/discovery.rs:22`, `src/cleanup.rs:1248`), always with default `globset`
 construction: no `literal_separator`, no `backslash_escape` override,
-case-sensitive. So `*` crosses path separators and `/` is not special on Windows.
-`scan.unignore` is not a glob and is never compiled as one.
+case-sensitive. So `*` crosses path separators, `/` is not special on Windows,
+and matching is `globset`'s own: both sides are `/`-spelled, because
+`Candidate::new` normalizes candidate separators and `backslash_escape`
+defaults to `!is_separator('\\')` — with it off, a `\` in a pattern is compiled
+to a `/` too. `scan.unignore` is not a glob and is never compiled as one.
 
 Because matching is against canonicalized paths, `load` rewrites each pattern's
-glob-free prefix through `canonical_pattern_prefix` (`src/config.rs:251-288`,
-applied at `:151-193`). The rewrite is conservative: it stops at the first
-`* ? [ {` (`:252`) and leaves the pattern alone if the prefix ends in a backslash
+glob-free prefix through `canonical_pattern_prefix` (`src/config.rs:292-335`,
+applied at `:154-186`). The rewrite is conservative: it stops at the first
+`* ? [ {` (`:293`) and leaves the pattern alone if the prefix ends in a backslash
 (splitting there would land inside an escape sequence), if the prefix is relative
-(`:260-262`), or if `fs::canonicalize` fails (a non-existent path still means what
+(`:301-303`), or if `fs::canonicalize` fails (a non-existent path still means what
 it says — it matches nothing); trailing separators are structural and preserved
-around the canonicalized name (`:259`, `:263`, `:275`). Without it, a pattern
+around the canonicalized name (`:300`, `:304`, `:328`). Without it, a pattern
 spelled the way the user's own shell shows it (`/tmp/...` where `/tmp` is a
 symlink) would silently exclude nothing.
 
 **The canonical spelling is escaped, because it is a path and not a pattern.**
-`escape_glob_literal` (`src/config.rs:224-238`) bracket-escapes `* ? [ ]`. A
+`escape_glob_literal` (`src/config.rs:244-276`) bracket-escapes `* ? [ ]`. A
 directory named `real[abc]`, reached through a symlink, used to splice in as a
 character class: the rule stopped excluding the tree the user named and started
-excluding two they never wrote down. A spelling with no *portable* escape (`{`,
-`}`, `\`) is left untouched rather than guessed at — `{` opens an alternation no
-bracket form closes, and `\` is the escape character on Unix but a path
-separator on Windows. `PatternKind` (`src/config.rs:209-215`) keeps
-`scan.unignore` out of this: it is a literal path by design, so escaping it would
-corrupt the path it names.
+excluding two they never wrote down.
 
-**The rewritten patterns are re-validated** (`src/config.rs:195-202`). The
+The spelling is also `glob_spelling` (`src/config.rs:218-242`) — `/`-normalized
+— before it is escaped, and the order is load-bearing in both directions. A `\` in
+the canonical name is what made the whole rewrite a no-op on Windows: every
+canonical path there contains one, and `escape_glob_literal` used to reject it,
+so the escape never ran. Normalizing first is what lets the escape run; escaping
+first would double the separator into a path component that does not exist.
+`glob_spelling_with` takes the separator as an argument rather than reading
+`cfg!`, so the Windows answer is asserted on a Unix lane (C024).
+
+The `None` arm is now reachable for exactly one input pair. `{` opens an
+alternation no bracket form closes, and it is left untouched rather than guessed
+at. `\` is no longer in that set: after normalization it is a character of a
+*file name*, never a separator, and it is doubled where `globset` treats it as an
+escape character. That arm is unreachable on Windows because no file name there
+may contain a backslash, and it is tested individually on Unix
+(`a_backslash_in_a_canonical_directory_name_is_spliced_as_a_escape`).
+`PatternKind` (`src/config.rs:206-216`) keeps `scan.unignore` out of this: it is a
+literal path by design, so escaping it would corrupt the path it names — and its
+separators are the filesystem's own, not `/`.
+
+**The rewritten patterns are re-validated** (`src/config.rs:193-202`). The
 rewrite manufactures text that appears nowhere in the file, so validating on the
 way in does not certify what is compiled on the way out. No authorization depends
 on this list — `ignore`/`include`/`exclude` filter discovery and policy, never
-ownership. Test: `a_canonical_spelling_cannot_inject_glob_characters`.
+ownership. Tests: `a_canonical_spelling_cannot_inject_glob_characters` (Unix),
+`a_spliced_canonical_spelling_matches_the_directory_it_names` (every lane),
+`a_backslash_in_a_canonical_directory_name_is_spliced_as_a_escape` (Unix), and
+`a_bracketed_canonical_spelling_is_matched_literally_on_windows` (Windows).
 
 ## 3. Loading, creation, and validation
 
 ### `load` — read, parse, validate, normalize
 
-`load(path) -> Result<Config, AppError>` (`src/config.rs:89-203`): read to string
+`load(path) -> Result<Config, AppError>` (`src/config.rs:89-204`): read to string
 and `toml::from_str` when `path.exists()`, mapping failures to
 `AppError::Config("cannot read …")` / `("cannot parse …")` (`:89-93`); **return
 `Config::default()` when the file is absent** (`:94-96`); then check, in order
@@ -176,7 +197,7 @@ migration shim.
 
 ### `load_or_create` and `ensure_exists`
 
-`load_or_create` (`src/config.rs:216-221`) calls `create_initial` only when the
+`load_or_create` (`src/config.rs:337-342`) calls `create_initial` only when the
 file is missing, then `load`s it. It never overwrites: a malformed file stays
 malformed and stays on disk (`:521-531`, `:501-508`). Used by `scan`
 (`src/main.rs:299`), `clean` (`src/main.rs:99`) and `config show`
@@ -190,8 +211,8 @@ where `load_or_create` would refuse to show them the file they need to fix.
 
 ### `create_initial` — atomic, verbatim, never overwriting
 
-`src/config.rs:259-368`: `create_dir_all` the parent (`:260-264`, re-checked at
-`:270-274`); write to `<file_name>.tmp.<pid>.<nonce>.<attempt>` in the **same
+`src/config.rs:379-525`: `create_dir_all` the parent (`:380-384`, re-checked at
+`:390-395`); write to `<file_name>.tmp.<pid>.<nonce>.<attempt>` in the **same
 directory** (`:293-296`, so publication stays on one volume) opened
 `create_new(true)` (`:297-301`); `write_all` the template verbatim and `sync_all`
 it (`:322-325`); publish with `fs::hard_link(&temp, path)` then
@@ -259,7 +280,7 @@ but a link count is briefly 2).
 exFAT, several CIFS mounts, and WSL's `/mnt/c` drvfs report `EOPNOTSUPP` — after
 `create_new`, `write_all` and `sync_all` have all succeeded — which used to make
 **every** command fail at startup, because `load_or_create` is on every path.
-The fallback (`src/config.rs:411-437`) is `OpenOptions::create_new` straight at
+The fallback (`src/config.rs:464-483`) is `OpenOptions::create_new` straight at
 the destination. It keeps the property the design cannot give up: `create_new` is
 exclusive, so a concurrent winner is never overwritten. What it gives up is
 crash-atomicity of the *contents* — a crash mid-write leaves a truncated file,
@@ -271,7 +292,7 @@ config.
 ### `show` — a projection, not a file dump
 
 `show(&Config) -> Result<String, AppError>` is `toml::to_string_pretty`
-(`src/config.rs:343-345`), serializing the **in-memory, validated, normalized**
+(`src/config.rs:526-528`), serializing the **in-memory, validated, normalized**
 config. Comments and original formatting are gone; `scan.ignore` and friends
 appear in canonicalized spelling rather than the spelling the user typed; absent
 optionals are omitted rather than written as null (TOML has no null, and the
@@ -280,7 +301,7 @@ struct declaration order.
 
 ## 4. Path resolution
 
-`ConfigPathResolver` (`src/config.rs:69-87`) holds `override_path:
+`ConfigPathResolver` (`src/config.rs:69-88`) holds `override_path:
 Option<PathBuf>`. `src/main.rs:17` constructs it once from `cli.config` (the
 `--config` global flag, `src/cli.rs:19`) and resolves the path once per process,
 before any command dispatch — including for `update`, which does not use the
@@ -352,7 +373,7 @@ absent file as 'all defaults', so a deleted config would silently reset every
 policy." This is the most dangerous failure in the surface — an editor that
 renames badly, or a user who `:bdelete`d the buffer and quit, would otherwise leave
 cargo-cleanme running on stock defaults while believing their policy is in force.
-Because `load` cannot distinguish the two states (`src/config.rs:89-96`), this is
+Because `load` cannot distinguish the two states (`src/config.rs:89-97`), this is
 the only place that can, after the editor has exited. Hence a hard error rather
 than a warning, and no silent re-creation from the template: that would replace
 the user's intended deletion with a default file and hide it.
@@ -361,7 +382,7 @@ the user's intended deletion with a default file and hide it.
 is run and its error wrapped as `"edited config <path> is invalid: <e>"`. It
 reuses `load` rather than a lighter parse because `load` is the same function
 every scan and clean will run — the edit-time instantiation of the rule at
-`src/config.rs:133-134`, so a bad glob, a relative `allowed_output_roots` or
+`src/config.rs:134-135`, so a bad glob, a relative `allowed_output_roots` or
 `recency_seconds = 0` is reported where it was typed rather than at the next
 scan. The loaded value is discarded by the `?` at `:79`; `:80` prints
 `edited <path>`.
@@ -435,7 +456,7 @@ escape")` (`:130-132`) and an unterminated quote `Err("… unfinished quote")`
 What must remain true for this surface to stay safe:
 
 1. **The embedded template is a hard packaging requirement.**
-   `include_str!("../config.toml")` (`src/config.rs:10`) fails the build if
+   `include_str!("../config.toml")` (`src/config.rs:11`) fails the build if
    `/config.toml` is missing, so the allowlist entry at `Cargo.toml:24` is not
    optional, and `scripts/check-release-contract.py:460-464` asserts the
    allowlist exists and contains `config.toml`.
@@ -488,7 +509,7 @@ consumed elsewhere, update that consumer (`src/policy.rs`, `src/discovery.rs`,
 
 | Case | Behaviour |
 |---|---|
-| `--config` points at a directory | `load` reads it and fails `cannot read …`; creation refuses to replace a non-file (`src/config.rs:328-333`) |
+| `--config` points at a directory | `load` reads it and fails `cannot read …`; creation refuses to replace a non-file (`src/config.rs:509-516`) |
 | `--config` with no file name | `file_name()` yields the last component; the fallback name is literally `config.toml` (`:257-260`) |
 | Config file is not valid UTF-8 | `fs::read_to_string` fails → `cannot read …` (`:90-91`) |
 | Non-UTF-8 directory name during glob matching | Matched through `to_string_lossy` in discovery, so a broad `*` cannot be escaped (`src/discovery.rs:30-45`) |
@@ -496,27 +517,34 @@ consumed elsewhere, update that consumer (`src/policy.rs`, `src/discovery.rs`,
 
 ## 8. Testing
 
-`src/config.rs` has **14** `#[test]` functions. The module starts at
-`src/config.rs:347` (`#[cfg(test)]`) / `:309` (`mod tests`); production code ends
-at `:306`. One of the 14 is `#[cfg(unix)]`-gated (`:311-312`), so a non-Unix
-build compiles 13.
+`src/config.rs` has **19** `#[test]` functions. The module starts at
+`src/config.rs:530` (`#[cfg(test)]`) / `:531` (`mod tests`); production code ends
+at `:528`. Three are `#[cfg(unix)]`-gated (`:556`, `:642`, `:815`), one is
+`#[cfg(windows)]` (`:858`), and one is
+`#[cfg(all(target_os = "linux", target_arch = "x86_64"))]` (`:1276`), so a
+Windows build compiles 15 and a macOS build 18.
 
 | Test | Line | What it pins |
 |---|---|---|
-| `patterns_are_canonicalized_so_exclusions_actually_apply` | `:486` | The symlink-spelling regression for `ignore` and `exclude`; that a metacharacter-free pattern and a non-resolving pattern keep their spelling; that a relative pattern is never resolved against the CWD. Unix-only. |
-| `recency_seconds_of_zero_is_rejected` | `:626` | `0` is an error naming the inactivity guard; `1` is accepted. |
-| `out_of_range_retention_reports_a_range_not_a_parse_error` | `:640` | `99999` reports "must be between 0 and 3650" rather than a TOML type error; `7` is accepted. |
-| `invalid_scan_ignore_glob_is_reported_at_load` | `:656` | A malformed `scan.ignore` glob fails at load. The comment at `:414-420` is a premise guard: the pattern is made absolute so the test cannot pass for the wrong reason. |
-| `default_recency_and_absent_config` | `:674` | An absent file loads as all defaults with `recency_seconds = 300`. |
-| `malformed_and_relative_paths_fail` | `:680` | A non-numeric value, a relative `scan.root`, and a relative `allowed_output_roots` each fail. |
-| `checked_in_template_parses_and_matches_defaults` | `:695` | The template parses and agrees with `Config::default()` on every field it spells out. |
-| `config_template_matches_repository_file` | `:714` | `CONFIG_TEMPLATE` is byte-equal to the checked-in `config.toml`. |
-| `legacy_cleanup_config_loads_with_neutral_policy` | `:723` | A `[cleanup]`-only file yields a neutral policy: `0`, `None`, empty lists. |
-| `cleanup_policy_globs_and_durations_are_validated` | `:731` | `include = ["["]` and `min_inactive_seconds = u64::MAX` both fail. |
-| `operational_bootstrap_refuses_overwrite` | `:744` | `load_or_create` creates once, then preserves an edited `recency_seconds = 61`. |
-| `bootstrap_bytes_equal_checked_in_template` | `:753` | The created file is byte-equal to `CONFIG_TEMPLATE` and loads as defaults. |
-| `malformed_config_is_not_replaced_automatically` | `:764` | A malformed file errors *and* is left byte-identical on disk. |
-| `concurrent_first_use_creates_one_complete_template` | `:776` | 16 workers over 24 rounds, a fresh nested path each round; every racer succeeds and the bytes are one complete template. Strengthened deliberately — a single 8-thread round missed the Windows race most of the time. |
+| `patterns_are_canonicalized_so_exclusions_actually_apply` | `:559` | The symlink-spelling regression for `ignore` and `exclude`; that a metacharacter-free pattern and a non-resolving pattern keep their spelling; that a relative pattern is never resolved against the CWD. Unix-only. |
+| `a_canonical_spelling_cannot_inject_glob_characters` | `:645` | A bracketed canonical name is spliced escaped, so the named tree still matches and two siblings do not; `unignore` splices unescaped; a `{` spelling is left untouched. Unix-only, and its `#[cfg(unix)]` is the honest gate — see §2. |
+| `a_spliced_canonical_spelling_matches_the_directory_it_names` | `:725` | The spliced spelling itself: `/`-spelled, brackets escaped, named tree matched and siblings not. Asserts the *premise* in the same test — the unescaped reading misses the named tree and matches a sibling — so the assertions cannot be decoration. Then the same splice with the Windows answer, asserted on every lane. |
+| `a_backslash_in_a_canonical_directory_name_is_spliced_as_a_escape` | `:817` | The one remaining `escape_glob_literal` input on Unix: a `\` in a canonical file name is doubled, compiles to a literal `\`, and matches the directory it names. Unix-only — no Windows file name may contain one. |
+| `a_bracketed_canonical_spelling_is_matched_literally_on_windows` | `:860` | The whole C024 chain on the platform that motivated it: a real canonical spelling, a real bracket in a real file name, a junction alias, and a `config.toml` read through `load`. Windows-only, because a Windows symlink needs elevation a hosted runner does not grant. |
+| `recency_seconds_of_zero_is_rejected` | `:934` | `0` is an error naming the inactivity guard; `1` is accepted. |
+| `out_of_range_retention_reports_a_range_not_a_parse_error` | `:948` | `99999` reports "must be between 0 and 3650" rather than a TOML type error; `7` is accepted. |
+| `invalid_scan_ignore_glob_is_reported_at_load` | `:964` | A malformed `scan.ignore` glob fails at load. The comment at `:962-967` is a premise guard: the pattern is made absolute so the test cannot pass for the wrong reason. |
+| `default_recency_and_absent_config` | `:982` | An absent file loads as all defaults with `recency_seconds = 300`. |
+| `malformed_and_relative_paths_fail` | `:988` | A non-numeric value, a relative `scan.root`, and a relative `allowed_output_roots` each fail. |
+| `checked_in_template_parses_and_matches_defaults` | `:1003` | The template parses and agrees with `Config::default()` on every field it spells out. |
+| `config_template_matches_repository_file` | `:1022` | `CONFIG_TEMPLATE` is byte-equal to the checked-in `config.toml`. |
+| `legacy_cleanup_config_loads_with_neutral_policy` | `:1031` | A `[cleanup]`-only file yields a neutral policy: `0`, `None`, empty lists. |
+| `cleanup_policy_globs_and_durations_are_validated` | `:1039` | `include = ["["]` and `min_inactive_seconds = u64::MAX` both fail. |
+| `operational_bootstrap_refuses_overwrite` | `:1052` | `load_or_create` creates once, then preserves an edited `recency_seconds = 61`. |
+| `bootstrap_bytes_equal_checked_in_template` | `:1061` | The created file is byte-equal to `CONFIG_TEMPLATE` and loads as defaults. |
+| `malformed_config_is_not_replaced_automatically` | `:1072` | A malformed file errors *and* is left byte-identical on disk. |
+| `concurrent_first_use_creates_one_complete_template` | `:1084` | 16 workers over 24 rounds, a fresh nested path each round; every racer succeeds and the bytes are one complete template. Strengthened deliberately — a single 8-thread round missed the Windows race most of the time. |
+| `the_config_is_published_on_a_filesystem_without_hard_links` | `:1278` | The `create_new` fallback publishes a complete config where `link(2)` reports "unsupported". |
 
 `config.toml:10` tells contributors to run `cargo test config_template` after
 editing the template. That substring matches
@@ -543,23 +571,23 @@ three failure modes) and `tests/cli_contract.rs:161`/`:171` (the
 
 1. Did any change make the repository `config.toml` loadable at runtime (a CWD
    lookup, a bare `config.toml` path)? The only legitimate readers are
-   `CONFIG_TEMPLATE` (`src/config.rs:10`) and its test comparison (`:472`).
+   `CONFIG_TEMPLATE` (`src/config.rs:11`) and its test comparison (`:1022`).
 2. Does a new or moved field still match between the struct, its serde default,
-   `impl Default for ScanConfig` (`:51-61`) and the template (`config.toml:12-45`)?
-   `checked_in_template_parses_and_matches_defaults` (`:452`) is the guard.
+   `impl Default for ScanConfig` (`:52-62`) and the template (`config.toml:12-45`)?
+   `checked_in_template_parses_and_matches_defaults` (`:1003`) is the guard.
 3. Is `/config.toml` still in the `include` allowlist (`Cargo.toml:24`), given
    `check-release-contract.py:460-464`?
-4. Does any new validation live outside `load` (`:88-180`), where `config edit`
+4. Does any new validation live outside `load` (`:89-204`), where `config edit`
    would not see it and the failure would be deferred to the next scan (the rule
-   at `:133-134`)?
-5. Is `recency_seconds == 0` still rejected (`:97-101`) and
-   `learned_root_retention_days` still bounded at 3650 (`:105-109`) — the bound
+   at `:134-135`)?
+5. Is `recency_seconds == 0` still rejected (`:98-102`) and
+   `learned_root_retention_days` still bounded at 3650 (`:106-110`) — the bound
    `src/policy.rs:46`'s `as u16` depends on?
-6. Do new pattern lists pass through `canonical_pattern_prefix` (`:190-214`,
-   applied at `:153-178`)? A list that skips it excludes nothing.
+6. Do new pattern lists pass through `canonical_pattern_prefix` (`:292-335`,
+   applied at `:154-186`)? A list that skips it excludes nothing.
 7. Does anything still create, link over, or truncate an existing config?
-   Publication is `create_new` + `fs::hard_link` (`:265-281`) and
-   `load_or_create` acts only when the file is absent (`:216-221`).
+   Publication is `create_new` + `fs::hard_link` (`:447-486`) and
+   `load_or_create` acts only when the file is absent (`:337-342`).
 8. Are the three post-edit checks still present and still ordered non-zero-exit
    → deletion → validity (`src/main.rs:59-79`)? Reordering them changes which
    failure is reported for a broken editor.
@@ -567,5 +595,5 @@ three failure modes) and `tests/cli_contract.rs:161`/`:171` (the
    (`src/editor.rs:8-27`), and is the program still separated from its arguments
    in the return type (`:7`)? A single-string return regresses `code --wait`.
 10. Does `config show` still print the normalized projection rather than the file
-    bytes (`src/config.rs:343-345`)? That difference is the only visible way
+    bytes (`src/config.rs:526-528`)? That difference is the only visible way
     canonicalized patterns show up.

@@ -215,24 +215,60 @@ enum PatternKind {
     Literal,
 }
 
+/// A canonical path spelled the way `globset` matches it.
+///
+/// Both sides of the comparison are `/`-spelled. Candidates are normalized by
+/// `globset`'s `Candidate::new` (`normalize_path`), and on Windows patterns get
+/// the same treatment at compile time: `backslash_escape` defaults to
+/// `!is_separator('\\')`, and with it off `parse_backslash` pushes a `/` for
+/// every `\` — "normalize all patterns to use / as a separator".
+///
+/// That is also why the splice used to be a no-op here. It was gated on a
+/// spelling that could not be escaped, and `\` — which every canonical Windows
+/// path contains, and which `escape_glob_literal` used to reject outright — was
+/// one of the rejected characters. The separator was never the problem; it was
+/// only the reason the rewrite could not run.
+fn glob_spelling(path: &Path) -> String {
+    glob_spelling_with(&path.to_string_lossy(), std::path::MAIN_SEPARATOR)
+}
+
+/// [`glob_spelling`] for a spelling whose separators are known.
+///
+/// The separator is a parameter rather than a `cfg!` so the Windows answer can
+/// be asserted on a Unix lane: `\` is the one character whose treatment differs
+/// by platform, and it is the character this whole defect turned on.
+fn glob_spelling_with(canonical: &str, separator: char) -> String {
+    canonical.replace(separator, "/")
+}
+
 /// Escape globset metacharacters in a literal path so it splices in as itself.
 ///
-/// Returns `None` for a spelling that cannot be escaped portably, so the caller
-/// can leave the user's pattern alone rather than guess. `{` opens an alternation
-/// that no bracket form closes, and `\` is the escape character on Unix but a
-/// path separator on Windows.
+/// The input is expected to be `/`-spelled already ([`glob_spelling`]), which
+/// is what makes the `\` arm reachable at all: after that normalization a `\` is
+/// a character of a *file name*, never a separator. No Windows file name may
+/// contain one, so on that platform the arm is unreachable; where it is
+/// reachable (Unix) `\` is the escape character, so a literal one is doubled.
+///
+/// Returns `None` for a spelling that cannot be escaped, so the caller can leave
+/// the user's pattern alone rather than guess. `{` opens an alternation that no
+/// bracket form closes. `\` was in this set for exactly the reason
+/// `glob_spelling` now handles, which is why that arm moved rather than
+/// narrowing the reachable inputs.
 fn escape_glob_literal(path: &str) -> Option<String> {
     let mut out = String::with_capacity(path.len());
     for c in path.chars() {
         match c {
             // `[]]` and `[[]` are single-character classes holding `]` and `[`;
             // globset's class parser accepts a leading `]` as a literal member.
+            // `[` and `]` are legal Windows file-name characters, so this is not
+            // a Unix-only precaution.
             '*' | '?' | '[' | ']' => {
                 out.push('[');
                 out.push(c);
                 out.push(']');
             }
-            '{' | '}' | '\\' => return None,
+            '{' | '}' => return None,
+            '\\' => out.push_str(r"\\"),
             _ => out.push(c),
         }
     }
@@ -248,6 +284,11 @@ fn escape_glob_literal(path: &str) -> Option<String> {
 /// resolve — a pattern naming a path that does not exist still means exactly
 /// what it says: it matches nothing — or when the canonical spelling cannot be
 /// escaped and therefore cannot be spliced without changing the match.
+///
+/// A `Glob` prefix is spliced in [`glob_spelling`]-normalized and escaped, so
+/// the rewrite is no longer a no-op on any platform. A `Literal` one is spliced
+/// in the filesystem's own spelling, because it is compared as a path rather
+/// than compiled.
 fn canonical_pattern_prefix(pattern: &str, kind: PatternKind) -> String {
     let cut = pattern.find(['*', '?', '[', '{']).unwrap_or(pattern.len());
     let (prefix, tail) = pattern.split_at(cut);
@@ -263,8 +304,8 @@ fn canonical_pattern_prefix(pattern: &str, kind: PatternKind) -> String {
     let separators = &prefix[bare.len()..];
     match fs::canonicalize(bare) {
         Ok(canonical) => {
-            let canonical = canonical.to_string_lossy();
-            if canonical == bare {
+            let native = canonical.to_string_lossy();
+            if native == bare {
                 pattern.to_owned()
             } else {
                 // The canonical spelling is a real directory name, not a
@@ -273,11 +314,19 @@ fn canonical_pattern_prefix(pattern: &str, kind: PatternKind) -> String {
                 // `real[abc]` becomes a character class that stops matching the
                 // tree the user named and matches two they never wrote down.
                 match kind {
-                    PatternKind::Glob => match escape_glob_literal(&canonical) {
+                    // A literal path is compared as a `PathBuf`, not compiled,
+                    // so escaping it would corrupt the path it names — and its
+                    // separators are whatever the filesystem calls them.
+                    PatternKind::Literal => format!("{native}{separators}{tail}"),
+                    // `/`-spelled first, then escaped. Both halves are
+                    // load-bearing: the spelling is what a candidate on any
+                    // platform is compared against, and the escaping is what
+                    // stops the directory's own `real[abc]` from being read as
+                    // a character class.
+                    PatternKind::Glob => match escape_glob_literal(&glob_spelling(&canonical)) {
                         Some(literal) => format!("{literal}{separators}{tail}"),
                         None => pattern.to_owned(),
                     },
-                    PatternKind::Literal => format!("{canonical}{separators}{tail}"),
                 }
             }
         }
@@ -494,10 +543,11 @@ mod tests {
     /// already uses for the same reason. The path text itself, brackets
     /// included, is unchanged — the bracket must survive into the parsed
     /// string, because it is what the canonical rewrite has to escape.
-    /// Unix-gated with its callers: every case that writes a path into TOML
-    /// is `#[cfg(unix)]`, and an ungated helper is `-D warnings` dead code on
-    /// the Windows lane -- the same lesson C021 learned.
-    #[cfg(unix)]
+    ///
+    /// Ungated since C024: the Windows lane writes a `\`-spelled pattern into
+    /// TOML for exactly this reason, so this is no longer a Unix-only helper.
+    /// C021's lesson stands for helpers that are *still* single-platform — this
+    /// one has a caller on each side of the fence.
     fn toml_string(value: &str) -> String {
         toml::Value::String(value.to_owned()).to_string()
     }
@@ -664,6 +714,220 @@ mod tests {
             written,
             "a `{{` in the canonical spelling cannot be escaped, so the pattern is untouched"
         );
+    }
+
+    // Every lane. The escaped spelling and the matching consequences of it are
+    // pure string work, so they are asserted where they can be asserted rather
+    // than only on the one platform whose canonical spelling motivated C024.
+    // What this cannot cover is `fs::canonicalize`'s own answer on Windows,
+    // which is what the lane test below exists for.
+    #[test]
+    fn a_spliced_canonical_spelling_matches_the_directory_it_names() {
+        let d = tempfile::tempdir().unwrap();
+        // Derived from the canonical root for the same macOS reason the Unix
+        // test above gives: `tempdir()` and `canonicalize` disagree about the
+        // first segment under `/var`.
+        let base = fs::canonicalize(d.path()).unwrap();
+        let real = base.join("real[abc]");
+        fs::create_dir_all(&real).unwrap();
+        for sibling in ["reala", "realb"] {
+            fs::create_dir_all(base.join(sibling)).unwrap();
+        }
+
+        // Both halves of the fix, asserted directly. The spelling is what a
+        // candidate is compared against on *every* platform, so a `\` left in
+        // it is a Windows-only defect: there it cannot match a candidate whose
+        // separators have been normalized away, and the escape would have to be
+        // the other escape as well.
+        let spelling = glob_spelling(&real);
+        assert!(
+            !spelling.contains('\\'),
+            "the spliced spelling must be /-spelled on every platform: {spelling}"
+        );
+        assert_eq!(
+            spelling,
+            format!("{}/real[abc]", glob_spelling(&base)),
+            "a canonical path spells its own brackets, which is what has to be escaped"
+        );
+        let spliced = escape_glob_literal(&spelling)
+            .expect("a bracketed name is escapable; only `{{` and `}}` are not");
+        assert_eq!(spliced, format!("{}/real[[]abc[]]", glob_spelling(&base)));
+
+        let matcher = globset::Glob::new(&format!("{spliced}/*"))
+            .unwrap()
+            .compile_matcher();
+        assert!(
+            matcher.is_match(format!("{}/proj", glob_spelling(&real))),
+            "the named tree must match the spliced spelling {spliced}"
+        );
+        for sibling in ["reala", "realb"] {
+            assert!(
+                !matcher.is_match(format!("{}/{sibling}/proj", glob_spelling(&base))),
+                "{sibling} must not match the spliced spelling {spliced}"
+            );
+        }
+
+        // The premise of everything above, asserted rather than assumed: the
+        // spelling that C024 shipped — the canonical name spliced in with its
+        // brackets live — misses the tree the user named and prunes two they
+        // never wrote down. If this ever stopped being true the assertions
+        // above would be decoration.
+        let unescaped = format!("{}/real[abc]/*", glob_spelling(&base));
+        let unescaped = globset::Glob::new(&unescaped).unwrap().compile_matcher();
+        assert!(
+            !unescaped.is_match(format!("{}/proj", glob_spelling(&real))),
+            "premise: the unescaped reading must NOT match the directory it names"
+        );
+        assert!(
+            unescaped.is_match(format!("{}/reala/proj", glob_spelling(&base))),
+            "premise: the unescaped reading must match a sibling, which is the defect"
+        );
+
+        // The same splice with the Windows answer to the one platform-dependent
+        // question, asserted on this lane too. A `/`-spelled candidate is what
+        // `globset` builds on every platform, so these two matches are the ones
+        // a Windows run would make — which is why the rule can be pinned here
+        // rather than only on a platform that has a Windows filesystem.
+        let windows_spliced =
+            escape_glob_literal(&glob_spelling_with(r"C:\Users\runneradmin\real[abc]", '\\'))
+                .unwrap();
+        assert_eq!(
+            windows_spliced, "C:/Users/runneradmin/real[[]abc[]]",
+            "a Windows canonical spelling is `/`-spelled and its brackets escaped"
+        );
+        let windows = globset::Glob::new(&format!("{windows_spliced}/*"))
+            .unwrap()
+            .compile_matcher();
+        assert!(
+            windows.is_match("C:/Users/runneradmin/real[abc]/proj"),
+            "the spliced Windows spelling must match the tree it names"
+        );
+        assert!(
+            !windows.is_match("C:/Users/runneradmin/reala/proj"),
+            "the spliced Windows spelling must not match a sibling"
+        );
+    }
+
+    // Unix, and the mirror of the defect above: a `\` is legal in a Unix file
+    // name and is the escape character in a Unix pattern, so it has to be
+    // doubled to splice. `escape_glob_literal` used to refuse it outright, which
+    // left this prefix un-rewritten — the same no-op, on the other platform.
+    #[cfg(unix)]
+    #[test]
+    fn a_backslash_in_a_canonical_directory_name_is_spliced_as_a_escape() {
+        use std::os::unix::fs::symlink;
+        let d = tempfile::tempdir().unwrap();
+        let base = fs::canonicalize(d.path()).unwrap();
+        let real = base.join("back\\slash");
+        fs::create_dir_all(&real).unwrap();
+        let link = base.join("bslink");
+        symlink(&real, &link).unwrap();
+
+        let written = format!("{}/*", link.display());
+        let rewritten = canonical_pattern_prefix(&written, PatternKind::Glob);
+        assert_eq!(
+            rewritten,
+            format!("{}/back\\\\slash/*", base.display()),
+            "a literal backslash in the canonical name is spliced as an escaped backslash"
+        );
+        // A splice that compiled to the wrong text would pass the equality
+        // above and still match nothing, so the compiled behaviour is asserted
+        // too: `\\` is a literal `\`, not an escape of `s`.
+        let matcher = globset::Glob::new(&rewritten).unwrap().compile_matcher();
+        assert!(
+            matcher.is_match(format!("{}/proj", real.display())),
+            "the named tree must match {rewritten}"
+        );
+        assert!(
+            !matcher.is_match(format!("{}/backslash/proj", base.display())),
+            "an unescaped reading would have matched `backslash`: {rewritten}"
+        );
+    }
+
+    // Windows. The end-to-end lane C024 asked for: a real canonical spelling
+    // from `fs::canonicalize`, a real bracket in a real file name, and the
+    // production path from a `config.toml` to a compiled matcher.
+    //
+    // fixture-scope: `#[cfg(windows)]` is the explicit scope. The alias a
+    // canonical rewrite needs — two names for one directory — is a symlink on
+    // Unix and a junction here; a Windows symlink needs Developer Mode or
+    // elevation, which a hosted runner does not grant, so `mklink /J` is the
+    // alias that can actually be made there. The junction fails loudly if it
+    // cannot be made, because a fixture that quietly did not run is the exact
+    // shape C009/C011/C012 were about.
+    #[cfg(windows)]
+    #[test]
+    fn a_bracketed_canonical_spelling_is_matched_literally_on_windows() {
+        let d = tempfile::tempdir().unwrap();
+        let base = fs::canonicalize(d.path()).unwrap();
+        let real = base.join("real[abc]");
+        fs::create_dir_all(&real).unwrap();
+        for sibling in ["reala", "realb"] {
+            fs::create_dir_all(base.join(sibling)).unwrap();
+        }
+        let link = base.join("link");
+        let made = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(&real)
+            .output()
+            .unwrap();
+        assert!(
+            made.status.success(),
+            "fixture-scope: a directory junction is the Windows alias a canonical \
+             rewrite needs, and it needs no elevation: {}",
+            String::from_utf8_lossy(&made.stderr)
+        );
+        assert_ne!(
+            link.display().to_string(),
+            real.display().to_string(),
+            "premise: the fixture needs a spelling that is not the canonical one"
+        );
+
+        // The pattern is written the way a Windows user writes one, with the
+        // separators `display()` produces. globset compiles a `\` in a pattern
+        // to `/` on this platform, so the user's spelling is not itself part of
+        // the defect.
+        let config = base.join("config.toml");
+        fs::write(
+            &config,
+            format!(
+                "[cleanup.policy]\nexclude = [{}]\n",
+                toml_string(&format!("{}\\*", link.display()))
+            ),
+        )
+        .unwrap();
+        let exclude = load(&config).unwrap().cleanup.policy.exclude;
+        assert_eq!(exclude.len(), 1);
+        // The canonical spelling, escaped and `/`-spelled, with the user's own
+        // separator run and glob tail spliced back on verbatim.
+        assert_eq!(
+            exclude[0],
+            format!("{}/real[[]abc[]]\\*", glob_spelling(&base)),
+            "the rewritten pattern is the canonical name, escaped, with the \
+             user's own separators and tail untouched"
+        );
+
+        let matcher = globset::Glob::new(&exclude[0]).unwrap().compile_matcher();
+        assert!(
+            matcher.is_match(format!("{}/proj", glob_spelling(&real))),
+            "the named tree must match the spliced spelling {}",
+            exclude[0]
+        );
+        for sibling in ["reala", "realb"] {
+            assert!(
+                !matcher.is_match(format!("{}/{sibling}/proj", glob_spelling(&base))),
+                "{sibling} must not match the spliced spelling {}",
+                exclude[0]
+            );
+        }
+
+        // The premise again, on this platform: the spelling C024 shipped misses
+        // the tree the user named and matches a sibling they never wrote down.
+        let unescaped = format!("{}/real[abc]/*", glob_spelling(&base));
+        let unescaped = globset::Glob::new(&unescaped).unwrap().compile_matcher();
+        assert!(!unescaped.is_match(format!("{}/proj", glob_spelling(&real))));
+        assert!(unescaped.is_match(format!("{}/reala/proj", glob_spelling(&base))));
     }
 
     #[test]

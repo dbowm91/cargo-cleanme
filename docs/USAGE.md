@@ -248,6 +248,38 @@ A pattern with a trailing `/**` requires a path segment *after* the name, so it
 never matches the directory itself. Exclusion wins over inclusion, and a
 malformed glob is a configuration error (exit `2`), not a silent no-match.
 
+### Patterns are matched against canonical paths, and canonicalized first
+
+A pattern is matched against the **canonical** path, so a pattern spelled the
+way your shell shows it — through a symlink, or with an 8.3 short name on
+Windows — would silently match nothing. Each pattern's leading literal run is
+therefore resolved to its canonical spelling when the config is loaded, and
+the glob tail after it is kept exactly as you wrote it.
+
+The rule that follows from that is the one worth knowing, because it is the
+opposite of what a path normally does:
+
+> **Directory names in a pattern are matched literally, not as globs.**
+
+A directory really named `real[abc]` is matched by `.../real[abc]/*`, not by a
+character class. You do **not** escape the brackets yourself — the canonical
+spelling is escaped for you, and a pattern you write against the directory's
+real name matches it. The rule is the same on Windows, where `[` and `]` are
+legal file-name characters, and it is enforced by escaping at load time rather
+than by asking you to spell patterns differently.
+
+Two consequences that are genuinely yours:
+
+| Situation | What happens |
+|---|---|
+| The canonical directory name contains `{` or `}` | the rewrite is **skipped** for that pattern and it keeps your spelling — so it may not match the canonical path |
+| The pattern is relative, or names a path that does not exist | kept as written, and matches nothing (exit `2` only if it is not a valid glob) |
+
+`globset` compiles a `\` in a Windows pattern to `/` and compares against a
+`/`-normalized candidate, so `C:\dev\proj\*` and `C:/dev/proj/*` are the same
+pattern. Matching is case-sensitive, and `*` crosses path separators — both are
+`globset` defaults that this tool does not override.
+
 Profile and package selectors are the exception: they have no trustworthy
 selector-specific byte estimate, so a nonzero `--min-reclaimable-bytes` with any
 selector **fails closed** before Cargo mutation. See

@@ -91,19 +91,22 @@ valuable.
 
 ## Coverage shape, honestly
 
-266 inline `#[test]` functions are **declared**; **265 compile and run on Linux**,
-because exactly one is `#[cfg(any(target_os = "macos", windows))]`
-(`discovery.rs:1181`). A further 19 carry `#[cfg(unix)]` or
-`#[cfg(target_os = "linux")]`, so **on Windows and macOS the inline suite is 246
-of 266**. A green local run is not a green run elsewhere — that is what the OS
+320 inline `#[test]` functions are **declared**; **318 compile and run on Linux**.
+Two are excluded there: one `#[cfg(windows)]`
+(`config.rs:860`) and one `#[cfg(any(target_os = "macos", windows))]`
+(`discovery.rs:1394`). A further 21 carry `#[cfg(unix)]`, 3 carry
+`#[cfg(target_os = "linux")]` or an `all(linux, …)` form, so the three hosted
+lanes compile **318 of 320 on Linux**, **296 of 320 on Windows**, and **317 of 320
+on macOS** — `#[cfg(unix)]` is true *on* macOS, which is the half people get
+wrong. A green local run is not a green run elsewhere — that is what the OS
 matrix in `ci.yml` is for, and why `check-fixture-portability.py` exists to catch
 a *new* ungated fixture before a lane disagrees about it.
 
-State which number you mean. "266 tests" (declared) and "265 passing" (on Linux)
+State which number you mean. "320 tests" (declared) and "318 passing" (on Linux)
 are both true, and a record that gives one while meaning the other is ambiguous in
 the direction that matters.
 
-Of the 237, **48.5% live in two modules** (`cleanup.rs` 71, `workspace.rs` 44).
+Of the 320, **40.3% live in two modules** (`cleanup.rs` 72, `workspace.rs` 57).
 That concentration is a direct consequence of the architecture: cleanup and
 workspace resolution are where the invariants are. It is not a balanced suite,
 and a flat count would hide that. A change to a small module can be genuinely

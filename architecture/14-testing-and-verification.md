@@ -8,7 +8,7 @@
 
 The verification apparatus does three distinct jobs. The third is what makes it unusual.
 
-**(a) Product behaviour.** 292 inline `#[test]` functions in `src/`, plus two integration suites that drive the compiled binary as a subprocess: ownership proof, cleanup authorization, the three clean modes, workspace resolution, the versioned JSON contract.
+**(a) Product behaviour.** 320 inline `#[test]` functions in `src/`, plus two integration suites that drive the compiled binary as a subprocess: ownership proof, cleanup authorization, the three clean modes, workspace resolution, the versioned JSON contract.
 
 **(b) Structural contracts invisible at runtime.** 17 scripts in `scripts/` and 6 GitHub workflows. No product code path can detect a file left out of the published crate's `include` allowlist, completions drifted from `cli.rs`, a tag pointing at the wrong commit, or release bytes differing from qualified bytes. These are properties of the repository *as an artifact* — see [Distribution & release](15-distribution-and-release.md). **The inventory of those 17 scripts is itself machine-checked**: `check-doc-citations.py` requires the [§5](#5-the-contract-checkers) table to be exactly the set of scripts on disk, in both directions and without duplicates, so a new checker cannot ship while the table keeps describing an older repository.
 
@@ -23,7 +23,7 @@ were the premises, and is any of them unchecked?*
 
 | Layer | Location | Count | What it can catch | What it cannot catch |
 |---|---|---:|---|---|
-| Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 288 `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
+| Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 320 `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
 | Integration — CLI contract | `tests/cli_contract.rs` (1,761 lines) | 30 `#[test]` | The subprocess boundary end to end: argv normalization, exit codes, JSON shape, log-line shape, `--stats` stream discipline, selector behaviour, usage conflicts | Internals of `run()`; anything on a real machine; 18 of the 30 are `#[cfg(unix)]` |
 | Integration — end to end | `tests/end_to_end.rs` (347 lines) | 2 `#[test]` | Full production-pipeline scans against synthetic trees with real mtimes, under both a filtered Routine scope and an explicit scope | Cleanup, update, config editing |
 | Shared harness | `tests/common/mod.rs` (229 lines) | 0 tests | `set_path_modified` / `backdate_file` (per-platform mtime control), `inactive_project` tree construction, `write_fake_cargo` / `cargo_calls` (unix only) | — |
@@ -44,35 +44,37 @@ from `src/`, never copied between documents.
 
 | File | `#[test]` | `mod tests` opens at | Total lines | Lines in test module |
 |---|---:|---:|---:|---:|
-| `src/cleanup.rs` | 71 | 2393 | 6347 | 3955 |
-| `src/workspace.rs` | 47 | 1446 | 3918 | 2473 |
-| `src/update.rs` | 44 | 1211 | 2644 | 1434 |
-| `src/discovery.rs` | 32 | 902 | 1866 | 965 |
-| `src/cli.rs` | 24 | 381 | 901 | 521 |
-| `src/config.rs` | 14 | 374 | 632 | 259 |
-| `src/progress.rs` | 12 | 499 | 703 | 205 |
-| `src/discovery_state.rs` | 11 | 402 | 656 | 255 |
-| `src/output.rs` | 15 | 427 and 732 | 851 | 365 |
-| `src/policy.rs` | 7 | 248 | 396 | 149 |
-| `src/report.rs` | 7 | 72 | 195 | 124 |
-| `src/traverse.rs` | 6 | 470 | 599 | 130 |
-| `src/editor.rs` | 2 | 156 | 215 | 60 |
-| `src/domain.rs` | 0 | — | 381 | — |
+| `src/cleanup.rs` | 72 | 2413 | 6426 | 4015 |
+| `src/workspace.rs` | 57 | 1527 | 4517 | 2992 |
+| `src/update.rs` | 45 | 1237 | 2773 | 1538 |
+| `src/discovery.rs` | 34 | 918 | 2079 | 1163 |
+| `src/cli.rs` | 27 | 400 | 1025 | 627 |
+| `src/config.rs` | 19 | 531 | 1332 | 803 |
+| `src/output.rs` | 17 | 462 and 822 | 941 | 481 |
+| `src/progress.rs` | 13 | 510 | 840 | 332 |
+| `src/discovery_state.rs` | 12 | 407 | 702 | 297 |
+| `src/policy.rs` | 8 | 287 | 464 | 179 |
+| `src/report.rs` | 7 | 73 | 195 | 124 |
+| `src/traverse.rs` | 6 | 496 | 624 | 130 |
+| `src/editor.rs` | 2 | 157 | 215 | 60 |
+| `src/domain.rs` | 1 | 384 | 411 | 29 |
 | `src/error.rs` | 0 | — | 16 | — |
 | `src/lib.rs` | 0 | — | 15 | — |
-| `src/main.rs` | 0 | — | 740 | — |
-| **Total** | **292** | | | |
+| `src/main.rs` | 0 | — | 782 | — |
+| **Total** | **320** | | | |
 
-**The count is declared, not executed.** 292 `#[test]` functions exist in `src/`;
-**291 compile and run on Linux**, because exactly one is gated to the other
-platforms (`discovery.rs:1181`, `#[cfg(any(target_os = "macos", windows))]`). A
-further 20 carry `#[cfg(unix)]` (18) or `#[cfg(target_os = "linux")]` (2), so on
-Windows and on macOS the inline suite is 271 of 292. A green local run therefore
-does not mean a green run elsewhere — which is the whole reason the OS matrix
+**The count is declared, not executed.** 320 `#[test]` functions exist in `src/`;
+**318 compile and run on Linux**, because two are gated to the other platforms
+(`config.rs:860`, `#[cfg(windows)]`, and `discovery.rs:1394`,
+`#[cfg(any(target_os = "macos", windows))]`). A further 21 carry
+`#[cfg(unix)]`, and 3 are Linux-gated (`#[cfg(target_os = "linux")]` or an
+`all(linux, …)` form), so the three hosted lanes compile **318 of 320 on Linux**,
+**296 of 320 on Windows** and **317 of 320 on macOS** — `#[cfg(unix)]` is true
+*on* macOS. A green local run therefore does not mean a green run elsewhere — which is the whole reason the OS matrix
 exists, and the reason `check-fixture-portability.py` exists to catch a *new*
 ungated fixture before a lane disagrees about it.
 
-`cleanup.rs` (71) + `workspace.rs` (47) = 118 of 292 = **40.4%**. The two largest and most
+`cleanup.rs` (72) + `workspace.rs` (57) = 129 of 320 = **40.3%**. The two largest and most
 safety-critical modules — authorization, ownership proof, pre-spawn decision, and the `cargo
 metadata` resolution everything depends on — hold essentially half the unit tests. That
 allocation is correct, and it is the one place the pyramid is emphatically *not* inverted.
@@ -98,7 +100,7 @@ lives.
 
 ### The test-double architecture
 
-Two process seams keep the 288 declared tests from spawning a real `cargo`:
+Two process seams keep the 320 declared tests from spawning a real `cargo`:
 
 - **`CargoRunner`** — `src/workspace.rs:29`. `fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput>`.
 - **`CleanupRunner`** — declared in `src/cleanup.rs` for the destructive step, so cleanup is exercised while `cargo clean` is a no-op returning recorded bytes.
