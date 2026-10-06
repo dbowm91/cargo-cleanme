@@ -1,1 +1,7 @@
 /target/
+
+# Python bytecode caches are build artifacts, not sources. A tracked .pyc is
+# rewritten by any interpreter that differs from the one that produced it, which
+# dirties the tree and blocks scripts/release-check.sh (it requires a clean one).
+__pycache__/
+*.pyc

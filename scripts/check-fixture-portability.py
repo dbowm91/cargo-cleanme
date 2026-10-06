@@ -20,6 +20,22 @@ the source alone, and this check refuses them:
    corrective plan requires for a deliberately platform-scoped fixture, and it
    is what keeps "scoped" from quietly decaying into "not executed".
 
+3. **A raw-byte file name written to disk behind a `#[cfg(unix)]` gate.**
+   APFS and NTFS reject a name that is not valid UTF-8, so the write fails on
+   both other lanes *before* the behaviour under test runs. Linux is the honest
+   gate.
+
+4. **A hand-built `dua_core::Entry` struct literal.** `Entry`'s field types are
+   platform-dependent: on Linux they are `std::fs::{FileType, Metadata}`, while
+   macOS and Windows export their own `dua_core::{FileType, Metadata}`. A
+   literal written against `std::fs::FileType` therefore compiles on the lane
+   that wrote it and fails to compile on another — C023 WP-D discovered this
+   only because hosted macOS caught a helper that had been green on Linux
+   throughout. `Entry::from_path`, `walk_roots`, and `walk` are all portable and
+   produce the platform's real representation, so a literal is never the only
+   option; one that genuinely is needs the same explicit `fixture-scope:`
+   justification as an unjustified POSIX shebang.
+
 What this deliberately does **not** check, because it cannot be decided
 statically without false positives:
 
@@ -129,6 +145,15 @@ SCOPE_PATTERNS = tuple(
 # The explicit justification marker. Prose is not enough; a fixture that needs
 # defending has to say so in a form this check can find.
 JUSTIFICATION = "fixture-scope:"
+
+# Rule 4. A `dua_core::Entry` struct literal, however it is spelled. The braces
+# are optional because the literal is normally written across several lines.
+ENTRY_LITERAL = re.compile(r"dua_core::Entry\s*\{")
+
+# What a type position ends with: a reference (with or without a lifetime), a
+# generic closer, or a struct field colon. An expression position ends with `=`,
+# `(`, `,`, or the start of the line instead.
+TYPE_POSITION = re.compile(r"[>:&]('?[A-Za-z_][A-Za-z0-9_]*)?$")
 
 # How far above a fixture a justification may sit. Generous enough for a
 # paragraph, small enough that it cannot silently cover an unrelated case.
@@ -292,6 +317,44 @@ def rule_raw_byte_name_needs_linux(path: Path, lines: list[str]) -> list[str]:
     return problems
 
 
+def rule_platform_specific_entry_literal(path: Path, lines: list[str]) -> list[str]:
+    """A `dua_core::Entry { ... }` literal cannot be written portably.
+
+    `Entry`'s `file_type`/`metadata` fields are `std::fs` types on Linux and
+    dua-core's own on macOS and Windows, so a literal that names a `std::fs`
+    type is a fixture that compiles on exactly one lane. C023 WP-D found this
+    only when hosted macOS refused to compile a helper that had been green on
+    Linux for the whole milestone.
+
+    The portable forms — `Entry::from_path`, `dua_core::walk`, `walk_roots` —
+    are the ones that produce the platform's real representation, so this rule
+    points at them rather than merely reporting the literal.
+    """
+    if path.suffix != ".rs":
+        return []
+    problems: list[str] = []
+    for index, line in enumerate(lines, start=1):
+        match = ENTRY_LITERAL.search(line)
+        if not match:
+            continue
+        # A *type* position is not a literal: `-> &'a dua_core::Entry` and
+        # `Vec<dua_core::Entry>` (a helper's signature) are how this file now
+        # spells the type. Only an expression-position brace constructs a value.
+        if TYPE_POSITION.search(line[: match.start()].rstrip()):
+            continue
+        window = lines[max(0, index - 1 - JUSTIFICATION_WINDOW) : index]
+        if JUSTIFICATION in line or any(JUSTIFICATION in above for above in window):
+            continue
+        problems.append(
+            f"line {index}: a hand-built `dua_core::Entry` literal names field types "
+            "that are `std::fs` types on Linux and dua-core's own on macOS and "
+            "Windows, so this compiles on one lane only. Build the entry with "
+            "`dua_core::Entry::from_path`, `dua_core::walk`, or `dua_core::walk_roots` "
+            f"so it is the platform's real representation: {line.strip()[:120]}"
+        )
+    return problems
+
+
 def check_lines(path: Path, lines: list[str]) -> list[str]:
     relative = path.relative_to(ROOT)
     problems = []
@@ -300,6 +363,8 @@ def check_lines(path: Path, lines: list[str]) -> list[str]:
     for problem in rule_unjustified_shebang_fixture(path, lines):
         problems.append(f"{relative}:{problem}")
     for problem in rule_raw_byte_name_needs_linux(path, lines):
+        problems.append(f"{relative}:{problem}")
+    for problem in rule_platform_specific_entry_literal(path, lines):
         problems.append(f"{relative}:{problem}")
     return problems
 
@@ -452,6 +517,64 @@ def self_test() -> list[str]:
         False,
     )
 
+    case(
+        "a hand-built dua_core::Entry literal is flagged",
+        "target/fixture-portability-selftest/entry_literal.rs",
+        "#[test]\n"
+        "fn builds_an_entry() {\n"
+        "    let file_type = std::fs::metadata(d.path()).unwrap().file_type();\n"
+        "    let entry = dua_core::Entry {\n"
+        "        depth: 1,\n"
+        "        file_type,\n"
+        "        ..unreachable!()\n"
+        "    };\n"
+        "    assert!(entry.file_type.is_dir());\n"
+        "}\n",
+        True,
+    ),
+    case(
+        "an entry obtained from the production walk is accepted",
+        "target/fixture-portability-selftest/walked_entry.rs",
+        "#[test]\n"
+        "fn walks_an_entry() {\n"
+        "    for (_idx, event) in dua_core::walk_roots(\n"
+        "        [(0, root.to_path_buf())],\n"
+        "        2,\n"
+        "        dua_core::Order::ParentFirst,\n"
+        "        dua_core::Options::default().skip_metadata(),\n"
+        "        |_, _| true,\n"
+        "    ) {\n"
+        "        if let dua_core::RootEvent::Entry(Ok(entry)) = event {\n"
+        "            assert!(entry.file_type.is_dir());\n"
+        "        }\n"
+        "    }\n"
+        "}\n",
+        False,
+    ),
+    case(
+        "an entry literal with a fixture-scope marker is accepted",
+        "target/fixture-portability-selftest/marked_entry.rs",
+        "// fixture-scope: asserts dua_core's own layout on one named platform only.\n"
+        "#[cfg(target_os = \"macos\")]\n"
+        "#[test]\n"
+        "fn native_entry_layout() {\n"
+        "    let e = dua_core::Entry { depth: 0, file_type: native(), metadata: None };\n"
+        "    assert!(e.file_type.is_dir());\n"
+        "}\n",
+        False,
+    ),
+    case(
+        "a mention of dua_core::Entry in prose is not a literal",
+        "target/fixture-portability-selftest/entry_prose.rs",
+        "#[test]\n"
+        "fn documents_the_choice() {\n"
+        "    // a `dua_core::Entry` literal would not compile off Linux\n"
+        "    let entry = dua_core::Entry::from_path(&p, dua_core::Options::default()).unwrap();\n"
+        "    assert_eq!(entry.depth, 0);\n"
+        "}\n",
+        False,
+    ),
+
     return failures
 
 
@@ -472,7 +595,7 @@ def main() -> int:
                 print(f"  - {failure}", file=sys.stderr)
             return 1
         print(
-            "check-fixture-portability: self test passed; all three rules verified "
+            "check-fixture-portability: self test passed; all four rules verified "
             "in both directions"
         )
         return 0
@@ -489,7 +612,8 @@ def main() -> int:
         return 1
     print(
         f"check-fixture-portability: {len(files)} fixture file(s) clean "
-        f"(no literal PATH separator, no unjustified POSIX shebang fixture)"
+        f"(no literal PATH separator, no unjustified POSIX shebang fixture, "
+        f"no ungated raw-byte write, no platform-specific Entry literal)"
     )
     return 0
 

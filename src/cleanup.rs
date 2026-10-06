@@ -5874,6 +5874,66 @@ mod tests {
         assert!(report.diagnostics >= 1);
     }
 
+    /// C023 §7 layer 2: the *final preflight* proof must refuse on its own,
+    /// against a universe rebuilt immediately before the spawn, even when
+    /// classification has already said the group is private.
+    ///
+    /// `source_tree_as_output_root_is_never_cleaned` covers a workspace whose
+    /// own sources are its output root. This covers the shape that actually
+    /// destroyed a project in 0.2.0: a *different* workspace's sources inside
+    /// the cleaned region. The neighbour's output is a separate directory, so
+    /// the two do not form a shared group and the refusal cannot be attributed
+    /// to shared ownership.
+    ///
+    /// The region is deliberately named `out`, not `target`: discovery refuses
+    /// to descend into a `target` directory, so a fixture using the conventional
+    /// name would never discover the neighbour and would prove nothing.
+    #[test]
+    fn another_workspaces_source_tree_inside_the_cleaned_region_is_never_cleaned() {
+        for mode in [
+            CleanMode::CargoPreview,
+            CleanMode::Simulate,
+            CleanMode::Execute,
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let outer = ws_root(d.path(), "outer");
+            // Workspace A's declared output root.
+            let out = cargo_output(&outer.join("out"), 4096);
+            // Workspace B, independently resolved, whose *sources* live inside it.
+            let inner = ws_root(&out, "inner");
+            // B's own output is elsewhere, so A and B are not one shared group.
+            let inner_target = cargo_output(&d.path().join("inner-target"), 4096);
+
+            backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+            let mut runner = StagedCargo::new();
+            runner.add(&outer, out.clone(), None);
+            runner.add(&inner, inner_target, None);
+
+            // Premise: the neighbour is discovered and resolved. If it were not,
+            // the case would pass because the dangerous shape never existed.
+            let report = clean_with(d.path(), 0, &[], mode, &runner, &NoopObserver).unwrap();
+            assert!(
+                report.resolved_workspaces >= 2,
+                "{mode:?}: both workspaces must resolve, got {}: {:?}",
+                report.resolved_workspaces,
+                report.render()
+            );
+
+            assert!(
+                runner.clean_calls().is_empty(),
+                "{mode:?}: no cargo clean may run with a neighbour's sources inside the region"
+            );
+            // The bytes 0.2.0 deleted.
+            for path in [
+                inner.join("Cargo.toml"),
+                inner.join("src/main.rs"),
+                inner.join("src"),
+            ] {
+                assert!(path.exists(), "{mode:?}: {} must survive", path.display());
+            }
+        }
+    }
+
     #[test]
     fn source_tree_as_output_root_is_never_cleaned() {
         // C1, end to end: `target-dir = "."` makes the declared output root the

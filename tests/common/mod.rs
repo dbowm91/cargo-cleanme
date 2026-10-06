@@ -163,6 +163,12 @@ pub fn inactive_project(parent: &Path, name: &str) -> PathBuf {
 /// `<temp>/cargo-args.log`, answers `--version`, `locate-project`, and
 /// `metadata`, and deletes `artifact.bin` only for a `clean` that does not
 /// carry `--dry-run`.
+///
+/// When `CARGO_REAL` names a Cargo binary, an invocation whose first argument is
+/// an external subcommand is handed to that Cargo verbatim. This is opt-in
+/// rather than automatic because the stub must not silently become a different
+/// tool: without `CARGO_REAL` an external-subcommand call still exits 2, exactly
+/// as before.
 #[cfg(unix)]
 pub fn write_fake_cargo(bin: &Path, temp: &Path) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
@@ -172,6 +178,11 @@ pub fn write_fake_cargo(bin: &Path, temp: &Path) -> PathBuf {
     // POSIX executable stub whose callers are all cfg(unix)-gated.
     std::fs::write(&fake, r##"#!/bin/sh
 if [ "$1" = "--version" ]; then printf 'cargo %s (fixture)\n' "${CARGO_VERSION:-1.99.0}"; exit 0; fi
+if [ -n "$CARGO_REAL" ] && [ "$1" != "--version" ]; then
+  case "$1" in
+    cleanme) exec "$CARGO_REAL" "$@" ;;
+  esac
+fi
 printf '%s\n' "$1" >> "$CARGO_LOG"
 for arg in "$@"; do printf '%s\n' "$arg" >> "$CARGO_ARGS_LOG"; done
 dry=no

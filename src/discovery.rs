@@ -918,22 +918,52 @@ fn discover_manifests_root(
 mod tests {
     use super::*;
     use crate::progress::NoopObserver;
-    use std::sync::Arc;
     use tempfile::tempdir;
 
-    /// Build a minimal walk entry for the path `<parent>/<name>` at `depth`.
-    fn entry_at(parent: &Path, name: &str, depth: usize) -> dua_core::Entry {
-        let d = tempdir().unwrap();
-        let file_type = std::fs::metadata(d.path()).unwrap().file_type();
-        dua_core::Entry {
-            depth,
-            file_name: OsString::from(name),
-            file_type,
-            metadata: None,
-            parent_path: Arc::from(parent.to_path_buf().into_boxed_path()),
-            directory_id: None,
-            parent_directory_id: None,
+    /// Collect the walk entries `dua_core` actually produces for `roots`, using
+    /// the same `walk_roots` machinery production drives in
+    /// [`discover_manifests`](super::discover_manifests).
+    ///
+    /// A test that hand-builds a `dua_core::Entry` literal can only do so on a
+    /// platform where `Entry`'s fields are `std::fs` types. On macOS and Windows
+    /// `dua_core` exports its own `FileType`/`Metadata`, so a literal written
+    /// against `std::fs::FileType` compiles on Linux and fails on macOS
+    /// (C023 WP-D) — a helper that is green on the lane that reviewed it and
+    /// red on the lane that runs it. Walking a real tree instead means the
+    /// entry under test is always the platform's own representation, produced by
+    /// the same code path production uses.
+    fn walk_entries(roots: &[(usize, PathBuf)]) -> Vec<(usize, dua_core::Entry)> {
+        let mut collected = Vec::new();
+        let walk = dua_core::walk_roots(
+            roots.iter().cloned(),
+            2,
+            dua_core::Order::ParentFirst,
+            dua_core::Options::default().skip_metadata(),
+            |_, _| true,
+        );
+        for (root_idx, event) in walk {
+            if let dua_core::RootEvent::Entry(Ok(entry)) = event {
+                collected.push((root_idx, entry));
+            }
         }
+        collected
+    }
+
+    /// The single entry named `relative` seen while walking `root_idx`.
+    ///
+    /// Panics when the tree does not actually produce that entry, so a fixture
+    /// that stops matching production enumeration fails loudly instead of
+    /// quietly asserting nothing.
+    fn entry_under<'a>(
+        entries: &'a [(usize, dua_core::Entry)],
+        root_idx: usize,
+        relative: &str,
+    ) -> &'a dua_core::Entry {
+        entries
+            .iter()
+            .find(|(idx, entry)| *idx == root_idx && entry.path() == Path::new(relative))
+            .map(|(_, entry)| entry)
+            .unwrap_or_else(|| panic!("walk did not yield {relative} under root {root_idx}"))
     }
 
     #[test]
@@ -942,51 +972,70 @@ mod tests {
         // global-only prune. Matched on `parent_path`, that prune also covers
         // every entry below `/usr/local`, so the exception root would never be
         // walked — the reason developer content under it stays invisible.
-        let prunes = vec![PathBuf::from("/usr"), PathBuf::from("/System")];
+        //
+        // The tree is a real one under a temp root rather than the literal
+        // `/usr`, so the same premise is exercised identically on every lane;
+        // the predicates compare prefixes, never absolute spellings.
+        let d = tempdir().unwrap();
+        let top = d.path();
+        for relative in [
+            "usr/System",
+            "usr/local/bin",
+            "usr/local/src/cargo",
+            "usr/local/.git",
+            "usr/local/cargo/registry/src/serde",
+        ] {
+            fs::create_dir_all(top.join(relative)).unwrap();
+        }
 
-        // From the `/` root, `/usr` and `/System` are still refused.
+        let prunes = vec![top.join("usr"), top.join("usr/System")];
+        let roots = [(0, top.to_path_buf()), (1, top.join("usr/local"))];
+        let entries = walk_entries(&roots);
+
+        // From the top root, `usr` and `System` are still refused.
         assert!(entry_is_system_pruned(
-            &entry_at(Path::new("/"), "usr", 1),
-            Path::new("/"),
+            entry_under(&entries, 0, &top.join("usr").to_string_lossy()),
+            top,
             &prunes
         ));
         assert!(entry_is_system_pruned(
-            &entry_at(Path::new("/"), "System", 1),
-            Path::new("/"),
+            entry_under(&entries, 0, &top.join("usr/System").to_string_lossy()),
+            top,
             &prunes
         ));
 
         // From the `/usr/local` root, `/usr` no longer applies at any depth,
         // and nothing else in the list does either.
-        for (parent, name, depth) in [
-            ("/usr/local", "bin", 1usize),
-            ("/usr/local/src", "cargo", 2),
-            ("/usr/local", ".git", 1),
-        ] {
+        for relative in ["usr/local/bin", "usr/local/src/cargo", "usr/local/.git"] {
             assert!(
                 !entry_is_system_pruned(
-                    &entry_at(Path::new(parent), name, depth),
-                    Path::new("/usr/local"),
+                    entry_under(&entries, 1, &top.join(relative).to_string_lossy()),
+                    &top.join("usr/local"),
                     &prunes
                 ),
-                "{parent}/{name} under the /usr/local root must not be pruned by /usr"
+                "{relative} under the /usr/local root must not be pruned by /usr"
             );
         }
 
         // The exemption is scoped to the root that re-opened the prune: the
-        // same entry, walked from `/`, is still refused.
+        // same entry, walked from the top, is still refused.
         assert!(entry_is_system_pruned(
-            &entry_at(Path::new("/usr"), "local", 1),
-            Path::new("/"),
+            entry_under(&entries, 0, &top.join("usr/local").to_string_lossy()),
+            top,
             &prunes
         ));
 
         // Cargo and rustup homes get no such exemption: an explicitly rooted
         // subtree of one is still a registry cache that must not be walked.
-        let cargo_prunes = vec![PathBuf::from("/usr/local/cargo/registry")];
+        let cargo_prunes = vec![top.join("usr/local/cargo/registry")];
         assert!(entry_is_within_any(
-            &entry_at(Path::new("/usr/local/cargo/registry/src"), "serde", 2),
-            Path::new("/usr/local"),
+            entry_under(
+                &entries,
+                1,
+                &top.join("usr/local/cargo/registry/src/serde")
+                    .to_string_lossy()
+            ),
+            &top.join("usr/local"),
             &cargo_prunes
         ));
     }

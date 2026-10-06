@@ -828,6 +828,47 @@ impl MaintenanceFixture {
         common::cargo_calls(&self.log, "clean")
     }
 
+    /// Run the same argv through Cargo's external-subcommand entry point.
+    ///
+    /// The binary under test is staged *inside* `self.bin` — the same directory
+    /// that holds the Cargo stub — so `cargo cleanme` resolves it while the
+    /// stub still intercepts every Cargo call cargo-cleanme makes in turn.
+    /// `assert_staged_is_resolved` below is the premise: without it this case
+    /// would report on whichever `cargo-cleanme` happened to be installed, which
+    /// is the C012 failure.
+    #[cfg(unix)]
+    fn run_as_plugin(&self, args: &[&str]) -> std::process::Output {
+        let staged = self
+            .bin
+            .join(format!("cargo-cleanme{}", std::env::consts::EXE_SUFFIX));
+        fs::copy(env!("CARGO_BIN_EXE_cargo-cleanme"), &staged).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = fs::metadata(&staged).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&staged, permissions).unwrap();
+        }
+        let path = path_with(&self.bin);
+        assert_staged_is_resolved(&path, &staged);
+
+        let real_cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let mut command = Command::new("cargo");
+        command.args(["cleanme", "--config"]);
+        command.arg(&self.config);
+        command.args(["--no-progress", "--format", "json"]);
+        command.args(args);
+        command
+            .env("PATH", &path)
+            .env("CARGO_REAL", real_cargo)
+            .env("FIXTURE_ROOT", &self.root)
+            .env("FIXTURE_TARGET", &self.target)
+            .env("CARGO_LOG", &self.log)
+            .env("CARGO_ARGS_LOG", &self.args_log)
+            .output()
+            .unwrap()
+    }
+
     fn artifact(&self) -> PathBuf {
         self.target.join("artifact.bin")
     }
@@ -1084,6 +1125,209 @@ fn hidden_compatibility_aliases_map_exactly_to_the_canonical_modes() {
             "a hidden alias must not add chatter to an unattended run: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+}
+
+/// C023 §6/§10: **every accepted simulation spelling reaches `Simulate` and
+/// spawns zero `cargo clean` processes.**
+///
+/// The 0.2.0 defect was not "clap rejects the flag" — it accepted
+/// `--dry-run clean ROOT`, the spelling Cargo itself passes, and the `Clean` arm
+/// read only its own three flags. Dispatch fell through to `Execute`, a real
+/// `cargo clean` ran, the run reported success, and it exited 0. The published
+/// binary was proved to do exactly that: 65 KB of artifacts destroyed by a
+/// command whose name said `--dry-run`.
+///
+/// So the missing premise in M012A was never "does clap accept this?" — it was
+/// "does *every* accepted spelling reach the same execution mode?". Each case
+/// below therefore asserts the mode label, the machine summary, **and** the
+/// absence of a Cargo clean subprocess, on a fixture that would otherwise be
+/// fully eligible to be cleaned. A mode-label assertion alone would pass if
+/// dispatch were right and execution were not.
+///
+/// `--cargo-preview` is included because it is the one accepted combination
+/// that means two different things at once. Simulation wins: it is the mode that
+/// spawns no Cargo clean at all, and `--cargo-preview` is a request for
+/// *Cargo's* dry run, which does spawn Cargo.
+#[cfg(unix)]
+#[test]
+fn every_accepted_simulation_spelling_reaches_simulate_and_spawns_no_cargo_clean() {
+    // (label, argv template). `{root}` is the fixture project root.
+    let spellings: &[(&str, &[&str])] = &[
+        ("bare --dry-run", &["--dry-run"]),
+        (
+            "root --dry-run before clean",
+            &["--dry-run", "clean", "{root}"],
+        ),
+        (
+            "root --dry-run after clean",
+            &["clean", "--dry-run", "{root}"],
+        ),
+        (
+            "legacy --dryrun before clean",
+            &["--dryrun", "clean", "{root}"],
+        ),
+        (
+            "legacy --dryrun after clean",
+            &["clean", "--dryrun", "{root}"],
+        ),
+        (
+            "root --dry-run combined with clean --cargo-preview",
+            &["--dry-run", "clean", "--cargo-preview", "{root}"],
+        ),
+    ];
+
+    for (label, template) in spellings {
+        let fixture = MaintenanceFixture::new(true);
+        let root = fixture.root.to_str().unwrap().to_string();
+        let args: Vec<&str> = template
+            .iter()
+            .map(|arg| {
+                if *arg == "{root}" {
+                    root.as_str()
+                } else {
+                    *arg
+                }
+            })
+            .collect();
+
+        assert!(
+            fixture.artifact().exists(),
+            "premise for {label}: the artifact exists and the project is otherwise eligible"
+        );
+        let output = fixture.run(&args);
+        assert!(
+            output.status.success(),
+            "{label} must be accepted: stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .unwrap_or_else(|e| panic!("{label} produced no machine envelope: {e}"));
+
+        assert_eq!(json["operation"], "clean", "{label}: {json}");
+        assert_eq!(
+            json["mode"], "simulate",
+            "{label} silently fell through to another execution mode: {json}"
+        );
+        assert_eq!(
+            json["result"]["summary"]["simulated"], 1,
+            "{label} simulated nothing: {json}"
+        );
+        assert_eq!(
+            json["result"]["summary"]["cleaned"], 0,
+            "{label} reports recovered bytes, which only a real clean produces: {json}"
+        );
+        // The discriminating assertions. The label can be right while the
+        // execution is wrong; these cannot.
+        assert_eq!(
+            fixture.clean_calls(),
+            0,
+            "{label} spawned a real cargo clean"
+        );
+        assert!(
+            fixture.artifact().exists(),
+            "{label} removed a build artifact"
+        );
+        // Simulation still resolves: it is not a skip dressed up as one.
+        assert!(
+            common::cargo_calls(&fixture.log, "metadata") >= 1,
+            "{label} never resolved the workspace, so it proved nothing"
+        );
+    }
+}
+
+/// The Cargo plugin entry point normalizes to the same argv, so the same
+/// guarantee has to hold there — that is the spelling a user actually types.
+///
+/// This case is separate because it is the one whose premise can silently rot:
+/// it is only meaningful if the staged binary is the external subcommand Cargo
+/// resolves, which is asserted before the run rather than assumed.
+#[cfg(unix)]
+#[test]
+fn the_cargo_plugin_simulation_spelling_also_spawns_no_cargo_clean() {
+    let fixture = MaintenanceFixture::new(true);
+    let root = fixture.root.to_str().unwrap().to_string();
+    assert!(fixture.artifact().exists(), "premise: the artifact exists");
+
+    let output = fixture.run_as_plugin(&["--dry-run", "clean", &root]);
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["mode"], "simulate", "{json}");
+    assert_eq!(fixture.clean_calls(), 0, "{json}");
+    assert!(
+        fixture.artifact().exists(),
+        "simulation removed an artifact"
+    );
+}
+
+/// The one combination that has no coherent public meaning is refused at parse
+/// time rather than silently resolved.
+///
+/// `clean --dry-run --cargo-preview` asks for two mutually exclusive modes from
+/// the same subcommand, and clap declares them conflicting. That refusal is the
+/// contract: silently picking one would mean a user who asked for both gets
+/// whichever the dispatch happened to prefer, with nothing on stdout to say so.
+///
+/// The asymmetry matters and is not accidental. The *same* two flags spelled
+/// across the subcommand boundary (`--dry-run clean --cargo-preview ROOT`) are
+/// accepted, because clap cannot make a root flag conflict with a subcommand's;
+/// that case is resolved to simulation by `every_accepted_simulation_spelling…`
+/// above. This test pins the half that must fail, so making `--dry-run` a
+/// `global = true` flag — which would collide with `update --dry-run`'s own
+/// argument id — cannot quietly widen what is accepted.
+#[cfg(unix)]
+#[test]
+fn clean_rejects_simulate_and_cargo_preview_together_at_parse_time() {
+    let fixture = MaintenanceFixture::new(true);
+    let root = fixture.root.to_str().unwrap().to_string();
+
+    let output = fixture.run(&["clean", "--dry-run", "--cargo-preview", &root]);
+    assert!(
+        !output.status.success(),
+        "two exclusive modes must not resolve to a successful run: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        fixture.clean_calls() == 0 && fixture.artifact().exists(),
+        "a refused parse must not have spawned anything"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot be used with"),
+        "the refusal must name the conflict instead of silently choosing a mode: {stderr}"
+    );
+}
+
+/// C023 §6: the updater's own dry-run is a *different* flag with a *different*
+/// argument id, which is why the root-level `--dry-run` was reconciled in one
+/// explicit place rather than made `global = true`. Both spellings must reach
+/// the same non-mutating updater path.
+///
+/// `update` is not asserted against the network here; this asserts the resolved
+/// request, which is the part that silently regressed. A live updater rehearsal
+/// is `plans/closure/distribution-release-update/m011c-status.md`'s subject.
+#[test]
+fn update_dry_run_reaches_the_same_non_mutating_path_from_either_spelling() {
+    for args in [vec!["--dry-run", "update"], vec!["update", "--dry-run"]] {
+        let argv: Vec<std::ffi::OsString> = std::iter::once("cargo-cleanme".to_string())
+            .chain(args.iter().map(|a| a.to_string()))
+            .map(std::ffi::OsString::from)
+            .collect();
+        let cli = cargo_cleanme::cli::Cli::try_parse_normalized_from(argv)
+            .unwrap_or_else(|e| panic!("{args:?} must be accepted: {e}"));
+        match cli.invocation() {
+            cargo_cleanme::cli::Invocation::Update { dry_run } => assert!(
+                dry_run,
+                "{args:?} must resolve to a non-mutating updater request"
+            ),
+            other => panic!("{args:?} resolved to {other:?}, not an update"),
+        }
     }
 }
 
