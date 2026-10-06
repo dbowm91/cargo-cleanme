@@ -394,7 +394,7 @@ impl RealisticCargo {
                     if let Some(value) = line.trim().strip_prefix("target-dir") {
                         let value = value.trim_start().trim_start_matches('=').trim();
                         let value = value.trim_matches('"');
-                        let path = std::path::PathBuf::from(value);
+                        let path = plain_path(&std::path::PathBuf::from(value));
                         return if path.is_absolute() {
                             path
                         } else {
@@ -513,6 +513,26 @@ fn write_crate(root: &std::path::Path, name: &str) {
     fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
 }
 
+/// Windows' non-verbatim spelling of a canonical path.
+///
+/// `fs::canonicalize` returns the extended-length form `\\?\C:\...`, which is
+/// correct for the API but is not what any user writes in `build.target-dir`.
+/// Feeding the verbatim form back into Cargo produces a target directory that
+/// cannot be inspected — a real behaviour, and one the crate handles by
+/// refusing, but it tests Cargo's verbatim-path handling rather than
+/// cargo-cleanme's. The config fixture therefore uses the spelling a real
+/// config file has, while assertions still compare canonical paths.
+fn plain_path(path: &std::path::Path) -> std::path::PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        std::path::PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        std::path::PathBuf::from(rest)
+    } else {
+        path.to_path_buf()
+    }
+}
+
 fn set_target_dir(project: &std::path::Path, target: &std::path::Path) {
     fs::create_dir_all(project.join(".cargo")).unwrap();
     let value = toml::Value::String(target.to_string_lossy().replace('\\', "\\\\"));
@@ -581,9 +601,9 @@ fn a_neighbouring_projects_sources_inside_a_covering_output_root_are_never_clean
     let inner_target = case.join("inner-target");
 
     write_crate(&outer, "outer");
-    set_target_dir(&outer, &out);
+    set_target_dir(&outer, &plain_path(&out));
     write_crate(&inner, "inner");
-    set_target_dir(&inner, &inner_target);
+    set_target_dir(&inner, &plain_path(&inner_target));
     fs::write(inner.join("Cargo.lock"), "version = 3\n").unwrap();
 
     fs::create_dir_all(out.join("debug")).unwrap();
@@ -769,9 +789,9 @@ fn an_unrelated_sibling_workspace_stays_eligible_alongside_a_dangerous_one() {
     let inner = out.join("inner");
     let inner_target = case.join("inner-target");
     write_crate(&outer, "outer");
-    set_target_dir(&outer, &out);
+    set_target_dir(&outer, &plain_path(&out));
     write_crate(&inner, "inner");
-    set_target_dir(&inner, &inner_target);
+    set_target_dir(&inner, &plain_path(&inner_target));
     fs::create_dir_all(out.join("debug")).unwrap();
     fs::write(
         out.join("CACHEDIR.TAG"),
