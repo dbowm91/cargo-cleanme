@@ -377,8 +377,159 @@ failed staging write removes its own partial file is untested.
 
 ## 12. Publication evidence
 
-See §12 of the amendment below — this section is filled in by the publication
-amendment rather than by hand.
+Published **2026-10-06**. Release commit `5fc518d3685b`, tag `v0.2.1`.
+
+### 12.1 Qualification before tagging
+
+| Gate | Evidence |
+|---|---|
+| Local release gate | `scripts/release-check.sh` — `release-check: passed; no publication was performed`. Every static guard ran its own `--self-test` first. |
+| Hosted CI, all three lanes observed | run **37504097504**, `checks (ubuntu/macos/windows-latest)` + msrv, benchmark, generated-docs, and all three installer lanes green. **No lane cancelled.** |
+| Release drift guard | run **37504097326**, success. |
+| Cargo selector qualification | run **37505094227** on the tag, success. |
+| Release identity | `check-release-identity.py --tag v0.2.1` → `v0.2.1 names 0.2.1 at 5fc518d3685b`. |
+
+### 12.2 Publication gate, in the required order
+
+1. **Eggpack candidate build/stage green** — run **37505107200**, all 17 jobs
+   green across the five contracted targets. Draft staged as release
+   `405000990`; nothing published.
+2. **Staged-release validation green for the same tag and source SHA** — run
+   **37507507170**, triggered automatically by `workflow_run`. Its retained
+   report (`staged-validation.log`) records: tag `v0.2.1`; source revision
+   `5fc518d3685b`; upstream run `37505107200`; 15 assets = 5 binaries + 5
+   sidecars + manifest + 4 installers; sidecar integrity ok for all 5 binaries;
+   `release-manifest.json` agreeing with the bytes; contract agreement for all
+   five triples; static ABI floor `GLIBC_2.17.0` on both Linux targets; and a
+   **real installer qualification on the validator host** which installed the
+   published asset, saw `cargo-cleanme 0.2.1`, and confirmed the installed bytes
+   match the release digest exactly. `PASSED: the staged draft matches the
+   release contract`.
+3. **Human inspection** — performed on that log before publication. Inventory
+   count, per-asset digests, the tag/source binding, the measured glibc floor
+   and the installer result were each read, not assumed.
+4. **Then the draft was published** — `2026-10-06T17:58:51Z`.
+
+Minor observation, not release-blocking and not corrected here: the validator's
+summary line says "2 installers" while listing four (`install.sh`,
+`install-exact.sh`, `install.ps1`, `install-exact.ps1`). The inventory itself is
+correct and complete; the arithmetic in the prose is wrong. Recorded so the next
+reader does not treat the line as an inventory of two.
+
+### 12.3 crates.io
+
+Published from a **detached worktree of the exact tag**, per `docs/RELEASING.md`
+— not from `main`. `cargo publish --locked` at `5fc518d3685b`, accepted
+`2026-10-06T17:59:29Z`. crates.io now reports `max_stable_version: 0.2.1`.
+
+### 12.4 Immutability and attestation
+
+```
+$ python3 scripts/verify-release-attestation.py --tag v0.2.1
+verify-release-attestation: v0.2.1 is immutable and carries a valid release attestation
+  attested release subject: pkg:github/dbowm91/cargo-cleanme@v0.2.1 (15 asset digest(s))
+```
+
+### 12.5 The published binary, re-run against the safety fixtures
+
+Both §2 fixtures were re-run against the **published release asset**, not a
+local build. `cargo-cleanme-x86_64-unknown-linux-gnu` sha256
+`09660ecbccb3dacd2cc67af5c3f45f7a1dc529cbad8f40821e8492ee23da825f`, verified
+against its own `.sha256` sidecar before execution.
+
+| Fixture | Published 0.2.0 | Published 0.2.1 |
+|---|---|---|
+| A1 `--dry-run clean ROOT` | 1 `cargo clean`, 65,580 bytes destroyed, exit 0 | **0 `cargo clean`**, `Simulated … no cargo clean command was invoked`, target bytes 65580 → 65580 |
+| A2 neighbour sources | 1 `cargo clean`, 4 source files deleted, exit 0 | **0 `cargo clean`**, all four files byte-identical |
+
+### 12.6 Post-release smoke — and what this evidence is not
+
+This is the one place where the record has to be precise rather than
+flattering, because two runs exist and they do not say the same thing.
+
+**Run 37507738147 — the automatic `release: published` trigger. It fired, and it
+FAILED on all five lanes**, with:
+
+```
+error: cannot install package `cargo-cleanme`, it has been yanked from registry `crates-io`
+```
+
+The automatic trigger is itself now demonstrated: it fired without anyone
+remembering to run it, which is the property M011C was written for. But it
+produced no green evidence, and the reason is C023's own doing.
+
+**The cause was a direct collision between two of this plan's own
+requirements.** WP-L requires yanking 0.2.0; WP-J requires a green five-lane
+smoke; and the smoke's `select_predecessor` took the greatest stable release
+below the target **from GitHub**, never asking crates.io whether that version
+could be installed. Yanking 0.2.0 — the correct safety decision — made the
+rehearsal source uninstallable, on every lane, before the updater it exists to
+test ran a line. The updater was fine. The harness was lying about what it could
+do.
+
+**The fix was to the harness, not to the yank.** `scripts/resolve-smoke-transition.py`
+now reads crates.io's yanked set and selects the greatest *installable* release
+below the target, which is what WP-L's own resolution asks for: *"the updater
+rehearsal must be defined against the new release."* Deliberately **not** done:
+un-yanking 0.2.0 to make a harness reach it. That would have made a
+known-destructive release installable again for anyone pinning it explicitly,
+purely so a test could touch it.
+
+**Run 37508262225 — the green evidence, from the manual rehearsal surface.**
+Dispatched with `from_version=0.1.6`, `to_version=0.2.1`:
+
+| Lane | Transition | Result |
+|---|---|---|
+| `x86_64-unknown-linux-gnu` | `v0.1.6` → `v0.2.1` | success |
+| `aarch64-unknown-linux-gnu` | `v0.1.6` → `v0.2.1` | success |
+| `x86_64-apple-darwin` | `v0.1.6` → `v0.2.1` | success |
+| `aarch64-apple-darwin` | `v0.1.6` → `v0.2.1` | success |
+| `x86_64-pc-windows-msvc` | `v0.1.6` → `v0.2.1` | success |
+
+All five lanes performed the **real self-update transaction** against published
+bytes on all five contracted targets.
+
+**So, stated plainly: the automatic trigger fired and failed; the fixed
+resolver has green five-lane evidence from the manual rehearsal surface; there
+was no observed-green *automatic* run for v0.2.1, and there cannot be one now,
+because `release: published` fires once per release and 0.2.1 has been
+published.** The next release gets a genuinely automatic green run, from the
+fixed resolver, with no action required.
+
+This is recorded as the same kind of conditional closure M011C carried, and the
+registry says so in the same words. It is not recorded as a clean pass.
+
+### 12.7 A guard that caught me, in the one place I nearly did not look
+
+Run 37508164968 — the first dispatch of the fixed rehearsal — failed in its
+*first* step, because the resolver's own self-test did not pass. Two
+pre-existing cases assert the fragment `no stable cargo-cleanme release below`,
+and correcting the message to `no installable stable cargo-cleanme release
+below` broke both.
+
+I had run that self-test locally and read it with `tail -10`. Both failures were
+above the fold; the new cases I had just added were below it, so the output I
+looked at was entirely green. CI failed four minutes later.
+
+That is the third time in this corrective that a partial read produced a wrong
+conclusion, and the reason every verification claim in this record is an exit
+code or a named run id rather than "it printed ok". The guard worked. The
+reading did not.
+
+### 12.8 crates.io 0.2.0 yank
+
+Yanked at **2026-10-06T16:21:52Z**, before 0.2.1 existed, which is WP-L's
+preferred ordering: stop new default installs from selecting a release that can
+delete a neighbour's sources. Verified immediately against the registry API
+(`yanked=True`) and again after publication, with `max_stable_version: 0.2.1`
+and `0.2.1 yanked=False`.
+
+Disclosed in `CHANGELOG.md` (Security section), `README.md` (install block),
+`docs/INSTALLING.md`, and `docs/TROUBLESHOOTING.md` — including why this yank
+differs from the 0.1.x ones, and what a user who ran 0.2.0 should check.
+
+**Not retracted, not re-published.** The GitHub release for v0.2.0 is untouched
+and remains immutable; its assets and tag were never replaced.
 
 ## 13. Reconciliation
 
@@ -406,21 +557,39 @@ amendment rather than by hand.
 | 8 | Dry-run evidence across every accepted spelling, asserting zero spawned cleans | met | §5 |
 | 9 | Cross-workspace source-containment end-to-end fixture, with negative controls | met | §5, §6 |
 | 10 | Every other shipped change qualified by a discriminating test | met | §7, §8 |
-| 11 | A green automatic `release: published` five-lane smoke | met | §12 |
+| 11 | A green automatic `release: published` five-lane smoke | **not met** | §12.6 |
 | 12 | Published 0.2.1 binary passes both safety fixtures | met | §12 |
 | 13 | crates.io 0.2.0 yanked and disclosed | met | §12 |
 | 14 | No unresolved medium or high finding invalidates the release | met | §11.1 is medium and non-destructive; it is recorded, assigned to C024, and is not a precondition of this patch |
+| 15 | Reporting distinguishes a skipped smoke from a passing one | met | §12.6 states plainly that the automatic run fired and failed, and names the manual run that is green |
 
 ## 15. Disposition
 
-**Closed.**
+**Closed, with acceptance criterion 11 explicitly not met.**
 
 Both destructive defects shipped in 0.2.0 are fixed, qualified by tests that
 were shown to fail against the old behaviour, and published as 0.2.1 with
 crates.io 0.2.0 yanked and disclosed in `CHANGELOG.md`, `README.md`,
-`docs/INSTALLING.md`, and `docs/TROUBLESHOOTING.md`.
+`docs/INSTALLING.md`, and `docs/TROUBLESHOOTING.md`. The **published** 0.2.1
+binary passes both safety fixtures.
 
-The one finding this record does not close is 11.1, and it is deliberately
-handed to C024 rather than absorbed here: it is not a regression, it is not
-destructive, and fixing it is a matching-semantics decision rather than a
-safety patch.
+Criterion 11 is not met, and the reason is this plan's own doing rather than an
+oversight: WP-L required the yank and WP-J required the smoke, the smoke chose
+its rehearsal source from GitHub without asking crates.io whether it could be
+installed, and the yank made that source uninstallable. The automatic trigger
+fired and failed on all five lanes. The resolver is fixed and self-tested; the
+green five-lane evidence is from the manual rehearsal surface; and no green
+automatic run for v0.2.1 can exist, because the event fires once per release.
+
+This record therefore claims **conditional closure**, exactly as M011C's did,
+and does not claim a clean pass. The next release produces a genuinely automatic
+green run from the fixed resolver with no action required.
+
+Two findings are handed on rather than absorbed:
+
+- **11.1 → C024.** Windows glob canonicalization is a no-op. Not a regression,
+  not destructive, and a matching-semantics decision rather than a safety patch.
+- **The smoke's dependence on an installable predecessor is fixed**, but the
+  deeper question — whether a release-evidence path should be able to depend on
+  a version the same corrective decided to yank — belongs with whoever changes
+  the rehearsal policy next.
