@@ -65,7 +65,7 @@ from `src/`, never copied between documents.
 
 **The count is declared, not executed.** 320 `#[test]` functions exist in `src/`;
 **318 compile and run on Linux**, because two are gated to the other platforms
-(`config.rs:860`, `#[cfg(windows)]`, and `discovery.rs:1394`,
+(`config.rs:930`, `#[cfg(windows)]`, and `discovery.rs:1394`,
 `#[cfg(any(target_os = "macos", windows))]`). A further 21 carry
 `#[cfg(unix)]`, and 3 are Linux-gated (`#[cfg(target_os = "linux")]` or an
 `all(linux, …)` form), so the three hosted lanes compile **318 of 320 on Linux**,

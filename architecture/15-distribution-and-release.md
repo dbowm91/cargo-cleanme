@@ -374,7 +374,7 @@ include the xtask generator.
 This is the most easily-broken item in the whole surface, and the reason is a
 **compile-time coupling between a source file and a packaging manifest**.
 
-`src/config.rs:11` embeds the template as a compile-time constant:
+`src/config.rs:12` embeds the template as a compile-time constant:
 
 ```rust
 pub const CONFIG_TEMPLATE: &str = include_str!("../config.toml");
@@ -386,8 +386,8 @@ pub const CONFIG_TEMPLATE: &str = include_str!("../config.toml");
   compile at all** — `cargo install cargo-cleanme` fails with a compile error in
   `src/config.rs`, not with a runtime error and not with a degraded feature.
 - First-use config creation is impossible without it. The constant is the only
-  source of the default template; `src/config.rs:442` writes those bytes as the
-  new config file, and `src/config.rs:1003` parses them to prove the checked-in
+  source of the default template; `src/config.rs:473` writes those bytes as the
+  new config file, and `src/config.rs:1079` parses them to prove the checked-in
   template is well-formed. Both are compile-time-dependent facts about a file
   that lives outside `src/`.
 

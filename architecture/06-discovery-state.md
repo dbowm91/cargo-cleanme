@@ -375,7 +375,7 @@ This ordering is the single most consequential detail in the function and is
 analysed in §5 and §8.
 
 Retention arithmetic: `u64::from(retention_days) * 86400` is overflow-free
-because `config::load` caps the value at 3650 (`config.rs:106-110`), giving at
+because `config::load` caps the value at 3650 (`config.rs:107-111`), giving at
 most 315,360,000 — which is also what makes `policy.rs:46`'s `as u16` cast
 lossless. `saturating_sub` means a future `old.last_project_seen_at` cannot
 wrap; it is caught by the explicit `>` guard at `:181` first anyway. This is the
@@ -579,7 +579,7 @@ There is no `set_permissions` call anywhere in the module (verified by grep).
 file with the process umask, i.e. typically `0644` on unix — **world-readable**.
 The file contains the canonical path of every Rust project on the machine, which
 is a mild but real information disclosure on a shared host. This is consistent
-with `config.rs:412-420`, which uses the identical temp+`create_new` pattern for
+with `config.rs:446-454`, which uses the identical temp+`create_new` pattern for
 `config.toml` and also sets no permissions, so it reads as an existing repo
 convention rather than an oversight in this module. It is still worth a decision.
 

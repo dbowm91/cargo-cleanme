@@ -275,6 +275,9 @@ Two consequences that are genuinely yours:
 | The canonical directory name contains `{` or `}` | the rewrite is **skipped** for that pattern and it keeps your spelling — so it may not match the canonical path |
 | The pattern is relative, or names a path that does not exist | kept as written, and matches nothing (exit `2` only if it is not a valid glob) |
 
+On Windows the canonical path may come back as `\\?\C:\…`; that prefix is
+stripped before matching, so it never has to appear in a pattern.
+
 `globset` compiles a `\` in a Windows pattern to `/` and compares against a
 `/`-normalized candidate, so `C:\dev\proj\*` and `C:/dev/proj/*` are the same
 pattern. Matching is case-sensitive, and `*` crosses path separators — both are

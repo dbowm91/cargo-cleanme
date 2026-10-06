@@ -2,6 +2,7 @@ use crate::error::AppError;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::{
+    borrow::Cow,
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -237,8 +238,38 @@ fn glob_spelling(path: &Path) -> String {
 /// The separator is a parameter rather than a `cfg!` so the Windows answer can
 /// be asserted on a Unix lane: `\` is the one character whose treatment differs
 /// by platform, and it is the character this whole defect turned on.
+/// `separator == '\\'` is the same test `globset` uses to tell that it is on
+/// Windows (`backslash_escape: !is_separator('\\')`).
 fn glob_spelling_with(canonical: &str, separator: char) -> String {
+    let canonical = if separator == '\\' {
+        dereference(canonical)
+    } else {
+        Cow::Borrowed(canonical)
+    };
     canonical.replace(separator, "/")
+}
+
+/// Drop a Win32 verbatim prefix (`\\?\`), restoring the spelling a user writes.
+///
+/// `fs::canonicalize` hands back `\\?\C:\…` whenever the path it was given was
+/// already verbatim, and can hand it back for paths that were not. The prefix is
+/// a Win32 API artefact, not part of the path: a walked candidate is compared as
+/// `Path::display` spells it, and — decisively — the `?` in `\\?\` is a glob
+/// metacharacter, so a prefix left in place both reopens the split-at-`?`
+/// problem and produces a pattern that matches nothing. Leaving it out would
+/// repeat the original defect's failure direction on exactly the inputs that
+/// exhibit it.
+///
+/// A verbatim UNC path is the other form: `\\?\UNC\server\share` names the same
+/// thing as `\\server\share`, so it loses `?` and keeps its two separators.
+fn dereference(canonical: &str) -> Cow<'_, str> {
+    if let Some(unc) = canonical.strip_prefix(r"\\?\UNC\") {
+        return Cow::Owned(format!(r"\\{unc}"));
+    }
+    match canonical.strip_prefix(r"\\?\") {
+        Some(rest) => Cow::Borrowed(rest),
+        None => Cow::Borrowed(canonical),
+    }
 }
 
 /// Escape globset metacharacters in a literal path so it splices in as itself.
@@ -726,8 +757,12 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         // Derived from the canonical root for the same macOS reason the Unix
         // test above gives: `tempdir()` and `canonicalize` disagree about the
-        // first segment under `/var`.
-        let base = fs::canonicalize(d.path()).unwrap();
+        // first segment under `/var`. Through `glob_spelling` because on
+        // Windows `canonicalize` answers `\\?\C:\…`, and a fixture rooted there
+        // would be testing the Win32 prefix rather than the directory name —
+        // its `?` is a glob metacharacter, so the pattern split would land
+        // inside it. The hosted Windows lane found exactly that.
+        let base = PathBuf::from(glob_spelling(&fs::canonicalize(d.path()).unwrap()));
         let real = base.join("real[abc]");
         fs::create_dir_all(&real).unwrap();
         for sibling in ["reala", "realb"] {
@@ -783,11 +818,16 @@ mod tests {
             "premise: the unescaped reading must match a sibling, which is the defect"
         );
 
-        // The same splice with the Windows answer to the one platform-dependent
-        // question, asserted on this lane too. A `/`-spelled candidate is what
+        // The same splice with the Windows answer to the platform-dependent
+        // questions, asserted on this lane too. A `/`-spelled candidate is what
         // `globset` builds on every platform, so these two matches are the ones
         // a Windows run would make — which is why the rule can be pinned here
         // rather than only on a platform that has a Windows filesystem.
+        //
+        // The second case is what the hosted lane found: a verbatim
+        // `\\?\C:\…` spelling has a `?` in it, which is both a metacharacter
+        // and not part of the path. Splicing it as-is yields a pattern that
+        // cannot match any candidate a walk produces.
         let windows_spliced =
             escape_glob_literal(&glob_spelling_with(r"C:\Users\runneradmin\real[abc]", '\\'))
                 .unwrap();
@@ -806,6 +846,36 @@ mod tests {
             !windows.is_match("C:/Users/runneradmin/reala/proj"),
             "the spliced Windows spelling must not match a sibling"
         );
+
+        // The same input verbatim, which is what `fs::canonicalize` answers on
+        // a Windows lane. Stripping the prefix is what keeps the pattern
+        // expressible at all: `?` is a metacharacter, so the prefix would
+        // otherwise end up escaped into the middle of the pattern and require a
+        // candidate no walk produces.
+        for (verbatim, expected) in [
+            (
+                r"\\?\C:\Users\runneradmin\real[abc]",
+                "C:/Users/runneradmin/real[abc]",
+            ),
+            (
+                r"\\?\UNC\server\share\real[abc]",
+                "//server/share/real[abc]",
+            ),
+        ] {
+            let spelling = glob_spelling_with(verbatim, '\\');
+            assert_eq!(
+                spelling, expected,
+                "a verbatim prefix is a Win32 artefact, not part of the path"
+            );
+            let spliced = escape_glob_literal(&spelling).unwrap();
+            let matcher = globset::Glob::new(&format!("{spliced}/*"))
+                .unwrap()
+                .compile_matcher();
+            assert!(
+                matcher.is_match(format!("{expected}/proj")),
+                "the de-verbatim spelling must still match the tree it names: {spliced}"
+            );
+        }
     }
 
     // Unix, and the mirror of the defect above: a `\` is legal in a Unix file
@@ -859,7 +929,16 @@ mod tests {
     #[test]
     fn a_bracketed_canonical_spelling_is_matched_literally_on_windows() {
         let d = tempfile::tempdir().unwrap();
-        let base = fs::canonicalize(d.path()).unwrap();
+        // Rooted at the drive-letter spelling, not `canonicalize`'s own answer.
+        // On this platform `canonicalize` answers `\\?\C:\…`, and a pattern
+        // written from that text splits at the prefix's `?` — which is how the
+        // first run of this test on the hosted lane failed, with the rewrite
+        // correctly declining a prefix it could not express.
+        let base = PathBuf::from(glob_spelling(&fs::canonicalize(d.path()).unwrap()));
+        assert!(
+            !base.display().to_string().contains('?'),
+            "premise: the fixture root must be spelled the way a user spells it"
+        );
         let real = base.join("real[abc]");
         fs::create_dir_all(&real).unwrap();
         for sibling in ["reala", "realb"] {
@@ -884,17 +963,14 @@ mod tests {
             "premise: the fixture needs a spelling that is not the canonical one"
         );
 
-        // The pattern is written the way a Windows user writes one, with the
-        // separators `display()` produces. globset compiles a `\` in a pattern
-        // to `/` on this platform, so the user's spelling is not itself part of
-        // the defect.
+        // The pattern is written the way a Windows user writes one, in `\` and
+        // all. globset compiles a `\` in a pattern to `/` on this platform, so
+        // the user's own spelling is not part of the defect.
+        let written = format!("{}\\*", link.display().to_string().replace('/', "\\"));
         let config = base.join("config.toml");
         fs::write(
             &config,
-            format!(
-                "[cleanup.policy]\nexclude = [{}]\n",
-                toml_string(&format!("{}\\*", link.display()))
-            ),
+            format!("[cleanup.policy]\nexclude = [{}]\n", toml_string(&written)),
         )
         .unwrap();
         let exclude = load(&config).unwrap().cleanup.policy.exclude;
