@@ -143,3 +143,86 @@ real publication.
 verification that may run in the same workflow but keeps a separately visible
 verdict, as the plan requires; the two share no code path and no failure
 disposition.
+
+---
+
+## Five-target evidence — automatic run failed, manual recovery green (M013, 2026-10-06)
+
+**The automatic run is recorded as a failure and is not presented as passing.**
+
+Run [37419183947](https://github.com/dbowm91/cargo-cleanme/actions/runs/37419183947)
+fired correctly: event `release`, two seconds after publication at `05:34:06`,
+the draft/prerelease/tag guard passed, and the resolver started. It then hung in
+the bounded crates.io wait and failed. **Three defects** sat in that path, none
+of which had ever executed before, because M011C was correctly left
+conditionally closed pending exactly this run.
+
+### Defect 1 — the resolver polled a URL crates.io refuses
+
+```python
+payload = _fetch_json(CRATES_IO_API + f"/{target}")
+```
+
+crates.io's per-version endpoint is `/api/v1/crates/<name>/<version>`. The `v`
+belongs to the tag, not the version, so this requested
+`.../crates/cargo-cleanme/v0.2.0`, which crates.io answers **HTTP 400**. Every
+attempt was a guaranteed miss, retried with backoff until the 900s deadline and
+then failed. The transition itself was never wrong: `--to v0.2.0` alone
+resolved `from_version=v0.1.6` instantly.
+
+Fixed in `6ddc0d0` by building the path from the validated parse. Verified live:
+`crates_io_attempts=1 crates_io_waited_seconds=0.099`.
+
+**Why all 13 existing self-test cases passed:** each injects an `opener` that
+ignores the URL and returns a canned payload. A wrong URL is invisible to a test
+that never looks at the URL. A new case now records the requested URL and
+asserts the path carries no `v`; it is mutation-proven.
+
+### Defects 2 and 3 — the step could never have written its outputs
+
+`tee -o "$GITHUB_OUTPUT"` — GNU coreutils `tee` has no `-o` option. Under
+`set -o pipefail` the step failed before writing anything, masked on the
+automatic path because defect 1 hung in the same step first. Two defects stacked
+in one step and the first hid the second.
+
+The `workflow_dispatch` inputs also default to bare versions (`'0.1.1'`) while
+the resolver requires `vX.Y.Z`, so the manual path could not have worked either.
+Fixed in `7e522a3` and `f53dc94`; the tag is now added on the workflow→resolver
+edge and stripped on the resolver→script edge, since the resolver emits tags and
+`post-release-smoke.sh:120` builds `.../download/v$version`.
+
+### Recovery
+
+Because a `release: published` event fires once per publication, the automatic
+result **cannot be re-run automatically**. Recovery used the documented
+`workflow_dispatch` path: [37420625111](https://github.com/dbowm91/cargo-cleanme/actions/runs/37420625111),
+**five of five lanes green**.
+
+| Target | Runner | Result |
+|---|---|---|
+| `aarch64-apple-darwin` | macos-14 | success |
+| `aarch64-unknown-linux-gnu` | ubuntu-24.04-arm | success |
+| `x86_64-apple-darwin` | macos-15-intel | success |
+| `x86_64-pc-windows-msvc` | windows-latest | success |
+| `x86_64-unknown-linux-gnu` | ubuntu-latest | success |
+
+```text
+post-release-smoke: x86_64-unknown-linux-gnu v0.1.6 -> v0.2.0 (public releases only)
+  published v0.1.6 cargo-cleanme-x86_64-unknown-linux-gnu sha256 9bb8c582adcb1cf8bd6953f084d096e8249964b123ec01f61f6552e1efe9fc2c
+  published v0.2.0 cargo-cleanme-x86_64-unknown-linux-gnu sha256 46f976432facd54a822eed26273f8ca443a311c31de902c61dc47446ca8d567f
+  Cargo-managed install reports 0.1.6 (local build, sha256 e668741cddca, not the release asset)
+post-release-smoke: PASSED (x86_64-unknown-linux-gnu v0.1.6 -> v0.2.0)
+```
+
+No fail-fast: one lane failing never suppressed the other four, and both failed
+dispatches produced all five lane results.
+
+### Closure status
+
+**Operationally closed on five-target evidence, conditionally on the automatic
+path.** Every target lane has now rehearsed a real `v0.1.6 -> v0.2.0`
+transition against published bytes. What remains unmet is narrower and is
+stated rather than smoothed over: the *automatic* trigger has never been
+observed green, because the one time it fired it hit three defects, and a
+release event cannot be re-raised. The next publication is the first real test
+of whether the fixes hold.

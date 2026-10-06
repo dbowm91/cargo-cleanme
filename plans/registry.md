@@ -33,7 +33,7 @@ Immutability policy enabled: `2026-10-05T13:34:38Z` (repository-level, not owner
 | Subsystem | Status | Roadmap | Current milestone | Blocker |
 |---|---|---|---|---|
 | Artifact discovery and cleanup | closed | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | none | Phase 12 and C019-C021 are closed. No artifact-discovery work blocks release; the remaining pre-0.2.0 gate is distribution-owned C022. |
-| Distribution, release, and update | ready / publication | `plans/subsystems/distribution-release-update-roadmap.md` | M013 0.2.0 publication and Phase 11 operational closure | C022 is closed, so M013 is unblocked. Phase 11 implementation remains closed; its remaining operational evidence is consumed by M013. |
+| Distribution, release, and update | **closed** | `plans/subsystems/distribution-release-update-roadmap.md` | Phase 13 complete: C022 closed, M013 published 0.2.0 | 0.2.0 is published, immutable, and attested on all 15 assets; C018/M011A/M011B evidence satisfied and M011C five-target lanes green. **Six defects in first-party release automation were found and fixed during publication**, all of which had never executed because each milestone was conditionally closed pending exactly this evidence. |
 
 ## Open work
 
@@ -51,12 +51,12 @@ remain closed.
 | C020 — Windows concurrent first-use config creation race | **closed** | `plans/closure/artifact-discovery-cleanup/c020-status.md` | Corrects `config::create_initial`. The staging name was never unique within a process — threads shared the pid and the starting `attempt` — so every concurrent first use collided, and Windows spells that collision `PermissionDenied` rather than `AlreadyExists`. Fixed with a process-wide nonce, so the collision is removed rather than tolerated. Unreleased. |
 | C021 — pre-release test and verification-evidence reconciliation | **closed** | `plans/closure/artifact-discovery-cleanup/c021-status.md` | Release-blocking cleanup pass for 0.2.0, implemented on `bf99aa4` from `f3dfd7a`. The updater staging-cleanup flake was **proven** and was worse than reported: the assertion scanned the process-wide temp directory, so a sibling test's live staging path could fail it and it could not pass for its own reason either. Evidence is now fixture-owned, with a deliberate-own-leak negative control and a live-foreign-path concurrency control; no sleeps, retries, or serialization; production update code unchanged. The 17-script inventory is now machine-checked by `check-doc-citations.py` for exact set parity plus uniqueness — it found the real drift on its first run. Changelog now covers C018 and C020. Hosted: CI 37376843721 all 9 jobs green, drift 37375751351 green, selector 37375754785 green including the exploratory lane. **The Windows lane caught a defect in C021's own change** (a unix-only test helper tripping `-D dead_code`) that local Linux verification could not see. |
 | C022 — pre-release machine-contract hardening | **closed** | `plans/closure/distribution-release-update/c022-status.md` | Pins the update JSON machine contract (the one non-envelope surface, previously untested) and gives `check-installer-contract.py` a failing-direction self-test wired into every release gate, removing the last checker exception in the repository. No product behaviour changed. **Three hosted failures, all in C022's own new test code, none reproducible locally**: a CRLF assumption (Windows), an `ETXTBSY` staging race on overlayfs (`msrv`), and a read-only flush handle that made the second fix Unix-only (Windows again). It took four pushes to close. |
-| M013 — 0.2.0 publication and Phase 11 operational closure | **ready** | `plans/implementation/distribution-release-update/013-0.2.0-publication-and-phase11-operational-closure.md` | Exact-tag release plan: Eggpack draft -> automatic staged validation -> human publication -> crates.io from tag -> immutable attestation -> automatic five-target smoke -> C018/M011A-M011C evidence reconciliation. Unblocked by C022's closure record. |
+| M013 — 0.2.0 publication and Phase 11 operational closure | **closed** | `plans/closure/distribution-release-update/013-status.md` | Published 0.2.0 from tag `95629ae`: Eggpack draft -> automatic staged validation -> human publication -> crates.io from tag -> immutable attestation -> five-target smoke -> C018/M011A–M011C reconciliation. One acceptance criterion explicitly not met — see M011C. |
 | C010 — `CurlConfig::user_agent` seam in `eggup-curl` | **proposed** | `plans/implementation/distribution-release-update/c010-eggup-curl-user-agent-seam.md` | Bounded upstream request. It cannot be closed from this repository, and nothing here waits on it: `eggup-eggfetch` already provides the seam. No closure record, by design. |
-| C018 — self-update provenance uncertainty fail-closed | **closed** | `plans/closure/distribution-release-update/c018-status.md` | Outstanding: work package 9 — a default-Cargo-home and `--root` real installation refused by a *released* binary, bytes unchanged. |
-| M011A — immutable release attestation + verification | **closed (conditional)** | `plans/closure/distribution-release-update/m011a-status.md` | Outstanding: verification of a real attested `cargo-cleanme` release. Policy enabled and verified live; v0.1.0–v0.1.6 remain mutable and are not described as attested. |
-| M011B — staged-release validation workflow gate | **closed (conditional)** | `plans/closure/distribution-release-update/m011b-status.md` | Outstanding: a real Eggpack draft run triggering the workflow automatically, with a green validator against that draft. |
-| M011C — published-release smoke automation | **closed (conditional)** | `plans/closure/distribution-release-update/m011c-status.md` | Outstanding: a real `release: published` event launching the five-target workflow, all five lanes green after crates.io exposes the version. |
+| C018 — self-update provenance uncertainty fail-closed | **closed** | `plans/closure/distribution-release-update/c018-status.md` | None outstanding. Published 0.1.6 refused in both the default Cargo home and `--root` with 0.2.0 available; bytes byte-identical before and after, bookkeeping still v0.1.6. |
+| M011A — immutable release attestation + verification | **closed** | `plans/closure/distribution-release-update/m011a-status.md` | None outstanding. v0.2.0 verified immutable with a valid release attestation, and all 15 downloaded asset digests match it. v0.1.0–v0.1.6 predate the policy and remain mutable. |
+| M011B — staged-release validation workflow gate | **closed** | `plans/closure/distribution-release-update/m011b-status.md` | None outstanding. Automatic run 37418179489 passed all six steps against the real draft, including a measured `GLIBC_2.17.0` floor. Its first three executions exposed three defects, now fixed. |
+| M011C — published-release smoke automation | **closed (conditional)** | `plans/closure/distribution-release-update/m011c-status.md` | Five-target evidence satisfied: run 37420625111, all lanes green on `v0.1.6 -> v0.2.0`. **Still outstanding: an observed-green *automatic* `release: published` trigger.** The automatic run fired, hit three defects in its own path, and cannot be re-raised. |
 | M011D — Cargo selector qualification lifecycle | **closed** | `plans/closure/artifact-discovery-cleanup/m011d-status.md` | None outstanding. The hosted matrix is a recurring maintenance lane, not a release gate. **Addendum:** the gate had never actually run — both jobs passed a plural `toolchains:` input to an action that declares a singular `toolchain:`, and died on "'toolchain' is a required input". Fixed and re-verified. |
 
 **Read this before the next release.** The next release from `main` is the first
@@ -86,12 +86,20 @@ outstanding evidences at once. Three constraints make the order matter:
 
 ## Published state
 
-Seven releases are published as GitHub releases and on crates.io, none yanked:
-**v0.1.0, v0.1.1, v0.1.2, v0.1.3, v0.1.4, v0.1.5, v0.1.6**. `main` is at
-**0.2.0** and unreleased; 0.2.0 is the first version that could carry ADR 003's
-breaking bare-invocation change, the C019 and C020 corrections, and the
-bounded `--format log` surface. Phase 11 still requires that publication for
-C018/M011A–M011C closure evidence.
+Eight releases are published as GitHub releases and on crates.io, none yanked:
+**v0.1.0, v0.1.1, v0.1.2, v0.1.3, v0.1.4, v0.1.5, v0.1.6, v0.2.0**, none
+yanked.
+
+**v0.2.0 is the first immutable release.** v0.1.0–v0.1.6 predate the
+repository's immutable-release policy and remain mutable; only v0.2.0 carries a
+signed attestation, and only it is ever described as attested. v0.2.0 carries
+ADR 003's breaking bare-invocation change, the C019/C020 corrections, the
+bounded `--format log` surface, and the C018 updater refusal — the first
+published binary that would refuse to replace a Cargo-owned file.
+
+C018, M011A, and M011B are closed on this release's evidence. M011C has its
+five-target evidence but is still conditional on an observed-green automatic
+trigger; M013 closed with that one acceptance criterion explicitly unmet.
 
 Not every published version is defect-free, and the registry is where that is
 recorded rather than hidden:

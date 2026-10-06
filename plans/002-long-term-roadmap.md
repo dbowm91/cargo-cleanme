@@ -539,7 +539,8 @@ Sequence:
    - no product/release semantics change — confirmed.
 
 2. **M013 — 0.2.0 publication and Phase 11 operational closure**
-   (**ready**)
+   (**closed**; receipt in
+   `plans/closure/distribution-release-update/013-status.md`)
    - freeze one exact release commit and `v0.2.0` tag;
    - run the complete release gate;
    - stage all five targets through Eggpack;

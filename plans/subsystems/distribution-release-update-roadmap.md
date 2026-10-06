@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: Phase 10 and post-release correctives C013-C017 are **closed**. Phase 11 implementation is **closed**: C018, M011A, M011B, and M011C have closure records, with four operational evidences still requiring the next published release. Phase 13 now owns that path: C022 is **closed** and M013 is **ready**. C010 remains an upstream request (`proposed`) that nothing here waits on.
+Status: **Phase 13 is closed.** C022 closed; M013 published **0.2.0** from tag `95629ae`. Phase 10, post-release correctives C013-C017, and Phase 11 implementation are closed, and C018/M011A/M011B now carry that release's evidence. **M011C remains conditionally closed**: its five-target lanes are green, but the *automatic* `release: published` trigger has never been observed green. C010 remains an upstream request (`proposed`) that nothing here waits on.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 
@@ -533,12 +533,17 @@ C021 pre-release evidence reconciliation [closed]
 C022 machine-contract hardening [closed]
                     |
                     v
-M013 v0.2.0 publication + Phase 11 operational closure [ready]
+M013 v0.2.0 publication + Phase 11 operational closure [closed]
                     |
-                    +--> C018 released Cargo provenance evidence
-                    +--> M011A immutable attestation evidence
-                    +--> M011B automatic staged-validation evidence
+                    |    published 0.2.0 from tag 95629ae; six release-
+                    |    automation defects found and fixed on the way,
+                    |    all previously unexecuted
+                    |
+                    +--> C018 released Cargo provenance evidence [satisfied]
+                    +--> M011A immutable attestation evidence [satisfied]
+                    +--> M011B automatic staged-validation evidence [satisfied]
                     +--> M011C automatic five-target smoke evidence
+                         [lanes green; automatic trigger still conditional]
 ~~~
 
 ### 12.1 C022 — Pre-release machine-contract hardening
@@ -577,7 +582,7 @@ Plan:
 
 - `plans/implementation/distribution-release-update/013-0.2.0-publication-and-phase11-operational-closure.md`
 
-Status: **ready** (unblocked by C022's closure record).
+Status: **closed** — receipt in `plans/closure/distribution-release-update/013-status.md`.
 
 M013 is the canonical operator handoff for the 0.2.0 release. It consumes the
 existing release machinery rather than reimplementing it:
