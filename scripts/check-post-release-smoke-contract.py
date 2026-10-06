@@ -134,6 +134,11 @@ def _event_block(workflow: str, event: str) -> str:
     return "\n".join(lines)
 
 
+# A YAML comment cannot execute anything, so a comment that names a script or a
+# forbidden command must not be able to satisfy (or trip) a content check.
+YAML_COMMENT = re.compile(r"(?m)^\s*#.*$")
+
+
 def check(release: str, smoke: str) -> list[str]:
     problems: list[str] = []
 
@@ -268,7 +273,13 @@ def check(release: str, smoke: str) -> list[str]:
         if re.search(pattern, smoke, re.MULTILINE):
             problems.append(f"smoke workflow contains {description}")
 
-    if "post-release-smoke.sh" not in smoke:
+    # Command-shaped for the same reason the publication patterns above are:
+    # a comment that *names* the rehearsal is documentation, and a workflow that
+    # only mentions the script in prose has still computed a transition and run
+    # nothing. Comparing against comment-stripped content is what makes this the
+    # false green it is meant to catch -- a bare substring test was defeated by a
+    # comment explaining the tag-prefix handoff during M013.
+    if "post-release-smoke.sh" not in YAML_COMMENT.sub("", smoke):
         problems.append(
             "smoke workflow does not dispatch scripts/post-release-smoke.sh; the "
             "rehearsal must not be reimplemented inline"

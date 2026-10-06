@@ -165,10 +165,16 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/check-post-release-smoke-contract.py
+          # The resolver emits TAGS (`v0.1.6`) because that is what its own
+          # contract validates; `post-release-smoke.sh` builds its download URL
+          # as `.../releases/download/v$version` and therefore wants bare
+          # version numbers. Passing the tag through produced `vv0.1.6` and a
+          # 404 on all five lanes. The prefix is stripped here, at the one place
+          # the two conventions meet.
           bash scripts/post-release-smoke.sh \
             --target '${{ matrix.target }}' \
-            --from "$FROM" \
-            --to "$TO"
+            --from "${FROM#v}" \
+            --to "${TO#v}"
       - name: Record the lane result
         if: always()
         shell: bash
