@@ -320,10 +320,26 @@ fn escape_glob_literal(path: &str) -> Option<String> {
 /// the rewrite is no longer a no-op on any platform. A `Literal` one is spliced
 /// in the filesystem's own spelling, because it is compared as a path rather
 /// than compiled.
+/// Whether a prefix ending in `\` is a dangling escape rather than a separator.
+///
+/// `\` is the escape character only where it is not a path separator —
+/// `backslash_escape` defaults to `!is_separator('\\')`, the same rule
+/// [`glob_spelling`] is built on. Where it *is* a separator, a prefix ending in
+/// one is the ordinary structural trailing separator of `…/x/*`, and refusing it
+/// would refuse every Windows pattern: `C:\dev\proj\*` has a prefix that ends in
+/// `\`, so the check used to decline the whole rewrite on that platform. That was
+/// the third Unix assumption to surface, and the hosted Windows lane found it the
+/// same way it found the other two.
+fn dangling_trailing_escape(prefix: &str, backslash_escapes: bool) -> bool {
+    backslash_escapes && prefix.ends_with('\\')
+}
+
 fn canonical_pattern_prefix(pattern: &str, kind: PatternKind) -> String {
     let cut = pattern.find(['*', '?', '[', '{']).unwrap_or(pattern.len());
     let (prefix, tail) = pattern.split_at(cut);
-    if prefix.ends_with('\\') {
+    // Splitting after a dangling escape would land inside the escape sequence,
+    // so the split is refused. A trailing *separator* is not that case.
+    if dangling_trailing_escape(prefix, !std::path::is_separator('\\')) {
         return pattern.to_owned();
     }
     // Trailing separators are structural (`…/x/*` means "children of x"), so
@@ -876,6 +892,20 @@ mod tests {
                 "the de-verbatim spelling must still match the tree it names: {spliced}"
             );
         }
+
+        // The third Windows refusal, asserted on every lane: a prefix ending in
+        // `\` is a dangling escape only where `\` escapes. On Windows it is the
+        // ordinary trailing separator of `C:\dev\proj\*`, and refusing it refused
+        // the whole rewrite for every `\`-spelled pattern on the platform.
+        assert!(
+            !dangling_trailing_escape(r"C:\Users\runneradmin\proj\", false),
+            "a trailing separator is not a dangling escape where `\\` is a separator"
+        );
+        assert!(
+            dangling_trailing_escape("/home/you/proj\\", true),
+            "a trailing `\\` is a dangling escape where it escapes"
+        );
+        assert!(!dangling_trailing_escape("/home/you/proj/", true));
     }
 
     // Unix, and the mirror of the defect above: a `\` is legal in a Unix file

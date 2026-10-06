@@ -6,7 +6,7 @@ per-component deep dives that follow.
 - **What it is:** a Cargo subcommand (`cargo cleanme`) that finds inactive Cargo
   build artifacts on a machine and either reports or safely reclaims them.
 - **Shape:** one binary (`src/main.rs`) over one library (`src/lib.rs`) of 15
-  modules, 17 source files, 23,438 lines of Rust in `src/`, no async runtime
+  modules, 17 source files, 23,468 lines of Rust in `src/`, no async runtime
   of its own, and exactly one binary dependency that matters for safety
   (`cargo metadata`).
 - **Version:** 0.2.0 (unreleased) · **Edition:** 2024 · **MSRV:** 1.89
@@ -118,7 +118,7 @@ not as a claim that the ordering is verified.
 |---|---:|---|---|
 | [`main.rs`](13-orchestration.md) | 782 | Binary entry: argv → resolved invocation → dispatch → exit code. The only place the scan and cleanup pipelines are stitched together. | [Orchestration](13-orchestration.md) |
 | [`cli.rs`](02-cli.md) | 1025 / 398 | Clap surface, resolved-invocation model, `cargo`-subcommand argv normalization, scan-root absolutization. | [CLI](02-cli.md) |
-| [`config.rs`](03-config-and-editor.md) | 1413 / 563 | Load/create/validate `config.toml`; embedded template; path resolution. | [Config & editor](03-config-and-editor.md) |
+| [`config.rs`](03-config-and-editor.md) | 1443 / 575 | Load/create/validate `config.toml`; embedded template; path resolution. | [Config & editor](03-config-and-editor.md) |
 | [`policy.rs`](04-policy-and-scope.md) | 464 / 285 | Turns a `ScanRequest` + config into an `EffectiveScanPolicy` — the Routine/Full scope decision. | [Policy & scope](04-policy-and-scope.md) |
 | [`discovery.rs`](05-discovery.md) | 2079 / 916 | Finds `Cargo.toml` manifests across a bounded walk, with attribution for what was pruned. | [Discovery](05-discovery.md) |
 | [`discovery_state.rs`](06-discovery-state.md) | 702 / 405 | Persisted "learned roots", uncertainty-aware reconciliation, atomic publish. | [Discovery state](06-discovery-state.md) |
