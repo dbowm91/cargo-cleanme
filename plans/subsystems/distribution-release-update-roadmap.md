@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: **closed for C023.** C022 closed and M013 published immutable **0.2.0** from tag `95629ae`; M013's automatic M011C acceptance criterion was not met, and post-release interrogation then found two destructive product defects in the published bytes. **C023 is closed**: both are fixed, immutable **0.2.1** is published, crates.io 0.2.0 is yanked and disclosed, and an observed-green *automatic* five-lane `release: published` smoke discharges M011C's condition. C010 remains an independent upstream request.
+Status: **C025 planning reconciliation ready.** C022 is closed; M013's v0.2.0 publication was corrected by C023; C023 is **conditionally closed** with immutable v0.2.1 published, attested, safety-qualified, and crates.io v0.2.0 yanked. The automatic v0.2.1 `release: published` smoke fired but failed, so M011C remains conditional. C024 is the next substantive product corrective; C025 owns only the stale planning/status prose. C010 remains an independent upstream request.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 
@@ -648,4 +648,31 @@ requalification, crates.io 0.2.0 yank, and explicit reconciliation of the M013
 historical closure without erasing its failed evidence.
 
 Ordinary roadmap work is unblocked now that C023 is closed. C024, the one medium finding it recorded, should be taken before the next release rather than during one.
+
+### 12.5 C025 — Post-v0.2.1 planning and status reconciliation
+
+Status: **ready / immediate planning**.
+
+Plan:
+
+- `plans/implementation/distribution-release-update/c025-post-v0.2.1-planning-status-reconciliation.md`
+
+C025 is a documentation/control-surface corrective. It changes no Rust code,
+release bytes, glob semantics, updater behavior, yank state, or workflow
+behavior.
+
+It exists because current summaries disagree with the accepted evidence:
+
+- C023 is conditionally closed, but several current-status sentences call it
+  simply closed or still ready;
+- the automatic v0.2.1 smoke fired and failed, but several summaries call it
+  observed-green and say M011C is discharged;
+- the M011C closure record has not yet incorporated the v0.2.1
+  automatic-failure/manual-green evidence;
+- the canonical roadmap still describes completed v0.2.1 publication/yank work
+  in future tense.
+
+C024 remains open/ready in parallel and is the next substantive product
+corrective. C025 must preserve C024's status and must not invent a new release
+or upgrade M011C without a future observed-green automatic run.
 
