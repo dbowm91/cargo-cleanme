@@ -1,6 +1,6 @@
 ## Artifact Discovery and Cleanup Roadmap
 
-Status: Phase 12 implementation remains **closed** under ADR 003. Its first published realization, immutable v0.2.0, carried two destructive defects; **C023 is conditionally closed**, both defects are fixed and shipped in v0.2.1, and crates.io 0.2.0 is yanked and disclosed. **C024** is the next substantive product corrective for Windows glob canonicalization, and the only open implementation plan in this subsystem. **C025** is closed; it was a planning-only reconciliation that changed no cleanup or matching semantics.
+Status: Phase 12 implementation remains **closed** under ADR 003. Its first published realization, immutable v0.2.0, carried two destructive defects; **C023 is conditionally closed**, both defects are fixed and shipped in v0.2.1, and crates.io 0.2.0 is yanked and disclosed. **C024** — Windows glob canonicalization — is **closed**: the canonical-glob rewrite now runs on Windows, and the hosted Windows lane observed the fix. It is fixed but **unreleased**. **C025** is closed; it was a planning-only reconciliation that changed no cleanup or matching semantics. **No implementation plan in this subsystem is open.**
 
 
 Repository audit baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
@@ -839,11 +839,12 @@ qualified by tests shown to fail against the old behaviour:
   independently of the classifier.
 
 **No destructive-safety blocker from C023 remains open.** The one corrective it
-handed on, **C024** (Windows glob canonicalization is a no-op), is a
-matching-semantics defect that fails toward *under*-matching — the directory is
-cleaned as though no `exclude` had been written — so it is not a violation of
-either invariant above, and it is not release-blocking. It is the next
-substantive product handoff for this subsystem.
+handed on, **C024**, is **closed** — the canonical spelling is `/`-normalized
+and de-verbatimed before it is escaped, so the rewrite runs on Windows and an
+`exclude` naming a bracketed directory matches it literally. It failed toward
+*under*-matching and so was never a violation of either invariant above; the
+fix narrows what can be cleaned rather than widening it. The next release
+carries it.
 
 ## 11. Cross-cutting reliability concerns
 
@@ -905,4 +906,4 @@ The implementation should specifically verify:
 
 ## 14. Completion definition
 
-The initial read-only boundary was reached when M001-M003 closed with evidence that cargo-cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004-M007 and C001-C007 establish Cargo-mediated cleanup, complete ownership/freshness proof, adaptive discovery, and combined-root orchestration. Scans remain read-only; ADR 003/Phase 12 intentionally changes bare invocation from a scan front door to Routine cleanup without changing that proof boundary. Phase 9 remains closed for current objectives: M008A/B policy and reporting, profile support from M008C, and package support from M008D. Profile support is limited to exact qualified releases 1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0, 1.98.1, and 1.99.0; package support is limited to exact Cargo 1.98.1 and 1.99.0. Selector estimates remain unknown and unqualified Cargo versions fail closed. C019 and C020 shipped in v0.2.0; C021 closed the pre-release evidence pass. Post-release C023 is conditionally closed: immutable v0.2.0 was found to violate the dry-run and global source-disjointness invariants, both are fixed in the published v0.2.1, and crates.io 0.2.0 is yanked. C024 (Windows glob canonicalization is a no-op) is the active corrective and the next handoff; it is a matching-semantics defect that under-matches, not a destructive-safety violation. Distribution/release publication/yank work is tracked by `plans/subsystems/distribution-release-update-roadmap.md`.
+The initial read-only boundary was reached when M001-M003 closed with evidence that cargo-cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004-M007 and C001-C007 establish Cargo-mediated cleanup, complete ownership/freshness proof, adaptive discovery, and combined-root orchestration. Scans remain read-only; ADR 003/Phase 12 intentionally changes bare invocation from a scan front door to Routine cleanup without changing that proof boundary. Phase 9 remains closed for current objectives: M008A/B policy and reporting, profile support from M008C, and package support from M008D. Profile support is limited to exact qualified releases 1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0, 1.98.1, and 1.99.0; package support is limited to exact Cargo 1.98.1 and 1.99.0. Selector estimates remain unknown and unqualified Cargo versions fail closed. C019 and C020 shipped in v0.2.0; C021 closed the pre-release evidence pass. Post-release C023 is conditionally closed: immutable v0.2.0 was found to violate the dry-run and global source-disjointness invariants, both are fixed in the published v0.2.1, and crates.io 0.2.0 is yanked. C024 (Windows glob canonicalization was a no-op) is closed and unreleased; it was a matching-semantics defect that under-matched, not a destructive-safety violation. No implementation plan in this subsystem is open. Distribution/release publication/yank work is tracked by `plans/subsystems/distribution-release-update-roadmap.md`.

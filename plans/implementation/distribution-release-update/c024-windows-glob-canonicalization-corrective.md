@@ -1,9 +1,22 @@
 # C024 — Windows glob canonicalization is a no-op
 
-Status: **open — ready**. Opened by
+Status: **closed**. Implemented as `4fba120` with `33d9772`; closed by
+[`c024-status.md`](../../closure/distribution-release-update/c024-status.md).
+Opened by
 [`c023-status.md`](../../closure/distribution-release-update/c023-status.md) §11 as
-an unresolved finding from the 0.2.1 patch-release corrective. It is **not**
-part of C023 and must not be folded into it.
+an unresolved finding from the 0.2.1 patch-release corrective. It was **not**
+part of C023 and was not folded into it.
+
+**Outcome.** §4's option 1 was chosen, after verifying the premise it was
+conditional on: `globset` normalizes *candidates* to `/` on every platform
+(`Candidate::new`), and normalizes *patterns* the same way on Windows
+(`backslash_escape` defaults to `!is_separator('\\')`). Options 2 and 3 were
+rejected for reasons stronger than this plan gave — option 3's premise (that a
+`\` in a Windows pattern would not work) turned out to be **false**. One thing
+this plan did not anticipate was found by the hosted Windows lane: a
+`\\?\C:\…` verbatim prefix, whose `?` is a glob metacharacter. §5's five
+criteria are all met; §8 below records the four unresolved findings as
+classified rather than dropped.
 
 ## 1. Why this is a separate plan
 

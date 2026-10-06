@@ -34,18 +34,18 @@ Immutability policy enabled: `2026-10-05T13:34:38Z` (repository-level, not owner
 
 | Subsystem | Status | Roadmap | Current milestone | Blocker |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | **released in 0.2.1; C024 open** | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | C024 Windows glob canonicalization corrective | Both destructive defects are fixed, qualified by tests shown to fail against the old behaviour, and published as 0.2.1. C024 owns one medium finding the requalification surfaced: the canonical-glob rewrite is a no-op on Windows. |
+| Artifact discovery and cleanup | **released in 0.2.1; no open corrective** | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | none | Both destructive defects are fixed, qualified by tests shown to fail against the old behaviour, and published as 0.2.1. The one medium finding the requalification surfaced — the canonical-glob rewrite was a no-op on Windows — is fixed and **closed** by C024, unreleased. |
 | Distribution, release, and update | **no active release corrective; M011C conditional** | `plans/subsystems/distribution-release-update-roadmap.md` | none | C023 is conditionally closed: v0.2.1 is published/attested/safety-qualified and crates.io 0.2.0 is yanked, but acceptance criterion 11 — a green **automatic** five-lane smoke — is not met, because the automatic v0.2.1 run fired and failed against the yank C023 itself performed. M011C remains conditional on the same missing evidence; the next release must produce a green automatic smoke to discharge it. |
 
 ## Open work
 
-**C024 is the next implementation handoff.** It is the one medium finding C023's own
-requalification surfaced, and it is deliberately *not* a release blocker: the
-canonical-glob rewrite is a no-op on Windows, so an `exclude` naming a
-bracketed directory does not match it. It is a pre-existing gap, not a
-regression; it fails toward under-matching, which is default behaviour rather
-than a new hazard; and fixing it is a matching-semantics decision, not a
-safety patch. It should be taken before the next release, not during one.
+**There is no open implementation plan.** C024 — the one medium finding C023's
+requalification surfaced — is **closed**: the canonical-glob rewrite now runs on
+Windows, an `exclude` naming a bracketed directory matches it literally, and the
+hosted Windows lane observed it. The fix is **unreleased**: it reaches users when
+the next release is cut, which is a separate decision. What remains is not
+implementation work but two conditional-evidence debts below, neither of which is
+actionable from this repository.
 
 **C023 is closed, conditionally.** Both destructive defects that shipped in
 0.2.0 are fixed and published as 0.2.1, whose published binary passes both
@@ -81,8 +81,8 @@ upgrading the record now.
 | C022 — pre-release machine-contract hardening | **closed** | `plans/closure/distribution-release-update/c022-status.md` | Pins the update JSON machine contract (the one non-envelope surface, previously untested) and gives `check-installer-contract.py` a failing-direction self-test wired into every release gate, removing the last checker exception in the repository. No product behaviour changed. **Three hosted failures, all in C022's own new test code, none reproducible locally**: a CRLF assumption (Windows), an `ETXTBSY` staging race on overlayfs (`msrv`), and a read-only flush handle that made the second fix Unix-only (Windows again). It took four pushes to close. |
 | M013 — 0.2.0 publication and Phase 11 operational closure | **closed / corrected by C023** | `plans/closure/distribution-release-update/013-status.md` | Historical receipt preserved and not reopened. Its automatic M011C criterion was not met, and post-release interrogation then found two destructive defects in the immutable bytes. An appended corrective note records this; no claim in the record is retracted. |
 | C023 — v0.2.0 destructive-safety patch-release corrective | **closed (conditional)** | `plans/closure/distribution-release-update/c023-status.md` | Both published destructive defects reproduced against the immutable 0.2.0 binary and fixed; every shipped change requalified by a test shown to fail against the old behaviour; v0.2.1 published immutably and attested; the **published 0.2.1 binary** passes both safety fixtures; crates.io 0.2.0 yanked and disclosed in four documents. Five findings recorded rather than fixed, one handed to C024. **The single unmet criterion is WP-J**: no observed-green *automatic* five-lane smoke for v0.2.1, because the automatic run fired and failed against the yank C023 itself performed, and the event cannot be re-raised. The resolver that caused it is fixed and self-tested; green five-lane evidence exists from the manual rehearsal surface. |
-| C025 — post-v0.2.1 planning/status reconciliation | **closed** | `plans/closure/distribution-release-update/c025-status.md` | Documentation/control-surface corrective. Closed as a control-surface repair, not a product milestone: C023 reconciled to conditional closure with a five-finding count derived from its own §11, M011C's v0.2.1 automatic-failure/manual-green addendum appended, and every false automatic-green summary corrected. **No Rust changed, no release performed, no failed run rewritten as passing**, and C024 remains the open product handoff. |
-| C024 — Windows glob canonicalization corrective | **open / ready** | `plans/implementation/distribution-release-update/c024-windows-glob-canonicalization-corrective.md` | Medium. `escape_glob_literal` returns `None` for `\`, every canonical Windows path contains one, so `canonical_pattern_prefix` is a no-op on Windows and an `exclude` naming a bracketed directory does not match it. Pre-existing, not destructive, and a matching-semantics decision rather than a patch. |
+| C025 — post-v0.2.1 planning/status reconciliation | **closed** | `plans/closure/distribution-release-update/c025-status.md` | Documentation/control-surface corrective. Closed as a control-surface repair, not a product milestone: C023 reconciled to conditional closure with a five-finding count derived from its own §11, M011C's v0.2.1 automatic-failure/manual-green addendum appended, and every false automatic-green summary corrected. **No Rust changed, no release performed, no failed run rewritten as passing**. C024 was left untouched and open at that point, and has since been closed (§C024 row). |
+| C024 — Windows glob canonicalization corrective | **closed** | `plans/closure/distribution-release-update/c024-status.md` | Matching-semantics corrective. The canonical spelling is now `/`-normalized and stripped of a Win32 verbatim prefix before it is escaped, so `escape_glob_literal` no longer refuses every Windows path. Covered by a Windows-lane test and an every-lane test that pins the Windows spelling; both mutation-checked. **Fixed but unreleased** — the next release carries it. |
 | C010 — `CurlConfig::user_agent` seam in `eggup-curl` | **proposed** | `plans/implementation/distribution-release-update/c010-eggup-curl-user-agent-seam.md` | Bounded upstream request. It cannot be closed from this repository, and nothing here waits on it: `eggup-eggfetch` already provides the seam. No closure record, by design. |
 | C018 — self-update provenance uncertainty fail-closed | **closed** | `plans/closure/distribution-release-update/c018-status.md` | None outstanding. Published 0.1.6 refused in both the default Cargo home and `--root` with 0.2.0 available; bytes byte-identical before and after, bookkeeping still v0.1.6. |
 | M011A — immutable release attestation + verification | **closed** | `plans/closure/distribution-release-update/m011a-status.md` | None outstanding. v0.2.0 verified immutable with a valid release attestation, and all 15 downloaded asset digests match it. v0.1.0–v0.1.6 predate the policy and remain mutable. |
@@ -126,9 +126,10 @@ still-missing green automatic M011C evidence, so:
 6. v0.2.0 is immutable and was never rewritten. It is yanked on crates.io and its
    defects are documented in `CHANGELOG.md`, `README.md`, `docs/INSTALLING.md`,
    and `docs/TROUBLESHOOTING.md`.
-7. **Take C024 before the next release if you can.** It is a medium finding the
-   last patch deliberately did not absorb, and folding a matching-semantics
-   decision into a safety patch is the failure mode C023 exists to prevent.
+7. **C024 is closed and unreleased.** The next release carries the fix; nothing
+   about it is release-blocking, and folding it into a *safety* patch would have
+   been the failure mode C023 exists to prevent — which is why it waited until
+   after 0.2.1 rather than inside it.
 
 ## Published state
 

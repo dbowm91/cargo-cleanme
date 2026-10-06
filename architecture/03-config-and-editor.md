@@ -2,7 +2,7 @@
 
 > Component deep dive · part of the [architecture overview](overview.md)
 
-Covers `src/config.rs` (1408 lines: 559 production, 19 inline tests), the
+Covers `src/config.rs` (1413 lines: 563 production, 19 inline tests), the
 repository-root `config.toml` (45 lines), and `src/editor.rs` (215 lines,
 2 inline tests).
 
@@ -531,10 +531,10 @@ consumed elsewhere, update that consumer (`src/policy.rs`, `src/discovery.rs`,
 ## 8. Testing
 
 `src/config.rs` has **19** `#[test]` functions. The module starts at
-`src/config.rs:561` (`#[cfg(test)]`) / `:562` (`mod tests`); production code ends
-at `:559`. Three are `#[cfg(unix)]`-gated (`:587`, `:673`, `:885`), one is
+`src/config.rs:565` (`#[cfg(test)]`) / `:566` (`mod tests`); production code ends
+at `:562`. Three are `#[cfg(unix)]`-gated (`:587`, `:673`, `:885`), one is
 `#[cfg(windows)]` (`:928`), and one is
-`#[cfg(all(target_os = "linux", target_arch = "x86_64"))]` (`:1352`), so a
+`#[cfg(all(target_os = "linux", target_arch = "x86_64"))]` (`:1357`), so a
 Windows build compiles 15 and a macOS build 18.
 
 | Test | Line | What it pins |
@@ -544,20 +544,20 @@ Windows build compiles 15 and a macOS build 18.
 | `a_spliced_canonical_spelling_matches_the_directory_it_names` | `:756` | The spliced spelling itself: `/`-spelled, brackets escaped, named tree matched and siblings not. Asserts the *premise* in the same test — the unescaped reading misses the named tree and matches a sibling — so the assertions cannot be decoration. Then the same splice with the Windows answer, asserted on every lane. |
 | `a_backslash_in_a_canonical_directory_name_is_spliced_as_a_escape` | `:887` | The one remaining `escape_glob_literal` input on Unix: a `\` in a canonical file name is doubled, compiles to a literal `\`, and matches the directory it names. Unix-only — no Windows file name may contain one. |
 | `a_bracketed_canonical_spelling_is_matched_literally_on_windows` | `:930` | The whole C024 chain on the platform that motivated it: a real canonical spelling, a real bracket in a real file name, a junction alias, and a `config.toml` read through `load`. Windows-only, because a Windows symlink needs elevation a hosted runner does not grant. |
-| `recency_seconds_of_zero_is_rejected` | `:1010` | `0` is an error naming the inactivity guard; `1` is accepted. |
-| `out_of_range_retention_reports_a_range_not_a_parse_error` | `:1024` | `99999` reports "must be between 0 and 3650" rather than a TOML type error; `7` is accepted. |
-| `invalid_scan_ignore_glob_is_reported_at_load` | `:1040` | A malformed `scan.ignore` glob fails at load. The comment at `:1038-1043` is a premise guard: the pattern is made absolute so the test cannot pass for the wrong reason. |
-| `default_recency_and_absent_config` | `:1058` | An absent file loads as all defaults with `recency_seconds = 300`. |
-| `malformed_and_relative_paths_fail` | `:1064` | A non-numeric value, a relative `scan.root`, and a relative `allowed_output_roots` each fail. |
-| `checked_in_template_parses_and_matches_defaults` | `:1079` | The template parses and agrees with `Config::default()` on every field it spells out. |
-| `config_template_matches_repository_file` | `:1098` | `CONFIG_TEMPLATE` is byte-equal to the checked-in `config.toml`. |
-| `legacy_cleanup_config_loads_with_neutral_policy` | `:1107` | A `[cleanup]`-only file yields a neutral policy: `0`, `None`, empty lists. |
-| `cleanup_policy_globs_and_durations_are_validated` | `:1115` | `include = ["["]` and `min_inactive_seconds = u64::MAX` both fail. |
-| `operational_bootstrap_refuses_overwrite` | `:1128` | `load_or_create` creates once, then preserves an edited `recency_seconds = 61`. |
-| `bootstrap_bytes_equal_checked_in_template` | `:1137` | The created file is byte-equal to `CONFIG_TEMPLATE` and loads as defaults. |
-| `malformed_config_is_not_replaced_automatically` | `:1148` | A malformed file errors *and* is left byte-identical on disk. |
-| `concurrent_first_use_creates_one_complete_template` | `:1160` | 16 workers over 24 rounds, a fresh nested path each round; every racer succeeds and the bytes are one complete template. Strengthened deliberately — a single 8-thread round missed the Windows race most of the time. |
-| `the_config_is_published_on_a_filesystem_without_hard_links` | `:1354` | The `create_new` fallback publishes a complete config where `link(2)` reports "unsupported". |
+| `recency_seconds_of_zero_is_rejected` | `:1015` | `0` is an error naming the inactivity guard; `1` is accepted. |
+| `out_of_range_retention_reports_a_range_not_a_parse_error` | `:1029` | `99999` reports "must be between 0 and 3650" rather than a TOML type error; `7` is accepted. |
+| `invalid_scan_ignore_glob_is_reported_at_load` | `:1045` | A malformed `scan.ignore` glob fails at load. The comment at `:1043-1048` is a premise guard: the pattern is made absolute so the test cannot pass for the wrong reason. |
+| `default_recency_and_absent_config` | `:1063` | An absent file loads as all defaults with `recency_seconds = 300`. |
+| `malformed_and_relative_paths_fail` | `:1069` | A non-numeric value, a relative `scan.root`, and a relative `allowed_output_roots` each fail. |
+| `checked_in_template_parses_and_matches_defaults` | `:1084` | The template parses and agrees with `Config::default()` on every field it spells out. |
+| `config_template_matches_repository_file` | `:1103` | `CONFIG_TEMPLATE` is byte-equal to the checked-in `config.toml`. |
+| `legacy_cleanup_config_loads_with_neutral_policy` | `:1112` | A `[cleanup]`-only file yields a neutral policy: `0`, `None`, empty lists. |
+| `cleanup_policy_globs_and_durations_are_validated` | `:1120` | `include = ["["]` and `min_inactive_seconds = u64::MAX` both fail. |
+| `operational_bootstrap_refuses_overwrite` | `:1133` | `load_or_create` creates once, then preserves an edited `recency_seconds = 61`. |
+| `bootstrap_bytes_equal_checked_in_template` | `:1142` | The created file is byte-equal to `CONFIG_TEMPLATE` and loads as defaults. |
+| `malformed_config_is_not_replaced_automatically` | `:1153` | A malformed file errors *and* is left byte-identical on disk. |
+| `concurrent_first_use_creates_one_complete_template` | `:1165` | 16 workers over 24 rounds, a fresh nested path each round; every racer succeeds and the bytes are one complete template. Strengthened deliberately — a single 8-thread round missed the Windows race most of the time. |
+| `the_config_is_published_on_a_filesystem_without_hard_links` | `:1359` | The `create_new` fallback publishes a complete config where `link(2)` reports "unsupported". |
 
 `config.toml:10` tells contributors to run `cargo test config_template` after
 editing the template. That substring matches
@@ -584,10 +584,10 @@ three failure modes) and `tests/cli_contract.rs:161`/`:171` (the
 
 1. Did any change make the repository `config.toml` loadable at runtime (a CWD
    lookup, a bare `config.toml` path)? The only legitimate readers are
-   `CONFIG_TEMPLATE` (`src/config.rs:12`) and its test comparison (`:1098`).
+   `CONFIG_TEMPLATE` (`src/config.rs:12`) and its test comparison (`:1103`).
 2. Does a new or moved field still match between the struct, its serde default,
    `impl Default for ScanConfig` (`:53-63`) and the template (`config.toml:12-45`)?
-   `checked_in_template_parses_and_matches_defaults` (`:1079`) is the guard.
+   `checked_in_template_parses_and_matches_defaults` (`:1084`) is the guard.
 3. Is `/config.toml` still in the `include` allowlist (`Cargo.toml:24`), given
    `check-release-contract.py:460-464`?
 4. Does any new validation live outside `load` (`:90-205`), where `config edit`

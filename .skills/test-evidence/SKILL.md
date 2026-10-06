@@ -93,7 +93,7 @@ valuable.
 
 320 inline `#[test]` functions are **declared**; **318 compile and run on Linux**.
 Two are excluded there: one `#[cfg(windows)]`
-(`config.rs:930`) and one `#[cfg(any(target_os = "macos", windows))]`
+(`config.rs:936`) and one `#[cfg(any(target_os = "macos", windows))]`
 (`discovery.rs:1394`). A further 21 carry `#[cfg(unix)]`, 3 carry
 `#[cfg(target_os = "linux")]` or an `all(linux, …)` form, so the three hosted
 lanes compile **318 of 320 on Linux**, **296 of 320 on Windows**, and **317 of 320

@@ -945,10 +945,15 @@ mod tests {
             fs::create_dir_all(base.join(sibling)).unwrap();
         }
         let link = base.join("link");
+        // Backslashes, not the `/` this fixture's paths are built from: `cmd`
+        // reads a `/` as a switch introducer, so `C:/Users/…` reaches `mklink`
+        // as `Invalid switch - "Users"`. The hosted lane said so first.
+        let link_arg = link.display().to_string().replace('/', "\\");
+        let real_arg = real.display().to_string().replace('/', "\\");
         let made = std::process::Command::new("cmd")
             .args(["/c", "mklink", "/J"])
-            .arg(&link)
-            .arg(&real)
+            .arg(&link_arg)
+            .arg(&real_arg)
             .output()
             .unwrap();
         assert!(
@@ -966,7 +971,7 @@ mod tests {
         // The pattern is written the way a Windows user writes one, in `\` and
         // all. globset compiles a `\` in a pattern to `/` on this platform, so
         // the user's own spelling is not part of the defect.
-        let written = format!("{}\\*", link.display().to_string().replace('/', "\\"));
+        let written = format!("{link_arg}\\*");
         let config = base.join("config.toml");
         fs::write(
             &config,

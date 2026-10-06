@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: **conditionally closed**, with one named qualification outstanding. C022 is closed; M013's v0.2.0 publication was corrected by C023; C023 published immutable v0.2.1, attested it, and yanked crates.io 0.2.0, but its acceptance criterion 11 is not met — the automatic v0.2.1 `release: published` smoke **fired and failed on all five lanes**. M011C is therefore **not** discharged: it has the same missing evidence, and the next release is the first opportunity to obtain it. There is no active release corrective. C024 is the next substantive product corrective and is cross-listed here only because it was opened by C023 and lives in this plan directory — it is a discovery/matching decision, not distribution behaviour. C010 remains an independent upstream request.
+Status: **conditionally closed**, with one named qualification outstanding. C022 is closed; M013's v0.2.0 publication was corrected by C023; C023 published immutable v0.2.1, attested it, and yanked crates.io 0.2.0, but its acceptance criterion 11 is not met — the automatic v0.2.1 `release: published` smoke **fired and failed on all five lanes**. M011C is therefore **not** discharged: it has the same missing evidence, and the next release is the first opportunity to obtain it. There is no active release corrective. C024 was the next substantive product corrective, is now **closed** (fixed, unreleased), and is cross-listed here only because it was opened by C023 and lives in this plan directory — it is a discovery/matching decision, not distribution behaviour. C010 remains an independent upstream request.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 
@@ -665,7 +665,7 @@ a green **automatic** M011C five-target smoke, public-binary safety
 requalification, crates.io 0.2.0 yank, and explicit reconciliation of the M013
 historical closure without erasing its failed evidence.
 
-Ordinary roadmap work is unblocked now that C023 is conditionally closed. C024, the one medium finding it recorded, should be taken before the next release rather than during one.
+Ordinary roadmap work is unblocked now that C023 is conditionally closed. C024, the one medium finding it recorded, has been taken and is closed; it is unreleased, so the next release carries it.
 
 **What the plan asked for versus what happened.** Everything below was
 delivered: both defects were reproduced against the immutable 0.2.0 binary,
@@ -709,6 +709,6 @@ roadmap, `plans/registry.md`, and `plans/002-long-term-roadmap.md` all state the
 same current state. No failed run was rewritten as passing and no historical
 evidence was edited.
 
-C024 was left untouched and remains open/ready — it is the next substantive
-product corrective.
+C024 was left untouched by that reconciliation and was taken afterwards: it is
+now closed, with its fix unreleased pending the next release.
 

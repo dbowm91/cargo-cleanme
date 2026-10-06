@@ -49,7 +49,7 @@ from `src/`, never copied between documents.
 | `src/update.rs` | 45 | 1237 | 2773 | 1538 |
 | `src/discovery.rs` | 34 | 918 | 2079 | 1163 |
 | `src/cli.rs` | 27 | 400 | 1025 | 627 |
-| `src/config.rs` | 19 | 531 | 1332 | 803 |
+| `src/config.rs` | 19 | 562 | 1413 | 853 |
 | `src/output.rs` | 17 | 462 and 822 | 941 | 481 |
 | `src/progress.rs` | 13 | 510 | 840 | 332 |
 | `src/discovery_state.rs` | 12 | 407 | 702 | 297 |
@@ -65,7 +65,7 @@ from `src/`, never copied between documents.
 
 **The count is declared, not executed.** 320 `#[test]` functions exist in `src/`;
 **318 compile and run on Linux**, because two are gated to the other platforms
-(`config.rs:930`, `#[cfg(windows)]`, and `discovery.rs:1394`,
+(`config.rs:936`, `#[cfg(windows)]`, and `discovery.rs:1394`,
 `#[cfg(any(target_os = "macos", windows))]`). A further 21 carry
 `#[cfg(unix)]`, and 3 are Linux-gated (`#[cfg(target_os = "linux")]` or an
 `all(linux, …)` form), so the three hosted lanes compile **318 of 320 on Linux**,
