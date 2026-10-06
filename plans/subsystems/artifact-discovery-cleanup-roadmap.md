@@ -1,6 +1,6 @@
 ## Artifact Discovery and Cleanup Roadmap
 
-Status: Phase 12 implementation remains historically **closed** under ADR 003, but its first published realization, immutable v0.2.0, is under **C023 corrective**. Post-release interrogation found a dry-run mutation defect and a cross-workspace source-containment defect. C023 is ready/immediate and owns the v0.2.1 safety patch; ordinary feature work should wait.
+Status: Phase 12 implementation remains **closed** under ADR 003. Its first published realization, immutable v0.2.0, carried two destructive defects (a dry-run mutation and a cross-workspace source-containment failure); **C023 is closed**, both are fixed and shipped in v0.2.1, and crates.io 0.2.0 is yanked and disclosed. One medium finding from that requalification is open under **C024**: the canonical-glob rewrite is a no-op on Windows. Ordinary feature work is unblocked.
 
 
 Repository audit baseline: 3ee9699a0b0d987287d08e427195284e08d079f7

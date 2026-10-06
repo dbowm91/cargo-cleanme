@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: **corrective required — C023 ready.** C022 closed and M013 published immutable **0.2.0** from tag `95629ae`, but M013's automatic M011C acceptance criterion was not met and post-release interrogation found two destructive product defects in the published bytes. C023 owns the v0.2.1 safety patch, 0.2.0 yank/disclosure, automatic-smoke evidence, and planning reconciliation. C010 remains an independent upstream request.
+Status: **closed for C023.** C022 closed and M013 published immutable **0.2.0** from tag `95629ae`; M013's automatic M011C acceptance criterion was not met, and post-release interrogation then found two destructive product defects in the published bytes. **C023 is closed**: both are fixed, immutable **0.2.1** is published, crates.io 0.2.0 is yanked and disclosed, and an observed-green *automatic* five-lane `release: published` smoke discharges M011C's condition. C010 remains an independent upstream request.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 
@@ -518,7 +518,7 @@ remains available for recovery/historical transitions.
 
 ## 12. Phase 13 — 0.2.0 pre-release hardening and publication
 
-Status: **corrective required after publication — C023 ready**.
+Status: **published; corrected by C023.**
 
 Phase 13 does not add a new product feature. It takes the already-implemented
 0.2.0 tree through the last bounded verification hardening and then through the
@@ -582,7 +582,7 @@ Plan:
 
 - `plans/implementation/distribution-release-update/013-0.2.0-publication-and-phase11-operational-closure.md`
 
-Status: **historical closure recorded; current state corrected by C023** — receipt in `plans/closure/distribution-release-update/013-status.md`. The receipt itself records that automatic M011C criterion 9 was not met; subsequent post-release safety findings make C023 the active disposition.
+Status: **historical closure recorded; current state corrected by C023 (closed)** — receipt in `plans/closure/distribution-release-update/013-status.md`, with an appended corrective note. The receipt itself records that automatic M011C criterion 9 was not met; the post-release safety findings that followed are closed by v0.2.1. No claim in the receipt is retracted.
 
 M013 is the canonical operator handoff for the 0.2.0 release. It consumes the
 existing release machinery rather than reimplementing it:
@@ -647,5 +647,5 @@ a green **automatic** M011C five-target smoke, public-binary safety
 requalification, crates.io 0.2.0 yank, and explicit reconciliation of the M013
 historical closure without erasing its failed evidence.
 
-Ordinary roadmap work must not advance ahead of C023.
+Ordinary roadmap work is unblocked now that C023 is closed. C024, the one medium finding it recorded, should be taken before the next release rather than during one.
 

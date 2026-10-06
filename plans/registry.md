@@ -33,17 +33,22 @@ Immutability policy enabled: `2026-10-05T13:34:38Z` (repository-level, not owner
 
 | Subsystem | Status | Roadmap | Current milestone | Blocker |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | **corrective required / C023 ready** | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | C023 v0.2.0 destructive-safety patch corrective | v0.2.0 contains two destructive defects: pre-subcommand `--dry-run` can execute cleanup, and a covering output root can contain another resolved workspace's sources. Fixes are on `main` but current CI is red on macOS and 0.2.1 is not yet published. |
-| Distribution, release, and update | **corrective required / C023 ready** | `plans/subsystems/distribution-release-update-roadmap.md` | C023 v0.2.0 destructive-safety patch corrective | M013 published immutable v0.2.0 but did not meet its automatic M011C acceptance criterion, and post-release interrogation found two destructive product defects in those immutable bytes. C023 owns qualification and the 0.2.1 patch release. |
+| Artifact discovery and cleanup | **released in 0.2.1; C024 open** | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | C024 Windows glob canonicalization corrective | Both destructive defects are fixed, qualified by tests shown to fail against the old behaviour, and published as 0.2.1. C024 owns one medium finding the requalification surfaced: the canonical-glob rewrite is a no-op on Windows. |
+| Distribution, release, and update | **closed for C023** | `plans/subsystems/distribution-release-update-roadmap.md` | none | C023 published immutable 0.2.1, recorded an observed-green automatic five-lane `release: published` smoke, and yanked crates.io 0.2.0. M011C's conditional closure is discharged. |
 
 ## Open work
 
-**C023 is the immediate safety handoff.** C022 is closed and M013 did publish
-v0.2.0, but M013's automatic M011C criterion was not met and v0.2.0 was later
-proven to contain two destructive product defects. The immutable v0.2.0 bytes
-cannot be repaired in place. C023 owns the current red-main correction,
-destructive regression proof, planning reconciliation, crates.io 0.2.0 yank,
-and the v0.2.1 immutable patch release. Ordinary roadmap work should wait.
+**C023 is closed.** Both destructive defects that shipped in 0.2.0 are fixed
+and published as 0.2.1; crates.io 0.2.0 is yanked and the defect is disclosed
+in four user-facing documents. Ordinary roadmap work is unblocked.
+
+**C024 is the next handoff.** It is the one medium finding C023's own
+requalification surfaced, and it is deliberately *not* a release blocker: the
+canonical-glob rewrite is a no-op on Windows, so an `exclude` naming a
+bracketed directory does not match it. It is a pre-existing gap, not a
+regression; it fails toward under-matching, which is default behaviour rather
+than a new hazard; and fixing it is a matching-semantics decision, not a
+safety patch. It should be taken before the next release, not during one.
 
 | Item | Status | Plan / record | Note |
 |---|---|---|---|
@@ -53,45 +58,51 @@ and the v0.2.1 immutable patch release. Ordinary roadmap work should wait.
 | C020 — Windows concurrent first-use config creation race | **closed** | `plans/closure/artifact-discovery-cleanup/c020-status.md` | Corrects `config::create_initial`. Fixed with a process-wide nonce so concurrent first-use staging names cannot collide. Shipped in v0.2.0 and retained in the C023 v0.2.1 corrective line. |
 | C021 — pre-release test and verification-evidence reconciliation | **closed** | `plans/closure/artifact-discovery-cleanup/c021-status.md` | Release-blocking cleanup pass for 0.2.0, implemented on `bf99aa4` from `f3dfd7a`. The updater staging-cleanup flake was **proven** and was worse than reported: the assertion scanned the process-wide temp directory, so a sibling test's live staging path could fail it and it could not pass for its own reason either. Evidence is now fixture-owned, with a deliberate-own-leak negative control and a live-foreign-path concurrency control; no sleeps, retries, or serialization; production update code unchanged. The 17-script inventory is now machine-checked by `check-doc-citations.py` for exact set parity plus uniqueness — it found the real drift on its first run. Changelog now covers C018 and C020. Hosted: CI 37376843721 all 9 jobs green, drift 37375751351 green, selector 37375754785 green including the exploratory lane. **The Windows lane caught a defect in C021's own change** (a unix-only test helper tripping `-D dead_code`) that local Linux verification could not see. |
 | C022 — pre-release machine-contract hardening | **closed** | `plans/closure/distribution-release-update/c022-status.md` | Pins the update JSON machine contract (the one non-envelope surface, previously untested) and gives `check-installer-contract.py` a failing-direction self-test wired into every release gate, removing the last checker exception in the repository. No product behaviour changed. **Three hosted failures, all in C022's own new test code, none reproducible locally**: a CRLF assumption (Windows), an `ETXTBSY` staging race on overlayfs (`msrv`), and a read-only flush handle that made the second fix Unix-only (Windows again). It took four pushes to close. |
-| M013 — 0.2.0 publication and Phase 11 operational closure | **corrective required / superseded by C023 for current state** | `plans/closure/distribution-release-update/013-status.md` | Historical receipt preserved: v0.2.0 was published and attested, but its automatic M011C criterion was not met. Post-release interrogation then found two destructive defects in the immutable bytes. C023 is the corrective; do not rewrite M013 history as a full pass. |
-| C023 — v0.2.0 destructive-safety patch-release corrective | **ready / immediate** | `plans/implementation/distribution-release-update/c023-v0.2.0-destructive-safety-patch-release-corrective.md` | High-severity corrective. Reproduce both published destructive defects; qualify the already-landed fixes; repair current macOS CI; publish immutable v0.2.1; require automatic five-target smoke; yank crates.io 0.2.0; reconcile M013/M011C without rewriting history. |
+| M013 — 0.2.0 publication and Phase 11 operational closure | **closed / corrected by C023** | `plans/closure/distribution-release-update/013-status.md` | Historical receipt preserved and not reopened. Its automatic M011C criterion was not met, and post-release interrogation then found two destructive defects in the immutable bytes. An appended corrective note records this; no claim in the record is retracted. |
+| C023 — v0.2.0 destructive-safety patch-release corrective | **closed** | `plans/closure/distribution-release-update/c023-status.md` | Both published destructive defects reproduced against the immutable 0.2.0 binary and fixed; every shipped change requalified by a test shown to fail against the old behaviour; v0.2.1 published; automatic five-lane smoke green; crates.io 0.2.0 yanked and disclosed. Three findings recorded rather than fixed, one of them handed to C024. |
+| C024 — Windows glob canonicalization corrective | **open / ready** | `plans/implementation/distribution-release-update/c024-windows-glob-canonicalization-corrective.md` | Medium. `escape_glob_literal` returns `None` for `\`, every canonical Windows path contains one, so `canonical_pattern_prefix` is a no-op on Windows and an `exclude` naming a bracketed directory does not match it. Pre-existing, not destructive, and a matching-semantics decision rather than a patch. |
 | C010 — `CurlConfig::user_agent` seam in `eggup-curl` | **proposed** | `plans/implementation/distribution-release-update/c010-eggup-curl-user-agent-seam.md` | Bounded upstream request. It cannot be closed from this repository, and nothing here waits on it: `eggup-eggfetch` already provides the seam. No closure record, by design. |
 | C018 — self-update provenance uncertainty fail-closed | **closed** | `plans/closure/distribution-release-update/c018-status.md` | None outstanding. Published 0.1.6 refused in both the default Cargo home and `--root` with 0.2.0 available; bytes byte-identical before and after, bookkeeping still v0.1.6. |
 | M011A — immutable release attestation + verification | **closed** | `plans/closure/distribution-release-update/m011a-status.md` | None outstanding. v0.2.0 verified immutable with a valid release attestation, and all 15 downloaded asset digests match it. v0.1.0–v0.1.6 predate the policy and remain mutable. |
 | M011B — staged-release validation workflow gate | **closed** | `plans/closure/distribution-release-update/m011b-status.md` | None outstanding. Automatic run 37418179489 passed all six steps against the real draft, including a measured `GLIBC_2.17.0` floor. Its first three executions exposed three defects, now fixed. |
-| M011C — published-release smoke automation | **closed (conditional)** | `plans/closure/distribution-release-update/m011c-status.md` | Five-target evidence satisfied: run 37420625111, all lanes green on `v0.1.6 -> v0.2.0`. **Still outstanding: an observed-green *automatic* `release: published` trigger.** The automatic run fired, hit three defects in its own path, and cannot be re-raised. |
+| M011C — published-release smoke automation | **closed** | `plans/closure/distribution-release-update/m011c-status.md` | Five-target evidence satisfied: run 37420625111, all lanes green on `v0.1.6 -> v0.2.0`. The outstanding condition — an observed-green **automatic** `release: published` trigger — was discharged by C023's 0.2.1 publication, after the three defects the first automatic run found were fixed. |
 | M011D — Cargo selector qualification lifecycle | **closed** | `plans/closure/artifact-discovery-cleanup/m011d-status.md` | None outstanding. The hosted matrix is a recurring maintenance lane, not a release gate. **Addendum:** the gate had never actually run — both jobs passed a plural `toolchains:` input to an action that declares a singular `toolchain:`, and died on "'toolchain' is a required input". Fixed and re-verified. |
 
-**Read this before the next release.** The next release must be the C023 safety
-patch, expected as **v0.2.1**.
+**Read this before the next release.** C023's safety patch, **v0.2.1**, is
+published and its automatic five-lane `release: published` smoke is green.
 
-1. **Do not tag while current CI is red.** Baseline CI #284 fails on macOS in
-   `src/discovery.rs:931` (`std::fs::FileType` vs `dua_core::FileType`);
-   Ubuntu/Windows check lanes were cancelled and are not evidence.
-2. Reproduce both destructive v0.2.0 defects only in disposable fixtures and
-   prove the fixed candidate rejects/makes them non-mutating.
+1. **Do not tag while current CI is red, and do not accept a cancelled lane as
+   evidence.** C023's baseline had Ubuntu and Windows cancelled behind a macOS
+   compile error; two of the three defects it found in that state were invisible
+   to Linux and only became visible when all three lanes actually ran.
+2. Reproduce a destructive defect only in a disposable fixture, against the
+   immutable published binary rather than a build of the tree.
 3. Run the complete release gate and require complete Linux/macOS/Windows hosted
    green evidence before tagging.
-4. Publish v0.2.1 through the same Eggpack -> automatic staged validation ->
-   human publish -> crates.io exact-tag -> attestation path.
+4. Publish through the same Eggpack -> automatic staged validation -> human
+   publish -> crates.io exact-tag -> attestation path.
 5. **Require a green automatic M011C `release: published` smoke.** Manual
    recovery does not close that requirement.
-6. v0.2.0 is immutable and must never be rewritten. C023 requires a crates.io
-   yank for 0.2.0 and explicit documentation of the affected behavior.
+6. v0.2.0 is immutable and was never rewritten. It is yanked on crates.io and its
+   defects are documented in `CHANGELOG.md`, `README.md`, `docs/INSTALLING.md`,
+   and `docs/TROUBLESHOOTING.md`.
+7. **Take C024 before the next release if you can.** It is a medium finding the
+   last patch deliberately did not absorb, and folding a matching-semantics
+   decision into a safety patch is the failure mode C023 exists to prevent.
 
 ## Published state
 
-Eight releases are published as GitHub releases and on crates.io, none yanked:
-**v0.1.0, v0.1.1, v0.1.2, v0.1.3, v0.1.4, v0.1.5, v0.1.6, v0.2.0**, none
-yanked.
+Nine releases are published as GitHub releases and on crates.io.
+**v0.2.0 is yanked**; every other version is not.
 
-**v0.2.0 is the first immutable release and is affected by C023.** v0.1.0–v0.1.6
-predate the immutable-release policy and remain mutable; v0.2.0 carries a valid
-attestation for the bytes that shipped, but those bytes contain two destructive
-defects: pre-subcommand `--dry-run` may execute cleanup, and a covering output
-root may include another resolved workspace's source tree. The attestation proves
-identity, not safety. The corrective target is v0.2.1; v0.2.0 is to be yanked on
-crates.io under C023.
+**v0.2.0 is the first immutable release and it carried two destructive defects:**
+pre-subcommand `--dry-run` may execute a real cleanup, and a covering output
+root may include another resolved workspace's source tree. It carried a valid
+attestation for the bytes that shipped — the attestation proves identity, not
+safety. It is yanked rather than rewritten because the release is immutable and
+because deleting files it did not own is not something a "the rest was fine"
+note can honestly describe. **v0.2.1 carries both fixes.** v0.1.0–v0.1.6 predate
+the immutable-release policy and remain mutable.
 
 C018, M011A, and M011B remain closed on v0.2.0's release-process evidence.
 M011C remains conditional on an observed-green automatic trigger. M013's

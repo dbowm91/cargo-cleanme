@@ -571,7 +571,10 @@ fn a_neighbouring_projects_sources_inside_a_covering_output_root_are_never_clean
     use cargo_cleanme::cleanup::{CleanMode, CleanOutcome, CleanupPolicy};
 
     let temp = tempdir().unwrap();
-    let case = temp.path();
+    // Canonical, for the reason given in the sibling-eligibility case: macOS
+    // puts the temporary directory under a symlinked prefix, and workspace
+    // resolution canonicalizes every path it reports.
+    let case = &fs::canonicalize(temp.path()).unwrap();
     let outer = case.join("outer");
     let out = outer.join("out");
     let inner = out.join("inner");
@@ -606,7 +609,7 @@ fn a_neighbouring_projects_sources_inside_a_covering_output_root_are_never_clean
 
     let runner = RealisticCargo::new();
     let report = cargo_cleanme::cleanup::clean_with_roots_policy_selector(
-        &[case.to_path_buf()],
+        std::slice::from_ref(case),
         300,
         // Authorization is granted deliberately: `allowed_output_roots`
         // authorizes, it never manufactures ownership proof, so this fixture
@@ -750,7 +753,11 @@ fn an_unrelated_sibling_workspace_stays_eligible_alongside_a_dangerous_one() {
     use cargo_cleanme::cleanup::{CleanMode, CleanOutcome, CleanupPolicy};
 
     let temp = tempdir().unwrap();
-    let case = temp.path();
+    // Workspace resolution canonicalizes every root, so the group's
+    // `output_roots` are canonical paths. On macOS the temporary directory sits
+    // under a symlinked prefix (`/var` -> `/private/var`), so comparing them
+    // against `temp.path()` fails on a spelling production never produces.
+    let case = &fs::canonicalize(temp.path()).unwrap();
 
     // A plain, private, inactive project: the ordinary happy path.
     let sibling = common::inactive_project(case, "sibling");
@@ -778,7 +785,7 @@ fn an_unrelated_sibling_workspace_stays_eligible_alongside_a_dangerous_one() {
 
     let runner = RealisticCargo::new();
     let report = cargo_cleanme::cleanup::clean_with_roots_policy_selector(
-        &[case.to_path_buf()],
+        std::slice::from_ref(case),
         300,
         &[out.clone(), sibling_target.clone()],
         CleanMode::Simulate,
