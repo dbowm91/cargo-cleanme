@@ -478,12 +478,12 @@ def self_test() -> int:
     expect_error(
         "a predecessor missing the contracted asset fails rather than being skipped",
         lambda: select_predecessor("v0.1.8", triple, releases=releases),
-        "no stable cargo-cleanme release below",
+        "no installable stable cargo-cleanme release below",
     )
     expect_error(
         "a target with no predecessor at all fails",
         lambda: select_predecessor("v0.0.1", triple, releases=[]),
-        "no stable cargo-cleanme release below",
+        "no installable stable cargo-cleanme release below",
     )
     expect_error(
         "a pre-release target is refused",
