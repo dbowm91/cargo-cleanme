@@ -1337,6 +1337,11 @@ mod tests {
         /// as_success`: `leaking_staging` *succeeds* while leaving bytes behind,
         /// which is a different defect. This one is the transport reporting a
         /// failure the caller has to carry.
+        /// Unix-gated with its only caller, for the reason in
+        /// `src/config.rs`'s `toml_string`: a test-only builder that nothing
+        /// reaches on one lane is dead code there, and CI compiles with
+        /// `-D warnings`.
+        #[cfg(unix)]
         fn failing_cleanup(mut self, detail: &str) -> Self {
             self.cleanup_error = Some(detail.to_owned());
             self

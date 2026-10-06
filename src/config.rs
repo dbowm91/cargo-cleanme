@@ -494,6 +494,10 @@ mod tests {
     /// already uses for the same reason. The path text itself, brackets
     /// included, is unchanged — the bracket must survive into the parsed
     /// string, because it is what the canonical rewrite has to escape.
+    /// Unix-gated with its callers: every case that writes a path into TOML
+    /// is `#[cfg(unix)]`, and an ungated helper is `-D warnings` dead code on
+    /// the Windows lane -- the same lesson C021 learned.
+    #[cfg(unix)]
     fn toml_string(value: &str) -> String {
         toml::Value::String(value.to_owned()).to_string()
     }
