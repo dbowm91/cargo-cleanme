@@ -28,7 +28,7 @@ set edit:completion:arg-completer[cargo] = {|@words|
             cand --format 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers'
             cand --no-progress 'Disable transient progress UI (useful for benchmarks and debugging)'
             cand --stats 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination'
-            cand --dry-run 'Simulate routine maintenance: run every decision, proof, and reporting step, but invoke no `cargo clean` process at all'
+            cand --dry-run 'Simulate: run every decision, proof, and reporting step, but invoke no `cargo clean` process at all. Honoured wherever it appears, so the `cargo cleanme --dry-run clean ROOT` spelling cannot fall back to Execute'
             cand --dryrun 'Historical spelling of `--dry-run`; retained as a hidden alias'
             cand -h 'Print help (see more with ''--help'')'
             cand --help 'Print help (see more with ''--help'')'

@@ -258,6 +258,21 @@ fn entry_is_within_any(entry: &dua_core::Entry, root: &Path, prefixes: &[PathBuf
         .any(|prefix| entry_is_within(entry, root, prefix))
 }
 
+/// Whether a *global-only* system prune covers this entry.
+///
+/// A walk root strictly inside a system prune re-opens that prune for its own
+/// subtree: the platform policy listed both, and the more specific list wins.
+/// Without this, macOS's `/usr` prune also swallows the `/usr/local` exception
+/// root the same policy adds — `entry_is_within` matches on `parent_path`, so
+/// every entry under `/usr/local` is "within" `/usr` and the subtree is never
+/// walked. Only global-only prunes get the exemption: a Cargo or rustup home
+/// stays refused even when a root sits inside it.
+fn entry_is_system_pruned(entry: &dua_core::Entry, root: &Path, prefixes: &[PathBuf]) -> bool {
+    prefixes.iter().any(|prefix| {
+        !(root != prefix && root.starts_with(prefix)) && entry_is_within(entry, root, prefix)
+    })
+}
+
 fn top_level_entry_map(
     roots: &[(usize, PathBuf)],
     root_counts: &HashMap<usize, u64>,
@@ -533,7 +548,7 @@ fn discover_global_roots(
             if entry.depth > 0 && (entry.file_name == "target" || vcs(&entry.file_name)) {
                 return false;
             }
-            if entry_is_within_any(entry, root, &descend_system_prunes)
+            if entry_is_system_pruned(entry, root, &descend_system_prunes)
                 || entry_is_within_any(entry, root, &descend_cargo_prunes)
                 || entry_is_within_any(entry, root, &descend_rustup_prunes)
             {
@@ -634,7 +649,7 @@ fn discover_global_roots(
             let Some((_, root)) = roots.get(root_idx) else {
                 continue;
             };
-            let system = entry.depth > 0 && entry_is_within_any(&entry, root, &system_prunes);
+            let system = entry.depth > 0 && entry_is_system_pruned(&entry, root, &system_prunes);
             let cargo = entry.depth > 0 && entry_is_within_any(&entry, root, &cargo_prunes);
             let rustup = entry.depth > 0 && entry_is_within_any(&entry, root, &rustup_prunes);
             let target = entry.depth > 0 && (entry.file_name == "target" || vcs(&entry.file_name));
@@ -903,7 +918,78 @@ fn discover_manifests_root(
 mod tests {
     use super::*;
     use crate::progress::NoopObserver;
+    use std::sync::Arc;
     use tempfile::tempdir;
+
+    /// Build a minimal walk entry for the path `<parent>/<name>` at `depth`.
+    fn entry_at(parent: &Path, name: &str, depth: usize) -> dua_core::Entry {
+        let d = tempdir().unwrap();
+        let file_type = std::fs::metadata(d.path()).unwrap().file_type();
+        dua_core::Entry {
+            depth,
+            file_name: OsString::from(name),
+            file_type,
+            metadata: None,
+            parent_path: Arc::from(parent.to_path_buf().into_boxed_path()),
+            directory_id: None,
+            parent_directory_id: None,
+        }
+    }
+
+    #[test]
+    fn a_root_inside_a_global_prune_reopens_that_prune() {
+        // macOS lists both `/` and `/usr/local` as roots and `/usr` as a
+        // global-only prune. Matched on `parent_path`, that prune also covers
+        // every entry below `/usr/local`, so the exception root would never be
+        // walked — the reason developer content under it stays invisible.
+        let prunes = vec![PathBuf::from("/usr"), PathBuf::from("/System")];
+
+        // From the `/` root, `/usr` and `/System` are still refused.
+        assert!(entry_is_system_pruned(
+            &entry_at(Path::new("/"), "usr", 1),
+            Path::new("/"),
+            &prunes
+        ));
+        assert!(entry_is_system_pruned(
+            &entry_at(Path::new("/"), "System", 1),
+            Path::new("/"),
+            &prunes
+        ));
+
+        // From the `/usr/local` root, `/usr` no longer applies at any depth,
+        // and nothing else in the list does either.
+        for (parent, name, depth) in [
+            ("/usr/local", "bin", 1usize),
+            ("/usr/local/src", "cargo", 2),
+            ("/usr/local", ".git", 1),
+        ] {
+            assert!(
+                !entry_is_system_pruned(
+                    &entry_at(Path::new(parent), name, depth),
+                    Path::new("/usr/local"),
+                    &prunes
+                ),
+                "{parent}/{name} under the /usr/local root must not be pruned by /usr"
+            );
+        }
+
+        // The exemption is scoped to the root that re-opened the prune: the
+        // same entry, walked from `/`, is still refused.
+        assert!(entry_is_system_pruned(
+            &entry_at(Path::new("/usr"), "local", 1),
+            Path::new("/"),
+            &prunes
+        ));
+
+        // Cargo and rustup homes get no such exemption: an explicitly rooted
+        // subtree of one is still a registry cache that must not be walked.
+        let cargo_prunes = vec![PathBuf::from("/usr/local/cargo/registry")];
+        assert!(entry_is_within_any(
+            &entry_at(Path::new("/usr/local/cargo/registry/src"), "serde", 2),
+            Path::new("/usr/local"),
+            &cargo_prunes
+        ));
+    }
 
     #[test]
     fn rustup_home_uses_absolute_override_or_platform_home_only() {

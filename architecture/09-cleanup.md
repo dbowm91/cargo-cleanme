@@ -582,14 +582,14 @@ concrete assertions in this module:
 
 | Test | Lines | Assertion |
 | --- | --- | --- |
-| `unresolved_discovered_manifest_blocks_every_cleanup_mode_before_clean` | `:2702-2757` | All three modes; `clean_calls().is_empty()` at `:2745-2748` ("zero clean and dry-run invocations"); `results.is_empty()` `:2730-2733`; exact `scope_blocked` string `:2734-2740`. |
-| `initial_shared_overlap_is_decided_conservatively_without_proof` | `:5549-5580` | All three modes; `proof_workspaces_refreshed == 0` `:5575-5578` ("gate blocked before any ownership proof"); `clean_calls().is_empty()` `:5579`. |
-| `fresh_size_policy_rejects_shrunk_output_before_any_cargo_clean` | `:4240-4285` | All three modes; policy rejection precedes any clean. |
-| `fresh_source_and_output_age_policy_rejects_before_any_cargo_clean` | `:4286-4334` | All three modes. |
-| `preview_is_default_and_simulate_invokes_no_clean` | `:2667-2699` | Simulate: `clean_calls().is_empty()` `:2688-2691`. |
-| `simulation_parity_valid_private_reaches_cleanable_with_zero_clean_calls` | `:3780-3825` | Simulate reaches cleanable with zero clean calls; the same unit proves `Ok` through `final_cleanup_proof` with a fake runner. |
-| `combined_roots_share_one_ownership_proof_and_simulation_never_cleans` | `:5864-5895` | Two roots, one shared universe proof: 6 metadata + 2 locate; zero cleans. |
-| `simulation_parity_missing_and_invalid_markers_both_skip` | `:3720-3779` | Marker failures skip identically in Simulate and Preview. |
+| `unresolved_discovered_manifest_blocks_every_cleanup_mode_before_clean` | `:2813` | All three modes; `clean_calls().is_empty()` at `:2745-2748` ("zero clean and dry-run invocations"); `results.is_empty()` `:2730-2733`; exact `scope_blocked` string `:2734-2740`. |
+| `initial_shared_overlap_is_decided_conservatively_without_proof` | `:5738` | All three modes; `proof_workspaces_refreshed == 0` `:5575-5578` ("gate blocked before any ownership proof"); `clean_calls().is_empty()` `:5579`. |
+| `fresh_size_policy_rejects_shrunk_output_before_any_cargo_clean` | `:4381` | All three modes; policy rejection precedes any clean. |
+| `fresh_source_and_output_age_policy_rejects_before_any_cargo_clean` | `:4431` | All three modes. |
+| `preview_is_default_and_simulate_invokes_no_clean` | `:2778` | Simulate: `clean_calls().is_empty()` `:2688-2691`. |
+| `simulation_parity_valid_private_reaches_cleanable_with_zero_clean_calls` | `:3913` | Simulate reaches cleanable with zero clean calls; the same unit proves `Ok` through `final_cleanup_proof` with a fake runner. |
+| `combined_roots_share_one_ownership_proof_and_simulation_never_cleans` | `:6061` | Two roots, one shared universe proof: 6 metadata + 2 locate; zero cleans. |
+| `simulation_parity_missing_and_invalid_markers_both_skip` | `:3853` | Marker failures skip identically in Simulate and Preview. |
 
 **Precision required:** "zero-spawn" here means **zero `clean` invocations**, not
 zero processes. `cargo locate-project` and `cargo metadata` still run during

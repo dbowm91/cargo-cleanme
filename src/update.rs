@@ -285,8 +285,8 @@ pub enum UpdateError {
     },
     /// This installation may not be updated by this tool.
     Provenance { provenance: Provenance },
-    /// The running executable is already the target version, but only after
-    /// the destination was positively identified.
+    /// The registry publishes no contracted release asset for this host's
+    /// platform/architecture pair, so there is nothing this tool could install.
     HostUnsupported { detail: String },
 }
 
@@ -507,9 +507,9 @@ pub fn classify_provenance_in(current_exe: &Path, cargo_home: Option<PathBuf>) -
 /// refusal that names the manager command. So this is deliberately generous.
 ///
 /// The bound cannot miss a supported layout, and that is now checkable rather
-/// than asserted: `a_cargo_root_beyond_the_bound_cannot_exist` walks the
-/// real-shape layouts from C018's Work Package A and proves the owning root is
-/// always within it. What changed in C018 is not the bound but the *marker* --
+/// than asserted: `the_cargo_root_search_cannot_miss_a_supported_layout` walks
+/// the real-shape layouts from C018's Work Package A and proves the owning root
+/// is always within it. What changed in C018 is not the bound but the *marker* --
 /// a candidate root now has to carry positive Cargo metadata to be considered,
 /// so "an ancestor called `bin`" is no longer treated as a Cargo root.
 const CARGO_ROOT_SEARCH_DEPTH: usize = 4;
@@ -799,7 +799,11 @@ pub trait UpdateEnvironment {
     /// Fetch a URL into memory, bounded by `limit` bytes.
     fn fetch_metadata(&self, url: &str, limit: usize) -> Result<Vec<u8>, UpdateError>;
     /// Remove only this run's own staging directory.
-    fn cleanup(&self, staging: &Path);
+    ///
+    /// Reports failure instead of swallowing it. Up to `MAX_ARTIFACT_BYTES` of
+    /// downloaded bytes can remain in the temp directory, and a command that
+    /// says "updated" while leaving them there has not described what it did.
+    fn cleanup(&self, staging: &Path) -> Result<(), String>;
 }
 
 /// The User-Agent every outbound request identifies itself with.
@@ -863,17 +867,23 @@ impl UpdateEnvironment for HttpEnvironment {
     }
 
     fn staging_dir(&self) -> Result<PathBuf, UpdateError> {
-        // A collision-resistant, invocation-owned directory name. The
-        // timestamp plus pid is enough: this never overwrites an existing path,
-        // it fails instead.
+        // A collision-resistant, invocation-owned directory name: the timestamp
+        // plus pid is enough. `create_dir` — not `create_dir_all`, which
+        // *succeeds* on an existing path — makes the comment literal: this
+        // never adopts a directory that already exists, it fails instead, so a
+        // collision cannot leave one invocation staging bytes into another's
+        // tree. No retry loop is needed because the name is unique per call.
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let unique =
             std::env::temp_dir().join(format!("{PRODUCT}-update-{}-{nanos}", std::process::id()));
-        std::fs::create_dir_all(&unique).map_err(|error| UpdateError::Transaction {
-            detail: format!("could not create a private staging directory: {error}"),
+        std::fs::create_dir(&unique).map_err(|error| UpdateError::Transaction {
+            detail: format!(
+                "could not create a private staging directory at {}: {error}",
+                unique.display()
+            ),
         })?;
         Ok(unique)
     }
@@ -923,9 +933,9 @@ impl UpdateEnvironment for HttpEnvironment {
         }
     }
 
-    fn cleanup(&self, staging: &Path) {
+    fn cleanup(&self, staging: &Path) -> Result<(), String> {
         // Only this run's own directory, created by `staging_dir` above.
-        let _ = std::fs::remove_dir_all(staging);
+        std::fs::remove_dir_all(staging).map_err(|error| error.to_string())
     }
 }
 
@@ -1020,9 +1030,13 @@ pub fn run(
         return Ok(plan);
     }
 
-    // Refuse before acquiring anything if this installation is not ours to
-    // replace. Checking after the download would waste the user's bandwidth on
-    // a run that could not be committed.
+    // Defence in depth, not the gate. The gate that decides is the one above,
+    // before `fetch_metadata`; by here `check_only` has returned and provenance
+    // is known to be `VerifiableSelfManaged`, so the `else` arm cannot be
+    // reached today. It stays because `plan.provenance` is a field a future
+    // step could rebuild, and a commit that trusts it must be able to refuse on
+    // its own. What it does *not* do is save the user bandwidth — by this point
+    // the metadata fetch has already happened.
     if let Provenance::VerifiableSelfManaged { .. } = plan.provenance {
     } else {
         return Err(UpdateError::Provenance {
@@ -1184,9 +1198,20 @@ fn execute(
             })
     })();
 
-    environment.cleanup(&staging);
+    // Cleanup runs on both the success and the failure path, so it is captured
+    // rather than `?`-propagated here: the transaction's own outcome is the more
+    // important fact and must not be masked by a leftover temp directory.
+    let cleanup = environment.cleanup(&staging);
 
     let receipt = outcome?;
+    if let Err(detail) = cleanup {
+        return Err(UpdateError::Transaction {
+            detail: format!(
+                "the executable was replaced, but its staging directory {} could not be removed: {detail}",
+                staging.display()
+            ),
+        });
+    }
     let disposition = match receipt.disposition() {
         TransactionDisposition::Committed => return Ok(plan.clone()),
         TransactionDisposition::RolledBack => "rolled_back",
@@ -1374,9 +1399,11 @@ mod tests {
             self.version.clone()
         }
         fn staging_dir(&self) -> Result<PathBuf, UpdateError> {
+            // Mirrors production: `create_dir`, no pre-cleaning. Removing the
+            // directory first would pre-clean the exact hazard the subject is
+            // supposed to refuse, so no test could ever see a collision.
             let path = unique("cargo-cleanme-update-test");
-            let _ = std::fs::remove_dir_all(&path);
-            std::fs::create_dir_all(&path).map_err(|e| UpdateError::Transaction {
+            std::fs::create_dir(&path).map_err(|e| UpdateError::Transaction {
                 detail: e.to_string(),
             })?;
             *self.staging.borrow_mut() = Some(path.clone());
@@ -1423,15 +1450,16 @@ mod tests {
                     detail: format!("fixture has no metadata for {url}"),
                 })
         }
-        fn cleanup(&self, staging: &Path) {
+        fn cleanup(&self, staging: &Path) -> Result<(), String> {
             *self.cleanup_calls.borrow_mut() += 1;
             if self.suppress_cleanup {
                 // Deliberately leave the directory in place so
                 // `leaked_staging` has something real to report.
-                return;
+                return Ok(());
             }
-            let _ = std::fs::remove_dir_all(staging);
+            std::fs::remove_dir_all(staging).map_err(|e| e.to_string())?;
             *self.staging.borrow_mut() = None;
+            Ok(())
         }
     }
 
@@ -2505,11 +2533,27 @@ mod tests {
         // The compiled-in table is a copy of release/eggpack/distribution.toml.
         // scripts/check-release-contract.py proves the same invariant in CI;
         // this asserts the table itself is exactly the contract's five targets.
-        let contract = std::fs::read_to_string(concat!(
+        //
+        // The contract is a repository file, not crate content: the `include`
+        // allowlist has no `/release/**`, so it is absent from a crates.io
+        // tarball and from a `cargo vendor` tree. Reading it unconditionally
+        // made `cargo test` fail on a tree that is perfectly correct. The
+        // comparison is skipped only when the file is genuinely absent —
+        // present-but-unreadable is still a failure.
+        let contract_path = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/release/eggpack/distribution.toml"
-        ))
-        .expect("the distribution contract is part of the repository");
+        );
+        let contract = match std::fs::read_to_string(contract_path) {
+            Ok(contract) => contract,
+            Err(error) => {
+                assert!(
+                    !std::path::Path::new(contract_path).exists(),
+                    "the distribution contract is unreadable: {error}"
+                );
+                return;
+            }
+        };
         for (triple, asset) in PUBLISHED_TARGETS {
             assert!(
                 contract.contains(&format!("triple = \"{triple}\"")),

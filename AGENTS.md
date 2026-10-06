@@ -7,10 +7,10 @@ the one architecture deep dive your change touches.
 
 A single Rust crate that finds Cargo build output and cleans it **through
 Cargo**, never by deleting directories. One binary over one library of 15
-modules, 17 source files, 20,915 lines in `src/`. No async runtime of its own.
+modules, 17 source files, 21,868 lines in `src/`. No async runtime of its own.
 `cargo metadata` is the only binary dependency that matters for safety.
 
-Seven releases are published (v0.1.0 through v0.1.6), none yanked.
+Eight releases are published (v0.1.0 through v0.1.6, plus 0.2.0), none yanked.
 
 ## Read this before your first change
 
@@ -169,12 +169,12 @@ closure records.
 | Path | Contents |
 |---|---|
 | `src/` | the crate — 17 files; `main.rs` is the binary, `lib.rs` declares the 15 library modules |
-| `tests/` | `cli_contract.rs` (9 tests), `end_to_end.rs` (1), `common/` |
+| `tests/` | `cli_contract.rs` (32 tests), `end_to_end.rs` (2), `common/` |
 | `architecture/` | `overview.md` + 15 deep dives |
 | `docs/` | `RELEASING.md` (operator checklist), `TROUBLESHOOTING.md` (includes known defects by version) |
 | `plans/` | decision records — see §6 |
 | `.skills/` | the six skills — see §2 |
-| `scripts/` | 17 scripts; `check-doc-citations.py` also gates that `architecture/14-testing-and-verification.md` §5 table is exactly these 17, so a new checker cannot ship undocumented. All 17 take `--self-test`; C022 removed the last exception |
+| `scripts/` | 17 scripts; `check-doc-citations.py` also gates that `architecture/14-testing-and-verification.md` §5 table is exactly these 17, so a new checker cannot ship undocumented. **11 of the 17 implement `--self-test`; the other 6 do not** — `release-check.sh` *invokes* five self-tests rather than providing one, and `gen-release-workflow-shape.py`, `release-benchmark.py`, `smoke-release-candidate.py`, `validate-staged-release.py`, and `post-release-smoke.sh` have no such mode. A new guard must ship with one; the existing six are inventoried in `architecture/14-testing-and-verification.md` §5 |
 | `completions/`, `man/` | **generated** — do not hand-edit; run `generate-docs` |
 | `xtask/` | `generate-docs` source (feature `dev-tools`); excluded from the published crate |
 | `release/eggpack/` | `distribution.toml` is the authority for the release target matrix |

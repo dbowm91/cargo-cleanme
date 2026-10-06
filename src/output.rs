@@ -388,6 +388,41 @@ pub mod log {
         )
     }
 
+    /// One line for a `config` subcommand.
+    ///
+    /// `config path` and `config show` exist precisely to put a path and the
+    /// file's text on stdout, and in log mode that content is exactly what this
+    /// format refuses to retain: a path in a history pane, and prose where a
+    /// monitor expects `key=value`. The line therefore reports which action ran
+    /// and nothing about what it produced.
+    pub fn config(action: &str) -> String {
+        line(
+            &[("op", "config".to_owned()), ("status", "ok".to_owned())],
+            &[("action", action.to_owned())],
+        )
+    }
+
+    /// One line for an `update` run.
+    ///
+    /// `target` is a target triple, not a path, and the versions are the
+    /// registry's own strings, so none of this is what the format refuses. The
+    /// `mode` field uses the cleanup vocabulary — `simulate` for a resolved plan
+    /// that acquired nothing, `execute` for a replacement that committed.
+    pub fn update(from: &str, to: &str, target: &str, dry_run: bool) -> String {
+        line(
+            &[("op", "update".to_owned()), ("status", "ok".to_owned())],
+            &[
+                ("from", from.to_owned()),
+                ("to", to.to_owned()),
+                ("target", target.to_owned()),
+                (
+                    "mode",
+                    if dry_run { "simulate" } else { "execute" }.to_owned(),
+                ),
+            ],
+        )
+    }
+
     /// Join `key=value` pairs under the fixed prefix.
     ///
     /// Structural fields are emitted unconditionally and in the order given.

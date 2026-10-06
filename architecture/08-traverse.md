@@ -431,13 +431,13 @@ One Windows-specific hazard, verifiable and worth stating: that path calls `std:
 |---|---|---|
 | **Two metadata syscalls per entry.** The engine collects `entry.metadata()` eagerly because `skip_metadata` is off (`dua-core lib.rs:776`), then `traverse.rs:93`/`:190` throws it away and re-`stat`s. | `:35-37` + `:93` | The single largest avoidable cost in the module. `discovery.rs:522` uses `.skip_metadata()`; `traverse.rs` cannot, because it needs the `modified()` value — but it does not need the *rest* of the metadata. |
 | `PathBuf` allocated per entry. `entry.path()` joins parent + filename and returns an owned `PathBuf` (`dua-core lib.rs:748`). | `:89`, `:182` | O(entries) heap allocations. Unavoidable given the re-stat design. |
-| **Double directory read in source activity.** The descend closure calls `fs::read_dir` (`:287`), then `is_excluded` calls it *again* on the same path (`:340`). | `:287` + `:340` | Two full child enumerations of every included directory, purely to look for a VCS name. Same duplication at `:394` + `:443`. |
+| **Double directory read in source activity.** The descend closure and the entry classification used to ask the same question of the same directory, each costing a `fs::read_dir`. | `:344` + `:382`, and `:445` + `:473` | **Fixed.** One definition, `contains_vcs_marker` (`:31-38`), behind a `NestedRepoMarkers` memo (`:50-66`) shared by both. Only *positives* are recorded, so the memo is bounded by the number of nested repositories rather than by the size of the tree, and a miss costs exactly what it cost before — the entry loop degrades to the old behaviour rather than to a wrong answer. |
 | O(entries) with two passes for roots. `symlink_metadata` runs once in the batch pre-pass and again per entry inside the walk. | `:148`, `:190` | |
 | `root_paths` clones every path. | `:165` | O(roots) `PathBuf` clones per batch, for a comparison that only ever needs the root's own `path()`. |
 | Sizing is O(bytes-of-inodes), not O(bytes). | — | Measuring a 40 GB tree costs one `st_blocks` lookup per file, not a read. This is the property that makes whole-machine sizing affordable. |
 
-Hot spots for a whole-machine scan, in order: the double `stat` per entry; the `read_dir`
-  double-enumeration in the activity walks; and — outside this module — the sheer number of
+Hot spots for a whole-machine scan, in order: the double `stat` per entry; and — outside
+  this module — the sheer number of
   entries, which is why `worker_threads()`'s cap of 8 is a *deliberate* limit (`:24-28`:
   "candidate count never spawns unbounded worker pools") rather than a missing feature.
 
@@ -537,12 +537,12 @@ Otherwise: no `unwrap`, no `expect`, no slicing, and no integer casts in `traver
 
 | Test | Line | What it establishes |
 |---|---|---|
-| `worker_pool_is_bounded` | `:475-479` | `worker_threads()` is in `1..=8` |
-| `single_and_batched_target_measures_agree` | `:481-502` | Batch and single agree on `entries` and `bytes` for 3 roots — the cross-check for §5's duplication |
-| `duplicate_candidate_indices_do_not_panic_and_are_measured_once` | `:503-543` | A repeated `candidate_index` is measured once and every occurrence reports that one measurement, instead of tripping `dua_core::walk_roots`' `assert_eq!` |
-| `candidate_count_does_not_grow_worker_pool` | `:544-560` | 32 roots still measure, pool still ≤ 8 |
-| `synthetic_wide_and_deep_trees_count_entries` | `:561-584` | 64 flat files → 64 entries; 12 nested dirs + 1 file → 13 entries (root excluded) |
-| `source_scan_short_circuits_recent_files` | `:585-599` | A fresh file yields `Recent`, not `Quiet` |
+| `worker_pool_is_bounded` | `:501` | `worker_threads()` is in `1..=8` |
+| `single_and_batched_target_measures_agree` | `:507` | Batch and single agree on `entries` and `bytes` for 3 roots — the cross-check for §5's duplication |
+| `duplicate_candidate_indices_do_not_panic_and_are_measured_once` | `:529` | A repeated `candidate_index` is measured once and every occurrence reports that one measurement, instead of tripping `dua_core::walk_roots`' `assert_eq!` |
+| `candidate_count_does_not_grow_worker_pool` | `:570` | 32 roots still measure, pool still ≤ 8 |
+| `synthetic_wide_and_deep_trees_count_entries` | `:587` | 64 flat files → 64 entries; 12 nested dirs + 1 file → 13 entries (root excluded) |
+| `source_scan_short_circuits_recent_files` | `:611` | A fresh file yields `Recent`, not `Quiet` |
 
 `tests/end_to_end.rs` and `tests/cli_contract.rs` give indirect end-to-end coverage:
   `end_to_end.rs:205-210` asserts a real artifact is *sized* through the JSON contract (`bytes >= 8192`, and the human formatter agrees), and `end_to_end.rs:50-70` backdates both files and

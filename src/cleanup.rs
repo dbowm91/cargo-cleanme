@@ -2025,9 +2025,10 @@ fn final_cleanup_proof_roots(
         );
     }
     // 8. No other discovered workspace may now overlap the candidate's affected
-    // output. The fresh graph catches proven overlaps (the group would be
-    // `Shared` in step 7); this pass also covers symlink/unresolvable roots the
-    // graph cannot represent, failing closed when they can reach the region.
+    // output, nor have its source tree inside it. The fresh graph catches proven
+    // overlaps (the group would be `Shared` in step 7); this pass also covers
+    // symlink/unresolvable roots the graph cannot represent, failing closed when
+    // they can reach the region.
     for other in &fresh_universe {
         if other.id == unit.id {
             continue;
@@ -2043,6 +2044,24 @@ fn final_cleanup_proof_roots(
                         other_path.display()
                     ).into());
                 }
+            }
+        }
+        // Another workspace's *source* tree inside the cleaned region is the
+        // same hazard one level down: `cargo clean` removes it too. The
+        // classification already refuses such a group, so this is the
+        // fail-closed half of the same rule against a universe rebuilt here.
+        for member in &other.members {
+            if let Some(c) = unit
+                .covering
+                .iter()
+                .find(|c| member.source_root == **c || member.source_root.starts_with(c))
+            {
+                return Err(format!(
+                    "ownership changed before cleanup; skipped: source tree {} of another discovered workspace ({}) lies inside cleaned output {}",
+                    member.source_root.display(),
+                    other.root.display(),
+                    c.display()
+                ).into());
             }
         }
     }

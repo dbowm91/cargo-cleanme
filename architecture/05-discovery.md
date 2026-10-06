@@ -491,22 +491,22 @@ or macOS run executes 17 and a Windows run 15.
 
 | Test | Line | Invariant protected |
 |---|---|---|
-| `rustup_home_uses_absolute_override_or_platform_home_only` | `:833` | precedence table via the pure `effective_rustup_home_from`; relative `RUSTUP_HOME` → `None` |
-| `global_rustup_prune_keeps_adjacent_user_project_reachable` | `:855` | the rustup prune spares an adjacent sibling project; the five per-reason counters sum to `directories_pruned`; an explicit scope overrides the global prune |
-| `global_multi_root_walk_deduplicates_equivalent_roots_and_manifests` | `:911` | duplicate identical roots collapse by canonical identity |
-| `profiling_worker_override_is_opt_in_and_bounded` | `:939` | worker override inert unless profiling; 32-worker cap; `completion` order opt-in only |
-| `synthetic_wide_and_deep_manifest_set_is_stable_across_worker_caps` | `:959` | 288-leaf + deep + hidden + unignore + symlink fixture is identical across 6×2×2 configurations; `top_level_entries` sums to `visited_entries` |
-| `manifest_name_is_matched_case_insensitively_where_the_volume_is` | `:1094` | case-insensitive manifest match |
-| `non_utf8_directory_still_matches_a_broad_ignore_pattern` | `:1114` | L4: a non-UTF-8 name cannot escape `*` |
-| `directories_visited_counts_directories_not_files` | `:1135` | L6: 4 directories vs 8 entries |
-| `symlinked_scan_root_is_refused_instead_of_scanning_nothing` | `:1153` | L7: a symlinked root yields an `Error` diagnostic, not a silent empty scan |
+| `rustup_home_uses_absolute_override_or_platform_home_only` | `:995` | precedence table via the pure `effective_rustup_home_from`; relative `RUSTUP_HOME` → `None` |
+| `global_rustup_prune_keeps_adjacent_user_project_reachable` | `:1017` | the rustup prune spares an adjacent sibling project; the five per-reason counters sum to `directories_pruned`; an explicit scope overrides the global prune |
+| `global_multi_root_walk_deduplicates_equivalent_roots_and_manifests` | `:1073` | duplicate identical roots collapse by canonical identity |
+| `profiling_worker_override_is_opt_in_and_bounded` | `:1101` | worker override inert unless profiling; 32-worker cap; `completion` order opt-in only |
+| `synthetic_wide_and_deep_manifest_set_is_stable_across_worker_caps` | `:1121` | 288-leaf + deep + hidden + unignore + symlink fixture is identical across 6×2×2 configurations; `top_level_entries` sums to `visited_entries` |
+| `manifest_name_is_matched_case_insensitively_where_the_volume_is` | `:1269` | case-insensitive manifest match |
+| `non_utf8_directory_still_matches_a_broad_ignore_pattern` | `:1289` | L4: a non-UTF-8 name cannot escape `*` |
+| `directories_visited_counts_directories_not_files` | `:1315` | L6: 4 directories vs 8 entries |
+| `symlinked_scan_root_is_refused_instead_of_scanning_nothing` | `:1333` | L7: a symlinked root yields an `Error` diagnostic, not a silent empty scan |
 | `discovers_real_manifest_and_prunes_target` / `manifest_discovery_prunes_target_children` / `manifest_discovery_finds_project_without_target` | `:1184`, `:1234`, `:1218` | `target/` descent refused and a nested `target/` manifest excluded, while a project with no `target/` is still a candidate |
-| `global_attribution_is_unallocated_when_not_requested` | `:1200` | `attribution = false` leaves the map empty while manifests and counters are unchanged |
-| `manifest_discovery_prunes_cargo_home_registry` | `:1254` | `$CARGO_HOME/registry/src` sources are not user projects |
-| `ignored_subtree_never_invokes_cargo_manifest_count_zero_for_pruned` | `:1375` | an ignored tree contributes prunes and zero manifests |
+| `global_attribution_is_unallocated_when_not_requested` | `:1380` | `attribution = false` leaves the map empty while manifests and counters are unchanged |
+| `manifest_discovery_prunes_cargo_home_registry` | `:1434` | `$CARGO_HOME/registry/src` sources are not user projects |
+| `ignored_subtree_never_invokes_cargo_manifest_count_zero_for_pruned` | `:1461` | an ignored tree contributes prunes and zero manifests |
 | `discovery_reaches_unignored_project_without_entering_ignored_sibling` / `filters_ignored_parent_keeps_exception_route` | `:1401`, `:1454` | the `/*` half of the unignore mechanism, against canonical spellings, and the re-enable path in `Filters` |
 | `literal_ignored_ancestor_does_not_readmit_ignored_siblings` and 8 further C019 tests | `:1559`–`:1802` | the literal-ancestor premise negative, wildcard/recursive/multiple/nested exceptions, re-included subtree, explicit bypass, internal-prune precedence, and the prune-counter contract |
-| `discovery_rejects_symlink_target` | `:1339` | a symlinked `target` does not stop manifest discovery (eligibility is decided later) |
+| `discovery_rejects_symlink_target` | `:1519` | a symlinked `target` does not stop manifest discovery (eligibility is decided later) |
 
 **Not covered — the gaps a reader should worry about.**
 

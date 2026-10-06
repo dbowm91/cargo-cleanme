@@ -378,7 +378,7 @@ qualifies the path inline.
 | Type | Qualified `domain::` refs | Consuming modules |
 |---|---:|---|
 | `DiagnosticCategory` | 11 | `main.rs`, `output.rs`, `workspace.rs`, `discovery.rs` (glob) |
-| `elapsed_nanos` | 6 | `main.rs`, `cleanup.rs`, `workspace.rs` |
+| `elapsed_nanos` | 10 | `main.rs`, `cleanup.rs`, `workspace.rs` |
 | `ScanRequest` | 2 | `policy.rs`, `main.rs`, `tests/end_to_end.rs` |
 | `ScanReport` | 2 | `main.rs`, `output.rs`, `tests/end_to_end.rs` |
 | `EffectiveScanPolicy` | 2 | `policy.rs`, `cleanup.rs` |
@@ -440,26 +440,27 @@ claim that proof work "is merged into separate `proof_*` fields (never into the
 initial-scan counters)" (`domain.rs:331-333`) is accurate and is the property to
 preserve.
 
-**5.4 `elapsed_nanos` and inconsistent siblings.** `elapsed_nanos`
+**5.4 `elapsed_nanos` and its siblings.** `elapsed_nanos`
 (`domain.rs:284-286`) uses `u64::try_from(...).unwrap_or(u64::MAX)`, with a doc
 comment explaining that a `Duration` cannot actually reach u64 nanoseconds
 (~584 years) and that this is defensive: a truncating cast on a user-visible
 counter is "a silent-wrong-number bug waiting for a slow machine"
-(`domain.rs:279-283`).
+(`domain.rs:278-284`).
 
-**That reasoning is not applied consistently elsewhere.** Six call sites use the
-helper (`main.rs:326`, `cleanup.rs:791`, `cleanup.rs:2032`, `cleanup.rs:2050`,
-`workspace.rs:1003`, `workspace.rs:1092`), but four use a truncating
-`elapsed().as_nanos() as u64` on the very same `*_nanos` fields —
-`workspace.rs:358`, `workspace.rs:372`, `workspace.rs:518`, `workspace.rs:524`,
-feeding `cargo_locate_nanos` / `cargo_metadata_nanos`, which `merge_proof` then
-saturating-adds. Treat those four as defects in the making, not as precedent.
+**That reasoning is now applied consistently.** Ten call sites use the helper
+(`main.rs:536`, `cleanup.rs:842`, `cleanup.rs:2121`, `cleanup.rs:2139`,
+`workspace.rs:391`, `workspace.rs:405`, `workspace.rs:559`, `workspace.rs:565`,
+`workspace.rs:1060`, `workspace.rs:1154`) and **no** site in `src/` writes
+`elapsed().as_nanos() as u64`. The four that did — the `cargo_locate_nanos` and
+`cargo_metadata_nanos` accumulators in `workspace.rs`, which `merge_proof` then
+saturating-adds — were the last inconsistent ones and now call the helper.
 
-**5.5 Saturating vs checked arithmetic.** `saturating_add` appears on 39 lines
-in `src/`, 6 of them in `merge_proof` (`domain.rs:342-357`).
-`saturating_sub` appears 3 times: `policy.rs:115` and `discovery_state.rs:183`
-(both `SystemTime`, where clamping to the epoch is intended) and
-`cleanup.rs:1128`, `proof.pre_bytes.saturating_sub(after)` — clamping to `0` when
+**5.5 Saturating vs checked arithmetic.** `saturating_add` appears on 41 lines
+in `src/`, 6 of them in `merge_proof` (`domain.rs:339-357`).
+`saturating_sub` appears 3 times in production: `policy.rs:115` and
+`discovery_state.rs:183` (both `SystemTime`, where clamping to the epoch is
+intended) and `cleanup.rs:1198`, `proof.pre_bytes.saturating_sub(after)` —
+clamping to `0` when
 output *grew* between proof and verification, the only safe reading.
 `checked_sub` appears 20 times but only **4** in production code (`main.rs:465`,
 `cleanup.rs:1022`, `cleanup.rs:1312`, `cleanup.rs:2002`); the other 16 are
@@ -508,7 +509,7 @@ the modules that consume it. That is the right place for them — a test of
 `format_bytes` belongs in `report.rs`, not in a data module. Concretely, the only
 domain-owned behaviour (`stats_line`, `timings_line`, `proof_stats_line`,
 `proof_timings_line`, `merge_proof`, `label`, `as_str`, `elapsed_nanos`) is
-asserted in `cleanup.rs:5851-5860`, three lines, one of which only checks that
+asserted in `cleanup.rs:6048-6057`, three lines, one of which only checks that
 `proof_timings_line()` contains `proof_metadata=`. That is thin. **Do not
 overstate the coverage:** there is no unit test pinning the full `stats_line` key
 list, none for `elapsed_nanos` saturation, and none for the

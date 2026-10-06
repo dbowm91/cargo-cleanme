@@ -8,6 +8,114 @@ command-line, JSON, and release-asset contracts are the stable surface.
 
 ## [Unreleased]
 
+### Fixed — safety
+
+- **`--dry-run` before the subcommand no longer deletes.** `cargo cleanme
+  --dry-run clean ROOT` — the spelling Cargo itself passes, and the one users
+  type — parsed cleanly, discarded the flag, and ran a real `cargo clean`,
+  reporting `status=ok` and exit 0. The root-level flag is now honoured on the
+  `Clean` and `Update` arms wherever it appears. `cargo cleanme --dry-run update`
+  reached `run_update(false)` by the same route. The root flag is still not
+  `global = true`, because that would collide with `update --dry-run`'s own
+  argument id; `invocation()` reconciles the two instead. When a root
+  `--dry-run` meets `clean --cargo-preview`, simulation wins: it is the mode
+  that spawns no Cargo process at all.
+
+- **A second workspace's source tree inside a covering root is no longer
+  deleted.** The source-disjointness check consulted only the group's own
+  owner's members. An outer workspace whose output directory was not literally
+  named `target`, containing a real nested project, was classified `PrivateBounded`
+  and cleaned — destroying the inner project's `Cargo.toml`, `Cargo.lock`,
+  `src/`, and `.cargo/config.toml` with exit 0 and no diagnostic. The check now
+  walks every resolved workspace's members, and the preflight proof independently
+  refuses when another workspace's source tree lies inside the cleaned region.
+  The diagnostic text is now "contains a workspace source tree" rather than "is
+  the workspace source tree", because the tree need not be the owner's.
+
+### Fixed — correctness and reporting
+
+- **On macOS, the `/usr/local` root is actually walked again.** The platform
+  policy lists `/usr/local` as an exception to the `/usr` prune, and both halves
+  of that exception were missing: the canonical collapse folded `/usr/local`
+  into `/`, and — had it survived — `entry_is_within` matched on `parent_path`,
+  so the `/usr` prune covered every entry below the `/usr/local` root.
+  Composition now protects a root that sits strictly inside a global-only prune,
+  and the prune exempts a walk root strictly inside it. The certifying test
+  asserted on a private pre-collapse helper and so passed while production
+  walked nothing; it now calls the production composition.
+
+- **Cargo's stderr is reported on the two failure paths.** A manifest that
+  `cargo locate-project` or `cargo metadata` refused produced a bare label —
+  `cargo locate-project failed` — with no way to learn why a project was missing
+  from every report. Both now carry a bounded first line of Cargo's stderr, the
+  same way the adjacent "could not start" and "cannot parse" paths already did.
+  No safety impact: these projects were refused, never deleted.
+
+- **`--format log` emits a line for `config` and `update`.** `op` is documented
+  to admit both, but neither had a `Log` branch, so `--format log config path`
+  printed a raw path on stdout and `--format log config show` printed the config
+  file — exactly what the format promises never to retain. Both now report the
+  action; the content is still available in human and JSON form.
+
+- **Config glob metacharacters can no longer be injected by the canonical
+  rewrite.** `load` validated each pattern and then spliced the canonical
+  spelling of its prefix in unescaped, so a directory named `real[abc]` reached
+  through a symlink turned `link/*` into a character class: the rule stopped
+  excluding the tree the user named and began excluding two they never wrote
+  down. The canonical spelling is now bracket-escaped, spellings with no portable
+  escape are left untouched, and the rewritten patterns are re-validated.
+  `scan.unignore` is a literal path by design and is still not escaped.
+
+- **Duplicate learned roots are folded.** A workspace with N members
+  contributed N observations resolving to one root, and the containment collapse
+  started at the parent, so the identical path was published N times. Behaviour
+  was inert (both consumers dedup first); the state file is what an operator
+  reads to judge whether the tool "knows" their projects.
+
+- **`active_skipped` counts what it claims to.** It counted *workspaces* while
+  `stats_line` compares it against `groups_measured`, so a workspace owning two
+  skipped groups reported `active_skipped=1`; every skip counter is now
+  per-group, like the rest of that line. `has_artifact_entries` returning `None`
+  for EACCES/ELOOP is still folded into `MissingOutput` rather than reported as
+  unreadable — fail-safe (the group is skipped, never deleted), already recorded
+  as a deliberate trade-off in `architecture/07-workspace.md`, and changing it
+  needs a new reason code.
+
+### Changed — internal
+
+- Four `u128 → u64` truncating casts on user-visible timing counters now call
+  `domain::elapsed_nanos`, the last inconsistent users of a rule the crate states
+  in `domain.rs`.
+- `update`'s `cleanup` returns its failure instead of discarding it. A staging
+  directory that survives removal (up to 128 MiB) is now reported rather than
+  papered over with `updated to <v>` and exit 0.
+- `staging_dir` uses `fs::create_dir`, so "this never adopts an existing
+  directory, it fails instead" is now what the code does rather than what the
+  comment says; the test fixture no longer pre-cleans the hazard its subject
+  should refuse.
+- First-use config creation falls back to an exclusive `create_new` publish when
+  the filesystem has no hard links (FAT32/exFAT, some CIFS mounts, WSL `/mnt/c`),
+  which previously made every command fail at startup. The never-overwrite-a-
+  concurrent-winner guarantee is kept; crash-atomicity of the contents is the
+  thing traded away, and a truncated config is refused rather than read as
+  defaults.
+- The cleanup progress bar is cleared on the failure path too: `BarState::drop`
+  finishes a bar rather than clearing it, so a `?` that returned first left a
+  retained line above the error message.
+- Traversal: the nested-repository probe is one shared, memoised definition
+  instead of four duplicated `read_dir` closures; the physical-group index is
+  built once per group set instead of once per workspace; and the
+  owns-a-non-empty-group test is a single pass instead of a scan per workspace.
+- Corrected stale documentation: `AGENTS.md`'s line count, release count, and
+  test counts; its blanket "all 17 scripts take `--self-test`" claim, which was
+  true of 11; the second provenance gate in `update.rs`, which is unreachable
+  defence in depth rather than the gate that decides; a comment citing a test
+  that does not exist; `HostUnsupported`'s doc comment; the
+  `distribution.toml` test, which panicked on a published crate that does not
+  ship that file; and the `TERM=dumb` progress test, which asserted on a
+  function that returns false in CI regardless and so passed with the branch it
+  claimed to cover deleted.
+
 ## [0.2.0] - 2026-10-06
 
 ### Changed — BREAKING

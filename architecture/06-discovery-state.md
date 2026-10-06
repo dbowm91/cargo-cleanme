@@ -539,7 +539,7 @@ Three honest limits:
   `$HOME` either.
 - It is a *conservative-in-the-right-direction* heuristic, not an authority. The
   real containment guarantee for the Routine walk is
-  `canonical_dedup_roots` in `policy.rs:211-240`, not this function.
+  `canonical_dedup_roots` in `policy.rs:236-278`, not this function.
 
 ## 6. Publication
 
@@ -839,17 +839,17 @@ decide what is removable.
 
 | # | Test | Line | What it pins |
 |---|---|---|---|
-| 1 | `v1_migrates_in_memory_and_newer_schema_is_rejected` | `:405` | v1 loads, `schema_version` becomes `CURRENT_SCHEMA`, `resolution` defaults to `Resolved`; v99 → `UnsupportedNewer`. |
-| 2 | `state_load_classifies_absent_invalid_newer_and_unavailable_paths` | `:422` | All five `StateLoad` outcomes, including a directory-as-file → `Unavailable` and `u64::MAX` → `UnsupportedNewer`. |
-| 3 | `supported_schema_with_invalid_structure_is_recoverable` | `:446` | Current version + structurally invalid record → `RecoverableInvalid`. |
-| 4 | `full_reconciliation_recovers_invalid_only_after_complete_scan` | `:458` | `replacing_invalid == true`; `complete=false` → `NoPublication` **and the corrupt bytes survive**; then recovery to v2. |
-| 5 | `full_reconciliation_never_selects_newer_or_unavailable_state_for_publication` | `:486` | `full_reconciliation_prior` → `None` for `UnsupportedNewer` and `Unavailable`; the `"future"` field's bytes are preserved verbatim. |
-| 6 | `full_reconciliation_creates_missing_and_migrates_v1_state` | `:500` | First run and v1 run both publish; `replacing_invalid == false`; `last_full_at == Some(10)`. |
-| 7 | `unique_temp_attempts_replace_existing_state` | `:532` | A colliding `.{name}.{pid}.0.tmp` is skipped, not clobbered; the destination is replaced. |
-| 8 | `localized_uncertainty_retains_intersecting_roots_and_publishes_positives` | `:553` | Uncertain root retained, expired root dropped, `ManifestObservedUnresolved` recorded — from a complete scan. |
-| 9 | `zero_retention_disables_expiration_and_nested_roots_collapse` | `:604` | `retention_days == 0` never expires; `/work/old` collapses into `/work`. |
-| 10 | `uncertainty_containment_is_symmetric` | `:627` | Containment both directions; `/workspace/a` correctly does not match. |
-| 11 | `failed_replacement_preserves_existing_destination_and_cleans_temp` | `:636` | A failed replace leaves the destination intact **and** removes the temp file. |
+| 1 | `v1_migrates_in_memory_and_newer_schema_is_rejected` | `:410` | v1 loads, `schema_version` becomes `CURRENT_SCHEMA`, `resolution` defaults to `Resolved`; v99 → `UnsupportedNewer`. |
+| 2 | `state_load_classifies_absent_invalid_newer_and_unavailable_paths` | `:427` | All five `StateLoad` outcomes, including a directory-as-file → `Unavailable` and `u64::MAX` → `UnsupportedNewer`. |
+| 3 | `supported_schema_with_invalid_structure_is_recoverable` | `:451` | Current version + structurally invalid record → `RecoverableInvalid`. |
+| 4 | `full_reconciliation_recovers_invalid_only_after_complete_scan` | `:463` | `replacing_invalid == true`; `complete=false` → `NoPublication` **and the corrupt bytes survive**; then recovery to v2. |
+| 5 | `full_reconciliation_never_selects_newer_or_unavailable_state_for_publication` | `:491` | `full_reconciliation_prior` → `None` for `UnsupportedNewer` and `Unavailable`; the `"future"` field's bytes are preserved verbatim. |
+| 6 | `full_reconciliation_creates_missing_and_migrates_v1_state` | `:505` | First run and v1 run both publish; `replacing_invalid == false`; `last_full_at == Some(10)`. |
+| 7 | `unique_temp_attempts_replace_existing_state` | `:537` | A colliding `.{name}.{pid}.0.tmp` is skipped, not clobbered; the destination is replaced. |
+| 8 | `localized_uncertainty_retains_intersecting_roots_and_publishes_positives` | `:558` | Uncertain root retained, expired root dropped, `ManifestObservedUnresolved` recorded — from a complete scan. |
+| 9 | `zero_retention_disables_expiration_and_nested_roots_collapse` | `:609` | `retention_days == 0` never expires; `/work/old` collapses into `/work`. |
+| 10 | `uncertainty_containment_is_symmetric` | `:632` | Containment both directions; `/workspace/a` correctly does not match. |
+| 11 | `failed_replacement_preserves_existing_destination_and_cleans_temp` | `:641` | A failed replace leaves the destination intact **and** removes the temp file. |
 
 **Documentation discrepancy worth fixing (not fixed here — `overview.md` is not
 mine to modify):** `overview.md:101` lists the module as `656` with no

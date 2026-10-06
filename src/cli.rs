@@ -44,8 +44,10 @@ pub struct Cli {
     /// one bounded ASCII summary line for unattended schedulers.
     #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Human)]
     pub format: OutputFormat,
-    /// Simulate routine maintenance: run every decision, proof, and reporting
-    /// step, but invoke no `cargo clean` process at all.
+    /// Simulate: run every decision, proof, and reporting step, but invoke no
+    /// `cargo clean` process at all. Honoured wherever it appears, so the
+    /// `cargo cleanme --dry-run clean ROOT` spelling cannot fall back to
+    /// Execute.
     #[arg(long, conflicts_with = "dryrun_legacy")]
     pub dry_run: bool,
     /// Historical spelling of `--dry-run`; retained as a hidden alias.
@@ -261,7 +263,13 @@ impl Cli {
                 (None, false) => ScanIntent::Full,
             }),
             Some(Command::Config { command }) => Invocation::Config(*command),
-            Some(Command::Update { dry_run }) => Invocation::Update { dry_run: *dry_run },
+            // The root-level `--dry-run` is honoured here too, not only on the
+            // bare front door: `cargo cleanme --dry-run clean ROOT` is the
+            // spelling Cargo itself passes, so a flag parsed before the
+            // subcommand must never silently fall back to Execute.
+            Some(Command::Update { dry_run }) => Invocation::Update {
+                dry_run: *dry_run || self.dry_run || self.dryrun_legacy,
+            },
             // `yes_legacy` is intentionally not bound: `--yes` used to be the
             // only way to ask for Execute, Execute is now the default, so the
             // flag carries no intent of its own and printing nothing about it
@@ -290,7 +298,17 @@ impl Cli {
                 };
                 Invocation::Cleanup(CleanupRequest {
                     scope,
-                    mode: clean_mode(*dry_run, *cargo_preview, *dryrun_legacy),
+                    // A dry run asked for *before* the subcommand is a dry run,
+                    // exactly like one asked for after it: clap cannot make a
+                    // root flag mutually exclusive with a subcommand's flags,
+                    // so the combination is resolved here instead. Simulation
+                    // outranks every other cleanup mode because it is the one
+                    // that spawns no Cargo process at all.
+                    mode: if self.dry_run || self.dryrun_legacy {
+                        CleanMode::Simulate
+                    } else {
+                        clean_mode(*dry_run, *cargo_preview, *dryrun_legacy)
+                    },
                     overrides: CleanupOverrides {
                         min_reclaimable_bytes: *min_reclaimable_bytes,
                         older_than: *older_than,
@@ -425,6 +443,112 @@ mod tests {
         assert!(
             Cli::try_parse_from(["cargo-cleanme", "--dry-run", "--dryrun"]).is_err(),
             "the alias must not be combinable with the canonical spelling"
+        );
+    }
+
+    #[test]
+    fn a_dry_run_before_the_subcommand_is_still_a_dry_run() {
+        // `cargo cleanme --dry-run clean ROOT` is the spelling Cargo itself
+        // passes, and it used to parse cleanly while the root field was never
+        // read on that arm -- so the flag was silently discarded and a real
+        // `cargo clean` ran. The canonical spelling was correct, which is what
+        // made it silent.
+        for args in [
+            vec!["cargo-cleanme", "--dry-run", "clean", "/tmp/p"],
+            vec!["cargo-cleanme", "--dryrun", "clean", "/tmp/p"],
+        ] {
+            let parsed = Cli::try_parse_from(args.clone()).unwrap();
+            assert_eq!(
+                parsed.invocation(),
+                Invocation::Cleanup(cleanup(
+                    CleanupScope::Root(std::path::PathBuf::from("/tmp/p")),
+                    CleanMode::Simulate,
+                )),
+                "{args:?} must not fall back to Execute"
+            );
+        }
+        // The bare front door keeps its own spelling working.
+        assert_eq!(
+            Cli::try_parse_from(["cargo-cleanme", "--dry-run"])
+                .unwrap()
+                .invocation(),
+            Invocation::Cleanup(cleanup(CleanupScope::Maintenance, CleanMode::Simulate))
+        );
+        // And so does the position after the subcommand.
+        assert_eq!(
+            Cli::try_parse_from(["cargo-cleanme", "clean", "/tmp/p", "--dry-run"])
+                .unwrap()
+                .invocation(),
+            Invocation::Cleanup(cleanup(
+                CleanupScope::Root(std::path::PathBuf::from("/tmp/p")),
+                CleanMode::Simulate,
+            ))
+        );
+        // Without the flag, Execute is still the default in that position.
+        assert_eq!(
+            Cli::try_parse_from(["cargo-cleanme", "clean", "/tmp/p"])
+                .unwrap()
+                .invocation(),
+            Invocation::Cleanup(cleanup(
+                CleanupScope::Root(std::path::PathBuf::from("/tmp/p")),
+                CleanMode::Execute,
+            ))
+        );
+    }
+
+    #[test]
+    fn a_dry_run_before_update_is_still_a_dry_run() {
+        // Same route, same bug: the root flag was discarded before the
+        // `Update` arm too, so `cargo cleanme --dry-run update` would have
+        // replaced the binary.
+        for args in [
+            vec!["cargo-cleanme", "--dry-run", "update"],
+            vec!["cargo-cleanme", "--dryrun", "update"],
+        ] {
+            assert_eq!(
+                Cli::try_parse_from(args.clone()).unwrap().invocation(),
+                Invocation::Update { dry_run: true },
+                "{args:?} must not replace the binary"
+            );
+        }
+        assert_eq!(
+            Cli::try_parse_from(["cargo-cleanme", "update"])
+                .unwrap()
+                .invocation(),
+            Invocation::Update { dry_run: false }
+        );
+    }
+
+    #[test]
+    fn a_root_dry_run_wins_over_cargo_preview_because_it_spawns_nothing() {
+        // clap cannot make a root flag mutually exclusive with a subcommand's
+        // flags, so the combination reaches here. Simulation is the mode that
+        // spawns no Cargo process at all, and a user who asked for it before
+        // the subcommand must not be handed a Cargo invocation instead.
+        assert_eq!(
+            Cli::try_parse_from([
+                "cargo-cleanme",
+                "--dry-run",
+                "clean",
+                "/tmp/p",
+                "--cargo-preview"
+            ])
+            .unwrap()
+            .invocation(),
+            Invocation::Cleanup(cleanup(
+                CleanupScope::Root(std::path::PathBuf::from("/tmp/p")),
+                CleanMode::Simulate,
+            ))
+        );
+        // Without the root flag, Cargo preview is unaffected.
+        assert_eq!(
+            Cli::try_parse_from(["cargo-cleanme", "clean", "/tmp/p", "--cargo-preview"])
+                .unwrap()
+                .invocation(),
+            Invocation::Cleanup(cleanup(
+                CleanupScope::Root(std::path::PathBuf::from("/tmp/p")),
+                CleanMode::CargoPreview,
+            ))
         );
     }
 

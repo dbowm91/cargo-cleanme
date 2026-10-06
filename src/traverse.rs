@@ -16,10 +16,53 @@
 #![allow(clippy::result_unit_err)]
 
 use std::{
+    collections::HashSet,
     fs,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     time::SystemTime,
 };
+
+/// Whether `path` is a directory holding a nested-repository marker.
+///
+/// One definition, four call sites: the descend decision and the entry
+/// classification both ask this question, and they must agree or a boundary
+/// entry would be treated differently depending on which one ran.
+fn contains_vcs_marker(path: &Path) -> bool {
+    fs::read_dir(path).ok().is_some_and(|mut children| {
+        children.any(|child| {
+            child
+                .ok()
+                .is_some_and(|child| is_vcs_name(&child.file_name().to_string_lossy()))
+        })
+    })
+}
+
+/// Memo of directories already found to hold a nested-repository marker.
+///
+/// The descend callback and the entry loop ask the same question about the same
+/// directory, and each answer costs a `read_dir`. Only *positives* are
+/// recorded, so the memo is bounded by the number of nested repositories rather
+/// than by the size of the tree, and a miss costs exactly what it cost before.
+/// Shared across the walk's worker threads, so it is a `Mutex`; the critical
+/// section is one hash lookup and never spans I/O.
+#[derive(Clone, Default)]
+struct NestedRepoMarkers(Arc<Mutex<HashSet<PathBuf>>>);
+
+impl NestedRepoMarkers {
+    fn probe(&self, path: &Path) -> bool {
+        if self.0.lock().is_ok_and(|known| known.contains(path)) {
+            return true;
+        }
+        if !contains_vcs_marker(path) {
+            return false;
+        }
+        if let Ok(mut known) = self.0.lock() {
+            known.insert(path.to_path_buf());
+        }
+        true
+    }
+}
 
 /// Bounded worker count shared by every traversal.
 ///
@@ -277,6 +320,8 @@ pub fn source_activity(
     let walk_root = project_root.clone();
     let descend_project = project_root.clone();
     let descend_target = target_root.clone();
+    let markers = NestedRepoMarkers::default();
+    let descend_markers = markers.clone();
     let walk = dua_core::walk(
         &walk_root,
         worker_threads(),
@@ -296,16 +341,7 @@ pub fn source_activity(
             {
                 return false;
             }
-            if path != descend_project
-                && entry.file_type.is_dir()
-                && fs::read_dir(&path).ok().is_some_and(|mut children| {
-                    children.any(|child| {
-                        child
-                            .ok()
-                            .is_some_and(|child| is_vcs_name(&child.file_name().to_string_lossy()))
-                    })
-                })
-            {
+            if path != descend_project && entry.file_type.is_dir() && descend_markers.probe(&path) {
                 return false;
             }
             true
@@ -322,7 +358,13 @@ pub fn source_activity(
         // their own directory mtime (which updates when excluded descendants
         // change). This keeps nested-repository activity from protecting the
         // parent through the boundary directory's own timestamp.
-        if is_excluded(&project_root, &target_root, &path, entry.file_type.is_dir()) {
+        if is_excluded(
+            &project_root,
+            &target_root,
+            &markers,
+            &path,
+            entry.file_type.is_dir(),
+        ) {
             continue;
         }
         let modified = fs::metadata(&path)
@@ -337,7 +379,13 @@ pub fn source_activity(
     Ok(SourceActivity::Quiet(newest))
 }
 
-fn is_excluded(project: &Path, target: &Path, path: &Path, is_dir: bool) -> bool {
+fn is_excluded(
+    project: &Path,
+    target: &Path,
+    markers: &NestedRepoMarkers,
+    path: &Path,
+    is_dir: bool,
+) -> bool {
     if path == project {
         return false;
     }
@@ -350,18 +398,7 @@ fn is_excluded(project: &Path, target: &Path, path: &Path, is_dir: bool) -> bool
     {
         return true;
     }
-    if is_dir
-        && fs::read_dir(path).ok().is_some_and(|mut children| {
-            children.any(|child| {
-                child
-                    .ok()
-                    .is_some_and(|child| is_vcs_name(&child.file_name().to_string_lossy()))
-            })
-        })
-    {
-        return true;
-    }
-    false
+    is_dir && markers.probe(path)
 }
 
 /// Scan one workspace member root for recent activity, excluding *all*
@@ -382,6 +419,8 @@ pub fn workspace_member_activity(
     let outputs_for_closure = outputs.clone();
     let is_recent = move |time: SystemTime| time >= cutoff || time > start;
     let descend_root = root.clone();
+    let markers = NestedRepoMarkers::default();
+    let descend_markers = markers.clone();
     let walk = dua_core::walk(
         &root,
         worker_threads(),
@@ -403,16 +442,7 @@ pub fn workspace_member_activity(
             {
                 return false;
             }
-            if path != descend_root
-                && entry.file_type.is_dir()
-                && fs::read_dir(&path).ok().is_some_and(|mut children| {
-                    children.any(|child| {
-                        child
-                            .ok()
-                            .is_some_and(|child| is_vcs_name(&child.file_name().to_string_lossy()))
-                    })
-                })
-            {
+            if path != descend_root && entry.file_type.is_dir() && descend_markers.probe(&path) {
                 return false;
             }
             true
@@ -425,7 +455,7 @@ pub fn workspace_member_activity(
             Err(_) => return Err(()),
         };
         let path = entry.path();
-        if is_excluded_multi(&root, &outputs, &path, entry.file_type.is_dir()) {
+        if is_excluded_multi(&root, &outputs, &markers, &path, entry.file_type.is_dir()) {
             continue;
         }
         let modified = fs::metadata(&path)
@@ -440,7 +470,13 @@ pub fn workspace_member_activity(
     Ok(SourceActivity::Quiet(newest))
 }
 
-fn is_excluded_multi(member_root: &Path, outputs: &[PathBuf], path: &Path, is_dir: bool) -> bool {
+fn is_excluded_multi(
+    member_root: &Path,
+    outputs: &[PathBuf],
+    markers: &NestedRepoMarkers,
+    path: &Path,
+    is_dir: bool,
+) -> bool {
     if path == member_root {
         return false;
     }
@@ -453,18 +489,7 @@ fn is_excluded_multi(member_root: &Path, outputs: &[PathBuf], path: &Path, is_di
     {
         return true;
     }
-    if is_dir
-        && fs::read_dir(path).ok().is_some_and(|mut children| {
-            children.any(|child| {
-                child
-                    .ok()
-                    .is_some_and(|child| is_vcs_name(&child.file_name().to_string_lossy()))
-            })
-        })
-    {
-        return true;
-    }
-    false
+    is_dir && markers.probe(path)
 }
 
 #[cfg(test)]

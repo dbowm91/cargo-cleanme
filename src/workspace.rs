@@ -185,6 +185,39 @@ fn canonical_or_absolute(path: &Path) -> Result<PathBuf, String> {
     }
 }
 
+/// Bounded first meaningful line of a failed Cargo invocation's stderr.
+///
+/// The other failure modes in this module carry their cause — "could not start:
+/// {e}", "cannot parse … output: {e}" — so a bare "cargo metadata failed" is the
+/// one shape that leaves the user with a project missing from every report and
+/// no way to learn why. Cargo already names the offending manifest on stderr,
+/// and the remedy is "fix the manifest", which is not guessable from a label.
+///
+/// Only the length is bounded: a diagnostic message is serialized verbatim into
+/// JSON, the log line, and the human report, and Cargo's stderr is unbounded.
+/// Content is left intact — it is Cargo talking about the user's own paths,
+/// which that user invoked the command to find out about.
+fn cargo_failure_reason(stderr: &[u8]) -> String {
+    const MAX_REASON_BYTES: usize = 200;
+    let text = String::from_utf8_lossy(stderr);
+    let first = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    if first.is_empty() {
+        return "cargo wrote nothing to stderr".into();
+    }
+    let mut end = MAX_REASON_BYTES.min(first.len());
+    while end > 0 && !first.is_char_boundary(end) {
+        end -= 1;
+    }
+    if end == first.len() {
+        return first.to_owned();
+    }
+    format!("{}… (truncated)", &first[..end])
+}
+
 /// Probe one declared output root.
 ///
 /// The path comes from untrusted `cargo metadata`, so a probe can fail for
@@ -355,7 +388,7 @@ pub fn resolve_workspaces_with_coverage(
             Err(e) => {
                 counters.cargo_locate_nanos = counters
                     .cargo_locate_nanos
-                    .saturating_add(locate_start.elapsed().as_nanos() as u64);
+                    .saturating_add(crate::domain::elapsed_nanos(locate_start.elapsed()));
                 counters.cargo_failures += 1;
                 observer.cargo_failure();
                 diagnostics.push(ScanDiagnostic {
@@ -369,7 +402,7 @@ pub fn resolve_workspaces_with_coverage(
         };
         counters.cargo_locate_nanos = counters
             .cargo_locate_nanos
-            .saturating_add(locate_start.elapsed().as_nanos() as u64);
+            .saturating_add(crate::domain::elapsed_nanos(locate_start.elapsed()));
         if !locate_out.success {
             counters.cargo_failures += 1;
             observer.cargo_failure();
@@ -377,7 +410,10 @@ pub fn resolve_workspaces_with_coverage(
                 severity: DiagnosticSeverity::Warning,
                 category: DiagnosticCategory::CandidateUncertain,
                 path: Some(manifest.clone()),
-                message: "cargo locate-project failed".into(),
+                message: format!(
+                    "cargo locate-project failed: {}",
+                    cargo_failure_reason(&locate_out.stderr)
+                ),
             });
             continue;
         }
@@ -400,15 +436,17 @@ pub fn resolve_workspaces_with_coverage(
         if locate_cache.contains_key(&canonical_key) {
             counters.deduped_workspace_hits += 1;
             // Seed this manifest as a known member for future lookups.
+            // `manifest_key` *is* `canonical_manifest_key(manifest)`, already
+            // computed above; re-canonicalizing it is a syscall for nothing.
+            authoritative_coverage.insert(manifest_key.clone());
             member_to_root.insert(manifest_key, canonical_key);
-            authoritative_coverage.insert(canonical_manifest_key(manifest));
             continue;
         }
         if cache.contains_key(&canonical_key) {
             counters.deduped_workspace_hits += 1;
             locate_cache.insert(canonical_key.clone(), root_manifest);
+            authoritative_coverage.insert(manifest_key.clone());
             member_to_root.insert(manifest_key, canonical_key);
-            authoritative_coverage.insert(canonical_manifest_key(manifest));
             continue;
         }
         // Metadata once per workspace.
@@ -476,9 +514,12 @@ pub fn resolve_workspaces_with_coverage(
         })
         .collect();
     unresolved.sort_by(|a, b| a.manifest.cmp(&b.manifest));
-    unresolved.dedup_by(|a, b| {
-        canonical_manifest_key(&a.manifest) == canonical_manifest_key(&b.manifest)
-    });
+    // Sort by canonical identity first, then dedup on the plain spelling. The
+    // original compared `canonical_manifest_key` on both sides of `dedup_by`,
+    // which canonicalizes once per comparison — O(n log n) syscalls for a set
+    // that is almost always already unique.
+    unresolved.sort_by_cached_key(|p| canonical_manifest_key(&p.manifest));
+    unresolved.dedup_by(|a, b| a.manifest == b.manifest);
     ResolutionCoverage {
         workspaces,
         unresolved,
@@ -515,13 +556,13 @@ fn resolve_one_workspace_cached(
         Ok(o) => {
             counters.cargo_metadata_nanos = counters
                 .cargo_metadata_nanos
-                .saturating_add(meta_start.elapsed().as_nanos() as u64);
+                .saturating_add(crate::domain::elapsed_nanos(meta_start.elapsed()));
             o
         }
         Err(e) => {
             counters.cargo_metadata_nanos = counters
                 .cargo_metadata_nanos
-                .saturating_add(meta_start.elapsed().as_nanos() as u64);
+                .saturating_add(crate::domain::elapsed_nanos(meta_start.elapsed()));
             counters.cargo_failures += 1;
             observer.cargo_failure();
             diagnostics.push(ScanDiagnostic {
@@ -543,7 +584,10 @@ fn resolve_one_workspace_cached(
             severity: DiagnosticSeverity::Warning,
             category: DiagnosticCategory::CandidateUncertain,
             path: Some(original_manifest.to_path_buf()),
-            message: "cargo metadata failed".into(),
+            message: format!(
+                "cargo metadata failed: {}",
+                cargo_failure_reason(&meta_out.stderr)
+            ),
         });
         return None;
     }
@@ -709,14 +753,14 @@ pub fn outermost(roots: &[PathBuf]) -> Vec<PathBuf> {
 /// their workspace uncertain. Equal/ancestor-descendant overlaps form connected
 /// groups. Classification:
 /// - Uncertain: symlink, unresolvable, or missing physical identity, or an
-///   output root that is (or contains) the workspace's own source tree, or one
-///   of Cargo's conventional source directories (`src`, `tests`, `benches`,
-///   `examples`).
+///   output root that is (or contains) any resolved workspace's member source
+///   tree, or one of Cargo's conventional source directories (`src`, `tests`,
+///   `benches`, `examples`).
 /// - Shared: multiple workspaces own overlapping physical output, or exclusivity
 ///   cannot be proven because some root in the universe has no graph node.
 /// - PrivateBounded: single owner, every covering root strictly below the
-///   workspace root, disjoint from every member source root, and every root in
-///   the universe represented in the graph.
+///   workspace root, disjoint from every resolved member source root, and every
+///   root in the universe represented in the graph.
 /// - ExternalUnproven: single owner, output outside workspace root.
 pub fn build_groups(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup> {
     // Collect (workspace_idx, physical_path) for existing non-symlink roots.
@@ -804,8 +848,16 @@ pub fn build_groups(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup> {
             // A covering root that is the source tree itself, or an ancestor of
             // a member source root, is not an artifact: cleaning it would
             // delete the project. `contains` is inclusive, so equality counts.
+            //
+            // Every workspace in the universe is consulted, not only the
+            // group's own owner: `cargo clean` deletes whatever is under the
+            // root, so a second resolved project whose *sources* live inside it
+            // is destroyed just as surely as the owner's own. Consulting only
+            // `ws.members` would ratify exactly the shape this refuses.
             source_overlap = covering.iter().any(|c| {
-                ws.members.iter().any(|m| contains(c, &m.source_root))
+                workspaces
+                    .iter()
+                    .any(|w| w.members.iter().any(|m| contains(c, &m.source_root)))
                     || is_conventional_source_dir(c)
             });
             let inside_root = covering.iter().all(|c| strictly_below(&ws.root, c));
@@ -977,6 +1029,15 @@ pub fn analyze_groups_detailed(
             }
         }
     }
+    // Workspaces owning at least one non-empty group, computed in one pass.
+    // The alternative -- asking `groups.iter().any(...)` per workspace -- made
+    // this stage quadratic in workspaces × groups before any source walk.
+    let mut ws_owns_nonempty: HashSet<usize> = HashSet::new();
+    for (gi, g) in groups.iter().enumerate() {
+        if *group_has_entries.get(gi).unwrap_or(&false) {
+            ws_owns_nonempty.extend(g.owners.iter().copied());
+        }
+    }
     for (wi, ws) in workspaces.iter().enumerate() {
         // If workspace has no existing output at all, it cannot be eligible;
         // skip source walk entirely (fail-fast).
@@ -987,11 +1048,7 @@ pub fn analyze_groups_detailed(
             continue;
         }
         // If all groups owned by this workspace are already empty, skip source.
-        let owns_nonempty = groups
-            .iter()
-            .enumerate()
-            .any(|(gi, g)| g.owners.contains(&wi) && *group_has_entries.get(gi).unwrap_or(&false));
-        if !owns_nonempty {
+        if !ws_owns_nonempty.contains(&wi) {
             // Already counted as empty above; no source walk.
             ws_source_recent.insert(wi, false);
             continue;
@@ -1004,7 +1061,10 @@ pub fn analyze_groups_detailed(
         match activity {
             Ok(true) => {
                 ws_source_recent.insert(wi, true);
-                counters.active_skipped += 1;
+                // Progress reports one active workspace; the *counter* is bumped
+                // per skipped group below, because `stats_line` compares it with
+                // `groups_measured`. Counting workspaces here under-reported a
+                // workspace that owns two skipped groups as one.
                 observer.active_skipped();
             }
             Ok(false) => {
@@ -1038,11 +1098,13 @@ pub fn analyze_groups_detailed(
             continue;
         }
         // If any owner source-recent, skip group without sizing.
-        // Already counted per workspace above; do not double-count here.
+        // Counted per *group*, alongside every other skip reason below, so the
+        // counter is comparable with `groups_measured`.
         if g.owners
             .iter()
             .any(|o| *ws_source_recent.get(o).unwrap_or(&false))
         {
+            counters.active_skipped += 1;
             pre_skip[gi] = Some(GroupSkipReason::ActiveSource);
             continue;
         }
@@ -1063,7 +1125,7 @@ pub fn analyze_groups_detailed(
                     category: DiagnosticCategory::CandidateUncertain,
                     path: Some(g.display.clone()),
                     message: format!(
-                        "output root {} is the workspace source tree, not a build artifact; it is not sized and not eligible for cleanup",
+                        "output root {} contains a workspace source tree, not a build artifact; it is not sized and not eligible for cleanup",
                         g.display.display()
                     ),
                 });
@@ -1260,14 +1322,31 @@ pub fn analyze_groups(
 /// Cargo clean to remove) and unprovable roots (symlink or unresolvable
 /// identity, which `build_groups` excludes) are not affected groups.
 ///
-/// Returns group indices in deterministic display order.
-pub fn map_workspace_groups(ws: &ResolvedWorkspace, groups: &[RawGroup]) -> Vec<usize> {
+/// `physical path → group index` for one group set.
+///
+/// Built once and shared. `build_cleanup_units` calls the mapper per workspace,
+/// and rebuilding the whole map each time made a Full scan quadratic in
+/// workspaces × groups before it did any work.
+fn physical_group_index(groups: &[RawGroup]) -> HashMap<&Path, usize> {
     let mut by_physical: HashMap<&Path, usize> = HashMap::new();
     for (gi, g) in groups.iter().enumerate() {
         for p in &g.physicals {
             by_physical.insert(p.as_path(), gi);
         }
     }
+    by_physical
+}
+
+/// Returns group indices in deterministic display order.
+pub fn map_workspace_groups(ws: &ResolvedWorkspace, groups: &[RawGroup]) -> Vec<usize> {
+    map_workspace_groups_indexed(ws, &physical_group_index(groups), groups)
+}
+
+fn map_workspace_groups_indexed(
+    ws: &ResolvedWorkspace,
+    by_physical: &HashMap<&Path, usize>,
+    groups: &[RawGroup],
+) -> Vec<usize> {
     let mut idxs: Vec<usize> = Vec::new();
     for root in [&ws.output.target, &ws.output.build] {
         if root.is_symlink || !root.exists {
@@ -1358,9 +1437,10 @@ pub fn build_cleanup_units(
     outcomes: &[GroupOutcome],
 ) -> Vec<CleanupUnit> {
     let groups: Vec<RawGroup> = outcomes.iter().map(|o| o.group.clone()).collect();
+    let by_physical = physical_group_index(&groups);
     let mut units = Vec::new();
     for (wi, ws) in workspaces.iter().enumerate() {
-        let idxs = map_workspace_groups(ws, &groups);
+        let idxs = map_workspace_groups_indexed(ws, &by_physical, &groups);
         let mut unmapped: Vec<OutputRoot> = Vec::new();
         for root in [&ws.output.target, &ws.output.build] {
             if root.is_symlink || !root.exists {
@@ -2505,6 +2585,64 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn another_workspaces_source_tree_inside_a_covering_root_is_never_private() {
+        // The two tests above both use a *single* workspace, which is the only
+        // shape where `ws.members` is the complete set of relevant members. The
+        // gap was the neighbour: an outer workspace whose output directory is
+        // not literally named `target`, with a second real workspace whose
+        // sources live inside that output directory. `cargo clean` on the outer
+        // deleted the inner's Cargo.toml, Cargo.lock, and `src/` with exit 0 and
+        // no diagnostic, because the inner's *own* output was outside the
+        // covering root and so was refused -- which does not protect its source.
+        let d = tempfile::tempdir().unwrap();
+        let outer_root = d.path().join("outer");
+        let outer_out = outer_root.join("out");
+        let inner_root = outer_out.join("inner");
+        std::fs::create_dir_all(inner_root.join("src")).unwrap();
+        std::fs::write(inner_root.join("src/lib.rs"), b"fn main(){}").unwrap();
+        // The inner workspace's own output lives outside the covering root.
+        let inner_out = d.path().join("inner-target");
+        std::fs::create_dir_all(&inner_out).unwrap();
+
+        let outer = workspace_with_output(
+            &outer_root,
+            vec![outer_root.clone()],
+            Some(outer_out.clone()),
+            false,
+        );
+        let inner = workspace_with_output(
+            &inner_root,
+            vec![inner_root.clone()],
+            Some(inner_out),
+            false,
+        );
+        let groups = build_groups(&[outer, inner]);
+        assert_eq!(groups.len(), 2, "{groups:?}");
+
+        let outer_group = groups
+            .iter()
+            .find(|g| g.covering.contains(&outer_out))
+            .expect("the outer output root must form its own group");
+        assert_eq!(
+            outer_group.ownership,
+            OutputOwnershipClass::Uncertain,
+            "a covering root holding another workspace's sources is not an artifact"
+        );
+        assert!(outer_group.source_overlap);
+        assert!(
+            !crate::cleanup::covering_is_authorized(
+                outer_group.ownership,
+                &outer_group.covering,
+                &outer_root,
+                &[],
+            )
+            .unwrap(),
+            "the group that would delete the inner project must never be authorized"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn another_workspaces_unrepresentable_root_blocks_a_private_claim() {
         // H4: workspace B's target is a symlink into A's target. B contributes
         // no node to the physical graph, so A's group must not claim to be
@@ -2562,7 +2700,7 @@ mod tests {
         assert!(
             diagnostics
                 .iter()
-                .any(|d| d.message.contains("is the workspace source tree")),
+                .any(|d| d.message.contains("contains a workspace source tree")),
             "{diagnostics:?}"
         );
         assert!(counters.uncertain_skipped >= 1);

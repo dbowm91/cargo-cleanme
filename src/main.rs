@@ -76,7 +76,7 @@ fn run(cli: Cli) -> Result<i32, AppError> {
     // they cannot reach different proof, policy, or reporting paths.
     match cli.invocation() {
         Invocation::Update { dry_run } => run_update(dry_run, options.format),
-        Invocation::Config(command) => run_config(command, &path),
+        Invocation::Config(command) => run_config(command, &path, options.format),
         Invocation::Scan(intent) => run_scan(intent, &path, options, EmitReport::Yes),
         Invocation::Cleanup(request) => run_cleanup(request, &path, options),
     }
@@ -92,6 +92,19 @@ fn run_update(dry_run: bool, format: OutputFormat) -> Result<i32, AppError> {
             "{}",
             cargo_cleanme::output::update_json_stream(&plan, dry_run)
         );
+    } else if format == OutputFormat::Log {
+        // One bounded line, never the human paragraphs below: a scheduler
+        // tailing this stream gets `key=value` for every `op` the log format
+        // documents, not prose.
+        println!(
+            "{}",
+            cargo_cleanme::output::log::update(
+                &plan.from_version,
+                &plan.to_version,
+                &plan.target,
+                dry_run,
+            )
+        );
     } else if dry_run {
         println!(
             "cargo-cleanme: {} -> {} available for {}",
@@ -106,11 +119,31 @@ fn run_update(dry_run: bool, format: OutputFormat) -> Result<i32, AppError> {
     Ok(0)
 }
 
-fn run_config(command: ConfigCommand, path: &std::path::Path) -> Result<i32, AppError> {
+fn run_config(
+    command: ConfigCommand,
+    path: &std::path::Path,
+    format: OutputFormat,
+) -> Result<i32, AppError> {
+    // `--format log` promises exactly one ASCII key=value line and no paths or
+    // config text. `config path` and `config show` are nothing *but* a path and
+    // config text, so in that format they report the action and leave their
+    // content to the human and JSON forms.
+    let log = format == OutputFormat::Log;
     match command {
-        ConfigCommand::Path => println!("{}", path.display()),
+        ConfigCommand::Path => {
+            if log {
+                println!("{}", cargo_cleanme::output::log::config("path"));
+            } else {
+                println!("{}", path.display());
+            }
+        }
         ConfigCommand::Show => {
-            println!("{}", config::show(&config::load_or_create(path)?)?)
+            let shown = config::show(&config::load_or_create(path)?)?;
+            if log {
+                println!("{}", cargo_cleanme::output::log::config("show"));
+            } else {
+                println!("{shown}");
+            }
         }
         ConfigCommand::Edit => {
             config::ensure_exists(path)?;
@@ -141,7 +174,11 @@ fn run_config(command: ConfigCommand, path: &std::path::Path) -> Result<i32, App
             config::load(path).map_err(|e| {
                 AppError::Config(format!("edited config {} is invalid: {e}", path.display()))
             })?;
-            println!("edited {}", path.display());
+            if log {
+                println!("{}", cargo_cleanme::output::log::config("edit"));
+            } else {
+                println!("edited {}", path.display());
+            }
         }
     }
     Ok(0)
@@ -227,7 +264,11 @@ fn run_cleanup(
         && cargo_cleanme::progress::should_show_progress(options.no_progress);
     let renderer = cargo_cleanme::progress::IndicatifRenderer::new(!show);
     let wall_start = std::time::Instant::now();
-    let report = cargo_cleanme::cleanup::clean_with_roots_policy_selector(
+    // The bar must come down on the failure path too. `?` returned to the
+    // top-level error reporter with the bar still live, and `BarState::drop`
+    // *finishes* the bar rather than clearing it, so the retained line stayed
+    // on screen above the `cargo-cleanme: …` message.
+    let cleanup = cargo_cleanme::cleanup::clean_with_roots_policy_selector(
         &resolved.roots,
         config.scan.recency_seconds,
         &config.cleanup.allowed_output_roots,
@@ -236,8 +277,9 @@ fn run_cleanup(
         &renderer,
         &policy,
         selector,
-    )?;
+    );
     renderer.finish_and_clear();
+    let report = cleanup?;
     if options.format == OutputFormat::Human
         && let Some(generation) = resolved.state_generation
     {

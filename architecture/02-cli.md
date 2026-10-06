@@ -74,8 +74,26 @@ instead of three, and `cli.rs` cannot name a mode the engine does not implement.
 
 `config`, `no_progress`, `stats`, and `format` are `global = true`, so each is
 accepted before *or* after the subcommand name. `--dry-run` and the hidden
-`--dryrun` at the root are **not** global: they select the mode of a *bare*
-invocation, and `update --dry-run` keeps its own unrelated meaning.
+`--dryrun` at the root are **not** global: a blanket `global = true` collides
+with `update --dry-run`'s own argument id, so the two have to be reconciled
+deliberately rather than by making one of them disappear.
+
+That is why `invocation()` re-reads the root flag on the `Clean` and `Update`
+arms (`src/cli.rs:270-274`, `src/cli.rs:299-313`) rather than trusting clap to
+have done it. Being non-global used to mean **silently discarded**: clap
+happily accepts `cargo cleanme --dry-run clean ROOT` — the spelling Cargo itself
+passes — and the `Clean` arm read only its *own* three flags, so the mode fell
+through to `Execute` and a real `cargo clean` ran, reported `status=ok`, and
+exited 0. A dry run that deletes and confirms everything was fine is the worst
+failure mode this tool has.
+
+Because clap cannot make a root flag mutually exclusive with a subcommand's
+flags, `--dry-run` plus `clean --cargo-preview` reaches `invocation()` together.
+It resolves to `Simulate` (`src/cli.rs:307-313`): simulation is the mode that
+spawns no Cargo process at all, and a user who asked for it before the
+subcommand must not be handed a Cargo invocation instead. It is resolved *before*
+`clean_mode`, so that function's `debug_assert!` keeps its premise — clap really
+does reject conflicting mode flags *on the subcommand*.
 
 | Flag | Short | Type | Default | Maps to |
 |---|---|---|---|---|
@@ -83,7 +101,7 @@ invocation, and `update --dry-run` keeps its own unrelated meaning.
 | `--no-progress` | — | `bool` | `false` | `progress::should_show_progress(..)` → `main.rs:181`, `main.rs:405` |
 | `--stats` | — | `bool` | `false` | `discover_manifests_with_attribution(.., options.stats)` `main.rs:414`; the `eprintln!` blocks at `main.rs:206`, `main.rs:646` |
 | `--format <FORMAT>` | — | `OutputFormat` (value enum) | `human` | selects `output::scan` / `output::cleanup` / `report::render` → `main.rs:607`, `main.rs:319`, `main.rs:614` |
-| `--dry-run` | — | `bool` | `false` | `clean_mode(..)` → `CleanMode::Simulate` for a bare invocation |
+| `--dry-run` | — | `bool` | `false` | `CleanMode::Simulate` for a bare invocation *and* for `clean` / `update`, whichever side of the subcommand it was given on |
 | `--dryrun` (hidden) | — | `bool` | `false` | same, as a compatibility alias |
 | `--help` / `-h` | `-h` | clap built-in | — | clap help path |
 | `--version` / `-V` | `-V` | clap built-in (from `version`, `src/cli.rs:15`) | — | `cargo-cleanme 0.2.0` |
@@ -232,8 +250,14 @@ generated documentation.
 
 `update --dry-run` is *unrelated* to cleanup `--dry-run` and is not routed
 through `clean_mode`. It resolves and reports a plan without acquiring or
-replacing bytes; `update_keeps_its_own_dry_run_meaning` (`src/cli.rs:578`) pins
-that it still parses and reaches `Invocation::Update`.
+replacing bytes; `update_keeps_its_own_dry_run_meaning` pins that it still
+parses and reaches `Invocation::Update`.
+
+It is, however, **not** immune to the root-level flag: the arm ORs the two
+(`src/cli.rs:270-274`), so `cargo cleanme --dry-run update` is also a plan-only
+run. The same discarding bug reached this arm by the same route; whether a
+replacement actually committed could not be exercised in the sandbox that found
+it, so it is fixed by construction and by test rather than by observation.
 
 ### 2.7 `OutputFormat` (`src/cli.rs:5-11`)
 
@@ -626,29 +650,32 @@ to end of file (498 of 873 lines, including helpers).
 
 | Test | Line | What it pins |
 |---|---|---|
-| `bare_invocation_is_routine_execute_maintenance_not_scan` | 394 | `cargo-cleanme` with no argv → `Cleanup(Maintenance, Execute)`. Its comment names the pre-M012A dispatch it replaces |
-| `bare_dry_run_is_simulate_and_the_legacy_alias_maps_to_it` | 408 | `--dry-run` and `--dryrun` both → Simulate; the two spellings cannot be combined |
-| `scan_scope_selection_is_full_explicit_or_maintenance` | 427 | no-ROOT → Full, `ROOT` → Explicit, `--known` → Maintenance, hidden `--full` → Full |
-| `scan_scope_conflicts_fail_at_invocation_time` | 456 | `ROOT`+`--known`, `ROOT`+`--full`, `--known`+`--full` are all parse errors |
-| `hidden_full_alias_is_not_advertised_in_scan_help` | 470 | `scan --help` renders `--known` and never `--full` |
-| `clean_scope_selectors_stay_mutually_exclusive` | 477 | `ROOT`/`--known`/`--full` map to three `CleanupScope`s; bare `clean` equals bare invocation; all three bad pairs are errors |
-| `cleanup_modes_default_to_execute_and_expose_cargo_preview` | 512 | no mode flag → Execute; `--dry-run`/cargo-preview/`--yes`/`--dryrun` map correctly; **all six** mode pairs are parse errors |
-| `compatibility_aliases_are_hidden_but_accepted` | 565 | `clean --help` shows `--dry-run` and `--cargo-preview` and hides `--yes`/`--dryrun` |
-| `update_keeps_its_own_dry_run_meaning` | 578 | `update --dry-run` still parses into `Invocation::Update { dry_run: true }` |
-| `config_command_parses` | 588 | `config path`/`edit` ok; `config init` err; `config show` → `Invocation::Config(Show)` |
-| `root_parses` | 601 | `scan /tmp` → `ScanIntent::Explicit("/tmp")` |
-| `cleanup_policy_options_are_repeatable_and_mode_independent` | 610 | two `--include` values accumulate, `--exclude` lands, `--min-reclaimable-bytes`/`--older-than` land, and the whole set travels **inside** the `CleanupRequest`; `--profile`+`--package` is an error |
-| `orchestration_roots_are_mutually_exclusive_and_external_forms_match` | 668 | direct vs external `invocation()` equality for `--known`/`--full`; **the only caller of `try_parse_normalized_from`** |
-| `direct_argv_is_unchanged` | 689 | no-arg and `scan /x` argv returned byte-identical |
-| `cargo_external_argv_strips_exactly_one_documented_token` | 701 | one token removed for `cleanme`, `cleanme scan`, `cleanme config show`, `cleanme clean /x --yes` |
-| `later_literal_cleanme_values_are_preserved` | 721 | `scan cleanme`, `cleanme scan cleanme`, `clean ./cleanme --yes` — the literal survives at every position ≥ 2 |
-| `help_and_version_forms_normalize` | 737 | `--help`, `--version`, `clean --help` all normalize identically |
-| `direct_and_external_forms_parse_equivalently` | 753 | five direct/external pairs, compared on `invocation()` |
-| `config_init_is_removed_and_edit_parses` | 791 | re-asserts `config init` err, `config edit` ok |
-| `absolute_root_is_stable` | 797 | `absolutize_root` returns an absolute path unchanged (POSIX and Windows spellings) |
-| `relative_root_becomes_absolute` | 807 | `./project` → `cwd/project`; three `absolutize_relative` `..` cases: `c/../d` → `/a/b/d`, `../outside` → `/a/outside`, `../../x` from `/a` → `/x` (root saturation) |
-| `no_progress_flag_parses_globally` | 821 | global before the subcommand, default false, legal with **no** subcommand — where it now means a Routine cleanup |
-| `stats_flag_parses_globally_in_direct_and_external_forms` | 835 | global before the subcommand; combinable with `--no-progress`; accepted after `clean` in all three modes and in external form |
+| `bare_invocation_is_routine_execute_maintenance_not_scan` | 417 | `cargo-cleanme` with no argv → `Cleanup(Maintenance, Execute)`. Its comment names the pre-M012A dispatch it replaces |
+| `bare_dry_run_is_simulate_and_the_legacy_alias_maps_to_it` | 431 | `--dry-run` and `--dryrun` both → Simulate; the two spellings cannot be combined |
+| `a_dry_run_before_the_subcommand_is_still_a_dry_run` | 450 | root `--dry-run`/`--dryrun` **before** `clean ROOT` → `Simulate`, not the `Execute` it silently fell through to; the post-subcommand and no-flag spellings are unchanged |
+| `a_dry_run_before_update_is_still_a_dry_run` | 500 | root `--dry-run`/`--dryrun` before `update` → `Update { dry_run: true }`; bare `update` stays `false` |
+| `a_root_dry_run_wins_over_cargo_preview_because_it_spawns_nothing` | 523 | root `--dry-run` + `clean --cargo-preview` → `Simulate`; `clean --cargo-preview` alone is still `CargoPreview` |
+| `scan_scope_selection_is_full_explicit_or_maintenance` | 556 | no-ROOT → Full, `ROOT` → Explicit, `--known` → Maintenance, hidden `--full` → Full |
+| `scan_scope_conflicts_fail_at_invocation_time` | 585 | `ROOT`+`--known`, `ROOT`+`--full`, `--known`+`--full` are all parse errors |
+| `hidden_full_alias_is_not_advertised_in_scan_help` | 599 | `scan --help` renders `--known` and never `--full` |
+| `clean_scope_selectors_stay_mutually_exclusive` | 606 | `ROOT`/`--known`/`--full` map to three `CleanupScope`s; bare `clean` equals bare invocation; all three bad pairs are errors |
+| `cleanup_modes_default_to_execute_and_expose_cargo_preview` | 641 | no mode flag → Execute; `--dry-run`/cargo-preview/`--yes`/`--dryrun` map correctly; **all six** mode pairs are parse errors |
+| `compatibility_aliases_are_hidden_but_accepted` | 694 | `clean --help` shows `--dry-run` and `--cargo-preview` and hides `--yes`/`--dryrun` |
+| `update_keeps_its_own_dry_run_meaning` | 707 | `update --dry-run` still parses into `Invocation::Update { dry_run: true }` |
+| `config_command_parses` | 740 | `config path`/`edit` ok; `config init` err; `config show` → `Invocation::Config(Show)` |
+| `root_parses` | 753 | `scan /tmp` → `ScanIntent::Explicit("/tmp")` |
+| `cleanup_policy_options_are_repeatable_and_mode_independent` | 762 | two `--include` values accumulate, `--exclude` lands, `--min-reclaimable-bytes`/`--older-than` land, and the whole set travels **inside** the `CleanupRequest`; `--profile`+`--package` is an error |
+| `orchestration_roots_are_mutually_exclusive_and_external_forms_match` | 820 | direct vs external `invocation()` equality for `--known`/`--full`; **the only caller of `try_parse_normalized_from`** |
+| `direct_argv_is_unchanged` | 841 | no-arg and `scan /x` argv returned byte-identical |
+| `cargo_external_argv_strips_exactly_one_documented_token` | 853 | one token removed for `cleanme`, `cleanme scan`, `cleanme config show`, `cleanme clean /x --yes` |
+| `later_literal_cleanme_values_are_preserved` | 873 | `scan cleanme`, `cleanme scan cleanme`, `clean ./cleanme --yes` — the literal survives at every position ≥ 2 |
+| `help_and_version_forms_normalize` | 889 | `--help`, `--version`, `clean --help` all normalize identically |
+| `direct_and_external_forms_parse_equivalently` | 905 | five direct/external pairs, compared on `invocation()` |
+| `config_init_is_removed_and_edit_parses` | 943 | re-asserts `config init` err, `config edit` ok |
+| `absolute_root_is_stable` | 949 | `absolutize_root` returns an absolute path unchanged (POSIX and Windows spellings) |
+| `relative_root_becomes_absolute` | 959 | `./project` → `cwd/project`; three `absolutize_relative` `..` cases: `c/../d` → `/a/b/d`, `../outside` → `/a/outside`, `../../x` from `/a` → `/x` (root saturation) |
+| `no_progress_flag_parses_globally` | 973 | global before the subcommand, default false, legal with **no** subcommand — where it now means a Routine cleanup |
+| `stats_flag_parses_globally_in_direct_and_external_forms` | 987 | global before the subcommand; combinable with `--no-progress`; accepted after `clean` in all three modes and in external form |
 
 (Two helpers, `maintenance(..)` and `cleanup(..)`, construct a `CleanupRequest`
 with default overrides; they are not tests.)

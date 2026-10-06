@@ -161,7 +161,7 @@ Roots are existing seed directories under `$HOME` plus retained learned roots
 from the state file (§5). Worked example: a developer with `~/Code/api` and
 `~/Code/web` plus a learned root at `~/scratch/lab`, where the state file's
 `last_project_seen_at` for `~/scratch/lab` is 10 days old and retention is 30.
-`canonical_dedup_roots` (`policy.rs:211`) collapses nothing here, so the scan
+`canonical_dedup_roots` (`policy.rs:236`) collapses nothing here, so the scan
 walks all three, applying `scan.ignore` / `scan.unignore` normally. A Rust
 project in `~/Documents/sidequest` is **not** found — that is the deliberate
 blind spot, and `scan --full` is the documented way to teach the tool about it.
@@ -350,8 +350,8 @@ pub struct GlobalDiscoveryPolicy {              // policy.rs:13-18
 
 | Lines | Gate | Body |
 |---|---|---|
-| `policy.rs:126-138` | `#[cfg(unix)]` | delegates to `unix_policy(...)`, then fills `roots` through `canonical_dedup_roots` and `managed_tool_prunes` through `managed_rust_prunes()` |
-| `policy.rs:164-188` | `#[cfg(windows)]` | enumerates drive letters with `GetLogicalDrives` / `GetDriveTypeW` |
+| `policy.rs:126-133` | `#[cfg(unix)]` | delegates to `unix_policy(...)`, then hands the result to `compose_global_policy` (`policy.rs:142-163`), which fills `roots` through `canonical_dedup_roots_protecting` and `managed_tool_prunes` through `managed_rust_prunes()` |
+| `policy.rs:189-213` | `#[cfg(windows)]` | enumerates drive letters with `GetLogicalDrives` / `GetDriveTypeW` |
 
 **They are not duplicates and neither is dead.** They are mutually exclusive
 `#[cfg]` variants of the same public function: exactly one is compiled per
@@ -371,20 +371,43 @@ tested on any host. It always returns `managed_tool_prunes: Vec::new()`
 
 | Platform | `roots` | `global_only_prunes` | Source |
 |---|---|---|---|
-| macOS | `["/"]`, plus `/usr/local` when that directory exists | `/System`, `/dev`, `/bin`, `/sbin`, `/usr` | `policy.rs:142-149` |
-| Linux | `["/"]` | `/proc`, `/sys`, `/dev`, `/run` | `policy.rs:150-153` |
-| Other unix | `["/"]` | none | `policy.rs:154-156` |
-| Windows | `X:\` for each letter where `GetLogicalDrives` reports a bit and `GetDriveTypeW` is `DRIVE_FIXED` or `DRIVE_REMOVABLE` | none | `policy.rs:170-182` |
+| macOS | `["/"]`, plus `/usr/local` when that directory exists | `/System`, `/dev`, `/bin`, `/sbin`, `/usr` | `policy.rs:166-182` |
+| Linux | `["/"]` | `/proc`, `/sys`, `/dev`, `/run` | `policy.rs:175-178` |
+| Other unix | `["/"]` | none | `policy.rs:179-181` |
+| Windows | `X:\` for each letter where `GetLogicalDrives` reports a bit and `GetDriveTypeW` is `DRIVE_FIXED` or `DRIVE_REMOVABLE` | none | `policy.rs:190-212` |
 
 The macOS row is the interesting one: `/usr` is pruned while `/usr/local` is
 enumerated as a *root*, so the Homebrew toolchain subtree stays reachable
-inside an otherwise-pruned `/usr`. Test
-`macos_global_policy_prunes_protected_usr_and_enumerates_usr_local`
-(`policy.rs:256`) pins exactly that, and also asserts `/Library` and
-`/Applications` are *not* pruned. `managed_tool_prunes` is `Some` only via
+inside an otherwise-pruned `/usr`. That exception takes **two** steps to work,
+and both were once missing:
+
+1. **Composition.** `global_discovery_policy` (`policy.rs:126-133`) delegates to
+   `compose_global_policy` (`policy.rs:142-163`), which collapses redundant
+   roots — and the collapse folds `/usr/local` into `/`, because
+   `"/usr/local".starts_with("/")`. `compose_global_policy` therefore computes
+   the *protected* set first: every root sitting strictly inside a global-only
+   prune is that prune's exception, so `canonical_dedup_roots_protecting`
+   (`policy.rs:248-278`) keeps it as a walk root of its own.
+2. **Application.** A root that survived composition would still be unwalked:
+   `entry_is_within` matches on `parent_path`, so with root `/usr/local` every
+   entry's parent `starts_with("/usr")` and the subtree read as pruned.
+   `discovery::entry_is_system_pruned` (`discovery.rs:270-283`) exempts a walk
+   root strictly inside a system prune. The exemption is scoped to *global-only*
+   prunes on purpose: a Cargo or rustup home stays refused even when a root sits
+   inside it.
+
+Test `macos_global_policy_prunes_protected_usr_and_enumerates_usr_local`
+(`policy.rs:294`) pins this — and it now calls `compose_global_policy`, so it
+asserts the roots **production** walks rather than the ones a private
+pre-collapse helper declares. That distinction was the defect: the old test
+called `unix_policy` directly and passed while production collapsed the root
+away. `a_root_inside_a_global_prune_survives_the_collapse_as_its_own_root`
+(`policy.rs:321`) covers the collapse alone, including that an ordinary nested
+root is still folded; `a_root_inside_a_global_prune_reopens_that_prune`
+(`discovery.rs:940`) covers the prune. `managed_tool_prunes` is `Some` only via
 `managed_rust_prunes()` → `discovery::effective_rustup_home()`
-(`policy.rs:242-246`), i.e. `$RUSTUP_HOME` when absolute, else `~/.rustup`
-(`discovery.rs:152-161`).
+(`policy.rs:280-284`), i.e. `$RUSTUP_HOME` when absolute, else `~/.rustup`
+(`discovery.rs:145-186`).
 
 ### Consumers
 
@@ -403,7 +426,7 @@ acquire platform prunes it never asked for.
 
 ### Root normalization
 
-`canonical_dedup_roots` (`policy.rs:211-240`) is the shared normalizer for all
+`canonical_dedup_roots` (`policy.rs:236-246`) is the shared normalizer for all
 three roots lists:
 
 1. For each root, try `fs::canonicalize`. Success → identity is the canonical
@@ -414,7 +437,7 @@ three roots lists:
 3. Drop any root whose identity `starts_with` an already-kept root's identity
    (containment collapse).
 
-`lexical_identity` (`policy.rs:194-209`) resolves `.` and `..` textually and
+`lexical_identity` (`policy.rs:219-234`) resolves `.` and `..` textually and
 never touches the filesystem; the doc comment states it "is only ever compared
 against other roots, never walked". The rationale comment at `policy.rs:212-217`
 records the bug it fixed (L16): an unresolvable root previously kept its raw
@@ -523,7 +546,7 @@ the JSON `scope` field equals `"explicit"` — but per §7.9 that string comes f
   `global_discovery_policy()` call at `policy.rs:23` are never executed by a
   test; the platform tables are covered only through the pure `unix_policy`
   helper. The `#[cfg(windows)]` body (`policy.rs:164-188`) is untested too.
-- `canonical_dedup_roots` and `lexical_identity` (`policy.rs:194-240`) are
+- `canonical_dedup_roots` and `lexical_identity` (`policy.rs:219-278`) are
   covered only indirectly, via the discovery tests above — the
   unresolvable-root branch (the L16 fix) has no direct test. The `other unix`
   arm (`policy.rs:154-156`) and the `BaseDirs::new() == None` branch

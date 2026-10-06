@@ -150,7 +150,7 @@ pub fn should_show_progress(no_progress: bool) -> bool {
     if no_progress {
         return false;
     }
-    if std::env::var_os("TERM").is_some_and(|v| v == "dumb") {
+    if term_is_dumb() {
         return false;
     }
     // Hidden when stderr is not an attended terminal; tests force hidden via
@@ -160,6 +160,16 @@ pub fn should_show_progress(no_progress: bool) -> bool {
         return false;
     }
     true
+}
+
+/// Whether the terminal itself refuses progress output.
+///
+/// Split out of [`should_show_progress`] so this gate is testable on its own.
+/// The public function also consults `stderr_is_terminal()`, which is false in
+/// every captured or CI run, so an assertion on it held with this branch
+/// deleted — it proved the environment, not the code.
+fn term_is_dumb() -> bool {
+    std::env::var_os("TERM").is_some_and(|v| v == "dumb")
 }
 
 fn stderr_is_terminal() -> bool {
@@ -591,14 +601,35 @@ mod tests {
 
     #[test]
     fn should_show_progress_respects_flag_and_dumb_term() {
-        assert!(!should_show_progress(true));
-        let prev = std::env::var_os("TERM");
+        assert!(!should_show_progress(true), "the explicit flag is absolute");
+        // TERM is process-global, so the restore has to survive a panic: a
+        // failure between set and restore left TERM=dumb for every later test
+        // in this binary.
+        let _restore = EnvRestore {
+            key: "TERM",
+            prev: std::env::var_os("TERM"),
+        };
         unsafe { std::env::set_var("TERM", "dumb") };
-        assert!(!should_show_progress(false));
-        if let Some(v) = prev {
-            unsafe { std::env::set_var("TERM", v) };
-        } else {
-            unsafe { std::env::remove_var("TERM") };
+        // Asserted on the gate, not on `should_show_progress`: stderr is not a
+        // terminal under `cargo test`, so the public function returns false
+        // either way and this assertion used to hold with the branch deleted.
+        assert!(term_is_dumb(), "TERM=dumb must refuse progress");
+        unsafe { std::env::set_var("TERM", "xterm-256color") };
+        assert!(!term_is_dumb(), "only the literal `dumb` refuses progress");
+    }
+
+    /// Restores one environment variable when dropped, panic or not.
+    struct EnvRestore {
+        key: &'static str,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => unsafe { std::env::set_var(self.key, v) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
         }
     }
 

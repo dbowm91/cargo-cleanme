@@ -155,40 +155,100 @@ pub fn load(path: &Path) -> Result<Config, AppError> {
         .scan
         .ignore
         .iter()
-        .map(|p| canonical_pattern_prefix(p))
+        .map(|p| canonical_pattern_prefix(p, PatternKind::Glob))
         .collect();
+    // `unignore` is a literal relative path, not a glob, so its canonical
+    // spelling is spliced unescaped: escaping it would corrupt the path.
     c.scan.unignore = c
         .scan
         .unignore
         .iter()
-        .map(|p| PathBuf::from(canonical_pattern_prefix(&p.to_string_lossy())))
+        .map(|p| {
+            PathBuf::from(canonical_pattern_prefix(
+                &p.to_string_lossy(),
+                PatternKind::Literal,
+            ))
+        })
         .collect();
     c.cleanup.policy.include = c
         .cleanup
         .policy
         .include
         .iter()
-        .map(|p| canonical_pattern_prefix(p))
+        .map(|p| canonical_pattern_prefix(p, PatternKind::Glob))
         .collect();
     c.cleanup.policy.exclude = c
         .cleanup
         .policy
         .exclude
         .iter()
-        .map(|p| canonical_pattern_prefix(p))
+        .map(|p| canonical_pattern_prefix(p, PatternKind::Glob))
         .collect();
+    // The rewrite above manufactures pattern text that no longer exists in the
+    // file, so what was validated on the way in is not what is compiled on the
+    // way out. Validating the results is what stops a canonical spelling from
+    // turning a good pattern into an uncompilable one (or, worse, a different
+    // one). No authorization depends on this list: `ignore`/`include`/`exclude`
+    // filter discovery and policy, never ownership.
+    for pattern in c
+        .scan
+        .ignore
+        .iter()
+        .chain(&c.cleanup.policy.include)
+        .chain(&c.cleanup.policy.exclude)
+    {
+        globset::Glob::new(pattern)
+            .map_err(|e| AppError::Config(format!("invalid scan.ignore glob {pattern:?}: {e}")))?;
+    }
     Ok(c)
 }
 
-/// Rewrite a glob pattern's glob-free prefix to its canonical spelling.
+/// How a pattern-shaped config value is matched, which decides whether its
+/// canonical spelling may be bracket-escaped on the way in.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PatternKind {
+    /// Compiled by `globset`. A canonical directory name carrying a glob
+    /// character would be read as a pattern, not as itself.
+    Glob,
+    /// Compared as a literal path (`scan.unignore` is a literal relative path by
+    /// design, predating glob support).
+    Literal,
+}
+
+/// Escape globset metacharacters in a literal path so it splices in as itself.
+///
+/// Returns `None` for a spelling that cannot be escaped portably, so the caller
+/// can leave the user's pattern alone rather than guess. `{` opens an alternation
+/// that no bracket form closes, and `\` is the escape character on Unix but a
+/// path separator on Windows.
+fn escape_glob_literal(path: &str) -> Option<String> {
+    let mut out = String::with_capacity(path.len());
+    for c in path.chars() {
+        match c {
+            // `[]]` and `[[]` are single-character classes holding `]` and `[`;
+            // globset's class parser accepts a leading `]` as a literal member.
+            '*' | '?' | '[' | ']' => {
+                out.push('[');
+                out.push(c);
+                out.push(']');
+            }
+            '{' | '}' | '\\' => return None,
+            _ => out.push(c),
+        }
+    }
+    Some(out)
+}
+
+/// Rewrite a pattern's glob-free prefix to its canonical spelling.
 ///
 /// Only the leading literal run can be canonicalized, so the suffix is copied
 /// verbatim. The pattern is left untouched when the prefix is relative (it could
 /// not be resolved against anything meaningful), when it ends in an escape
-/// (the split would land inside an escape sequence), or when it does not
+/// (the split would land inside an escape sequence), when it does not
 /// resolve — a pattern naming a path that does not exist still means exactly
-/// what it says: it matches nothing.
-fn canonical_pattern_prefix(pattern: &str) -> String {
+/// what it says: it matches nothing — or when the canonical spelling cannot be
+/// escaped and therefore cannot be spliced without changing the match.
+fn canonical_pattern_prefix(pattern: &str, kind: PatternKind) -> String {
     let cut = pattern.find(['*', '?', '[', '{']).unwrap_or(pattern.len());
     let (prefix, tail) = pattern.split_at(cut);
     if prefix.ends_with('\\') {
@@ -207,7 +267,18 @@ fn canonical_pattern_prefix(pattern: &str) -> String {
             if canonical == bare {
                 pattern.to_owned()
             } else {
-                format!("{canonical}{separators}{tail}")
+                // The canonical spelling is a real directory name, not a
+                // pattern. Splicing it raw lets *its* glob characters rewrite
+                // what the user's own pattern matches: a directory named
+                // `real[abc]` becomes a character class that stops matching the
+                // tree the user named and matches two they never wrote down.
+                match kind {
+                    PatternKind::Glob => match escape_glob_literal(&canonical) {
+                        Some(literal) => format!("{literal}{separators}{tail}"),
+                        None => pattern.to_owned(),
+                    },
+                    PatternKind::Literal => format!("{canonical}{separators}{tail}"),
+                }
             }
         }
         Err(_) => pattern.to_owned(),
@@ -326,7 +397,43 @@ fn create_initial(path: &Path) -> Result<(), AppError> {
             drop(f);
             // Creating the final link is atomic and never overwrites a
             // concurrent winner. Both names are siblings on the same volume.
-            fs::hard_link(&temp, path).map_err(|e| step_error("publishing the config", e))?;
+            match fs::hard_link(&temp, path) {
+                Ok(()) => {}
+                // Some filesystems have no hard links at all: FAT32 and exFAT,
+                // several CIFS mounts, and WSL's `/mnt/c` drvfs. There
+                // `link(2)` reports "unsupported" *after* the staging file is
+                // written, which used to make every single command fail at
+                // startup, because `config::load_or_create` is on every path.
+                //
+                // The fallback keeps the property the design cannot give up —
+                // never overwriting a concurrent winner — by creating the
+                // destination with `create_new`, which is equally exclusive.
+                // What it gives up is crash-atomicity of the *contents*: a
+                // crash mid-write leaves a truncated file, which `load` refuses
+                // rather than silently reading as defaults. That is the right
+                // trade against not running at all.
+                Err(e) if e.kind() == std::io::ErrorKind::Unsupported => {
+                    // A successful `create_new` means this process owns the
+                    // destination and no racer can have created it, so a later
+                    // failure removes its own partial file — otherwise the
+                    // lost-race check below would read our truncated write as a
+                    // winner's complete config and call it success.
+                    let mut published = fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(path)
+                        .map_err(|e| step_error("publishing the config", e))?;
+                    let written = published
+                        .write_all(CONFIG_TEMPLATE.as_bytes())
+                        .and_then(|()| published.sync_all());
+                    if let Err(e) = written {
+                        drop(published);
+                        let _ = fs::remove_file(path);
+                        return Err(step_error("writing the config", e));
+                    }
+                }
+                Err(e) => return Err(step_error("publishing the config", e)),
+            }
             fs::remove_file(&temp).map_err(|e| step_error("removing the staging file", e))?;
             Ok(())
         })();
@@ -439,9 +546,79 @@ mod tests {
         );
         // A relative pattern is never resolved against the process CWD.
         assert_eq!(
-            canonical_pattern_prefix("relative/*"),
+            canonical_pattern_prefix("relative/*", PatternKind::Glob),
             "relative/*",
             "relative patterns keep their spelling"
+        );
+    }
+
+    #[test]
+    fn a_canonical_spelling_cannot_inject_glob_characters() {
+        // The rewrite validated the *user's* pattern and then spliced in text
+        // that had never been validated. A directory named `real[abc]`, reached
+        // through a symlink, turned `link/*` into a character class: the tree
+        // the user named stopped matching, and two trees they never named
+        // started being pruned.
+        let d = tempfile::tempdir().unwrap();
+        let real = d.path().join("real[abc]");
+        fs::create_dir_all(&real).unwrap();
+        for sibling in ["reala", "realb"] {
+            fs::create_dir_all(d.path().join(sibling)).unwrap();
+        }
+        let link = d.path().join("link");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        #[cfg(not(unix))]
+        let link = {
+            fs::create_dir(&link).unwrap();
+            real.clone()
+        };
+
+        let config = d.path().join("config.toml");
+        fs::write(
+            &config,
+            format!("[scan]\nignore = [\"{}/*\"]\n", link.display()),
+        )
+        .unwrap();
+        let ignore = load(&config).unwrap().scan.ignore;
+        assert_eq!(ignore.len(), 1);
+        // The compiled pattern must match the tree the user named...
+        let matcher = globset::Glob::new(&ignore[0]).unwrap().compile_matcher();
+        assert!(
+            matcher.is_match(format!("{}/proj", real.display())),
+            "the named tree must still match: {}",
+            ignore[0]
+        );
+        // ...and nothing else.
+        for sibling in ["reala", "realb"] {
+            assert!(
+                !matcher.is_match(format!("{}/{}/proj", d.path().display(), sibling)),
+                "{} must not be pruned by {}",
+                sibling,
+                ignore[0]
+            );
+        }
+        // `unignore` is a literal path, so its canonical spelling is spliced
+        // unescaped: escaping it would corrupt the path it names.
+        let literal =
+            canonical_pattern_prefix(&format!("{}/*", link.display()), PatternKind::Literal);
+        assert_eq!(literal, format!("{}/*", real.display()));
+        // A spelling with no portable escape is left exactly as written.
+        let braces = d.path().join("a{b}c");
+        fs::create_dir_all(&braces).unwrap();
+        let brace_link = d.path().join("bracelink");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&braces, &brace_link).unwrap();
+        #[cfg(not(unix))]
+        let brace_link = {
+            fs::create_dir(&brace_link).unwrap();
+            braces.clone()
+        };
+        let written = format!("{}/*", brace_link.display());
+        assert_eq!(
+            canonical_pattern_prefix(&written, PatternKind::Glob),
+            written,
+            "a `{{` in the canonical spelling cannot be escaped, so the pattern is untouched"
         );
     }
 

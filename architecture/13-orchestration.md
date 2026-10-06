@@ -43,7 +43,7 @@ Its top `use` block is nine lines (`:1-9`) and names `cli`, `config`, `domain`
 `run_update`/`run_scan` is fully qualified (`serde_json::…`). Everything else is
 named at the point of use (`cargo_cleanme::update::update` `:86`,
 `cargo_cleanme::workspace::SystemCargoRunner` `:488`,
-`cargo_cleanme::progress::IndicatifRenderer` `:222`). Consequence: renaming a
+`cargo_cleanme::progress::IndicatifRenderer` `:265`). Consequence: renaming a
 library function breaks this file at many scattered sites, and there is no single
 list of what it depends on. Modules reached: `cli`, `config`, `error`, `domain`,
 `discovery`, `workspace`, `discovery_state`, `cleanup`, `update`, `editor`,
@@ -58,14 +58,14 @@ list of what it depends on. Modules reached: `cli`, `config`, `error`, `domain`,
 | `error_code` | `51-59` | `AppError` → stable `reason=` code |
 | `run` | `67-83` | config path, `RunOptions`, four-arm dispatch |
 | `run_update` | `85-101` | plan, JSON / dry-run four-liner / one-line success |
-| `run_config` | `103-142` | `path`, `show`, `edit` + three post-edit checks |
-| `run_cleanup` | `152-260` | the cleanup pipeline (§5) |
-| `resolve_cleanup_roots` | `266-345` | scope → roots + label + generation (§5) |
-| `emit_cleanup` | `351-384` | three-branch format dispatch for a cleanup report |
-| `collapse_roots` | `386-400` | canonicalize, sort, dedupe, nest-collapse (§6) |
-| `scope_label` | `410-416` | `ScanScope` → JSON `scope` string |
-| `run_scan` | `418-711` | the scan pipeline (§4) |
-| `update_json` | `715-737` | the one hand-rolled envelope (§8) |
+| `run_config` | `:122` | `path`, `show`, `edit` + three post-edit checks |
+| `run_cleanup` | `:195` | the cleanup pipeline (§5) |
+| `resolve_cleanup_roots` | `:314` | scope → roots + label + generation (§5) |
+| `emit_cleanup` | `:405` | three-branch format dispatch for a cleanup report |
+| `collapse_roots` | `:440` | canonicalize, sort, dedupe, nest-collapse (§6) |
+| `scope_label` | `:464` | `ScanScope` → JSON `scope` string |
+| `run_scan` | `:485` | the scan pipeline (§4) |
+| `update_json` | `:724` | the one hand-rolled envelope (§8) |
 
 The two log helpers are new in M012B and exist only to serve `main`'s fatal path;
 they are the reason `main` parses argv itself instead of leaving it inside `run`
@@ -279,7 +279,7 @@ deleted, not a report. If that is ever contentious it is a one-line change at
    `(Some(root), false)`.
 3. `policy::resolve(domain::ScanRequest { cli_root: root, full }, &c.scan)?`
    (`:438-444`); `recency` bound at `:445`.
-4. `IndicatifRenderer::new(!show)` (`:449-451`) where `show` = `format == Human`
+4. `IndicatifRenderer::new(!show)` (`:519-521`) where `show` = `format == Human`
    **and** `should_show_progress(no_progress)`; `observer.phase(Discovery)`
    (`:455`).
 5. `discovery::discover_manifests_with_attribution(&policy, observer, stats)?`
@@ -298,7 +298,7 @@ deleted, not a report. If that is ever contentious it is a one-line change at
     (`:594-603`), mutating `counters` and `diagnostics`.
 12. `full_incomplete` (`:605-609`); `domain::ScanReport` built (`:611-629`),
     carrying `visited_entries` through.
-13. `phase(Reporting)` (`:631`), `finish_and_clear()` (`:632`), **output always
+13. `phase(Reporting)` (`:699`), `finish_and_clear()` (`:700`), **output always
     emitted** (`:635-651`), then diagnostics to stderr (`:655-678`) and `--stats`
     to stderr (`:682-699`).
 
@@ -441,13 +441,17 @@ though `resolved.roots` is empty by construction — consistent, not contradicto
 `:218`** — "nothing to do" is success.
 
 **Reporting** (`:220-240`): `show` requires `format == Human` **and** a capable
-terminal (`:220-221`) — so progress is disabled for both JSON *and* log mode, which
-is what log mode wants; `wall_start` at `:223`; the engine call is `:224-233`;
-`renderer.finish_and_clear()` at `:234` clears transient UI **before** the report,
-matching the scan ordering. The state-generation `println!` (`:235-239`) is also
+terminal (`:263-264`) — so progress is disabled for both JSON *and* log mode, which
+is what log mode wants; `wall_start` at `:266`; the engine call is `:271-280`;
+`renderer.finish_and_clear()` at `:281` clears transient UI **before** the report,
+matching the scan ordering. It runs on the **failure** path too: the result is
+bound to `cleanup` and `finish_and_clear()` is called before the `?`
+(`:281-282`), because `BarState::drop` *finishes* a bar rather than clearing it,
+and a `?` that returned first left a retained bar line above the
+`cargo-cleanme: …` message. The state-generation `println!` (`:235-239`) is also
 Human-only, so it cannot corrupt JSON *or* a log line.
 
-**Exit code** (`:255-259`): `1` if `report.failed > 0 || report.scope_blocked.is_some()`.
+**Exit code** (`:299-303`): `1` if `report.failed > 0 || report.scope_blocked.is_some()`.
 `failed > 0` means at least one `CleanOutcome::Failed`, counted in
 `CleanReport::render`'s tally (`src/cleanup.rs:337-339`) — "ran; at least one
 workspace could not be cleaned". `scope_blocked.is_some()` means the scan
@@ -796,8 +800,9 @@ mutually exclusive, and the Cleanup arm is the only caller of `run_scan` from
 inside `run`, calling it once (`:281`). So the "re-scoped totals" comment at
 `:585-588` describes the phase sequence *within* one call, not a second call.
 There is no double-initialised renderer, no global state, no `static mut` in the
-file — the renderer is a plain local (`:222` for cleanup, `:451` for scan) whose
-`finish_and_clear()` runs once (`:234`, `:632`) before the report.
+file — the renderer is a plain local (`:265` for cleanup, `:519` for scan) whose
+`finish_and_clear()` runs once (`:281`, `:700`) before the report, failure path
+included.
 
 **Is `checked_sub` the only overflow guard? Yes, in this file.** `scan_start`
 (`:426`) is used unguarded at `:597` and guarded at `:590` (§4).

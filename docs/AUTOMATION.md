@@ -19,8 +19,9 @@ This page covers the three things an unattended run needs to get right:
 
 ## Bounded log output
 
-`--format log` emits **exactly one ASCII line on stdout** for each scan or
-cleanup report, and nothing on stderr for a successful run.
+`--format log` emits **exactly one ASCII line on stdout** for each scan,
+cleanup, `config`, or `update` invocation, and nothing on stderr for a
+successful run.
 
 ```console
 $ cargo cleanme --format log
@@ -31,7 +32,15 @@ cargo-cleanme op=scan status=ok scope=full manifests=184 groups=31 bytes=5133556
 
 $ cargo cleanme --format log
 cargo-cleanme op=clean status=blocked scope=routine mode=execute cleaned=0 skipped=0 failed=0 reason=ownership_unproven diagnostics=1
+
+$ cargo cleanme --format log config path
+cargo-cleanme op=config status=ok action=path
 ```
+
+`config` and `update` report the action, never the content: `config path`'s
+whole output *is* a path and `config show`'s is the config file, and both are
+exactly what a retained history pane must not hold. Use the default human format
+when you want the path or the text.
 
 The line is designed to be retained and read by a human in a pane, and to be
 grepped by a monitor. It is deliberately **not** a machine contract:
@@ -53,7 +62,7 @@ consumer must be able to rely on a field. Log drops per-unit detail entirely.
 | `op` | always | `scan`, `clean`, `config`, or `update` |
 | `status` | always | `ok`, `blocked`, `failed`, or `error` |
 | `scope` | reports | `full`, `explicit`, or `routine` — what was resolved, not what was typed |
-| `mode` | cleanup only | `execute`, `simulate`, or `preview` |
+| `mode` | cleanup and update | `execute`, `simulate`, or `preview` (cleanup); `simulate` or `execute` (update) |
 | `reason` | when blocked or failed | a stable code, never English prose |
 | counts and bytes | when they fit | base-10 ASCII integers |
 

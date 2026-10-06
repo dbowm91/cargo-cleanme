@@ -557,15 +557,24 @@ own artifacts as source activity.
 |---|---|---|---|
 | 1 | no covering root had an entry, and all were missing/unreadable | `MissingOutput` | `missing_output_skipped` (stage 1) |
 | 2 | no covering root had an entry, at least one was readable-and-empty | `EmptyOutput` | `empty_no_output_skipped` (stage 1) |
-| 3 | any owner's source is recent | `ActiveSource` | `active_skipped` (per workspace, stage 2) |
+| 3 | any owner's source is recent | `ActiveSource` | `active_skipped` (per group, stage 3) |
 | 4 | any owner's source is uncertain | `UncertainSource` | `uncertain_skipped += 1` |
 | 5 | `ownership == Uncertain` | `UncertainOwnership` | `uncertain_skipped += 1` |
 
 Arm 5 additionally emits the source-overlap diagnostic when `g.source_overlap`
-(`:1057-1070`): *"output root … is the workspace source tree, not a build
+(`:1121-1134`): *"output root … contains a workspace source tree, not a build
 artifact; it is not sized and not eligible for cleanup"*. The comment above it
-(`:1058-1060`) gives the reason — the user configured `target-dir` that way and
-must be told, rather than being met with silence. Test: `:2389`.
+gives the reason — the user configured `target-dir` that way and must be told,
+rather than being met with silence.
+
+The overlap test walks **every** resolved workspace's members, not just the
+group's own owner. `cargo clean` removes whatever is under the covering root, so
+a *second* resolved project whose sources live inside it is destroyed just as
+surely as the owner's own; consulting only the owner's `members` ratified exactly
+the shape the check exists to refuse — an outer workspace whose output directory
+was not literally named `target`, containing a real nested project, lost four
+files with exit 0 and no diagnostic. The preflight proof closes the same gap
+independently at `cleanup.rs:2036-2050`.
 
 **Stage 4 — deep sizing (`:1078-1096`).** One bounded pool, one call:
 `traverse::measure_many_targets` over `(survivor_position, covering_path)` pairs.

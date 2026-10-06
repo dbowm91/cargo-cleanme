@@ -204,17 +204,17 @@ both before a renderer exists at all.
    being false produces a renderer whose every draw path short-circuits.
 
 A third condition sits behind the format gate, inside
-`should_show_progress(no_progress: bool) -> bool` — `progress.rs:149-163`. Three
+`should_show_progress(no_progress: bool) -> bool` — `progress.rs:149-166`. Three
 conditions, evaluated in order, each an early `return false`:
 
 | # | Condition | Line | Effect |
 |---|---|---|---|
 | 1 | `no_progress == true` | `progress.rs:150-152` | `--no-progress` wins outright |
-| 2 | `TERM == "dumb"` | `progress.rs:153-155` | Dumb terminal |
+| 2 | `TERM == "dumb"` | `progress.rs:153-155`, via `term_is_dumb` (`:171-173`) | Dumb terminal |
 | 3 | `!stderr_is_terminal()` | `progress.rs:159-161` | stderr is not a TTY |
 
 **TTY detection is on stderr, and only stderr.** `stderr_is_terminal`
-(`progress.rs:165-168`) is `std::io::stderr().is_terminal()` via
+(`progress.rs:175-178`) is `std::io::stderr().is_terminal()` via
 `std::io::IsTerminal`. **stdout is never inspected.**
 
 The table below therefore describes `--format human` only. Under the default
@@ -253,7 +253,15 @@ only `--stats`; the diagnostics instead ride along as the log line's
 suppression are separate decisions that happen to agree, and each was made for
 its own reason.
 
-**Testability of the gate.** `should_show_progress_respects_flag_and_dumb_term`
+**Testability of the gate.** The `TERM` branch is now asserted on
+`term_is_dumb` (`progress.rs:171-173`) rather than on `should_show_progress`.
+It used to assert `!should_show_progress(false)` under `TERM=dumb`, which holds
+in CI because stderr is not a TTY there: the assertion passed with condition 2
+deleted. The negation is checked too, under `TERM=xterm-256color`, so the test
+now fails if the branch is removed rather than passing for the wrong reason. The
+restore of the process-global `TERM` is an RAII guard, so a panic mid-test cannot
+leave `TERM=dumb` behind for every later test in the binary.
+`should_show_progress_respects_flag_and_dumb_term`
 (`progress.rs:593-603`) covers conditions 1 and 2. Condition 3 — the TTY branch —
 is **never exercised by any test in the crate**: every integration case that runs
 a scan or cleanup passes `--no-progress` (26 occurrences, `tests/cli_contract.rs:183`
@@ -506,18 +514,18 @@ at `progress.rs:499-500`.
 
 | # | Test | Line | Protects |
 |---|---|---|---|
-| 1 | `noop_observer_is_free_and_hidden_renderer_emits_nothing` | `:504` | Hidden short-circuit; `NoopObserver` total no-op |
-| 2 | `coordinated_renderer_owns_six_bars_on_one_draw_target` | `:524` | Bar count + shared draw target |
-| 3 | `in_memory_frame_contains_at_most_six_progress_lines` | `:533` | Rendered frame shape; no unbounded scroll |
-| 4 | `renderer_caps_rows_at_five_largest_first` | `:566` | Top-5 truncation + descending sort |
-| 5 | `test_observer_records_semantic_events` | `:578` | `TestObserver` bookkeeping |
-| 6 | `should_show_progress_respects_flag_and_dumb_term` | `:593` | Gate conditions 1 and 2 |
-| 7 | `renderer_refresh_bounded_independently_of_entry_count` | `:606` | Zero refreshes when hidden |
-| 8 | `discovery_begins_indeterminate_then_analysis_determinate` | `:619` | Indeterminate→determinate switch; `group_measured` does not advance |
-| 9 | `unit_events_rescope_totals_on_a_phase_change_without_an_explicit_phase_call` | `:645` | M8: event-carried phase re-scopes |
-| 10 | `phase_total_resets_so_cleanup_cannot_reuse_analysis_counts` | `:664` | Phase change zeroes total and done |
-| 11 | `sizes_render_in_top_rows_and_clear_before_report` | `:680` | Candidate list; `format_bytes`; idempotent clear |
-| 12 | `renderer_error_falls_back_without_failing_scan` | `:693` | Hidden fallback is a no-op |
+| 1 | `noop_observer_is_free_and_hidden_renderer_emits_nothing` | `:514` | Hidden short-circuit; `NoopObserver` total no-op |
+| 2 | `coordinated_renderer_owns_six_bars_on_one_draw_target` | `:534` | Bar count + shared draw target |
+| 3 | `in_memory_frame_contains_at_most_six_progress_lines` | `:543` | Rendered frame shape; no unbounded scroll |
+| 4 | `renderer_caps_rows_at_five_largest_first` | `:576` | Top-5 truncation + descending sort |
+| 5 | `test_observer_records_semantic_events` | `:588` | `TestObserver` bookkeeping |
+| 6 | `should_show_progress_respects_flag_and_dumb_term` | `:603` | Gate conditions 1 and 2 |
+| 7 | `renderer_refresh_bounded_independently_of_entry_count` | `:637` | Zero refreshes when hidden |
+| 8 | `discovery_begins_indeterminate_then_analysis_determinate` | `:650` | Indeterminate→determinate switch; `group_measured` does not advance |
+| 9 | `unit_events_rescope_totals_on_a_phase_change_without_an_explicit_phase_call` | `:676` | M8: event-carried phase re-scopes |
+| 10 | `phase_total_resets_so_cleanup_cannot_reuse_analysis_counts` | `:695` | Phase change zeroes total and done |
+| 11 | `sizes_render_in_top_rows_and_clear_before_report` | `:711` | Candidate list; `format_bytes`; idempotent clear |
+| 12 | `renderer_error_falls_back_without_failing_scan` | `:724` | Hidden fallback is a no-op |
 
 `TestObserver` (`progress.rs:64-78`) records semantic events: phase sequence and
 totals in `Mutex<Vec<_>>`, counters in `AtomicU64`, the full reportable list in

@@ -34,7 +34,7 @@ json\:""
 log\:"One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract\: complete consumers use \`json\`"))' \
 '--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
 '--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
-'(--dryrun)--dry-run[Simulate routine maintenance\: run every decision, proof, and reporting step, but invoke no \`cargo clean\` process at all]' \
+'(--dryrun)--dry-run[Simulate\: run every decision, proof, and reporting step, but invoke no \`cargo clean\` process at all. Honoured wherever it appears, so the \`cargo cleanme --dry-run clean ROOT\` spelling cannot fall back to Execute]' \
 '(--dry-run)--dryrun[Historical spelling of \`--dry-run\`; retained as a hidden alias]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \

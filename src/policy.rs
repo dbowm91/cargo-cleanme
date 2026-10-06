@@ -125,14 +125,39 @@ fn routine_roots_from_state(
 }
 #[cfg(unix)]
 pub fn global_discovery_policy() -> GlobalDiscoveryPolicy {
-    let policy = unix_policy(
+    compose_global_policy(unix_policy(
         cfg!(target_os = "macos"),
         cfg!(target_os = "linux"),
         cfg!(target_os = "macos") && Path::new("/usr/local").is_dir(),
-    );
+    ))
+}
+
+/// Turn a platform's declared roots and prunes into the production global
+/// policy: collapse redundant roots, then fill in the managed-tool prunes.
+///
+/// Split out from [`global_discovery_policy`] so the composition itself — not
+/// just the platform declaration — is reachable from a test. A green assertion
+/// about the pre-collapse roots proved nothing about what production walks.
+#[cfg(unix)]
+fn compose_global_policy(platform: GlobalDiscoveryPolicy) -> GlobalDiscoveryPolicy {
+    // A root sitting strictly inside a global-only prune is that prune's
+    // exception, so it must survive the collapse as a root of its own. Folded
+    // into its ancestor it would be indistinguishable from the pruned subtree,
+    // and the prune below would swallow it whole (macOS `/usr` vs `/usr/local`).
+    let protected: Vec<PathBuf> = platform
+        .roots
+        .iter()
+        .filter(|root| {
+            platform
+                .global_only_prunes
+                .iter()
+                .any(|prune| prune != *root && root.starts_with(prune))
+        })
+        .cloned()
+        .collect();
     GlobalDiscoveryPolicy {
-        roots: canonical_dedup_roots(policy.roots),
-        global_only_prunes: policy.global_only_prunes,
+        roots: canonical_dedup_roots_protecting(platform.roots, &protected),
+        global_only_prunes: platform.global_only_prunes,
         managed_tool_prunes: managed_rust_prunes(),
     }
 }
@@ -209,6 +234,18 @@ fn lexical_identity(path: &Path) -> PathBuf {
 }
 
 fn canonical_dedup_roots(roots: Vec<PathBuf>) -> Vec<PathBuf> {
+    canonical_dedup_roots_protecting(roots, &[])
+}
+
+/// Dedup and collapse, keeping every root in `protected` even when an already
+/// collapsed root contains it.
+///
+/// A protected root is one the caller listed *in addition to* the ancestor that
+/// contains it, because it is that ancestor's exception (see
+/// [`compose_global_policy`]). Collapsing it would re-create the ambiguity the
+/// caller resolved, and the scan would double-count nothing while losing the
+/// exception.
+fn canonical_dedup_roots_protecting(roots: Vec<PathBuf>, protected: &[PathBuf]) -> Vec<PathBuf> {
     // Dedup and collapse on the best available identity for each root. A root
     // that cannot be canonicalized previously kept its raw spelling, so it was
     // neither deduped nor collapsed against a parent root and an overlapping
@@ -229,9 +266,10 @@ fn canonical_dedup_roots(roots: Vec<PathBuf>) -> Vec<PathBuf> {
     identified.dedup_by(|a, b| a.0 == b.0);
     let mut collapsed: Vec<(PathBuf, PathBuf)> = Vec::new();
     for (identity, root) in identified {
-        if !collapsed
-            .iter()
-            .any(|(parent, _): &(PathBuf, PathBuf)| identity.starts_with(parent))
+        if protected.contains(&identity)
+            || !collapsed
+                .iter()
+                .any(|(parent, _): &(PathBuf, PathBuf)| identity.starts_with(parent))
         {
             collapsed.push((identity, root));
         }
@@ -254,9 +292,18 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn macos_global_policy_prunes_protected_usr_and_enumerates_usr_local() {
-        let policy = unix_policy(true, false, true);
+        // Composed, not merely declared: `compose_global_policy` is what
+        // `global_discovery_policy` applies, so this asserts the roots
+        // production actually walks. Asserting on `unix_policy` proved only
+        // that the exception root existed before the collapse removed it.
+        let policy = compose_global_policy(unix_policy(true, false, true));
         assert!(policy.global_only_prunes.contains(&PathBuf::from("/usr")));
-        assert!(policy.roots.contains(&PathBuf::from("/usr/local")));
+        assert!(
+            policy.roots.contains(&PathBuf::from("/usr/local")),
+            "the /usr/local exception root must survive composition, got {:?}",
+            policy.roots
+        );
+        assert!(policy.roots.contains(&PathBuf::from("/")));
         assert!(
             !policy
                 .global_only_prunes
@@ -267,6 +314,27 @@ mod tests {
                 .global_only_prunes
                 .contains(&PathBuf::from("/Applications"))
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_root_inside_a_global_prune_survives_the_collapse_as_its_own_root() {
+        // The collapse folds a nested root into its ancestor. For `/usr/local`
+        // that folds the exception into the very prune it exists to escape.
+        let roots = vec![
+            PathBuf::from("/"),
+            PathBuf::from("/usr/local"),
+            PathBuf::from("/usr/local/bin"),
+        ];
+        let composed = canonical_dedup_roots_protecting(roots, &[PathBuf::from("/usr/local")]);
+        assert!(composed.contains(&PathBuf::from("/")));
+        assert!(composed.contains(&PathBuf::from("/usr/local")));
+        // An ordinary nested root is still folded, so the protection is not a
+        // blanket licence to walk everything twice.
+        assert!(!composed.contains(&PathBuf::from("/usr/local/bin")));
+        // With nothing protected, the plain collapse behaves as before.
+        let plain = canonical_dedup_roots(vec![PathBuf::from("/"), PathBuf::from("/usr/local")]);
+        assert_eq!(plain, vec![PathBuf::from("/")]);
     }
 
     #[test]

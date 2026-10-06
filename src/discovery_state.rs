@@ -193,7 +193,11 @@ pub fn reconcile_full(
     let mut collapsed: Vec<LearnedRoot> = Vec::new();
     let mut representative: HashMap<PathBuf, usize> = HashMap::new();
     for root in learned {
-        let mut cursor = root.path.parent();
+        // The walk starts at the root itself, not at its parent, so an exact
+        // duplicate folds too. A workspace with N members contributes N
+        // observations that all resolve to one root, and the parent-only walk
+        // folded nesting while publishing the identical path N times.
+        let mut cursor = Some(root.path.as_path());
         let parent = loop {
             let Some(candidate) = cursor else { break None };
             if let Some(&index) = representative.get(candidate) {

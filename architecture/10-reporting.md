@@ -668,7 +668,7 @@ bytes describe observed output and are not recovered bytes."*
 
 ---
 
-## 7. The log surface — `output.rs:267-671`
+## 7. The log surface — `output.rs:267-885`
 
 Added in M012B. The module's own doc comment states its status precisely
 (`output.rs:267-273`):
@@ -685,7 +685,7 @@ second measurement, so the two surfaces cannot disagree about a number.
 
 ### The line format
 
-`line()` (`output.rs:397-424`) joins `key=value` pairs under a fixed prefix
+`line()` (`output.rs:432-459`) joins `key=value` pairs under a fixed prefix
 (`output.rs:286`) and splits them into two classes:
 
 - **Structural** fields are emitted unconditionally, in the order given. A
@@ -704,6 +704,16 @@ losing `reclaimed_bytes`, not losing `status=blocked`. The ordering
 optionals, because a typed code worth alerting on must survive a crowded line
 while a byte count need not.
 
+**Every operation has a line.** `config` and `update` were the gap: `op` is
+documented to admit both (`docs/AUTOMATION.md:53`) but `main.rs` had no `Log`
+branch for either, so `--format log config path` printed a raw path on stdout and
+`--format log config show` printed fourteen lines of config text — precisely the
+"no paths, no config text" the format refuses (`docs/AUTOMATION.md:67`). Both
+commands still do their job in human and JSON form; in log mode they report the
+action and nothing about what it produced. `config`'s `action` is the one honest
+resolution: the *content* of `config path` **is** the path, so a format that
+forbids paths cannot also answer that command.
+
 **ASCII is a contract here, not an aspiration.** No value is quoted, so the
 format depends on values containing no space, quote, or newline. Rather than
 sanitise, the module commits to sources that are already ASCII tokens — enum
@@ -719,6 +729,8 @@ fatal path passes only a typed `error_code` (`main.rs:26-29`) rather than the
 | `scan` | `output.rs:293-312` | `op`, `status`, `scope` | `manifests`, `groups`, `bytes`, `diagnostics` |
 | `cleanup` | `output.rs:319-377` | `op`, `status`, `scope`, `mode` | `reason` (only when blocked), `cleaned`, `skipped`, `failed`, `reclaimed_bytes` (Execute only), `diagnostics` |
 | `fatal` | `output.rs:384-389` | `op`, `status` | `reason` |
+| `config` | `output.rs:398-406` | `op`, `status` | `action` (`path` / `show` / `edit`) |
+| `update` | `output.rs:411-424` | `op`, `status` | `from`, `to`, `target`, `mode` (`simulate` / `execute`) |
 
 Three semantics are worth stating because they are *narrower* than the JSON:
 

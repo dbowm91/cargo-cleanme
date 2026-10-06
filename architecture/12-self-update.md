@@ -119,7 +119,7 @@ the `From` mapping:
 | `Transaction { detail }` | `the update transaction failed: {detail}` (`:325`) | `AppError::Update` |
 | `Receipt { disposition, detail }` | `the update did not commit cleanly ({disposition}): {detail}` (`:331-334`) | `AppError::Update` |
 | `Provenance { provenance }` | `this installation cannot be updated by cargo-cleanme update ({code})` (`:336-342`) | **`AppError::Provenance(remediation_text(..))`** (`:359-361`) |
-| `HostUnsupported { detail }` | `this host has no published cargo-cleanme binary: {detail}` (`:344-347`) | `AppError::Update` |
+| `HostUnsupported { detail }` | `this host has no published cargo-cleanme binary: {detail}` (`:343-348`) | `AppError::Update`. Its doc comment (`update.rs:288-289`) now names the same condition the `Display` and the only construction site (`update.rs:975-977`) do: the registry publishes no contracted asset for this host. |
 
 The single special mapping is deliberate and commented: "A refused update is a
 user-actionable condition, not a crash" (`:358`). A refusal becomes
@@ -370,10 +370,10 @@ pins `Equal → AlreadyCurrent`.
 | `current_exe() -> Result<PathBuf, UpdateError>` | The running executable's absolute path | `std::env::current_exe()` (`:680`) |
 | `cargo_home() -> Option<PathBuf>` | The Cargo home to consult | Exists purely so the refusal path is reachable from a test without mutating process globals (`:617-620`) |
 | `current_version() -> String` | This build's version | `env!("CARGO_PKG_VERSION")` (`:690`) — compile-time and infallible, hence untestable-by-design in the fixture |
-| `staging_dir() -> Result<PathBuf, UpdateError>` | Creating a private staging directory | `std::env::temp_dir()` + `cargo-cleanme-update-<pid>-<nanos>` (`:694-708`) |
+| `staging_dir() -> Result<PathBuf, UpdateError>` | Creating a private staging directory | `std::env::temp_dir()` + `cargo-cleanme-update-<pid>-<nanos>`, created with `fs::create_dir` (`update.rs:869-887`). `create_dir`, not `create_dir_all`: the latter *succeeds* on an existing path, which is not the invariant the name is supposed to have. |
 | `fetch(url, destination) -> Result<u64, UpdateError>` | Streaming a URL to disk | The return value is load-bearing — the empty-asset check (`:880-884`) |
 | `fetch_metadata(url, limit) -> Result<Vec<u8>, UpdateError>` | Fetching a bounded document into memory | `limit` threaded into `FetchLimits.max_metadata_bytes` (`:737-738`) |
-| `cleanup(&Path)` | Removing **only this run's** directory | `remove_dir_all`, errors ignored (`:755-758`) |
+| `cleanup(&Path) -> Result<(), String>` | Removing **only this run's** directory | `remove_dir_all` (`update.rs:936-939`). It returns the failure instead of swallowing it: up to `MAX_ARTIFACT_BYTES` (128 MiB) can remain in the temp directory, and a command that says "updated" while leaving them has not described what it did. |
 
 ### `HttpEnvironment` (`:649-759`)
 
@@ -449,7 +449,14 @@ overstates.
 ### `execute` (`:845-1012`) — the transaction
 
 10. Re-extract `live_digest` from the plan, refusing anything not
-    `VerifiableSelfManaged` (`:850-857`) — a second, independent gate.
+    `VerifiableSelfManaged` (`update.rs:1033-1043`) — **defence in depth, not
+    the gate**. The gate that decides is the one before `fetch_metadata`
+    (`update.rs:974-976`); by here `check_only` has already returned and the
+    provenance is known to be `VerifiableSelfManaged`, so the `else` arm is
+    unreachable today. It stays because `plan.provenance` is a field a future
+    step could rebuild. It does **not** save the user's bandwidth: the metadata
+    fetch has already happened by this point, which the old comment claimed
+    otherwise.
 11. Create the private staging directory (`:859`).
 12. All of the following runs inside a closure (`:860-994`) so `cleanup` is
     unconditional.
@@ -469,7 +476,13 @@ overstates.
     (`:972-974`) — runs the candidate.
 19. Commit with `CommitOwnership::new(&LiveDigestVerifier{..}, AbsentPolicy::DenyCreate)`
     (`:985-993`).
-20. `environment.cleanup(&staging)` (`:996`) — **unconditional**, both paths.
+20. `let cleanup = environment.cleanup(&staging)` (`update.rs:1204`) —
+    **unconditional**, both paths, and its result is captured rather than
+    `?`-propagated so a leftover temp directory cannot mask the transaction's own
+    outcome. A cleanup failure on an otherwise-committed transaction is reported
+    as `Transaction` reading "the executable was replaced, but its staging
+    directory … could not be removed" — the user is told plainly which half
+    failed, because reporting plain success is the lie this replaced.
 21. Receipt (`:998-1011`): `Committed` → success; `RolledBack` → `Receipt
     {"rolled_back"}`; `RecoveryRequired` → `Receipt {"recovery_required"}`.
 
@@ -546,7 +559,7 @@ and the previous binary intact inside `.eggup-backup-*`. Recoverable by hand, bu
 not atomic in the strict sense, and nothing in `src/update.rs` narrows or
 documents the window.
 
-Residue: the module's `cleanup` (`:996`) removes only the temp staging directory
+Residue: the module's `cleanup` (`update.rs:1204`) removes only the temp staging directory
 it created. `.eggup-stage-*` and `.eggup-backup-*` are Eggup's, removed on the
 success path (`transaction.rs:521`, `stage.rs:192`) and after a *verified*
 rollback (`transaction.rs:944`). A crash leaves them in the parent of the install
@@ -726,7 +739,7 @@ succeeded, the mutation lock is `.eggup-mutation.lock` **in the install root**
 (`eggup-core/src/lock.rs:54`) and `require_ready_parent` re-checks the
 destination's parent (`transaction.rs:788-806`). A read-only filesystem, full
 disk, or permission-denied target therefore all surface as `Transaction` at the
-staging step, with `cleanup` running unconditionally at `:996` and the live
+staging step, with `cleanup` running unconditionally at `update.rs:1204` and the live
 binary untouched.
 
 ### Symlinks
@@ -755,9 +768,10 @@ only the lock path construction, not its implementation.
 
 ### Temp-file residue on failure
 
-The module's own temp directory is removed unconditionally at `:996` on both
-paths, because the transaction body is a closure (`:860-994`) whose result is
-bound before `cleanup`. Covered by
+The module's own temp directory is removed unconditionally at `update.rs:1204`
+on both paths, because the transaction body is a closure whose result is bound
+before `cleanup`; a failure to remove it is now reported rather than swallowed.
+Covered by
 `staging_is_cleaned_up_on_success_and_on_failure` (`:2390`) and, live,
 `scripts/post-release-smoke.sh:209`. Eggup's `.eggup-stage-*` /
 `.eggup-backup-*` directories are removed on success and after a verified

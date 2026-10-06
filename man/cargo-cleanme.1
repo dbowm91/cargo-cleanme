@@ -45,7 +45,7 @@ log: One bounded ASCII summary line per report, for unattended schedulers that r
 .RE
 .TP
 \fB\-\-dry\-run\fR
-Simulate routine maintenance: run every decision, proof, and reporting step, but invoke no `cargo clean` process at all
+Simulate: run every decision, proof, and reporting step, but invoke no `cargo clean` process at all. Honoured wherever it appears, so the `cargo cleanme \-\-dry\-run clean ROOT` spelling cannot fall back to Execute
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)

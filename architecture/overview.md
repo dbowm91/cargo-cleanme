@@ -6,7 +6,7 @@ per-component deep dives that follow.
 - **What it is:** a Cargo subcommand (`cargo cleanme`) that finds inactive Cargo
   build artifacts on a machine and either reports or safely reclaims them.
 - **Shape:** one binary (`src/main.rs`) over one library (`src/lib.rs`) of 15
-  modules, 17 source files, 21,075 lines of Rust in `src/`, no async runtime
+  modules, 17 source files, 21,868 lines of Rust in `src/`, no async runtime
   of its own, and exactly one binary dependency that matters for safety
   (`cargo metadata`).
 - **Version:** 0.2.0 (unreleased) · **Edition:** 2024 · **MSRV:** 1.89
@@ -92,17 +92,17 @@ it.**
 ## 3. Module index
 
 Line counts are `total`; where a module carries an inline `#[cfg(test)]`
-module, the `prod` half of the split is given. The crate has **292 inline
-`#[test]` functions**, and **40.4% of them live in the two largest modules**
-(`cleanup.rs` 71 + `workspace.rs` 47). Four modules have **zero** tests:
+module, the `prod` half of the split is given. The crate has **299 inline
+`#[test]` functions**, and **39.8% of them live in the two largest modules**
+(`cleanup.rs` 71 + `workspace.rs` 48). Four modules have **zero** tests:
 `main.rs`, `domain.rs`, `error.rs`, `lib.rs`.
 
 Test counts in this table are **declared**, not "how many ran on my machine".
-292 are declared; **291 compile and run on Linux**, because exactly one is
+299 are declared; **298 compile and run on Linux**, because exactly one is
 gated to other platforms
-(`discovery.rs:1181`, `#[cfg(any(target_os = "macos", windows))]`). A further
-20 are `#[cfg(unix)]` (18) or `#[cfg(target_os = "linux")]` (2), so on Windows
-and macOS the inline suite is 271 of 292. Read the total as coverage
+(`discovery.rs:1268`, `#[cfg(any(target_os = "macos", windows))]`). A further
+21 are `#[cfg(unix)]` (19) or `#[cfg(target_os = "linux")]` (2), so macOS runs
+296 of 299 and Windows 277 of 299. Read the total as coverage
 concentrated in two modules, not as a balance — see
 [14-testing-and-verification](14-testing-and-verification.md) §2.
 
