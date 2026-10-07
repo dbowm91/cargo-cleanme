@@ -29,6 +29,7 @@ C022/M013 planning baseline: `f3d0d9c8c435063bb67940b8dd1c95605141e0e7`
 C023 planning baseline: `eaa7bba1cd70513a7bf48a99d7d9ffe19334a539`
 C025 planning baseline: `35905c5841effadcdb32e3ad4b5f396e4e9096ef`
 C026 planning baseline: `129ac21db3e39dd578df7df5ad6cdeefabc8acb0`
+C027 planning baseline: `59c0be9422e52b23bbb771fe94943cb004670b59`
 Immutability policy enabled: `2026-10-05T13:34:38Z` (repository-level, not owner-enforced)
 
 ## Subsystem status
@@ -36,14 +37,31 @@ Immutability policy enabled: `2026-10-05T13:34:38Z` (repository-level, not owner
 | Subsystem | Status | Roadmap | Current milestone | Blocker |
 |---|---|---|---|---|
 | Artifact discovery and cleanup | **released through 0.2.2; no open corrective** | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | none | Both destructive defects are fixed, qualified by tests shown to fail against the old behaviour, and published as 0.2.1. The one medium finding the requalification surfaced — the canonical-glob rewrite was a no-op on Windows — is fixed by C024 and **shipped in 0.2.2**. |
-| Distribution, release, and update | **closed through v0.2.2** | `plans/subsystems/distribution-release-update-roadmap.md` | none | v0.2.2 closed the C023/M011C operational evidence line and shipped C024. C026 reconciled the remaining post-v0.2.2 current-state drift and retired the proven-stale development branches; it changed no product or release behavior. |
+| Distribution, release, and update | **C027 conditionally closed; published state remains v0.2.2** | `plans/subsystems/distribution-release-update-roadmap.md` | none open | C027 corrects the first-install UX: a default non-root install now persists `$HOME/.local/bin` into a supported zsh/bash profile, while `--dir`, system installs, unsupported shells, unsafe targets, `--no-shell-profile`, and `--no-path` stay non-mutating. Implementation, 19 state-transition fixture cases, and hosted Linux/macOS/Windows evidence are complete. **The one remaining condition is a published release carrying this installer** — the published v0.2.2 wrapper is immutable and retains the old behaviour. That is release discipline, not open engineering work. |
 
 ## Open work
 
-**No cargo-cleanme-local implementation plan is open.** The product and
-release line is closed through **v0.2.2** and reconciled by C026
-(`plans/closure/distribution-release-update/c026-status.md`), which found no
-open corrective other than itself.
+**No cargo-cleanme-local implementation plan is open.**
+
+C027 is **conditionally closed** and is the only work this registry carries. It
+corrected M010B's deliberately weak POSIX PATH contract — the published v0.2.2
+installer installed to `$HOME/.local/bin` for a normal user without persisting
+that directory into a supported shell profile, so a first install on a stock
+macOS account reported success while a new terminal could not find the binary.
+Plan:
+`plans/implementation/distribution-release-update/c027-posix-installer-user-local-path-persistence-corrective.md`.
+Closure record:
+`plans/closure/distribution-release-update/c027-status.md`.
+
+What remains is a **publication event, not engineering work**: the corrected
+installer ships only in a later release. The product/release line remains
+published through **v0.2.2**, whose published wrapper is immutable and retains the
+old behaviour. C027 did not authorize a release and did not select a version.
+
+Read `plans/closure/distribution-release-update/c027-status.md` §7 before
+assuming the POSIX/PowerShell PATH asymmetry is a gap: it is intentional, and the
+macOS append-failure case skips with a stated reason on a kernel that does not
+enforce `RLIMIT_FSIZE`.
 
 `C010` remains `proposed`, upstream, and non-blocking: it cannot be closed from
 this repository and nothing here waits on it.
@@ -84,6 +102,7 @@ later green run does not convert them into passes.
 | M011C — published-release smoke automation | **closed** | `plans/closure/distribution-release-update/m011c-status.md` | The automatic `release: published` trigger is **demonstrated three times**: v0.2.0 (run `37419183947`), v0.2.1 (run `37507738147`), and v0.2.2 (run `37561575727`). The first two **failed**, the first because of three defects in the automation path and the second because C023 had just yanked 0.2.0 and the resolver chose that now-uninstallable version as its rehearsal source. Fixed in the resolver, which now picks the greatest *installable* predecessor. Five-lane green evidence for `v0.1.6 -> v0.2.1` comes from the manual rehearsal surface (run `37508262225`). **The third automatic run discharged the qualification**: v0.2.2's run `37561575727` was green on all five lanes with `from_version=v0.2.1`. The v0.2.0 and v0.2.1 automatic runs both failed and stay recorded as failures. |
 | M011D — Cargo selector qualification lifecycle | **closed** | `plans/closure/artifact-discovery-cleanup/m011d-status.md` | None outstanding. The hosted matrix is a recurring maintenance lane, not a release gate. **Addendum:** the gate had never actually run — both jobs passed a plural `toolchains:` input to an action that declares a singular `toolchain:`, and died on "'toolchain' is a required input". Fixed and re-verified. |
 | C026 — post-v0.2.2 repository reconciliation, cleanup, and polish | **closed** | `plans/closure/distribution-release-update/c026-status.md` | Documentation/control-surface and repository-hygiene corrective, not a product milestone. Reconciled the post-v0.2.2 present-tense drift across the registry, both roadmaps, `architecture/`, and the agent/operator entry points; re-derived 20 `file.rs:N` citations from source, including an `overview.md` mode table that still described the pre-ADR-003 CLI and an `AGENTS.md` line that still claimed cleanup was opt-in; corrected the stale version/script/ADR counts; retired four stale remote branches after proving zero unique commits for three of them and content-preservation for the fourth. **No Rust changed, no release performed, no failed run rewritten as passing, and no historical record edited.** |
+| C027 — POSIX installer user-local PATH persistence corrective | **conditionally closed** | `plans/closure/distribution-release-update/c027-status.md` | Corrects M010B forward rather than rewriting its closed record. Default non-root Linux/macOS installs should safely and idempotently persist `$HOME/.local/bin` for supported zsh/bash profiles, while still printing an export for the current parent shell. Custom `--dir`, system installs, unsupported shells, unsafe profile targets, and `--no-path` remain non-mutating. Hosted macOS closure evidence must prove a fresh zsh resolves the exact installed fixture binary — run `37586963589` proves it, together with the negative direction that the same shell does **not** resolve it once the profile entry is removed. Implementation landed in `b011c85` plus three evidence repairs (`a114367`, `17b91ca`, `9d5b4f6`), each forced by a red hosted run; all four are recorded as findings rather than quietly fixed. **The one outstanding condition is a published release carrying the corrected installer**, which C027 does not authorize. No future plan waits on this. |
 
 **Release discipline for the next release, derived from the v0.2.2-closed
 process.** This is a handoff note, not an open plan: there is no requirement

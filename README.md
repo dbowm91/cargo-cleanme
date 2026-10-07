@@ -305,8 +305,11 @@ For contributors and coding agents: [AGENTS.md](AGENTS.md) and
 - **Library API is not stable.** The crate ships a library because the tests
   and tooling need one. The CLI, the versioned JSON schema, and the
   release-asset names are the stable surfaces.
-- cargo-cleanme never installs a service or daemon, and never modifies your
-  `PATH`.
+- cargo-cleanme never installs a service or daemon. The POSIX installer appends
+  one guarded, idempotent block to your zsh or bash startup file so a new shell
+  can find the binary — see [docs/INSTALLING.md](docs/INSTALLING.md#path-integration).
+  It never touches a system-wide startup file, and `--no-shell-profile` or
+  `--no-path` suppresses it.
 
 ## Uninstall
 

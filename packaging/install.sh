@@ -22,10 +22,11 @@
 #     doas. Run it yourself as root for a system-wide install.
 #
 # Usage:
-#   install.sh                    # latest stable release
-#   install.sh --version 0.1.0    # exact release
-#   install.sh --dir <path>       # override the install directory
-#   install.sh --no-path          # do not print PATH guidance
+#   install.sh                        # latest stable release
+#   install.sh --version 0.1.0        # exact release
+#   install.sh --dir <path>           # override the install directory
+#   install.sh --no-shell-profile     # do not edit a shell startup file
+#   install.sh --no-path              # do not touch PATH at all
 #   install.sh --help
 
 set -eu
@@ -40,8 +41,11 @@ USER_AGENT="cargo-cleanme-installer"
 
 VERSION=""
 INSTALL_DIR=""
+INSTALL_DIR_EXPLICIT=0
 SHOW_PATH_HINT=1
+PERSIST_SHELL_PROFILE=1
 FORCE=0
+IS_ROOT=0
 
 TMP_DIR=""
 cleanup() {
@@ -65,18 +69,31 @@ usage() {
 $PRODUCT installer
 
 Usage:
-  install.sh [--version X.Y.Z] [--dir PATH] [--force] [--no-path] [--help]
+  install.sh [--version X.Y.Z] [--dir PATH] [--force]
+             [--no-shell-profile] [--no-path] [--help]
 
 Options:
-  --version X.Y.Z  Install an exact release instead of the latest stable one.
-  --dir PATH       Install into PATH instead of the default location.
-  --force          Replace an existing cargo-cleanme in the install directory.
-  --no-path        Do not print PATH guidance.
-  --help           Show this message.
+  --version X.Y.Z    Install an exact release instead of the latest stable one.
+  --dir PATH         Install into PATH instead of the default location.
+  --force            Replace an existing cargo-cleanme in the install directory.
+  --no-shell-profile Install the binary but do not add the directory to a shell
+                     startup file. PATH guidance is still printed.
+  --no-path          Do not print PATH guidance and do not modify any shell
+                     startup file. This is the broad opt-out.
+  --help             Show this message.
 
 Default install directory:
   non-root   \$HOME/.local/bin
   root       /usr/local/bin
+
+Shell PATH integration (POSIX only):
+  A normal, non-root install into the default \$HOME/.local/bin adds a small
+  guarded block to your zsh or bash startup file so future shells can run
+  $PRODUCT. The block is idempotent, is appended only after the verified binary
+  is in place, and is never added for a --dir destination, a root/system
+  install, an unsupported shell, or an unsafe profile target. The installer
+  cannot change the PATH of the shell that invoked it, so it also prints the
+  export line for the current shell.
 EOF
 }
 
@@ -94,18 +111,28 @@ while [ $# -gt 0 ]; do
 	--dir)
 		[ $# -ge 2 ] || fail "--dir requires a value"
 		INSTALL_DIR="$2"
+		INSTALL_DIR_EXPLICIT=1
 		shift 2
 		;;
 	--dir=*)
 		INSTALL_DIR="${1#--dir=}"
+		INSTALL_DIR_EXPLICIT=1
 		shift
 		;;
 	--force)
 		FORCE=1
 		shift
 		;;
+	--no-shell-profile)
+		PERSIST_SHELL_PROFILE=0
+		shift
+		;;
 	--no-path)
+		# The broad opt-out: no PATH output *and* no startup-file mutation, so
+		# an existing scripted caller that already opted out never acquires a
+		# new side effect after upgrading.
 		SHOW_PATH_HINT=0
+		PERSIST_SHELL_PROFILE=0
 		shift
 		;;
 	-h | --help)
@@ -155,8 +182,12 @@ if [ -z "$TARGET" ]; then
 fi
 
 # ------------------------------------------------------------- destination
+if [ "$(id -u 2>/dev/null || echo 1000)" = "0" ]; then
+	IS_ROOT=1
+fi
+
 if [ -z "$INSTALL_DIR" ]; then
-	if [ "$(id -u 2>/dev/null || echo 1000)" = "0" ]; then
+	if [ "$IS_ROOT" -eq 1 ]; then
 		INSTALL_DIR="/usr/local/bin"
 	else
 		INSTALL_DIR="${HOME:-/tmp}/.local/bin"
@@ -246,6 +277,185 @@ is_version() {
 # Resolve the version string printed by the candidate itself.
 candidate_version() {
 	"$1" --version 2>/dev/null | head -n 1 | cut -d' ' -f2
+}
+
+# ------------------------------------------------------------ PATH handling
+# The installer cannot change the PATH of the shell that invoked it: a piped
+# child process cannot mutate its already-running parent. So the export line is
+# always printed for the current shell, and separately a small guarded block is
+# appended to one supported startup file so *future* shells work without the
+# user editing anything by hand.
+#
+# Every step below is deliberately conservative. The profile is only touched for
+# the canonical non-root user-local destination, the file is never sourced,
+# evaluated, or command-substituted, a symlink is never followed, and a failure
+# to write the profile is reported rather than rolled back into the binary.
+#
+# Two environment overrides exist purely so a deterministic fixture on one host
+# can exercise the *other* platform's PATH-integration policy:
+#
+#   CARGO_CLEANME_INSTALL_PATH_PROFILE_OS   linux|macos -- which startup file
+#                                           bash integration targets.
+#   CARGO_CLEANME_INSTALL_SYSTEM_SCOPE      1 -- refuse profile persistence, as
+#                                           a root/system install must.
+#
+# Both are PATH-integration policy only. Neither can influence transport, the
+# digest check, candidate identity, or placement: those run before any of this
+# and read no override.
+
+CANONICAL_USER_DIR="${HOME:-}/.local/bin"
+PATH_PROFILE_OS="${CARGO_CLEANME_INSTALL_PATH_PROFILE_OS:-$os_family}"
+SYSTEM_SCOPE="$IS_ROOT"
+if [ "${CARGO_CLEANME_INSTALL_SYSTEM_SCOPE:-0}" = "1" ]; then
+	SYSTEM_SCOPE=1
+fi
+PROFILE_BEGIN="# >>> cargo-cleanme installer PATH >>>"
+PROFILE_END="# <<< cargo-cleanme installer PATH <<<"
+
+# The literal directory a guarded profile entry should compare against. The
+# canonical spelling is the literal path, not `$HOME`, so the entry stays valid
+# and readable when a later shell sources it.
+canonical_dir_literal() {
+	printf '%s' "$CANONICAL_USER_DIR"
+}
+
+path_has_dir() {
+	case ":${PATH:-}:" in
+	*":$1:"*) return 0 ;;
+	esac
+	return 1
+}
+
+# Which startup file this invocation may use, or nothing at all.
+#
+# Only zsh and bash are supported. Anything else -- fish, nushell, elvish, an
+# unset SHELL, or a path with no recognisable basename -- yields no target, and
+# the caller falls back to manual guidance rather than guessing syntax or
+# startup-file precedence we have not tested.
+shell_profile_target() {
+	_shell_name=$(basename "${SHELL:-}" 2>/dev/null || printf '')
+	case "$_shell_name" in
+	zsh)
+		# A zsh user may have relocated their dotfiles. A valid ZDOTDIR is an
+		# absolute path with no newline in it; anything else falls back to HOME.
+		case "${ZDOTDIR:-}" in
+		/*)
+			case "$ZDOTDIR" in
+			*"
+"*) ;;
+			*) printf '%s/.zshrc' "$ZDOTDIR"; return 0 ;;
+			esac
+			;;
+		esac
+		printf '%s/.zshrc' "$HOME"
+		return 0
+		;;
+	bash)
+		# bash reads .bashrc for interactive non-login shells everywhere, but a
+		# login shell reads the first of .bash_profile, .bash_login, .profile.
+		# On macOS `Terminal` starts login shells, so following that precedence
+		# is what makes the entry actually take effect; elsewhere .bashrc is the
+		# file a terminal shell reads.
+		if [ "$PATH_PROFILE_OS" = "macos" ]; then
+			for _candidate in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+				if [ -f "$_candidate" ]; then
+					printf '%s' "$_candidate"
+					return 0
+				fi
+			done
+			printf '%s/.bash_profile' "$HOME"
+			return 0
+		fi
+		printf '%s/.bashrc' "$HOME"
+		return 0
+		;;
+	esac
+	return 1
+}
+
+# Is `$2` an acceptable profile file to append to?
+#
+# Rules, all of them about not touching something that is not ours to touch:
+#   * the file must not be a symlink -- following one could redirect the append
+#     into an arbitrary location, and a dotfile symlink is common enough that
+#     silently obeying it would be a surprise;
+#   * an existing target must be a regular file we can write;
+#   * a missing target may be created only in an existing, writable directory
+#     that we expect to be the user's own.
+profile_target_is_safe() {
+	_target="$1"
+	_parent=$(dirname "$_target" 2>/dev/null || printf '')
+
+	if [ -L "$_target" ]; then
+		return 1
+	fi
+	if [ -e "$_target" ]; then
+		[ -f "$_target" ] || return 1
+		[ -w "$_target" ] || return 1
+		return 0
+	fi
+
+	# Creating a file: only inside a directory that already exists, is a real
+	# directory, and is writable. `unignore` and friends are irrelevant here;
+	# the point is that the installer never creates a directory tree to drop a
+	# dotfile into.
+	[ -n "$_parent" ] || return 1
+	[ -d "$_parent" ] || return 1
+	[ ! -L "$_parent" ] || return 1
+	[ -w "$_parent" ] || return 1
+	return 0
+}
+
+# Does the profile already integrate the canonical directory for real?
+#
+# "For real" is the whole point. A commented-out line, an `echo`, a mention in
+# prose, or an unrelated variable that happens to contain `.local/bin` is not an
+# active integration, and treating one as such would silently skip the append
+# and leave the user with a broken PATH and no warning. Only an uncommented
+# `PATH=` assignment or `PATH` mutation naming the directory counts, plus the
+# installer's own previously-written managed block.
+profile_has_active_entry() {
+	_target="$1"
+	_dir="$2"
+	[ -f "$_target" ] || return 1
+
+	# Our own managed block is an unambiguous prior integration.
+	if grep -qF "$PROFILE_BEGIN" "$_target" 2>/dev/null; then
+		return 0
+	fi
+
+	# An active line is one that is not a comment and that assigns or extends
+	# PATH with the canonical directory. `#` anywhere earlier in the line means
+	# commented out, which is exactly the case that must not suppress us.
+	grep -v '^[[:space:]]*#' "$_target" 2>/dev/null |
+		grep -E "^[[:space:]]*(export[[:space:]]+)?PATH[[:space:]]*(\+?=)" |
+		grep -qF "$_dir"
+}
+
+# Append the guarded entry. Idempotent: a repeat install finds the managed block
+# and writes nothing.
+#
+# A write failure here must leave the already-verified binary alone, so the
+# signal POSIX raises for the file-size-limit case is ignored for the duration
+# of the write and the resulting write error is returned as an ordinary status
+# for the caller to report.
+append_profile_entry() {
+	_target="$1"
+	_dir="$2"
+
+	trap '' XFSZ 2>/dev/null || true
+	{
+		printf '\n%s\n' "$PROFILE_BEGIN"
+		printf '# added by the cargo-cleanme installer; safe to delete\n'
+		printf 'case ":$PATH:" in\n'
+		printf '  *":%s:"*) ;;\n' "$_dir"
+		printf '  *) export PATH="%s:$PATH" ;;\n' "$_dir"
+		printf 'esac\n'
+		printf '%s\n' "$PROFILE_END"
+	} >>"$_target" 2>/dev/null
+	_status=$?
+	trap - XFSZ 2>/dev/null || trap - SIGXFSZ 2>/dev/null || true
+	return "$_status"
 }
 
 # ------------------------------------------------------------------- install
@@ -470,15 +680,77 @@ FINAL=$(candidate_version "$DEST" || true)
 info ""
 info "$PRODUCT $FINAL installed to $DEST"
 
-if [ "$SHOW_PATH_HINT" -eq 1 ]; then
-	case ":${PATH:-}:" in
-	*":$INSTALL_DIR:"*) ;;
-	*)
+# ---------------------------------------------------------- PATH integration
+# Everything below runs only after the verified binary is in place, and nothing
+# here can turn a successful installation into a failure.
+
+print_path_guidance() {
+	info ""
+	info "$INSTALL_DIR is not on your PATH. Add it with:"
+	info "  export PATH=\"$INSTALL_DIR:\$PATH\""
+}
+
+# Profile persistence is permitted only for the canonical user-local destination
+# of a non-root install with the default directory. A `--dir` value is the
+# user's explicit choice and is never written into a startup file; neither is a
+# root/system destination, which has no user profile to edit.
+profile_persistence_permitted() {
+	[ "$PERSIST_SHELL_PROFILE" -eq 1 ] || return 1
+	[ "$SHOW_PATH_HINT" -eq 1 ] || return 1
+	[ "$INSTALL_DIR_EXPLICIT" -eq 0 ] || return 1
+	[ "$SYSTEM_SCOPE" -eq 0 ] || return 1
+	[ -n "$HOME" ] || return 1
+	[ "$INSTALL_DIR" = "$CANONICAL_USER_DIR" ] || return 1
+	return 0
+}
+
+integrate_shell_profile() {
+	profile_persistence_permitted || return 0
+
+	if path_has_dir "$INSTALL_DIR"; then
+		# Already on PATH in this process, so nothing to persist for the next
+		# one either: the user's environment already does it.
+		return 0
+	fi
+
+	_dir=$(canonical_dir_literal)
+	_target=$(shell_profile_target) || return 0
+
+	if ! profile_target_is_safe "$_target"; then
 		info ""
-		info "$INSTALL_DIR is not on your PATH. Add it with:"
-		info "  export PATH=\"$INSTALL_DIR:\$PATH\""
-		;;
-	esac
+		info "  could not add $_dir to $_target (it is not a writable regular file)."
+		info "  add it yourself if you want it on PATH in future shells."
+		return 0
+	fi
+
+	if profile_has_active_entry "$_target" "$_dir"; then
+		info ""
+		info "  $_target already adds $_dir to PATH; leaving it unchanged."
+		return 0
+	fi
+
+	if append_profile_entry "$_target" "$_dir" 2>/dev/null; then
+		info ""
+		info "  added $_dir to $_target for future shells."
+		return 0
+	fi
+
+	# Non-fatal by design: the binary is installed and verified, and undoing
+	# that because a dotfile could not be written would be a worse outcome than
+	# a PATH the user configures by hand.
+	info ""
+	info "  could not write $_target; $_dir is not on PATH for future shells."
+	info "  add it yourself, or re-run with --dir to choose a directory already on PATH."
+	return 0
+}
+
+# One gate for "the caller wants PATH handling at all", and one for "this
+# invocation may persist a profile". They are deliberately not the same
+# condition: --no-path opts out of both, --no-shell-profile out of only the
+# second.
+if [ "$SHOW_PATH_HINT" -eq 1 ] && ! path_has_dir "$INSTALL_DIR"; then
+	integrate_shell_profile
+	print_path_guidance
 fi
 
 exit 0

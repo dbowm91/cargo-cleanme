@@ -32,6 +32,7 @@ import argparse
 import hashlib
 import os
 import platform
+import shlex
 import shutil
 import stat
 import subprocess
@@ -273,6 +274,39 @@ def run_sh(args: list[str], base_url: str, env_extra: dict[str, str] | None = No
     )
 
 
+def run_sh_with_file_limit(
+    args: list[str],
+    base_url: str,
+    env_extra: dict[str, str] | None,
+    limit_blocks: int,
+) -> subprocess.CompletedProcess[str]:
+    """Run the wrapper under a POSIX file-size limit.
+
+    This is how the profile-append failure case is provoked *deterministically*:
+    `ulimit -f` makes the append of a profile that is already near the limit
+    fail with EFBIG (and SIGXFSZ, which the wrapper ignores so the write returns
+    an ordinary error instead of killing the script).
+
+    The limit applies to every file the process writes, so it is set high enough
+    for the downloaded and placed binary -- which is what must still succeed --
+    and the *profile* is pre-filled past the limit so only its append fails. The
+    seam therefore affects PATH-integration policy only, and cannot bypass the
+    transport, digest, identity, or placement checks that run before it.
+    """
+    env = host_env(base_url)
+    if env_extra:
+        env.update(env_extra)
+    quoted = " ".join(shlex.quote(str(a)) for a in [str(INSTALL_SH), *args])
+    return subprocess.run(
+        [posix_shell() or "sh", "-c", f"ulimit -f {limit_blocks} 2>/dev/null; exec sh {quoted}"],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=180,
+        check=False,
+    )
+
+
 def run_ps1(args: list[str], base_url: str, env_extra: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     env = host_env(base_url)
     if env_extra:
@@ -310,6 +344,104 @@ def posix_shell() -> str | None:
 
 def installed_binary(install_dir: Path) -> Path:
     return install_dir / (f"{PRODUCT}.exe" if os.name == "nt" else PRODUCT)
+
+
+# --------------------------------------------------------- PATH integration
+# C027 moved POSIX PATH handling from "print a sentence" to a state transition
+# on a shell profile. These helpers exist so every assertion below is about the
+# *filesystem and shell state*, never about the presence of guidance text: the
+# original defect survived precisely because "PATH" appeared in the output.
+
+MANAGED_BEGIN = "# >>> cargo-cleanme installer PATH >>>"
+MANAGED_END = "# <<< cargo-cleanme installer PATH <<<"
+
+# The two distinct profile-failure diagnostics, kept apart on purpose.
+#
+# "an unsafe target" is decided *before* any write is attempted; "a failed
+# write" is what happens after. They look similar to a user and behave
+# differently to the code: the first means the wrapper refused, the second means
+# it tried and the filesystem said no. Asserting only "no manual-action guidance
+# would help here" would accept either, so the cases name which one happened.
+PROFILE_UNSAFE_TARGET = "is not a writable regular file"
+PROFILE_WRITE_FAILED = "could not write"
+
+# The literal directory the wrapper persists, derived from a fixture HOME the
+# same way the wrapper derives it.
+def canonical_dir(home: Path) -> str:
+    return str(home / ".local" / "bin")
+
+
+def managed_block_count(text: str) -> int:
+    """How many installer-managed blocks a profile's text contains."""
+    return text.count(MANAGED_BEGIN)
+
+
+def profile_problem(profile: Path, home: Path, *, expect_blocks: int = 1) -> str | None:
+    """None when the profile holds exactly the expected managed blocks.
+
+    Checks the *shape* rather than one exact byte string: exactly
+    `expect_blocks` markers, balanced, and the canonical directory named in the
+    guarded `export` line. A profile that merely mentions the directory in a
+    comment does not satisfy this.
+    """
+    if not profile.is_file():
+        return f"{profile} was not created"
+    text = profile.read_text(encoding="utf-8", errors="replace")
+    begins = text.count(MANAGED_BEGIN)
+    ends = text.count(MANAGED_END)
+    if begins != ends:
+        return f"{profile} has {begins} begin markers and {ends} end markers"
+    if begins != expect_blocks:
+        return f"{profile} has {begins} managed blocks, expected {expect_blocks}"
+    if expect_blocks == 0:
+        return None
+    if canonical_dir(home) not in text:
+        return f"{profile} does not name {canonical_dir(home)}"
+    if "export PATH=" not in text:
+        return f"{profile} has no PATH assignment"
+    return None
+
+
+def profile_untouched(profile: Path, before: str | None) -> str | None:
+    """None when the profile is byte-identical to its pre-install content."""
+    if not profile.exists():
+        return None if before is None else f"{profile} was created"
+    if before is None:
+        return f"{profile} was created"
+    now = profile.read_text(encoding="utf-8", errors="replace")
+    if now != before:
+        return f"{profile} was modified ({len(before)} -> {len(now)} bytes)"
+    return None
+
+
+def managed_block_guard_rejects(blocks: int) -> bool:
+    """The failing-direction premise of the PATH assertions, as a pure function.
+
+    The assertions below are worth nothing if they accept any profile. This is
+    the same predicate `profile_problem` applies, with the values a case must
+    never accept, so `--self-test` can require a rejection without needing a
+    wrapper run.
+    """
+    if blocks != 1:
+        return True
+    return False
+
+
+def profile_home_env(home: Path, shell: str = "/bin/zsh", **extra: str) -> dict[str, str]:
+    """A wrapper environment with an isolated HOME and an explicit shell.
+
+    Tests must never touch the CI account's real shell configuration, so HOME,
+    SHELL, and ZDOTDIR are always set explicitly and ZDOTDIR is cleared unless a
+    case is deliberately exercising it.
+    """
+    env = {"HOME": str(home), "SHELL": shell}
+    for key, value in extra.items():
+        env[key.upper()] = value
+    return env
+
+
+def read_profile(profile: Path) -> str | None:
+    return profile.read_text(encoding="utf-8", errors="replace") if profile.is_file() else None
 
 
 def fake_cargo(tmp: Path) -> Path:
@@ -740,6 +872,645 @@ def case_temp_cleanup(runner_name: str, runner, release: Path, base_url: str, wo
     record(name, not leaked, f"leaked: {leaked}")
 
 
+# ------------------------------------------------------------ PATH profiles
+# Every case below isolates HOME, SHELL, and ZDOTDIR into a fixture-owned
+# directory. Nothing here may read or write the CI account's real dotfiles.
+
+
+def _isolated_home(work: Path, name: str) -> Path:
+    home = work / "homes" / name
+    home.mkdir(parents=True, exist_ok=True)
+    return home
+
+
+def _install_default_dir(args: list[str], base_url: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """A canonical, non-root install with no --dir, under an isolated HOME."""
+    # The curated tool PATH deliberately excludes any user-local bin directory,
+    # so "$HOME/.local/bin is already on PATH" is a real condition and not an
+    # accident of the host's environment.
+    return run_sh(args, base_url, env)
+
+
+def case_profile_zsh_user_local(release: Path, base_url: str, work: Path, asset: str) -> None:
+    """Case 1: the canonical zsh install writes the selected startup file."""
+    clear_control(release, asset)
+    home = _isolated_home(work, "profile-zsh")
+    env = profile_home_env(home, "/bin/zsh", path=tools_path(work), zdotdir="")
+    result = _install_default_dir([], base_url, env)
+    name = "[posix-path] canonical zsh install writes $HOME/.zshrc"
+    if result.returncode != 0:
+        record(name, False, f"exit {result.returncode}: {result.stderr.strip()[:200]}")
+        return
+    if not installed_binary(home / ".local" / "bin").is_file():
+        record(name, False, "the canonical user-local binary was not placed")
+        return
+    record(name, profile_problem(home / ".zshrc", home) is None,
+           profile_problem(home / ".zshrc", home) or "")
+    # The current shell cannot be mutated, so the export must still be printed.
+    if 'export PATH="%s:$PATH"' % (home / ".local" / "bin") not in result.stdout:
+        record("[posix-path] the current-shell export is still printed", False,
+               "the export line for the parent shell is missing")
+    else:
+        record("[posix-path] the current-shell export is still printed", True)
+
+
+def case_profile_repeat_is_idempotent(release: Path, base_url: str, work: Path, asset: str) -> None:
+    """Case 2: a repeated --force install must not duplicate the managed block."""
+    clear_control(release, asset)
+    home = _isolated_home(work, "profile-idempotent")
+    env = profile_home_env(home, "/bin/zsh", path=tools_path(work), zdotdir="")
+    profile = home / ".zshrc"
+    first = _install_default_dir([], base_url, env)
+    if first.returncode != 0:
+        record("[posix-path] repeat install is idempotent", False,
+               f"first install exited {first.returncode}: {first.stderr.strip()[:200]}")
+        return
+    # The premise of this case is that the first install wrote something. Without
+    # it, "the second install changed nothing" is true for the wrong reason.
+    if read_profile(profile) is None:
+        record("[posix-path] repeat install is idempotent", False,
+               "the first install wrote no profile, so there is nothing to repeat")
+        return
+    after_first = read_profile(profile) or ""
+    second = _install_default_dir(["--force"], base_url, env)
+    if second.returncode != 0:
+        record("[posix-path] repeat install is idempotent", False,
+               f"second install exited {second.returncode}: {second.stderr.strip()[:200]}")
+        return
+    after_second = read_profile(profile) or ""
+    name = "[posix-path] repeat install is idempotent"
+    if managed_block_count(after_first) != 1:
+        record(name, False, f"the first install wrote {managed_block_count(after_first)} managed blocks")
+        return
+    if managed_block_count(after_second) != 1:
+        record(name, False, f"the second install left {managed_block_count(after_second)} managed blocks")
+        return
+    record(name, after_first == after_second, "the profile changed on a repeat install")
+
+
+def case_profile_existing_active_entry_suppresses(release: Path, base_url: str, work: Path, asset: str) -> None:
+    """Case 3: a pre-existing *active* user-authored entry is respected."""
+    clear_control(release, asset)
+    home = _isolated_home(work, "profile-active")
+    profile = home / ".zshrc"
+    user_entry = (
+        "# my own PATH setup\n"
+        f'export PATH="{home / ".local" / "bin"}:$PATH"\n'
+        "alias ll='ls -l'\n"
+    )
+    profile.write_text(user_entry, encoding="utf-8")
+    env = profile_home_env(home, "/bin/zsh", path=tools_path(work), zdotdir="")
+    result = _install_default_dir([], base_url, env)
+    name = "[posix-path] an existing active entry suppresses the managed append"
+    if result.returncode != 0:
+        record(name, False, f"exit {result.returncode}: {result.stderr.strip()[:200]}")
+        return
+    problem = profile_untouched(profile, user_entry)
+    record(name, problem is None, problem or "")
+
+
+def case_profile_commented_entry_does_not_suppress(release: Path, base_url: str, work: Path, asset: str) -> None:
+    """Case 4: a comment or prose that merely mentions the dir is not active."""
+    clear_control(release, asset)
+    home = _isolated_home(work, "profile-commented")
+    profile = home / ".zshrc"
+    user_entry = (
+        f'# export PATH="{home / ".local" / "bin"}:$PATH"\n'
+        f'echo "remember to add {home / ".local" / "bin"} to PATH someday"\n'
+        "OTHER=\"/some/other/.local/bin\"\n"
+    )
+    profile.write_text(user_entry, encoding="utf-8")
+    env = profile_home_env(home, "/bin/zsh", path=tools_path(work), zdotdir="")
+    result = _install_default_dir([], base_url, env)
+    name = "[posix-path] a commented-out or prose mention does not suppress the append"
+    if result.returncode != 0:
+        record(name, False, f"exit {result.returncode}: {result.stderr.strip()[:200]}")
+        return
+    text = profile.read_text(encoding="utf-8", errors="replace")
+    if managed_block_count(text) != 1:
+        record(name, False, f"the profile has {managed_block_count(text)} managed blocks, expected 1")
+        return
+    if not text.startswith(user_entry):
+        record(name, False, "the user's existing lines were not preserved")
+        return
+    record(name, True)
+
+
+def case_profile_zdotdir_valid(release: Path, base_url: str, work: Path, asset: str) -> None:
+    """Case 5: a valid absolute ZDOTDIR selects its own .zshrc."""
+    clear_control(release, asset)
+    home = _isolated_home(work, "profile-zdotdir")
+    zdotdir = _isolated_home(work, "profile-zdotdir-dotfiles")
+    env = profile_home_env(home, "/bin/zsh", path=tools_path(work), zdotdir=str(zdotdir))
+    result = _install_default_dir([], base_url, env)
+    name = "[posix-path] a valid absolute ZDOTDIR selects $ZDOTDIR/.zshrc"
+    if result.returncode != 0:
+        record(name, False, f"exit {result.returncode}: {result.stderr.strip()[:200]}")
+        return
+    problem = profile_problem(zdotdir / ".zshrc", home)
+    if problem is not None:
+        record(name, False, problem)
+        return
+    if (home / ".zshrc").exists():
+        record(name, False, "$HOME/.zshrc was written even though ZDOTDIR was valid")
+        return
+    record(name, True)
+
+
+def case_profile_zdotdir_invalid(release: Path, base_url: str, work: Path, asset: str) -> None:
+    """Case 6: a relative or newline-bearing ZDOTDIR falls back to HOME."""
+    clear_control(release, asset)
+    for label, bad in (("relative", "relative/dotfiles"), ("newline-bearing", "/tmp/nope\n/etc")):
+        home = _isolated_home(work, f"profile-zdotdir-{label}")
+        env = profile_home_env(home, "/bin/zsh", path=tools_path(work), zdotdir=bad)
+        result = _install_default_dir([], base_url, env)
+        name = f"[posix-path] an invalid ZDOTDIR ({label}) falls back to $HOME/.zshrc"
+        if result.returncode != 0:
+            record(name, False, f"exit {result.returncode}: {result.stderr.strip()[:200]}")
+            continue
+        problem = profile_problem(home / ".zshrc", home)
+        record(name, problem is None, problem or "")
+
+
+def case_profile_zdotdir_missing_directory(release: Path, base_url: str, work: Path, asset: str) -> None:
+    """A syntactically valid ZDOTDIR that does not exist is not created.
+
+    The installer may create a dotfile in a directory the user already has; it
+    must never create a directory tree in order to drop one into it.
+    """
+    clear_control(release, asset)
+    home = _isolated_home(work, "profile-zdotdir-missing")
+    zdotdir = work / "homes" / "profile-zdotdir-missing" / "does-not-exist"
+    env = profile_home_env(home, "/bin/zsh", path=tools_path(work), zdotdir=str(zdotdir))
+    result = _install_default_dir([], base_url, env)
+    name = "[posix-path] a missing ZDOTDIR directory is not created"
+    if result.returncode != 0:
+        record(name, False, f"exit {result.returncode}: {result.stderr.strip()[:200]}")
+        return
+    if zdotdir.exists():
+        record(name, False, f"the installer created {zdotdir}")
+        return
+    if not installed_binary(home / ".local" / "bin").is_file():
+        record(name, False, "the binary was not installed")
+        return
+    record(name, PROFILE_UNSAFE_TARGET in result.stdout,
+           f"the wrapper did not name the unusable startup file: {result.stdout.strip()[-200:]!r}")
+
+
+def case_profile_linux_bash(release: Path, base_url: str, work: Path, asset: str) -> None:
+    """Case 7: a Linux bash install targets $HOME/.bashrc."""
+    clear_control(release, asset)
+    home = _isolated_home(work, "profile-bash-linux")
+    env = profile_home_env(
+        home, "/bin/bash", path=tools_path(work),
+        zdotdir="", cargo_cleanme_install_path_profile_os="linux",
+    )
+    result = _install_default_dir([], base_url, env)
+    name = "[posix-path] a Linux bash install targets $HOME/.bashrc"
+    if result.returncode != 0:
+        record(name, False, f"exit {result.returncode}: {result.stderr.strip()[:200]}")
+        return
+    problem = profile_problem(home / ".bashrc", home)
+    record(name, problem is None, problem or "")
+
+
+def case_profile_macos_bash_precedence(release: Path, base_url: str, work: Path, asset: str) -> None:
+    """Case 8: macOS bash follows login-shell startup precedence.
+
+    `CARGO_CLEANME_INSTALL_PATH_PROFILE_OS` selects the policy so the precedence
+    chain is exercised on every lane. It changes which startup file is chosen
+    and nothing else: the same transport, digest, identity, and placement checks
+    run first and read no override.
+    """
+    clear_control(release, asset)
+    chain = (".bash_profile", ".bash_login", ".profile")
+    expected = (".bash_profile", ".bash_login", ".profile", ".bash_profile")
+    for index, pre_existing in enumerate(chain + (None,)):
+        label = f"with {pre_existing} present" if pre_existing else "with no profile present"
+        home = _isolated_home(work, f"profile-bash-macos-{index}")
+        if pre_existing:
+            (home / pre_existing).write_text("# user content\n", encoding="utf-8")
+        env = profile_home_env(
+            home, "/bin/bash", path=tools_path(work), zdotdir="",
+            cargo_cleanme_install_path_profile_os="macos",
+        )
+        result = _install_default_dir([], base_url, env)
+        name = f"[posix-path] macOS bash selects {expected[index]} ({label})"
+        if result.returncode != 0:
+            record(name, False, f"exit {result.returncode}: {result.stderr.strip()[:200]}")
+            continue
+        target = home / expected[index]
+        problem = profile_problem(target, home)
+        if problem is not None:
+            record(name, False, problem)
+            continue
+        # Only the selected file may be touched.
+        others = [home / n for n in chain if home / n != target]
+        touched = [str(p) for p in others if managed_block_count(
+            (p.read_text(encoding="utf-8", errors="replace") if p.is_file() else "")
+        )]
+        record(name, not touched, f"other startup files were also modified: {touched}")
+
+
+def case_profile_no_shell_profile_flag(release: Path, base_url: str, work: Path, asset: str) -> None:
+    """Case 9: --no-shell-profile suppresses the append but keeps guidance."""
+    clear_control(release, asset)
+    home = _isolated_home(work, "profile-no-shell-profile")
+    env = profile_home_env(home, "/bin/zsh", path=tools_path(work), zdotdir="")
+    result = _install_default_dir(["--no-shell-profile"], base_url, env)
+    name = "[posix-path] --no-shell-profile leaves the profile untouched and still guides"
+    if result.returncode != 0:
+        record(name, False, f"exit {result.returncode}: {result.stderr.strip()[:200]}")
+        return
+    problem = profile_untouched(home / ".zshrc", None)
+    if problem is not None:
+        record(name, False, problem)
+        return
+    record(name, 'export PATH="%s:$PATH"' % (home / ".local" / "bin") in result.stdout,
+           "manual PATH guidance was suppressed by --no-shell-profile")
+
+
+def case_profile_no_path_flag(release: Path, base_url: str, work: Path, asset: str) -> None:
+    """Case 10: --no-path is the broad opt-out: no mutation *and* no output."""
+    clear_control(release, asset)
+    home = _isolated_home(work, "profile-no-path")
+    env = profile_home_env(home, "/bin/zsh", path=tools_path(work), zdotdir="")
+    result = _install_default_dir(["--no-path"], base_url, env)
+    name = "[posix-path] --no-path leaves the profile untouched and prints no PATH guidance"
+    if result.returncode != 0:
+        record(name, False, f"exit {result.returncode}: {result.stderr.strip()[:200]}")
+        return
+    problem = profile_untouched(home / ".zshrc", None)
+    if problem is not None:
+        record(name, False, problem)
+        return
+    # "PATH" appears nowhere in the output at all: not the guidance, not a
+    # profile-integration note.
+    record(name, "PATH" not in result.stdout,
+           f"stdout still mentions PATH: {result.stdout.strip()[-200:]!r}")
+
+
+def case_profile_custom_dir_untouched(release: Path, base_url: str, work: Path, asset: str) -> None:
+    """Case 11: a user-supplied --dir is never auto-persisted."""
+    clear_control(release, asset)
+    home = _isolated_home(work, "profile-custom-dir")
+    # Even a directory *inside* HOME: --dir is an explicit choice and does not
+    # authorize startup-file mutation.
+    dest = home / "custom" / "bin"
+    env = profile_home_env(home, "/bin/zsh", path=tools_path(work), zdotdir="")
+    result = _install_default_dir(["--dir", str(dest)], base_url, env)
+    name = "[posix-path] a custom --dir leaves profiles untouched"
+    if result.returncode != 0:
+        record(name, False, f"exit {result.returncode}: {result.stderr.strip()[:200]}")
+        return
+    if not installed_binary(dest).is_file():
+        record(name, False, "the custom destination was not used")
+        return
+    leftovers = sorted(p.name for p in home.iterdir() if p.name.startswith("."))
+    record(name, not leftovers, f"profile files were created anyway: {leftovers}")
+
+
+def case_profile_system_scope_untouched(release: Path, base_url: str, work: Path, asset: str) -> None:
+    """A root/system install never edits a user profile.
+
+    Exercised through `CARGO_CLEANME_INSTALL_SYSTEM_SCOPE`, which is PATH-policy
+    only; a non-root host cannot become root to prove this honestly.
+    """
+    clear_control(release, asset)
+    home = _isolated_home(work, "profile-system-scope")
+    env = profile_home_env(home, "/bin/zsh", path=tools_path(work), zdotdir="",
+                           cargo_cleanme_install_system_scope="1")
+    result = _install_default_dir([], base_url, env)
+    name = "[posix-path] a system-scope install never edits a user profile"
+    if result.returncode != 0:
+        record(name, False, f"exit {result.returncode}: {result.stderr.strip()[:200]}")
+        return
+    problem = profile_untouched(home / ".zshrc", None)
+    record(name, problem is None, problem or "")
+
+
+def case_profile_unsupported_shell(release: Path, base_url: str, work: Path, asset: str) -> None:
+    """Case 12: fish, an unknown shell, and an unset SHELL get guidance only."""
+    clear_control(release, asset)
+    for label, shell in (("fish", "/usr/bin/fish"), ("unknown", "/usr/bin/nu"), ("unset", "")):
+        home = _isolated_home(work, f"profile-shell-{label}")
+        env = profile_home_env(home, shell or "/bin/false", path=tools_path(work), zdotdir="")
+        if not shell:
+            env.pop("SHELL", None)
+        result = _install_default_dir([], base_url, env)
+        name = f"[posix-path] an unsupported or unset SHELL ({label}) leaves profiles untouched"
+        if result.returncode != 0:
+            record(name, False, f"exit {result.returncode}: {result.stderr.strip()[:200]}")
+            continue
+        problem = profile_untouched(home / ".zshrc", None)
+        if problem is not None:
+            record(name, False, problem)
+            continue
+        record(name, 'export PATH="%s:$PATH"' % (home / ".local" / "bin") in result.stdout,
+               "no manual PATH guidance was emitted")
+
+
+def case_profile_unsafe_targets(release: Path, base_url: str, work: Path, asset: str) -> None:
+    """Case 13: a symlink, directory, or unwritable target is not rewritten."""
+    clear_control(release, asset)
+    for kind in ("symlink", "directory", "unwritable"):
+        if kind == "unwritable" and (not hasattr(os, "geteuid") or os.geteuid() == 0):
+            skip(
+                f"[posix-path] an unsafe profile target ({kind}) is not rewritten",
+                "running as root, where mode bits do not prevent a write",
+            )
+            continue
+        home = _isolated_home(work, f"profile-unsafe-{kind}")
+        profile = home / ".zshrc"
+        elsewhere = home / "elsewhere"
+        elsewhere.mkdir(exist_ok=True)
+        if kind == "symlink":
+            profile.symlink_to(elsewhere / "target")
+        elif kind == "directory":
+            profile.mkdir()
+        else:
+            profile.write_text("# user content\n", encoding="utf-8")
+            profile.chmod(0o400)
+
+        env = profile_home_env(home, "/bin/zsh", path=tools_path(work), zdotdir="")
+        result = _install_default_dir([], base_url, env)
+        name = f"[posix-path] an unsafe profile target ({kind}) is not rewritten"
+        if result.returncode != 0:
+            record(name, False, f"exit {result.returncode}: {result.stderr.strip()[:200]}")
+            continue
+        # The binary must still be installed: a profile problem is not an
+        # installation failure.
+        if not installed_binary(home / ".local" / "bin").is_file():
+            record(name, False, "the binary was not installed")
+            continue
+        if kind == "symlink":
+            followed = elsewhere / "target"
+            problem = None
+            if followed.exists():
+                problem = f"the symlink was followed and {followed} was created"
+            elif not profile.is_symlink():
+                problem = "the symlink was replaced by a regular file"
+        elif kind == "directory":
+            problem = None if profile.is_dir() and not any(profile.iterdir()) else "the directory target was written into"
+        else:
+            body = profile.read_text(encoding="utf-8", errors="replace")
+            # A 0400 file is still readable by its owner, so the content is
+            # checkable. The point is that the wrapper refused on the *mode* and
+            # never attempted a write.
+            problem = None if body == "# user content\n" else "the unwritable profile was rewritten"
+        if problem is not None:
+            record(name, False, problem)
+            continue
+        # The refusal must be *diagnosed*, not merely observed: a wrapper that
+        # wrote the profile and then said nothing useful would also leave the
+        # target unchanged only by accident.
+        record(name, PROFILE_UNSAFE_TARGET in result.stdout,
+               f"the wrapper did not name the unsafe target: {result.stdout.strip()[-200:]!r}")
+
+
+def file_limit_is_enforced(work: Path) -> bool:
+    """Can an over-limit append be provoked here at all?
+
+    The probe performs the *same shape of write the wrapper performs*: a brace
+    group appending with `>>` to a pre-filled regular file, with `SIGXFSZ`
+    ignored, under a file-size limit the file is already past. If that write
+    fails, the platform can provoke the append-failure path and the case runs; if
+    it succeeds, it cannot, and the case says so instead of reporting a failure
+    about its own premise.
+
+    Darwin is why the question is asked at all. Linux raises `SIGXFSZ` and
+    returns an error; macOS does not enforce `RLIMIT_FSIZE` on writes to regular
+    files the same way, so an assumed limit silently stops exercising anything.
+
+    Guessing at the kernel's behaviour would defeat the purpose. The first
+    version of this probe inferred enforcement from a plain `> file` write and
+    got it wrong on macOS, where such a write succeeds while the wrapper's own
+    append still fails. This one runs the real thing.
+    """
+    probe = work / "fsize-probe"
+    blocks = 4
+    probe.write_bytes(b"x" * (blocks * 512 + 64))
+    quoted = shlex.quote(str(probe))
+    script = (
+        f"ulimit -f {blocks} 2>/dev/null || exit 90\n"
+        "trap '' XFSZ 2>/dev/null || trap '' SIGXFSZ 2>/dev/null || true\n"
+        f"{{ printf 'appended\\n'; }} >>{quoted} 2>/dev/null\n"
+        "printf 'rc=%s\\n' \"$?\""
+    )
+    result = subprocess.run(
+        [posix_shell() or "sh", "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    probe.unlink(missing_ok=True)
+    if result.returncode == 90:
+        # `ulimit -f` itself was rejected, so enforcement cannot be observed.
+        return False
+    status = next((line for line in result.stdout.splitlines() if line.startswith("rc=")), "rc=?")
+    return status != "rc=0"
+
+
+def case_profile_append_failure_keeps_binary(release: Path, base_url: str, work: Path, asset: str) -> None:
+    """Case 14: a failed profile append cannot remove the verified binary."""
+    clear_control(release, asset)
+    if not file_limit_is_enforced(work):
+        skip(
+            "[posix-path] a failed profile append leaves the verified binary installed",
+            "this kernel does not enforce RLIMIT_FSIZE on regular-file writes, so the "
+            "append-failure path cannot be provoked here",
+        )
+        return
+    home = _isolated_home(work, "profile-append-failure")
+    profile = home / ".zshrc"
+    # Payload bytes the wrapper must still be able to write: the downloaded and
+    # placed binary. The limit is set above this, and the profile is pre-filled
+    # past it, so only the *append* fails.
+    payload_blocks = max(1, len(make_candidate_stub()) // 512 + 8)
+    limit_blocks = payload_blocks + 4
+    with profile.open("w", encoding="utf-8") as handle:
+        handle.write("# padding\n")
+        handle.write("x" * (limit_blocks * 512 + 64))
+
+    env = profile_home_env(home, "/bin/zsh", path=tools_path(work), zdotdir="")
+    result = run_sh_with_file_limit([], base_url, env, limit_blocks)
+    name = "[posix-path] a failed profile append leaves the verified binary installed"
+    if not installed_binary(home / ".local" / "bin").is_file():
+        record(name, False, "the verified binary was not installed, so the case proved nothing")
+        return
+    # The premise: the append really did fail rather than succeed silently.
+    body = profile.read_text(encoding="utf-8", errors="replace")
+    if managed_block_count(body) != 0:
+        record(name, False, "the profile append succeeded, so the failure path was never exercised")
+        return
+    record(name, result.returncode == 0 and PROFILE_WRITE_FAILED in result.stdout,
+           f"exit {result.returncode} without reporting the write failure: "
+           f"{result.stdout.strip()[-200:]!r} / {result.stderr.strip()[-200:]!r}")
+
+
+def case_profile_entry_is_guarded(release: Path, base_url: str, work: Path, asset: str) -> None:
+    """The persisted entry is conditional, so re-sourcing never duplicates it.
+
+    Without the `case ":$PATH:"` guard the block still resolves the command on
+    the *first* source, which is why a fresh-shell assertion alone cannot see the
+    difference. The guard's own property is that sourcing the profile repeatedly
+    -- and sourcing it in a shell that already has the directory -- leaves the
+    directory on PATH exactly once.
+    """
+    clear_control(release, asset)
+    shell_path = shutil.which("zsh") or shutil.which("bash")
+    if shell_path is None:
+        skip(
+            "[posix-path] the persisted PATH entry is guarded against duplication",
+            "no zsh or bash on PATH to start a fresh shell with",
+        )
+        return
+    home = _isolated_home(work, "profile-guarded-entry")
+    env = profile_home_env(home, shell_path, path=tools_path(work), zdotdir="")
+    result = _install_default_dir([], base_url, env)
+    name = "[posix-path] the persisted PATH entry is guarded against duplication"
+    if result.returncode != 0:
+        record(name, False, f"exit {result.returncode}: {result.stderr.strip()[:200]}")
+        return
+    # Which startup file the wrapper selected depends on the shell, so the
+    # assertion reads the profile that exists rather than assuming one. An
+    # absent profile would make the case vacuous.
+    written = [n for n in (".zshrc", ".bashrc", ".bash_profile", ".bash_login", ".profile")
+               if (home / n).is_file()]
+    if len(written) != 1:
+        record(name, False, f"expected exactly one written startup file, found {written}")
+        return
+    profile = home / written[0]
+    target = canonical_dir(home)
+    # Source the same profile twice in one shell, and count occurrences. The
+    # `case` guard is what makes the second source a no-op. The probe shell gets
+    # a normal PATH: it is a *reader* of the profile, not the subject under test,
+    # and the installer deliberately excludes it so its own PATH check is real.
+    probe_env = {**os.environ, "HOME": str(home)}
+    probe = subprocess.run(
+        [
+            shell_path,
+            "-c",
+            f'. "{profile}"; . "{profile}"; '
+            f'printf "%s\\n" "$PATH" | tr ":" "\\n" | grep -cx "{target}"',
+        ],
+        capture_output=True,
+        text=True,
+        env=probe_env,
+        timeout=60,
+        check=False,
+    )
+    occurrences = probe.stdout.strip()
+    record(name, occurrences == "1",
+           f"after sourcing the profile twice the directory appears {occurrences!r} times on PATH, "
+           f"expected '1' (exit {probe.returncode}: {probe.stderr.strip()[-200:]!r})")
+
+
+def case_profile_non_regular_target(release: Path, base_url: str, work: Path, asset: str) -> None:
+    """A non-regular, non-directory profile target (a FIFO) is not written into.
+
+    `-f` is the guard that keeps the installer off a named pipe: appending to a
+    FIFO blocks forever, which would hang a user's terminal rather than merely
+    fail. The case asserts the installer returns promptly and leaves the pipe
+    alone; a wrapper without the guard would block until the run's timeout.
+    """
+    clear_control(release, asset)
+    home = _isolated_home(work, "profile-fifo")
+    profile = home / ".zshrc"
+    try:
+        os.mkfifo(profile)
+    except (AttributeError, OSError) as error:
+        skip(f"[posix-path] a FIFO profile target is not written into", f"could not create a FIFO: {error}")
+        return
+    env = profile_home_env(home, "/bin/zsh", path=tools_path(work), zdotdir="")
+    name = "[posix-path] a FIFO profile target is not written into"
+    try:
+        result = run_sh([], base_url, env)
+    except subprocess.TimeoutExpired:
+        record(name, False, "the installer blocked writing to a FIFO profile (no timeout in the wrapper)")
+        return
+    if not installed_binary(home / ".local" / "bin").is_file():
+        record(name, False, "the binary was not installed")
+        return
+    if not profile.is_fifo():
+        record(name, False, "the FIFO target was replaced")
+        return
+    record(name, PROFILE_UNSAFE_TARGET in result.stdout,
+           f"the wrapper did not name the FIFO as an unusable target: {result.stdout.strip()[-200:]!r}")
+
+
+def case_profile_fresh_shell_resolves(release: Path, base_url: str, work: Path, asset: str) -> None:
+    """A fresh login+interactive shell resolves the installed fixture binary.
+
+    This is the macOS closure evidence from the plan, runnable on any POSIX host:
+    asserting that the profile *contains text* would pass even if the entry were
+    syntactically inert, so the assertion is that a shell started from scratch
+    resolves the exact installed path through the persisted entry.
+    """
+    clear_control(release, asset)
+    shell_path = shutil.which("zsh") or shutil.which("bash")
+    if shell_path is None:
+        skip(
+            "[posix-path] a fresh shell resolves the installed binary through the profile",
+            "no zsh or bash on PATH to start a fresh shell with",
+        )
+        return
+    home = _isolated_home(work, "profile-fresh-shell")
+    env = profile_home_env(home, shell_path, path=tools_path(work), zdotdir="")
+    install = _install_default_dir([], base_url, env)
+    name = "[posix-path] a fresh shell resolves the installed binary through the profile"
+    if install.returncode != 0:
+        record(name, False, f"install exited {install.returncode}: {install.stderr.strip()[:200]}")
+        return
+    installed = home / ".local" / "bin" / PRODUCT
+    # The invocation has to match how the shell the installer targeted is
+    # actually started, or the case proves nothing about the entry: zsh reads
+    # .zshrc in any interactive shell, a Linux bash reads .bashrc only when it is
+    # non-login, and a macOS bash reads the login files instead.
+    flags = ["-l", "-i", "-c"] if os.path.basename(shell_path) == "zsh" else (
+        ["-l", "-i", "-c"] if platform.system() == "Darwin" else ["-i", "-c"]
+    )
+    # Two environment details decide whether this probe measures the profile or
+    # something else entirely.
+    #
+    # ZDOTDIR is *removed* rather than set empty. zsh consults ZDOTDIR in place
+    # of HOME whenever it is present at all, so an empty value sends it looking
+    # for `/.zshrc`, the profile is never read, and the case fails while
+    # reporting nothing about the installer.
+    #
+    # PATH stays the host's. The curated tool-only PATH exists so the
+    # installer's own "already on PATH" check is a real condition; handing it to
+    # the reader of the profile breaks shells whose startup needs a real PATH,
+    # since macOS `/etc/zprofile` calls `path_helper`, which is not resolvable
+    # on a tool-only PATH and takes `.zshrc` down with it.
+    probe_env = {k: v for k, v in os.environ.items() if k != "ZDOTDIR"}
+    probe_env["HOME"] = str(home)
+    probe = subprocess.run(
+        [shell_path, *flags, f"command -v {PRODUCT}"],
+        capture_output=True,
+        text=True,
+        env=probe_env,
+        timeout=60,
+        check=False,
+    )
+    resolved = probe.stdout.strip().splitlines()[-1].strip() if probe.stdout.strip() else ""
+    record(name, resolved == str(installed),
+           f"a fresh {os.path.basename(shell_path)} resolved {resolved!r}, expected {str(installed)!r} "
+           f"(exit {probe.returncode}: {probe.stderr.strip()[-200:]!r})")
+
+
+def tools_path(work: Path) -> str:
+    """A curated PATH with no user-local bin directory on it.
+
+    The wrapper's own "is the destination already on PATH" check has to be a real
+    condition here, or the profile append would be skipped for the wrong reason
+    and every profile case would pass vacuously.
+    """
+    bindir = tools_without_cargo(work / "tools" / "fallback")
+    return str(bindir)
+
+
 def case_contract_projection() -> None:
     """The wrapper target mapping is a mechanical projection of the contract.
 
@@ -779,6 +1550,35 @@ CASES = (
     case_fake_cargo_is_actually_resolved,
     case_cargo_produces_nothing,
     case_temp_cleanup,
+)
+
+# POSIX-only PATH-integration cases. They have a different signature from the
+# cross-platform roster above -- they assert a state transition on a shell
+# profile, which install.ps1 does not have -- so the driver calls them
+# separately and only for the posix block.
+#
+# The roster is a tuple for the same reason the other one is: a case quietly
+# dropped from it would reduce PATH coverage while the run stayed green.
+POSIX_PATH_CASES = (
+    case_profile_zsh_user_local,
+    case_profile_repeat_is_idempotent,
+    case_profile_existing_active_entry_suppresses,
+    case_profile_commented_entry_does_not_suppress,
+    case_profile_zdotdir_valid,
+    case_profile_zdotdir_invalid,
+    case_profile_zdotdir_missing_directory,
+    case_profile_linux_bash,
+    case_profile_macos_bash_precedence,
+    case_profile_no_shell_profile_flag,
+    case_profile_no_path_flag,
+    case_profile_custom_dir_untouched,
+    case_profile_system_scope_untouched,
+    case_profile_unsupported_shell,
+    case_profile_unsafe_targets,
+    case_profile_non_regular_target,
+    case_profile_append_failure_keeps_binary,
+    case_profile_entry_is_guarded,
+    case_profile_fresh_shell_resolves,
 )
 
 
@@ -871,6 +1671,34 @@ def self_test() -> int:
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
+    print("\n--- self test: the PATH profile assertions reject a broken premise ---")
+    # The C027 defect survived an entire release cycle because the assertion was
+    # "the output mentions PATH". A guard that accepts any profile is the same
+    # defect one level down, so each of these must reject a profile that a real
+    # installer would never have produced.
+    expect(
+        "a profile with no managed block is rejected",
+        managed_block_guard_rejects(0),
+        "the block-count guard accepted a profile the installer never wrote",
+    )
+    expect(
+        "a duplicated managed block is rejected",
+        managed_block_guard_rejects(2),
+        "the block-count guard accepted a non-idempotent repeat install",
+    )
+    expect(
+        "a single managed block is accepted",
+        not managed_block_guard_rejects(1),
+        "a correct profile was rejected",
+    )
+    # A file created where none existed is a mutation, even though "the profile
+    # was not there to be damaged".
+    for name, verdict in (
+        ("a created profile counts as touched", profile_untouched(Path("/nonexistent/x"), "# pre\n") is not None),
+        ("a created profile is accepted when none was expected", profile_untouched(Path("/nonexistent/x"), None) is None),
+    ):
+        expect(name, verdict, "the untouched-profile guard did not detect the creation")
+
     print()
     if problems:
         print(f"FAILED: {len(problems)} premise guard(s) did not reject a broken setup", file=sys.stderr)
@@ -955,6 +1783,13 @@ def main() -> int:
                 case(runner_name, runner, release, base_url, work, tools, asset)
                 executed += 1
             print()
+
+        if run_posix:
+            print(f"--- posix shell PATH integration ({posix_target}) ---")
+            for case in POSIX_PATH_CASES:
+                case(release, base_url, work, asset)
+                executed += 1
+            print()
     finally:
         server.shutdown()
         server.server_close()
@@ -963,15 +1798,17 @@ def main() -> int:
         else:
             shutil.rmtree(work, ignore_errors=True)
 
-    # The roster and the driver must not drift apart: a case removed from
-    # CASES would otherwise shrink coverage silently while the run stayed green.
-    expected_cases = len(blocks) * len(CASES)
+    # The rosters and the driver must not drift apart: a case removed from
+    # either tuple would otherwise shrink coverage silently while the run stayed
+    # green. The PATH roster only owes a run on a host that can run install.sh.
+    expected_cases = len(blocks) * len(CASES) + (len(POSIX_PATH_CASES) if run_posix else 0)
     if executed != expected_cases:
         record(
             "[suite] every declared case ran for every block",
             False,
             f"executed {executed} of {expected_cases} "
-            f"({len(CASES)} cases x {len(blocks)} block(s))",
+            f"({len(CASES)} cases x {len(blocks)} block(s)"
+            f" + {len(POSIX_PATH_CASES) if run_posix else 0} POSIX PATH case(s))",
         )
     else:
         record(

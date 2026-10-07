@@ -6,6 +6,69 @@ All notable changes to cargo-cleanme are documented here. The format follows
 stance: the `0.x` line may make breaking changes in any release, and the
 command-line, JSON, and release-asset contracts are the stable surface.
 
+## [Unreleased]
+
+### Fixed — distribution
+
+- **The POSIX installer reported success while a new terminal could not find the
+  binary.** `packaging/install.sh` installs a normal user account's copy into
+  `$HOME/.local/bin`, which is *not* on `PATH` by default on a stock macOS
+  account. The installer detected that, printed `export PATH=…` for you to run
+  yourself, and exited 0 — so a first install left a working binary that a newly
+  opened terminal could not resolve until the user performed the printed step by
+  hand.
+
+  The installer now appends one bounded, guarded block to a single startup file
+  **after** the verified binary is in place, so a future shell works without
+  manual work:
+
+  ```sh
+  # >>> cargo-cleanme installer PATH >>>
+  case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) export PATH="$HOME/.local/bin:$PATH" ;;
+  esac
+  # <<< cargo-cleanme installer PATH <<<
+  ```
+
+  It is idempotent, so re-running the installer adds nothing. The block is
+  removed by deleting the markers and everything between them.
+
+  The installer **cannot** change the `PATH` of the shell that invoked it — a
+  piped child cannot mutate its already-running parent — so it still prints the
+  export line for the current shell. Open a new terminal, or paste it yourself.
+
+  Which file is used: `$ZDOTDIR/.zshrc` when `ZDOTDIR` is an absolute path and
+  `$HOME/.zshrc` otherwise for zsh; `$HOME/.bashrc` for bash on Linux; and on
+  macOS the first existing file among `$HOME/.bash_profile`, `$HOME/.bash_login`,
+  `$HOME/.profile`, else a new `$HOME/.bash_profile`, because Terminal there
+  starts a login shell.
+
+  Nothing is written when it should not be: a `--dir` destination (your explicit
+  choice), a root/system install, a shell that is not zsh or bash, an unset or
+  invalid `ZDOTDIR`, or a target that is a symlink, a directory, a FIFO, or
+  unwritable. The installer never sources, evaluates, or command-substitutes the
+  file it writes, never creates a directory to drop a dotfile into, and never
+  follows a symlink. A failed write prints the manual step and leaves the
+  already-verified binary installed — it never rolls a working installation back
+  because a dotfile could not be appended.
+
+- **`--no-shell-profile` is new, and `--no-path` now suppresses more than it
+  did.** `--no-shell-profile` installs the binary and prints the manual PATH
+  guidance but writes no startup file. `--no-path` is the broad opt-out: no
+  startup-file change *and* no PATH output. That is a deliberate strengthening
+  for existing scripted callers — one that already opted out of PATH handling
+  will not acquire a new startup-file mutation after upgrading.
+
+  `install.ps1` and all Windows environment-variable handling are unchanged.
+
+  Qualified by a fixture suite that asserts the state transition rather than the
+  presence of guidance text (the earlier assertion passed on a printed
+  instruction), each case shown to fail against a mutated wrapper, plus a hosted
+  macOS lane that starts a fresh `zsh` with a fixture-owned `HOME` and asserts
+  it resolves the exact installed binary — and asserts the same shell does *not*
+  resolve it when the profile entry is removed.
+
 ## [0.2.2] - 2026-10-07
 
 ### Fixed — matching

@@ -62,6 +62,26 @@ jobs:
       - name: Qualify the public installers against a local fixture release
         shell: bash
         run: python3 packaging/tests/test_installers.py
+      # C027 WP-C: the POSIX installer now persists $HOME/.local/bin into a
+      # shell profile, so "the profile contains the expected text" is not
+      # evidence -- a syntactically inert entry passes that too. This step runs
+      # the same fixture install on a real macOS host and asserts that a fresh
+      # zsh login+interactive shell, with a fixture-owned HOME, resolves the
+      # exact installed fixture binary through the persisted entry.
+      #
+      # It is macOS-only because that is where the user-visible defect lived:
+      # `$HOME/.local/bin` is not on PATH by default on a stock macOS account,
+      # so a first install left a working binary that a new terminal could not
+      # find. On Linux the equivalent assertion already runs inside
+      # test_installers.py (case_profile_fresh_shell_resolves).
+      - name: A fresh macOS zsh resolves the installed binary through the profile
+        if: runner.os == 'macOS'
+        shell: bash
+        # --require-macos: a lane that was supposed to prove this and could not
+        # must fail, not skip. A silent skip here would be exactly the
+        # "fixture that reports green where it cannot run" shape this
+        # repository keeps having to catch.
+        run: python3 packaging/tests/qualify_macos_fresh_shell.py --require-macos
       # C013: the branch assertions the installer cases depend on are only
       # meaningful if they reject a broken setup. This is where the C012 class
       # of false green is proven to be detectable, and it runs on the Windows
