@@ -442,9 +442,11 @@ Post-phase release-readiness corrective C021 is **closed**:
 Its evidence supported the v0.2.0 release. C023, the subsequent
 post-publication safety corrective, is **closed** — both destructive defects are
 fixed in the published and attested v0.2.1, and its one unmet criterion was
-distribution-side, met by the v0.2.2 release (run `37561575727`). C024 is **closed and shipped in 0.2.2**. No product implementation plan is
-open; C026 closed the post-v0.2.2 reconciliation pass and changed no product
-behavior.
+distribution-side, met by the v0.2.2 release (run `37561575727`). C024 is
+**closed and shipped in 0.2.2**. C026 closed the post-v0.2.2 reconciliation
+pass. **C027 is now ready** as a bounded distribution corrective for the POSIX
+installer's user-local PATH persistence; it changes installer UX, not cleanup
+semantics or Phase 14 product direction.
 
 Decision:
 
@@ -542,7 +544,10 @@ ADR 003 -> M012A canonical CLI [closed] -> M012B unattended log/docs [closed]
                                   C025 -> C026 reconciliation [closed]
                                               |
                                               v
-                                  (no accepted milestone; Phase 14 undefined)
+                                  C027 POSIX installer PATH corrective [ready]
+                                              |
+                                              v
+                                  (Phase 14 feature milestone undefined)
 ~~~
 
 Phase 12 is implemented and C021/C022 are closed. v0.2.0 was published through
@@ -734,9 +739,30 @@ v0.2.2 release, proved stale branch history was preserved before retiring the
 branches, and left Phase 14 undefined. It changed no cleanup, discovery, update,
 release, schema, or configuration behavior.
 
-**It is not Phase 14 and it does not imply one.** No milestone in this roadmap
-is currently open, and no accepted milestone is queued behind it. Future
-shared-cache GC, stronger provenance/SBOM/SLSA work, or other feature expansion
-requires separate research and planning; repository idleness is not
-authorisation to pick a direction.
+**It is not Phase 14 and it does not imply one.** C027 has since been accepted
+as a bounded corrective to the already-shipped Phase-10 installer UX; it does
+not activate a new feature phase. Future shared-cache GC, stronger
+provenance/SBOM/SLSA work, or other feature expansion still requires separate
+research and planning.
+
+### Post-C026 distribution corrective — C027
+
+Status: **ready**.
+
+Plan:
+
+- `plans/implementation/distribution-release-update/c027-posix-installer-user-local-path-persistence-corrective.md`
+
+C027 corrects the public POSIX installer contract forward from M010B. The
+published v0.2.2 wrapper installs a normal user binary to `$HOME/.local/bin`
+but only prints an export command; it does not persist that directory for future
+supported shell sessions. The corrective is intentionally narrower than a new
+roadmap phase: safe/idempotent zsh/bash profile integration, deterministic
+fixture evidence, hosted macOS fresh-shell proof, and documentation
+reconciliation. Windows installer behavior and all cleanup/update semantics are
+outside scope.
+
+Final closure requires a later published release carrying the corrected
+installer. The release is an operational closure dependency, not authorization
+for C027 to publish one.
 
