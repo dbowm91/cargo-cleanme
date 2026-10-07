@@ -10,7 +10,8 @@ Cargo**, never by deleting directories. One binary over one library of 15
 modules, 17 source files, 23,468 lines in `src/`. No async runtime of its own.
 `cargo metadata` is the only binary dependency that matters for safety.
 
-Eight releases are published (v0.1.0 through v0.1.6, plus 0.2.0), none yanked.
+Ten releases are published (v0.1.0 through v0.1.6, then 0.2.0, 0.2.1, 0.2.2).
+**v0.2.0 is yanked; the other nine are not.**
 
 ## Read this before your first change
 
@@ -150,20 +151,25 @@ closure records.
 
 ## 7. Things that are already decided — do not relitigate
 
-- Cleanup is **opt-in**, Cargo-mediated, and fail-closed. Deletion is always
-  `cargo clean`, never direct filesystem removal.
+- Cleanup is **Cargo-mediated and fail-closed**; deletion is always
+  `cargo clean`, never direct filesystem removal. It is *not* opt-in: since
+  [ADR 003](plans/adr/003-canonical-maintenance-invocation-and-unattended-output.md)
+  bare `cargo cleanme` is Routine **Execute**, with `--dry-run` the canonical
+  zero-mutation preview. The safety boundary is ownership proof, not user
+  rememberment.
 - `allowed_output_roots` authorizes; it can never manufacture ownership proof.
-- `--dryrun` spawns nothing, not even a preview dry-run, and is otherwise as
-  strict as `--yes`.
+- `--dry-run` (hidden alias `--dryrun`) spawns nothing, not even a Cargo preview,
+  and is otherwise as strict as `--yes`. Cargo's own `clean --dry-run` lives
+  behind the separate `--cargo-preview` flag (`cli::clean_mode`).
 - `ignore.unignore` is a literal relative path, not a glob. It predates glob
   support by design; changing it needs a plan.
 - Learned state is advisory, never authority, and a persistence failure never
   changes an exit code.
 - Upstream support gaps: musl and Windows ARM64/ARMv7 are Cargo-only. Do not
   add binaries without deciding that explicitly.
-- `update_json` is the one non-envelope output and the only untested surface.
-  Migrating it to `EnvelopeV1` is a contract change needing a plan and a version
-  bump; adding a test for it needs neither.
+- `update_json` is the one non-envelope output. It is **no longer untested**:
+  C022 pinned the machine contract with tests. Migrating it to `EnvelopeV1` is
+  still a contract change needing a plan and a version bump.
 
 ## 8. Repository map
 

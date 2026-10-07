@@ -338,7 +338,9 @@ them without rewriting immutable history.
 
 ## Phase 11 — Hardening, release trust, and qualification automation
 
-Status: **closed for implementation.** C018, C019, and M011A-M011D are implemented. v0.2.0 supplied the real release evidence for C018/M011A/M011B; M011C remains conditional because its automatic release-trigger run failed and only manual recovery went green. **That condition was carried into C023 and v0.2.1 and is still unmet**: the automatic v0.2.1 smoke also fired and failed, and no green *automatic* five-lane run exists for any release. The next publication is the first opportunity to obtain one.
+Status: **closed.** C018, C019, and M011A-M011D are implemented and closed. v0.2.0 supplied the real release evidence for C018/M011A/M011B. M011C and C023 each held one operational condition after v0.2.1, because the automatic `release: published` smoke had fired twice and failed both times. **Both conditions were met on 2026-10-07**: the v0.2.2 release produced run `37561575727`, green on all five automatic lanes with `from_version=v0.2.1`. The two earlier automatic runs remain recorded as failures and are not converted into passes.
+
+*Historical (as of the v0.2.1 baseline): M011C was conditional because its automatic trigger run failed and only manual recovery went green; that condition was carried into C023 and v0.2.1 and was still unmet. The next publication was the first opportunity to obtain the missing evidence, and v0.2.2 was it.*
 
 Implementation sequence / parallelism:
 
@@ -399,14 +401,14 @@ Plans:
 - `plans/implementation/distribution-release-update/011c-published-release-smoke-automation.md`
 - `plans/implementation/artifact-discovery-cleanup/011d-cargo-selector-qualification-lifecycle.md`
 
-Exit condition:
+Exit condition, as originally written:
 
 - C018 is carried by a public release and real Cargo-managed installations
   refuse without remote acquisition or mutation when local provenance forbids
   replacement;
 - C019 restores exact unignore sibling containment with a premise-negative
   literal-ancestor regression and hosted cross-platform evidence;
-- a future public release is immutable and its release attestation/assets verify
+- a public release is immutable and its release attestation/assets verify
   under the documented trust model;
 - a real Eggpack staged draft automatically receives the full product staged
   validator before human publication;
@@ -416,12 +418,23 @@ Exit condition:
   real-Cargo qualification evidence;
 - no medium-or-higher finding remains in these five hardening scopes.
 
+All seven are met. v0.2.0 supplied C018/M011A/M011B evidence; v0.2.1 carried C019
+and the C023 safety fixes; v0.2.2 carried C024 and discharged the automatic
+smoke condition. The one medium finding C023 surfaced during requalification was
+handed to C024 rather than left open. Records:
+`plans/closure/distribution-release-update/{c018,c023,c024,m011a,m011b,m011c}-status.md`
+and `plans/closure/artifact-discovery-cleanup/{c019,m011d}-status.md`.
+
+**No Phase 14 follows from this closure.** Shared-cache GC, stronger
+provenance/SBOM/SLSA work, and other expansion each need separate research and a
+plan.
+
 ## Phase 12 — Canonical maintenance UX and unattended operation
 
 Status: **closed.** M012A and M012B are implemented and closed under ADR 003.
 The public front door changed while the existing destructive
 ownership/freshness boundary remained intact. `Cargo.toml` has read `0.2.0` or
-later ever since (it is `0.2.1`), so the breaking bare-invocation change
+later ever since (it is `0.2.2`), so the breaking bare-invocation change
 cannot ship as a 0.1.x patch.
 
 Post-phase release-readiness corrective C021 is **closed**:
@@ -429,8 +442,9 @@ Post-phase release-readiness corrective C021 is **closed**:
 Its evidence supported the v0.2.0 release. C023, the subsequent
 post-publication safety corrective, is **closed** — both destructive defects are
 fixed in the published and attested v0.2.1, and its one unmet criterion was
-distribution-side, met by the v0.2.2 release (run `37561575727`). C024 is **closed and shipped in 0.2.2**, so no
-implementation plan is open.
+distribution-side, met by the v0.2.2 release (run `37561575727`). C024 is **closed and shipped in 0.2.2**. No product implementation plan is
+open; C026 closed the post-v0.2.2 reconciliation pass and changed no product
+behavior.
 
 Decision:
 
@@ -513,7 +527,22 @@ ADR 003 -> M012A canonical CLI [closed] -> M012B unattended log/docs [closed]
                                   v0.2.0 [published/affected]
                                               |
                                               v
-                                  C023 -> v0.2.1 safety patch
+                                  C023 -> v0.2.1 safety patch [closed]
+                                              |
+                                              v
+                                  C024 matching-semantics fix
+                                              |
+                                              v
+                                  v0.2.2 [published/closed]
+                                              |
+                                              v
+                                  automatic M011C green [37561575727]
+                                              |
+                                              v
+                                  C025 -> C026 reconciliation [closed]
+                                              |
+                                              v
+                                  (no accepted milestone; Phase 14 undefined)
 ~~~
 
 Phase 12 is implemented and C021/C022 are closed. v0.2.0 was published through
@@ -522,7 +551,8 @@ and post-release interrogation found two destructive defects in the immutable
 bytes. C023 is now **closed**: v0.2.1 is published, immutable,
 attested, and safety-qualified, crates.io v0.2.0 is yanked, and its last
 criterion — the green automatic M011C smoke — was met by the **v0.2.2**
-release, run `37561575727`, green on all five lanes.
+release, run `37561575727`, green on all five lanes. C024 is closed and shipped
+in v0.2.2. C025 and C026 are closed. **No milestone in this roadmap is open.**
 
 
 Destructive work MUST NOT be pulled forward merely to make the tool feel complete.
@@ -583,9 +613,10 @@ Exit condition:
 - C022 closed — met;
 - v0.2.0 public on GitHub and crates.io from one exact source — met;
 - immutable release+asset attestation verified — met;
-- automatic staged validation green — met; **five-target post-release smoke
-  green — met only on the manual rehearsal surface, not under the automatic
-  trigger**, and that gap is what Phase 13 hands forward;
+- automatic staged validation green — met; five-target post-release smoke
+  **green only on the manual rehearsal surface at v0.2.0**, not under the
+  automatic trigger — that gap was what Phase 13 handed forward, and the
+  automatic trigger itself did not go green until v0.2.2 (`37561575727`);
 - C018 real Cargo-managed refusal evidence complete — met;
 - M011A/M011B conditional operational evidence reconciled — met;
 - M013 release receipt closed — met as history, with an appended corrective note.
@@ -647,7 +678,8 @@ recreated, because `release: published` fires once per release.
 
 M013's historical closure record is preserved and nothing in it is retracted. A
 manual smoke does not substitute for the missing automatic M011C evidence, and
-that evidence is now owed by the next publication.
+that evidence was owed by the next publication — **v0.2.2, which supplied it**
+(run `37561575727`, green on all five lanes).
 
 ### Post-v0.2.1 planning reconciliation — C025
 
@@ -683,7 +715,28 @@ was waiting for.
 **Later reconciliation (2026-10-07).** v0.2.2 is published, immutable, attested,
 and verified on both registries; run `37561575727` was green on all five
 automatic lanes. C023 and M011C are both **closed**, C024 is closed and shipped,
-and no implementation plan is open. The block above is left as it stood on
-2026-10-06, because it was accurate then. Release evidence:
+and no product implementation plan is open. The block above is left as it stood
+on 2026-10-06, because it was accurate then. Release evidence:
 `plans/closure/distribution-release-update/r022-status.md`.
+
+### Post-v0.2.2 repository reconciliation — C026
+
+Status: **closed** — closure record:
+`plans/closure/distribution-release-update/c026-status.md`.
+
+Plan:
+
+- `plans/implementation/distribution-release-update/c026-post-v0.2.2-repository-reconciliation-cleanup-and-polish.md`
+
+C026 was a bounded corrective over repository state, not a new roadmap phase. It
+reconciled stale present-tense planning/architecture/operator prose after the
+v0.2.2 release, proved stale branch history was preserved before retiring the
+branches, and left Phase 14 undefined. It changed no cleanup, discovery, update,
+release, schema, or configuration behavior.
+
+**It is not Phase 14 and it does not imply one.** No milestone in this roadmap
+is currently open, and no accepted milestone is queued behind it. Future
+shared-cache GC, stronger provenance/SBOM/SLSA work, or other feature expansion
+requires separate research and planning; repository idleness is not
+authorisation to pick a direction.
 
