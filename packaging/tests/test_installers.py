@@ -1268,9 +1268,48 @@ def case_profile_unsafe_targets(release: Path, base_url: str, work: Path, asset:
                f"the wrapper did not name the unsafe target: {result.stdout.strip()[-200:]!r}")
 
 
+def file_limit_is_enforced(work: Path) -> bool:
+    """Does this kernel actually enforce `ulimit -f` on a regular-file write?
+
+    Darwin is the reason this exists. On Linux, exceeding `RLIMIT_FSIZE` raises
+    `SIGXFSZ` and the write returns an error. On macOS the limit is not reliably
+    enforced for writes to regular files, so a fixture that assumed it would
+    silently stop exercising the append-failure path -- and the case would
+    report a failure about its own premise rather than about the wrapper.
+
+    Probing the platform directly is what keeps the skip honest: it happens
+    *before* the wrapper runs, and a host where the limit works gets the full
+    case.
+    """
+    probe = work / "fsize-probe"
+    blocks = 1
+    script = (
+        f"ulimit -f {blocks} 2>/dev/null; "
+        f'printf "%s" "$(head -c 4096 /dev/zero | tr "\\0" "x)" > {shlex.quote(str(probe))} 2>/dev/null'
+    )
+    result = subprocess.run(
+        [posix_shell() or "sh", "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    probe.unlink(missing_ok=True)
+    if result.returncode == 0 and probe.exists() and probe.stat().st_size >= 4096:
+        return False
+    return True
+
+
 def case_profile_append_failure_keeps_binary(release: Path, base_url: str, work: Path, asset: str) -> None:
     """Case 14: a failed profile append cannot remove the verified binary."""
     clear_control(release, asset)
+    if not file_limit_is_enforced(work):
+        skip(
+            "[posix-path] a failed profile append leaves the verified binary installed",
+            "this kernel does not enforce RLIMIT_FSIZE on regular-file writes, so the "
+            "append-failure path cannot be provoked here",
+        )
+        return
     home = _isolated_home(work, "profile-append-failure")
     profile = home / ".zshrc"
     # Payload bytes the wrapper must still be able to write: the downloaded and
@@ -1417,14 +1456,26 @@ def case_profile_fresh_shell_resolves(release: Path, base_url: str, work: Path, 
     # actually started, or the case proves nothing about the entry: zsh reads
     # .zshrc in any interactive shell, a Linux bash reads .bashrc only when it is
     # non-login, and a macOS bash reads the login files instead.
-    flags = ["-l", "-i", "-c"] if os.path.basename(shell_path) == "zsh" else (
-        ["-l", "-i", "-c"] if platform.system() == "Darwin" else ["-i", "-c"]
+    flags = ["-l", "-i"] if os.path.basename(shell_path) == "zsh" else (
+        ["-l", "-i"] if platform.system() == "Darwin" else ["-i"]
     )
+    # The command is fed on stdin rather than passed with `-c`, because a
+    # command-string shell is not interactive for startup-file purposes on
+    # every shell: a login+interactive shell reading a command from stdin is
+    # exactly what a terminal does, which is the state under test.
+    #
+    # The probe also gets the host PATH, not the curated one the installer ran
+    # with. The curated PATH exists so the installer's own "already on PATH"
+    # check is a real condition; handing it to the probe breaks shells whose
+    # startup needs a real PATH -- macOS `/etc/zprofile` calls `path_helper`,
+    # which is not found on a tool-only PATH and takes the rest of startup with
+    # it, so `.zshrc` is never read and the case fails for the wrong reason.
     probe = subprocess.run(
-        [shell_path, *flags, "command -v " + PRODUCT],
+        [shell_path, *flags],
+        input=f"command -v {PRODUCT}\n",
         capture_output=True,
         text=True,
-        env={**os.environ, **env},
+        env={**os.environ, "HOME": str(home), "ZDOTDIR": ""},
         timeout=60,
         check=False,
     )

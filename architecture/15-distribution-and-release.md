@@ -275,7 +275,7 @@ shell-appropriate:
 
 ### 3.4 The installer fixtures
 
-`packaging/tests/test_installers.py` (1762 lines) is the installer qualification
+`packaging/tests/test_installers.py` (1813 lines) is the installer qualification
 suite, and `packaging/tests/fixture_server.py` (160 lines) is a local fixture
 server that stands in for the GitHub release service. **No test in this suite
 contacts the public GitHub service or a real release** — the CI job comment
@@ -284,7 +284,7 @@ states this explicitly (`.github/workflows/ci.yml:38-40`).
 **The Windows cases do execute on a Windows runner.** The job matrix is
 `[ubuntu-latest, macos-latest, windows-latest]` (`.github/workflows/ci.yml:47`)
 and the suite is invoked on all three. The cross-platform roster has 15 named cases
-(`packaging/tests/test_installers.py:1471-1487`):
+(`packaging/tests/test_installers.py:1522-1538`):
 
 | Case | What it pins down |
 | --- | --- |
@@ -306,7 +306,7 @@ and the suite is invoked on all three. The cross-platform roster has 15 named ca
 
 The last three are the C012 repair. `case_fake_cargo_is_actually_resolved`
 exists specifically because a stub `cargo` earlier in `PATH` could have made a
-green result meaningless, and `self_test()` (`packaging/tests/test_installers.py:1519`)
+green result meaningless, and `self_test()` (`packaging/tests/test_installers.py:1570`)
 proves the guards reject a deliberately broken setup. The premise-negative
 self-test runs on every matrix lane, including Windows, specifically because
 that is where the defect lived (`.github/workflows/ci.yml:86-91`).
@@ -315,9 +315,9 @@ that is where the defect lived (`.github/workflows/ci.yml:86-91`).
 its cases have a different signature and only apply to `install.sh`: they assert
 a state transition on a shell profile, which `install.ps1` does not have. The 19
 cases are in `POSIX_PATH_CASES`
-(`packaging/tests/test_installers.py:1496-1516`) and run only on a host that can
+(`packaging/tests/test_installers.py:1547-1567`) and run only on a host that can
 run the POSIX block. Both rosters are tuples and the driver counts what it ran
-(`packaging/tests/test_installers.py:1735-1752`), because a case quietly dropped
+(`packaging/tests/test_installers.py:1786-1803`), because a case quietly dropped
 from a roster would otherwise shrink coverage while the run stayed green — the
 same failure mode this suite exists to prevent.
 
@@ -913,7 +913,7 @@ real self-update defects**:
 The diagnosis behind C017 is stated in the suite itself: the case "was green for
 an entire release cycle precisely because nothing ever checked the guards in the
 direction that matters: with the stub *not* reachable, and with the real tool
-winning the lookup" (`packaging/tests/test_installers.py:1520-1560`). The fixtures
+winning the lookup" (`packaging/tests/test_installers.py:1570-1641`). The fixtures
 had been built to pass, not to be shown capable of failing.
 
 The consequence, stated without softening: **a defect of the C016 or C017 class
@@ -1058,13 +1058,13 @@ the release workflows.
    not.
 6. **Does your installer change touch digest handling?** Three fixture cases
    exist specifically to prove a missing, malformed, or mismatched `.sha256`
-   aborts the install (`packaging/tests/test_installers.py:1471-1487`). If you
+   aborts the install (`packaging/tests/test_installers.py:1522-1538`). If you
    make the checksum optional, you are removing a guarantee, and the fixtures
    must be changed deliberately rather than incidentally.
 8. **Are your new fixtures capable of failing?** After C012, a green fixture
    that has only ever passed is not evidence. If you add a case, prove it rejects
    a broken premise, following `self_test()`
-   (`packaging/tests/test_installers.py:1519`).
+   (`packaging/tests/test_installers.py:1570`).
 9. **Did you touch the release workflow?** The contract check fails if a
    publication or clobber path reappears
    (`scripts/check-release-contract.py:527`), and `release-drift.yml` fails if
