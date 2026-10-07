@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: **conditionally closed**, with one named qualification outstanding. C022 is closed; M013's v0.2.0 publication was corrected by C023; C023 published immutable v0.2.1, attested it, and yanked crates.io 0.2.0, but its acceptance criterion 11 is not met — the automatic v0.2.1 `release: published` smoke **fired and failed on all five lanes**. M011C is therefore **not** discharged: it has the same missing evidence, and the next release is the first opportunity to obtain it. There is no active release corrective. C024 was the next substantive product corrective, is now **closed** (fixed, unreleased), and is cross-listed here only because it was opened by C023 and lives in this plan directory — it is a discovery/matching decision, not distribution behaviour. C010 remains an independent upstream request.
+Status: **closed.** C022 is closed; M013's v0.2.0 publication was corrected by C023; C023 published immutable v0.2.1, attested it, and yanked crates.io 0.2.0. Its acceptance criterion 11 and M011C's operational condition were both **met on 2026-10-07** by the v0.2.2 release: run `37561575727` was green on all five automatic lanes with `from_version=v0.2.1`, the first green automatic smoke in the project's history. **C023 and M011C are both closed.** There is no active release corrective. C024 was the next substantive product corrective, is now **closed and shipped in v0.2.2**, and is cross-listed here only because it was opened by C023 and lives in this plan directory — it is a discovery/matching decision, not distribution behaviour. C010 remains an independent upstream request.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 
@@ -431,9 +431,11 @@ C018 provenance uncertainty fail-closed [CLOSED]
 M011A immutable          M011B staged           M011C published
 release attestation      validation workflow    smoke automation
 [CLOSED]                 [CLOSED]               [CLOSED]
-  conditional*             conditional*            conditional*
 
-* implementation, static guarantees, and documentation are complete and verified.
+All three closed outright. M011A and M011B reached that when their evidence
+existed; M011C reached it on 2026-10-07, when run `37561575727` produced the
+first green **automatic** `release: published` smoke on all five lanes for the
+v0.2.2 release, discharging the condition it had held open.
   Each retains one outstanding *hosted* evidence, and all four are supplied by the
   same event: the first release published from `main` after 2026-10-05. M011A's
   immutable-releases policy is enabled and verified live, so that release is also
@@ -460,7 +462,7 @@ Cargo evidence that bytes and manager bookkeeping remain unchanged.
 
 Plan: `plans/implementation/distribution-release-update/011a-immutable-release-attestation-and-verification.md`
 
-Status: **conditionally closed; first real attested release evidence outstanding**.
+Status: **closed.** v0.2.0's real immutable release was verified with a valid attestation and all 15 downloaded asset digests matching it, and v0.2.2 repeated that verification (`verify-release-attestation.py`, 15 digests). The trust root is GitHub's release and attestation infrastructure, and the doc says so.
 
 M011A enables GitHub immutable releases for future publications and makes the
 platform's immutable-release attestation/asset verification part of release
@@ -476,7 +478,7 @@ provenance, SBOM attestation, or updater enforcement crosses into Eggpack Phase
 
 Plan: `plans/implementation/distribution-release-update/011b-staged-release-validation-workflow-gate.md`
 
-Status: **conditionally closed; first real automatic staged-draft evidence outstanding**.
+Status: **closed.** The automatic staged-draft validator has run against real drafts: run `37418179489` passed all six steps for v0.2.0 including a measured `GLIBC_2.17.0` floor, and run `37561423879` passed all six for v0.2.2 (inventory 15 assets, sidecar integrity, manifest agreement, contract agreement, static Linux ABI, real installer qualification).
 
 M011B makes `scripts/validate-staged-release.py` a hosted publication
 prerequisite. A product-owned, read-only workflow observes successful trusted
@@ -494,12 +496,14 @@ Plan: `plans/implementation/distribution-release-update/011c-published-release-s
 
 Closure: `plans/closure/distribution-release-update/m011c-status.md`
 
-Status: **conditionally closed.** The automatic trigger is **proven** — it has
-now fired unprompted on two real publications (v0.2.0 run `37419183947`, v0.2.1
-run `37507738147`) — and the five-target transaction is **green via manual
-recovery** (`37420625111` for v0.2.0, `37508262225` for `v0.1.6 -> v0.2.1`).
-A green run *under the automatic trigger* is **not yet proven**: both automatic
-runs failed. The v0.2.1 failure was C023's own yank reaching the harness —
+Status: **closed.** The automatic trigger is **proven** — it has fired
+unprompted on three real publications (v0.2.0 run `37419183947`, v0.2.1 run
+`37507738147`, v0.2.2 run `37561575727`) — and on the third it was **green on all
+five lanes under the automatic trigger itself**, which is what this section was
+waiting for. The first two automatic runs failed and remain recorded as
+failures; the manual recoveries (`37420625111`, `37508262225`) are still the
+evidence that the *transaction* works, but they are no longer standing in for it.
+The v0.2.1 failure was C023's own yank reaching the harness —
 `select_predecessor` consulted GitHub release suitability but not crates.io
 installability, so it chose a yanked v0.2.0 that no lane could install. Fixed in
 `cfdc910`, self-test corrected in `b0b41fc`, both landed. No automatic run for
@@ -529,7 +533,7 @@ remains available for recovery/historical transitions.
 
 ## 12. Phase 13 — 0.2.0 pre-release hardening and publication
 
-Status: **published; corrected by C023, which is conditionally closed.**
+Status: **published; corrected by C023, which is now closed.**
 
 Phase 13 does not add a new product feature. It takes the already-implemented
 0.2.0 tree through the last bounded verification hardening and then through the
@@ -630,9 +634,12 @@ None may be used to waive a failed release qualification gate.
 
 ### 12.4 C023 — v0.2.0 destructive-safety patch-release corrective
 
-Status: **conditionally closed** — accepted closure record:
+Status: **closed** — accepted closure record:
 `plans/closure/distribution-release-update/c023-status.md`. Acceptance criterion
-11, a green **automatic** M011C five-target smoke, is explicitly **not met**.
+11, a green **automatic** M011C five-target smoke, was **not met at v0.2.1** and
+**was met on 2026-10-07** by the v0.2.2 release, run `37561575727` — green on all
+five lanes with `from_version=v0.2.1`. See that record's §13B and
+`r022-status.md`.
 
 Plan:
 
@@ -665,7 +672,7 @@ a green **automatic** M011C five-target smoke, public-binary safety
 requalification, crates.io 0.2.0 yank, and explicit reconciliation of the M013
 historical closure without erasing its failed evidence.
 
-Ordinary roadmap work is unblocked now that C023 is conditionally closed. C024, the one medium finding it recorded, has been taken and is closed; it is unreleased, so the next release carries it.
+Ordinary roadmap work is unblocked. C024, the one medium finding C023 recorded, has been taken, is closed, and **shipped in v0.2.2**.
 
 **What the plan asked for versus what happened.** Everything below was
 delivered: both defects were reproduced against the immutable 0.2.0 binary,
@@ -710,5 +717,14 @@ same current state. No failed run was rewritten as passing and no historical
 evidence was edited.
 
 C024 was left untouched by that reconciliation and was taken afterwards: it is
-now closed, with its fix unreleased pending the next release.
+now closed, and its fix **shipped in 0.2.2** (release record
+`plans/closure/distribution-release-update/r022-status.md`).
+
+**Later reconciliation (2026-10-07).** The v0.2.2 release produced the first
+green *automatic* `release: published` smoke (run `37561575727`, all five lanes,
+`from_version=v0.2.1`). That discharged the condition C023 and M011C were both
+holding open, so **both are now closed**. The two earlier automatic runs remain
+recorded as failures; a later green run does not convert them into passes. The
+resolution text above is left as C025 wrote it, because it accurately describes
+the state on 2026-10-06.
 

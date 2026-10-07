@@ -2,7 +2,16 @@
 
 Plan: `plans/implementation/distribution-release-update/011c-published-release-smoke-automation.md`
 
-Disposition: **conditionally closed — implementation complete; operational closure requires a real `release: published` event.** Two such events have now occurred (v0.2.0 and v0.2.1); both automatic runs **failed**, and both were recovered green through the manual rehearsal surface. See the v0.2.1 addendum at the end of this record.
+Disposition: **closed.** The condition attached to the previous *conditional*
+disposition — *"operational closure requires a real `release: published` event"* —
+was met by run `37561575727` on the v0.2.2 release: all five lanes green, with
+the resolver recording `from_version=v0.2.1`, the correct previous stable. The
+earlier automatic failures (v0.2.0, v0.2.1) remain recorded below; they are not
+erased by a later green run.
+
+Disposition history: **conditionally closed** after v0.2.1, when two automatic
+events had occurred and **both had failed**. See the v0.2.1 addendum below, and
+the v0.2.2 addendum at the end of this record.
 
 Implementation commit: the `phase11-hardening` branch commit that extends
 `.github/workflows/post-release-smoke.yml` and adds
@@ -306,3 +315,23 @@ The distinction this milestone exists to protect survives intact: a run that was
 **skipped**, a run that **failed**, and a run that **passed** must never be
 confusable in a closure record. Two automatic failures and two manual greens are
 recorded as exactly that.
+
+## v0.2.2 addendum — the first green automatic run (2026-10-07)
+
+The disposition this record previously held was **conditionally closed**, on one
+condition: a real `release: published` event whose automatic run is green. Three
+automatic runs have now happened:
+
+| Event | Run | Result |
+|---|---|---|
+| v0.2.0 | `37419183947` | **failure** — three automation defects |
+| v0.2.1 | `37507738147` | **failure** — all five lanes; the resolver chose the yanked v0.2.0 |
+| **v0.2.2** | **`37561575727`** | **success — all five lanes green** |
+
+The v0.2.2 run recorded `from_version=v0.2.1`, which is the point of the whole
+exercise: the transition resolver no longer picks a yanked source, and the
+automatic path produced the evidence the criterion asks for without a manual
+rehearsal standing in for it. Release evidence: [`r022-status.md`](r022-status.md).
+
+The two earlier failures stay in this record. A later green run does not convert
+them into passes; it is the first automatic run that passed.

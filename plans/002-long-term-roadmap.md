@@ -364,12 +364,13 @@ C018, C019, and M011A-M011D were implemented in parallel where their files did
 not conflict. v0.2.0 supplied C018/M011A/M011B operational evidence. M011D
 closed independently on its hosted qualification matrix.
 
-M011C's automatic trigger has since fired twice on real publications and failed
-twice — for v0.2.0 because of three defects in the automation path, for v0.2.1
-because the resolver selected the v0.2.0 that C023 had just yanked. Both are
-fixed; the five-target transaction is green on the manual rehearsal surface. The
-outstanding qualification is unchanged in kind and is now owed by the next
-publication rather than by an implementation plan.
+M011C's automatic trigger has fired on three real publications. The first two
+failed — v0.2.0 because of three defects in the automation path, v0.2.1 because
+the resolver selected the v0.2.0 that C023 had just yanked. Both are fixed, and
+on the third, **v0.2.2, the automatic run was green on all five lanes**
+(`37561575727`, `from_version=v0.2.1`). That discharged the outstanding
+qualification: **M011C and C023 are both closed**. The two earlier automatic
+failures remain recorded as failures.
 
 Hard constraints:
 
@@ -426,9 +427,9 @@ cannot ship as a 0.1.x patch.
 Post-phase release-readiness corrective C021 is **closed**:
 `plans/closure/artifact-discovery-cleanup/c021-status.md`.
 Its evidence supported the v0.2.0 release. C023, the subsequent
-post-publication safety corrective, is **conditionally closed** — both destructive
-defects are fixed in the published and attested v0.2.1, and its one unmet
-criterion is distribution-side. C024 is **closed** (fixed, unreleased), so no
+post-publication safety corrective, is **closed** — both destructive defects are
+fixed in the published and attested v0.2.1, and its one unmet criterion was
+distribution-side, met by the v0.2.2 release (run `37561575727`). C024 is **closed and shipped in 0.2.2**, so no
 implementation plan is open.
 
 Decision:
@@ -498,7 +499,7 @@ Phase 10 distribution/release + C013-C017 [closed]
              v                v               v                  v
 C018 provenance        M011A immutable  M011B staged      M011C published
 fail-closed [closed]   release trust    validation gate   smoke automation
-                       [closed]         [closed]           [conditional]
+                       [closed]         [closed]           [closed]
 
 C019 exact-unignore sibling containment [closed]
 M011D Cargo selector qualification lifecycle [closed]
@@ -518,10 +519,10 @@ ADR 003 -> M012A canonical CLI [closed] -> M012B unattended log/docs [closed]
 Phase 12 is implemented and C021/C022 are closed. v0.2.0 was published through
 M013 and supplied C018/M011A/M011B evidence, but its automatic M011C run failed
 and post-release interrogation found two destructive defects in the immutable
-bytes. C023 is now conditionally closed: v0.2.1 is published, immutable,
-attested, and safety-qualified, and crates.io v0.2.0 is yanked. Its automatic
-M011C run also fired and failed, so the missing green automatic smoke evidence
-is still outstanding and now belongs to the next publication.
+bytes. C023 is now **closed**: v0.2.1 is published, immutable,
+attested, and safety-qualified, crates.io v0.2.0 is yanked, and its last
+criterion — the green automatic M011C smoke — was met by the **v0.2.2**
+release, run `37561575727`, green on all five lanes.
 
 
 Destructive work MUST NOT be pulled forward merely to make the tool feel complete.
@@ -529,10 +530,10 @@ Destructive work MUST NOT be pulled forward merely to make the tool feel complet
 ## Phase 13 — 0.2.0 release qualification and publication
 
 Status: **published.** v0.2.0 shipped through M013 and was then corrected by
-C023, which is **conditionally closed**: v0.2.1 is published, immutable,
-attested, and safety-qualified, and crates.io v0.2.0 is yanked and disclosed.
-The one unmet requirement — a green **automatic** M011C five-target smoke — is
-still outstanding and now belongs to the next publication.
+C023, which is **closed**: v0.2.1 is published, immutable,
+attested, and safety-qualified, crates.io v0.2.0 is yanked and disclosed, and its
+one unmet requirement — a green **automatic** M011C five-target smoke — was met
+by the v0.2.2 release (run `37561575727`).
 
 0.2.0 was already selected in `Cargo.toml`; publication is deliberately split
 from feature implementation.
@@ -593,9 +594,10 @@ Exit condition:
 
 ### Phase 13 corrective — C023 safety patch release
 
-Status: **conditionally closed** — accepted closure record:
+Status: **closed** — accepted closure record:
 `plans/closure/distribution-release-update/c023-status.md`. Acceptance criterion
-11 (a green **automatic** M011C five-target smoke) is explicitly **not met**.
+11 (a green **automatic** M011C five-target smoke) was **not met at v0.2.1** and
+**was met on 2026-10-07** by the v0.2.2 release, run `37561575727`.
 
 The first 0.2.x publication exposed two safety violations after M013:
 
@@ -623,22 +625,23 @@ C021/C022 release-readiness [closed]
 M013 v0.2.0 publication [historical; corrected by C023]
         |
         v
-C023 v0.2.1 safety patch [conditionally closed]
+C023 v0.2.1 safety patch [closed]
         |
         +--> published/immutable/attested v0.2.1 [done]
         +--> v0.2.0 crates.io yank [done]
         +--> public safety fixtures [done]
         +--> automatic M011C trigger fired [done]
-        +--> automatic M011C green result [outstanding]
+        +--> automatic M011C green result [done — v0.2.2, run 37561575727]
         |
         v
-C024 Windows glob semantics [done — closed, unreleased]
+C024 Windows glob semantics [done — closed, shipped in 0.2.2]
 ~~~
 
-The one line that is not `done` is the reason C023 is conditionally closed and
-not closed. The automatic trigger fired for v0.2.1 exactly as intended — that is
-the `done` line — and then failed on all five lanes, because WP-L's yank of
-v0.2.0 made the rehearsal source the resolver had chosen uninstallable. The
+That `outstanding` line is why C023 was conditionally closed at v0.2.1: the
+automatic trigger fired for v0.2.1 exactly as intended, and then failed on all
+five lanes, because WP-L's yank of v0.2.0 made the rehearsal source the resolver
+had chosen uninstallable. It was discharged by the v0.2.2 release, run
+`37561575727`. The
 resolver is fixed and self-tested; a green automatic run for v0.2.1 cannot be
 recreated, because `release: published` fires once per release.
 
@@ -664,16 +667,23 @@ Authoritative current state, as reconciled:
 ~~~text
 v0.2.0                published / immutable / crates.io yanked
 v0.2.1                published / immutable / attested / safety-qualified
-C023                  conditionally closed (criterion 11 not met)
+C023                  conditionally closed at the time (criterion 11 not met)
 automatic v0.2.1 smoke fired / failed
 manual five-target    v0.1.6 -> v0.2.1 green
-M011C                 conditionally closed
-C024                  closed substantive corrective (unreleased)
+M011C                 conditionally closed at the time
+C024                  closed substantive corrective
 ~~~
 
 C025 removed the future-tense publication/yank text and every false
 "automatic-smoke green" claim from the active surfaces while preserving every
-historical run result. C024 has since been taken and is closed, fixed but
-unreleased; the next release carries that fix and remains the first opportunity
-to obtain a green automatic M011C run.
+historical run result. C024 has since been taken, closed, and **shipped in
+0.2.2**; that release also produced the green automatic M011C run this document
+was waiting for.
+
+**Later reconciliation (2026-10-07).** v0.2.2 is published, immutable, attested,
+and verified on both registries; run `37561575727` was green on all five
+automatic lanes. C023 and M011C are both **closed**, C024 is closed and shipped,
+and no implementation plan is open. The block above is left as it stood on
+2026-10-06, because it was accurate then. Release evidence:
+`plans/closure/distribution-release-update/r022-status.md`.
 

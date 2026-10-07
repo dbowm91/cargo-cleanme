@@ -1,6 +1,6 @@
 ## Artifact Discovery and Cleanup Roadmap
 
-Status: Phase 12 implementation remains **closed** under ADR 003. Its first published realization, immutable v0.2.0, carried two destructive defects; **C023 is conditionally closed**, both defects are fixed and shipped in v0.2.1, and crates.io 0.2.0 is yanked and disclosed. **C024** — Windows glob canonicalization — is **closed**: the canonical-glob rewrite now runs on Windows, and the hosted Windows lane observed the fix. It is fixed but **unreleased**. **C025** is closed; it was a planning-only reconciliation that changed no cleanup or matching semantics. **No implementation plan in this subsystem is open.**
+Status: Phase 12 implementation remains **closed** under ADR 003. Its first published realization, immutable v0.2.0, carried two destructive defects; **C023 is closed** — its last open criterion, a green **automatic** `release: published` five-lane smoke, was met by the v0.2.2 release (run `37561575727`). Both defects are fixed and shipped in v0.2.1, and crates.io 0.2.0 is yanked and disclosed. **C024** — Windows glob canonicalization — is **closed and shipped in v0.2.2**: the canonical-glob rewrite now runs on Windows, and the hosted Windows lane observed the fix. **C025** is closed; it was a planning-only reconciliation that changed no cleanup or matching semantics. **No implementation plan in this subsystem is open.**
 
 
 Repository audit baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
@@ -721,8 +721,10 @@ Outcome:
   immediately before Cargo.
 - Publication occurred in v0.2.0. Post-publication, C023 found two destructive
   defects in that release and fixed both in the published and attested v0.2.1;
-  crates.io 0.2.0 is yanked and disclosed. C023 is conditionally closed and no
-  destructive-safety blocker from it remains open.
+  crates.io 0.2.0 is yanked and disclosed. C023 is **closed** — its last
+  criterion, a green **automatic** `release: published` five-lane smoke, was met
+  by the v0.2.2 release (run `37561575727`). No destructive-safety blocker from
+  it remains open.
 
 Dependency: M012B has an interface dependency on M012A's resolved operation/scope/mode vocabulary. Rendering work may proceed in parallel after that vocabulary is fixed.
 
@@ -798,10 +800,10 @@ contention, not a product defect, and no CI policy change was made on that basis
 
 ## 10J. C023 — v0.2.0 destructive-safety patch corrective
 
-Status: **conditionally closed** — accepted closure record:
+Status: **closed** — accepted closure record:
 `plans/closure/distribution-release-update/c023-status.md`. Both destructive
 invariants below are restored and shipped in v0.2.1; the published v0.2.1 binary
-passes both safety fixtures. C023's one unmet criterion is distribution-side
+passes both safety fixtures. C023's one unmet criterion was distribution-side
 (acceptance criterion 11, a green **automatic** M011C five-lane smoke), not a
 cleanup-safety one.
 
@@ -906,4 +908,4 @@ The implementation should specifically verify:
 
 ## 14. Completion definition
 
-The initial read-only boundary was reached when M001-M003 closed with evidence that cargo-cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004-M007 and C001-C007 establish Cargo-mediated cleanup, complete ownership/freshness proof, adaptive discovery, and combined-root orchestration. Scans remain read-only; ADR 003/Phase 12 intentionally changes bare invocation from a scan front door to Routine cleanup without changing that proof boundary. Phase 9 remains closed for current objectives: M008A/B policy and reporting, profile support from M008C, and package support from M008D. Profile support is limited to exact qualified releases 1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0, 1.98.1, and 1.99.0; package support is limited to exact Cargo 1.98.1 and 1.99.0. Selector estimates remain unknown and unqualified Cargo versions fail closed. C019 and C020 shipped in v0.2.0; C021 closed the pre-release evidence pass. Post-release C023 is conditionally closed: immutable v0.2.0 was found to violate the dry-run and global source-disjointness invariants, both are fixed in the published v0.2.1, and crates.io 0.2.0 is yanked. C024 (Windows glob canonicalization was a no-op) is closed and unreleased; it was a matching-semantics defect that under-matched, not a destructive-safety violation. No implementation plan in this subsystem is open. Distribution/release publication/yank work is tracked by `plans/subsystems/distribution-release-update-roadmap.md`.
+The initial read-only boundary was reached when M001-M003 closed with evidence that cargo-cleanme safely inventories inactive conventional Cargo target directories across supported platforms, obeys root/filter precedence, and produces deterministic size output. M004-M007 and C001-C007 establish Cargo-mediated cleanup, complete ownership/freshness proof, adaptive discovery, and combined-root orchestration. Scans remain read-only; ADR 003/Phase 12 intentionally changes bare invocation from a scan front door to Routine cleanup without changing that proof boundary. Phase 9 remains closed for current objectives: M008A/B policy and reporting, profile support from M008C, and package support from M008D. Profile support is limited to exact qualified releases 1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0, 1.98.1, and 1.99.0; package support is limited to exact Cargo 1.98.1 and 1.99.0. Selector estimates remain unknown and unqualified Cargo versions fail closed. C019 and C020 shipped in v0.2.0; C021 closed the pre-release evidence pass. Post-release C023 is closed: immutable v0.2.0 was found to violate the dry-run and global source-disjointness invariants, both are fixed in the published v0.2.1, crates.io 0.2.0 is yanked, and its last criterion — a green automatic `release: published` five-lane smoke — was met by the v0.2.2 release, run `37561575727`. C024 (Windows glob canonicalization was a no-op) is closed and **shipped in 0.2.2**; it was a matching-semantics defect that under-matched, not a destructive-safety violation. No implementation plan in this subsystem is open. Distribution/release publication/yank work is tracked by `plans/subsystems/distribution-release-update-roadmap.md`.

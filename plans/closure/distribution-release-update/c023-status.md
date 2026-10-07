@@ -1,9 +1,13 @@
 # C023 — v0.2.0 destructive-safety patch-release corrective: closure record
 
-Status: **conditionally closed**, with the publication evidence recorded in §12
-and **five** findings recorded rather than fixed in §11. Acceptance criterion 11 —
-a green automatic `release: published` five-lane smoke — is explicitly not met;
-see §15 for the disposition and §14 for the matrix.
+Status: **closed.** Both destructive defects in v0.2.0 are fixed and published,
+**five** findings were recorded rather than fixed in §11, and acceptance criterion 11
+— a green automatic `release: published` five-lane smoke — was **not met at
+v0.2.1** and **was met on 2026-10-07** by run `37561575727` on the v0.2.2 release.
+See §15 for the disposition and §14 for the matrix; §13B carries the evidence.
+
+Publication evidence for v0.2.1 is in §12; the v0.2.2 release that discharged the
+open criterion is [`r022-status.md`](r022-status.md).
 
 Plan: [`c023-v0.2.0-destructive-safety-patch-release-corrective.md`](../../implementation/distribution-release-update/c023-v0.2.0-destructive-safety-patch-release-corrective.md)
 Baseline: `eaa7bba1cd70513a7bf48a99d7d9ffe19334a539`
@@ -564,6 +568,41 @@ count is five, derived from the five numbered headings rather than from a
 remembered number. No run id, conclusion, digest, date, or acceptance-matrix
 cell was altered, and the disposition in §15 is unchanged in substance.
 
+### 13B. v0.2.2 reconciliation note (2026-10-07)
+
+**Acceptance criterion 11 is now met, and this record is closed rather than
+conditionally closed.**
+
+Criterion 11 asked for *"a green automatic `release: published` five-lane
+smoke"*. The v0.2.2 release produced one:
+
+| | |
+|---|---|
+| Run | `37561575727`, on the `release: published` event for `v0.2.2` |
+| Resolver | `from_version=v0.2.1` — the correct previous stable, **not** the yanked v0.2.0 that the v0.2.1 run chose |
+| `x86_64-unknown-linux-gnu` | PASSED (v0.2.1 → v0.2.2) |
+| `aarch64-unknown-linux-gnu` | PASSED (v0.2.1 → v0.2.2) |
+| `x86_64-apple-darwin` | PASSED (v0.2.1 → v0.2.2) |
+| `aarch64-apple-darwin` | PASSED (v0.2.1 → v0.2.2) |
+| `x86_64-pc-windows-msvc` | PASSED (v0.2.1 → v0.2.2) |
+
+This is the **first green automatic smoke in the project's history**. The two
+earlier automatic runs both failed — `37419183947` (v0.2.0, three automation
+defects) and `37507738147` (v0.2.1, all five lanes, after the resolver chose the
+yanked v0.2.0). Both remain recorded in §12.6 as failures. The v0.2.2 run does
+not erase them; it is the first time the *automatic* path produced the evidence
+the criterion asks for.
+
+The judgment this record made in §15 was correct when written and is not
+withdrawn: the criterion could not be met by v0.2.1, because WP-L required the
+yank and WP-J required the smoke to choose a source that the yank had made
+uninstallable. The condition was not met by effort. It was met by the resolver
+fix landing and a later release existing to be the rehearsal source.
+
+Full release evidence for v0.2.2 — tag, source revision, crates.io checksum, the
+15-asset inventory with every SHA-256, the two failed staging runs, and the
+external smoke — is in [`r022-status.md`](r022-status.md).
+
 ## 14. Acceptance criteria
 
 | # | Criterion | Result | Evidence |
@@ -578,13 +617,19 @@ cell was altered, and the disposition in §15 is unchanged in substance.
 | 8 | Dry-run evidence across every accepted spelling, asserting zero spawned cleans | met | §5 |
 | 9 | Cross-workspace source-containment end-to-end fixture, with negative controls | met | §5, §6 |
 | 10 | Every other shipped change qualified by a discriminating test | met | §7, §8 |
-| 11 | A green automatic `release: published` five-lane smoke | **not met** | §12.6 |
+| 11 | A green automatic `release: published` five-lane smoke | **not met at closure** — met 2026-10-07, see §13B and `r022-status.md` | §12.6, §13B |
 | 12 | Published 0.2.1 binary passes both safety fixtures | met | §12 |
 | 13 | crates.io 0.2.0 yanked and disclosed | met | §12 |
 | 14 | No unresolved medium or high finding invalidates the release | met | §11.1 is medium and non-destructive; it is recorded, assigned to C024, and is not a precondition of this patch |
 | 15 | Reporting distinguishes a skipped smoke from a passing one | met | §12.6 states plainly that the automatic run fired and failed, and names the manual run that is green |
 
 ## 15. Disposition
+
+> **Superseded 2026-10-07 — see §13B.** The disposition below was correct when
+> written. Criterion 11 is now met by run `37561575727`, so this record is
+> **closed**. The original text is retained unedited: it is the record of what
+> was true at v0.2.1, and the reason the criterion could not be met then is the
+> reason it was worth waiting for.
 
 **Conditionally closed**, with acceptance criterion 11 explicitly not met.
 
