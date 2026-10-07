@@ -429,8 +429,9 @@ Post-phase release-readiness corrective C021 is **closed**:
 Its evidence supported the v0.2.0 release. C023, the subsequent
 post-publication safety corrective, is **closed** — both destructive defects are
 fixed in the published and attested v0.2.1, and its one unmet criterion was
-distribution-side, met by the v0.2.2 release (run `37561575727`). C024 is **closed and shipped in 0.2.2**, so no
-implementation plan is open.
+distribution-side, met by the v0.2.2 release (run `37561575727`). C024 is **closed and shipped in 0.2.2**. No product implementation plan is
+open; C026 is the ready post-v0.2.2 reconciliation/cleanup handoff and changes
+no product behavior.
 
 Decision:
 
@@ -683,7 +684,22 @@ was waiting for.
 **Later reconciliation (2026-10-07).** v0.2.2 is published, immutable, attested,
 and verified on both registries; run `37561575727` was green on all five
 automatic lanes. C023 and M011C are both **closed**, C024 is closed and shipped,
-and no implementation plan is open. The block above is left as it stood on
-2026-10-06, because it was accurate then. Release evidence:
+and no product implementation plan is open. The block above is left as it stood
+on 2026-10-06, because it was accurate then. Release evidence:
 `plans/closure/distribution-release-update/r022-status.md`.
+
+### Post-v0.2.2 repository reconciliation — C026
+
+Status: **ready**.
+
+Plan:
+
+- `plans/implementation/distribution-release-update/c026-post-v0.2.2-repository-reconciliation-cleanup-and-polish.md`
+
+C026 is a bounded corrective over repository state, not a new roadmap phase. It
+reconciles stale present-tense planning/architecture/operator prose after the
+v0.2.2 release, proves stale branch history is preserved before retirement, and
+leaves Phase 14 undefined. It must not change cleanup, discovery, update,
+release, schema, or configuration behavior. A substantive product finding gets
+a separate corrective rather than being absorbed here.
 
