@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: **closed.** C022 is closed; M013's v0.2.0 publication was corrected by C023; C023 published immutable v0.2.1, attested it, and yanked crates.io 0.2.0. Its acceptance criterion 11 and M011C's operational condition were both **met on 2026-10-07** by the v0.2.2 release: run `37561575727` was green on all five automatic lanes with `from_version=v0.2.1`, the first green automatic smoke in the project's history. **C023 and M011C are both closed.** There is no active release corrective. C024 was the next substantive product corrective, is now **closed and shipped in v0.2.2**, and is cross-listed here only because it was opened by C023 and lives in this plan directory — it is a discovery/matching decision, not distribution behaviour. C010 remains an independent upstream request.
+Status: **C026 ready; release/product line otherwise closed.** C022 is closed; M013's v0.2.0 publication was corrected by C023; C023 published immutable v0.2.1, attested it, and yanked crates.io 0.2.0. Its acceptance criterion 11 and M011C's operational condition were both **met on 2026-10-07** by the v0.2.2 release: run `37561575727` was green on all five automatic lanes with `from_version=v0.2.1`, the first green automatic smoke in the project's history. **C023 and M011C are both closed.** C024 is **closed and shipped in v0.2.2**. C026 is a bounded post-release planning/architecture/repository-hygiene corrective and changes no distribution behavior. C010 remains an independent upstream request.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 
@@ -728,3 +728,34 @@ recorded as failures; a later green run does not convert them into passes. The
 resolution text above is left as C025 wrote it, because it accurately describes
 the state on 2026-10-06.
 
+
+
+### 12.6 C026 — Post-v0.2.2 repository reconciliation, cleanup, and polish
+
+Status: **ready**.
+
+Plan:
+
+- `plans/implementation/distribution-release-update/c026-post-v0.2.2-repository-reconciliation-cleanup-and-polish.md`
+
+C026 is the bounded handoff after the v0.2.2 release closed the remaining
+C023/M011C operational evidence. It does not reopen Phase 11, Phase 12, Phase
+13, C023, C024, C025, or the v0.2.2 release record.
+
+Its scope is deliberately non-product:
+
+- reconcile stale *current-state* registry/roadmap/architecture/operator prose
+  against the accepted v0.2.2 evidence while preserving historical records;
+- repair agent-entry facts such as release/yank counts and ADR-003 CLI wording;
+- audit architecture findings whose statuses predate the Phase-11 closure;
+- prove stale branch history is already preserved or superseded before
+  retirement;
+- leave the next product milestone undefined.
+
+Repository baseline: `aac5b685e116b67aadda06bacac5788c483b1499`.
+Registration branch:
+`plans/c026-post-v0.2.2-reconciliation-cleanup`.
+
+C026 must stop and open a separate corrective if the audit discovers a real
+product/release defect. It must not hide implementation work inside a
+documentation cleanup.
