@@ -444,9 +444,11 @@ post-publication safety corrective, is **closed** — both destructive defects a
 fixed in the published and attested v0.2.1, and its one unmet criterion was
 distribution-side, met by the v0.2.2 release (run `37561575727`). C024 is
 **closed and shipped in 0.2.2**. C026 closed the post-v0.2.2 reconciliation
-pass. **C027 is now ready** as a bounded distribution corrective for the POSIX
-installer's user-local PATH persistence; it changes installer UX, not cleanup
-semantics or Phase 14 product direction.
+pass. **C027 is conditionally closed** — the bounded distribution corrective for
+the POSIX installer's user-local PATH persistence landed and is green on hosted
+Linux, macOS, and Windows; its single remaining condition is a published release
+carrying the corrected installer, which C027 does not authorise. It changes
+installer UX, not cleanup semantics or Phase 14 product direction.
 
 Decision:
 
@@ -544,7 +546,7 @@ ADR 003 -> M012A canonical CLI [closed] -> M012B unattended log/docs [closed]
                                   C025 -> C026 reconciliation [closed]
                                               |
                                               v
-                                  C027 POSIX installer PATH corrective [ready]
+                                  C027 POSIX installer PATH corrective [conditionally closed]
                                               |
                                               v
                                   (Phase 14 feature milestone undefined)
@@ -747,11 +749,15 @@ research and planning.
 
 ### Post-C026 distribution corrective — C027
 
-Status: **ready**.
+Status: **conditionally closed.**
 
 Plan:
 
 - `plans/implementation/distribution-release-update/c027-posix-installer-user-local-path-persistence-corrective.md`
+
+Closure record:
+
+- `plans/closure/distribution-release-update/c027-status.md`
 
 C027 corrects the public POSIX installer contract forward from M010B. The
 published v0.2.2 wrapper installs a normal user binary to `$HOME/.local/bin`
@@ -765,4 +771,10 @@ outside scope.
 Final closure requires a later published release carrying the corrected
 installer. The release is an operational closure dependency, not authorization
 for C027 to publish one.
+
+**That is the whole of what remains.** Implementation landed in `b011c85` plus
+three evidence repairs, each forced by a red hosted macOS run; run `37586963589`
+is green on all nine jobs, and its macOS fresh `zsh -l -i -c` resolved the exact
+installed fixture binary. Nothing waits on this, and no future plan is blocked by
+it. **No Phase 14 milestone was activated by it**, and none has been accepted.
 

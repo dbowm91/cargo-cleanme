@@ -1064,7 +1064,13 @@ the release workflows.
 8. **Are your new fixtures capable of failing?** After C012, a green fixture
    that has only ever passed is not evidence. If you add a case, prove it rejects
    a broken premise, following `self_test()`
-   (`packaging/tests/test_installers.py:1570`).
+   (`packaging/tests/test_installers.py:1570`). For the C027 PATH cases the
+   stronger form is the one to copy: mutate `packaging/install.sh` by removing
+   each guard in turn and require the suite to go red. Five of those mutants
+   initially passed, and the reason is the shape worth remembering — two
+   assertions that cannot distinguish the states they claim to compare are
+   indistinguishable to a test too, exactly as a printed instruction was
+   indistinguishable from a persisted entry. See the C027 closure record §6.
 9. **Did you touch the release workflow?** The contract check fails if a
    publication or clobber path reappears
    (`scripts/check-release-contract.py:527`), and `release-drift.yml` fails if

@@ -1,6 +1,11 @@
 # C027 — POSIX Installer User-Local PATH Persistence Corrective
 
-Status: ready
+Status: **conditionally closed**
+
+Closure record: `plans/closure/distribution-release-update/c027-status.md`
+
+The remaining condition is a published release carrying this installer. It is
+named in §14 below and C027 does not authorise one.
 
 Repository baseline: `59c0be9422e52b23bbb771fe94943cb004670b59` (C026 closed on `main`).
 
