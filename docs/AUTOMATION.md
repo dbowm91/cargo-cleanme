@@ -217,8 +217,12 @@ one bounded line, load-aware timing, and never root for a developer home.**
 - It will not clean a group whose exclusive ownership it cannot prove, and it
   will not clean **any** group in a scope where one discovered manifest fails
   to resolve. That is the whole scope, not just the broken project.
-- It will not grow. `cargo cleanme` never installs a service, never spawns a
-  resident process, and never modifies your `PATH`.
+- It will not grow. `cargo cleanme` never installs a service and never spawns a
+  resident process. The tool itself never modifies your `PATH`; the separate
+  bootstrap installer adds one guarded block to a zsh or bash startup file so a
+  new shell can find the binary (see
+  [docs/INSTALLING.md](INSTALLING.md#path-integration)), and `--no-shell-profile`
+  or `--no-path` suppresses it.
 
 ### Exit codes
 

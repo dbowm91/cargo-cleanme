@@ -70,7 +70,8 @@ The path is binary-first and fail-closed:
 4. **refuse to continue unless the digest matches**;
 5. run the candidate and require it to print exactly `cargo-cleanme X.Y.Z`;
 6. place it, then **re-verify the placed bytes**;
-7. report the path, and print `PATH` guidance if the directory is not on `PATH`.
+7. report the path, and make sure the directory is on `PATH` for future shells
+   (see below).
 
 There is no signature check, so this is integrity evidence, not authenticity.
 See [Signing and notarization](#signing-and-notarization).
@@ -88,8 +89,61 @@ See [Signing and notarization](#signing-and-notarization).
 RunAs`.** For a machine-wide install, run the wrapper yourself in an elevated
 shell.
 
-**The wrappers never modify your `PATH`.** They print the command you would need
-to run.
+## PATH integration
+
+`install.sh` makes the install directory usable from a new shell. It appends one
+small guarded block to a single startup file, and only after the verified binary
+is already in place:
+
+```sh
+# >>> cargo-cleanme installer PATH >>>
+# added by the cargo-cleanme installer; safe to delete
+case ":$PATH:" in
+  *":$HOME/.local/bin:"*) ;;
+  *) export PATH="$HOME/.local/bin:$PATH" ;;
+esac
+# <<< cargo-cleanme installer PATH <<<
+```
+
+The block is idempotent: re-running the installer finds it and writes nothing.
+Delete the markers and everything between them to remove it.
+
+**The installer cannot change the `PATH` of the shell that invoked it.** A piped
+child process cannot mutate its already-running parent, so the installer always
+prints the export line for the current shell:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+That takes effect in the shell you run it from. Open a new terminal for the
+persisted entry, or paste the export yourself.
+
+### When the profile is left alone
+
+The startup file is **not** modified when:
+
+| Situation | What happens |
+|---|---|
+| you passed `--dir PATH` | your explicit choice is reported, never auto-persisted |
+| the install is a root/system install | there is no user profile to edit |
+| the shell is not zsh or bash | manual guidance only; no syntax is guessed |
+| the target is a symlink, a directory, a FIFO, or unwritable | refused, with the manual step printed |
+| you passed `--no-shell-profile` | binary installed, manual guidance printed |
+| you passed `--no-path` | binary installed, **no** PATH guidance and no profile change |
+
+Which file is used:
+
+- **zsh** — `$ZDOTDIR/.zshrc` when `ZDOTDIR` is an absolute path, otherwise
+  `$HOME/.zshrc`.
+- **bash on Linux** — `$HOME/.bashrc`.
+- **bash on macOS** — the first of `$HOME/.bash_profile`, `$HOME/.bash_login`,
+  `$HOME/.profile` that exists; `$HOME/.bash_profile` if none does. Terminal
+  starts a login shell there, so that is the file it reads.
+
+The installer never sources, evaluates, or command-substitutes the file it
+writes, never creates a directory to put a dotfile in, and never follows a
+symlink. If the write fails, it says so and leaves the installed binary alone.
 
 ## When Cargo is used instead
 

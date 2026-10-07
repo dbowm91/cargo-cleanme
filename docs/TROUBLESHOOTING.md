@@ -263,8 +263,21 @@ The wrappers never call `sudo`, `su`, `doas`, or `Start-Process -Verb RunAs`.
 Run the installer yourself from an elevated shell and it will use
 `/usr/local/bin`, `%ProgramFiles%\cargo-cleanme\bin`, or the platform default.
 
-They also never edit your `PATH`. If the install directory is not on `PATH`,
-they print the exact command to add it.
+A system-wide install never edits a user profile.
+
+### `cargo-cleanme` is installed but a new terminal cannot find it
+
+If the install directory is not on `PATH`, the POSIX installer prints the exact
+command to add it for the current shell. It additionally appends a guarded block
+to your zsh or bash startup file so new shells find it — see
+[PATH integration](INSTALLING.md#path-integration). Two caveats:
+
+- the block takes effect in **new** shells. The shell you ran the installer from
+  cannot be changed by it, which is why the export line is printed too;
+- if you see `could not add … (it is not a writable regular file)` or `could not
+  write …`, nothing was changed and the binary is still installed. Add the
+  directory to `PATH` yourself, or re-run with `--dir` pointing at a directory
+  already on `PATH`.
 
 ## `cargo cleanme update`
 

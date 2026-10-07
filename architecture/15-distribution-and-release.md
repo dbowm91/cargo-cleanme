@@ -82,7 +82,7 @@ Two details in that table are load-bearing and non-obvious.
 **The installers deliberately do *not* install into a Cargo bin root.** That is
 not an oversight; it is what keeps the installation updatable. `install.sh`
 chooses `/usr/local/bin` (elevated) or `$HOME/.local/bin` (normal user)
-(`packaging/install.sh:157-163`), and `install.ps1` chooses
+(`packaging/install.sh:189-195`), and `install.ps1` chooses
 `%ProgramFiles%\cargo-cleanme\bin` or `%LOCALAPPDATA%\cargo-cleanme\bin`
 (`packaging/install.ps1:105-113`). Both are outside any Cargo root, so
 `classify_provenance_in` falls through to hashing the executable and returns
@@ -164,19 +164,65 @@ defect class instead of only reporting that today's tree passes.
 
 | Concern | Behaviour | Reference |
 | --- | --- | --- |
-| Platform detection | `uname -s` → `linux`/`macos`; anything else fails, pointing the user at `cargo install --locked` | `install.sh:124-131` |
-| Architecture detection | `uname -m` normalised: `x86_64\|amd64`→`x64`, `aarch64\|arm64`→`arm64`, `armv7l\|armv7\|armhf`→`armv7`; anything else fails with the same source-build pointer | `install.sh:132-138` |
-| Triple selection | `case "$os_family:$arch_family"` mapping to one of the contracted triples, or `""` meaning "no prebuilt binary" | `install.sh:141-148` |
+| Platform detection | `uname -s` → `linux`/`macos`; anything else fails, pointing the user at `cargo install --locked` | `install.sh:154-158` |
+| Architecture detection | `uname -m` normalised: `x86_64\|amd64`→`x64`, `aarch64\|arm64`→`arm64`, `armv7l\|armv7\|armhf`→`armv7`; anything else fails with the same source-build pointer | `install.sh:160-165` |
+| Triple selection | `case "$os_family:$arch_family"` mapping to one of the contracted triples, or `""` meaning "no prebuilt binary" | `install.sh:168-176` |
 | Download source | `${CARGO_CLEANME_INSTALL_BASE_URL}` or `${CARGO_CLEANME_INSTALL_LATEST_URL}`, defaulting to the GitHub release URLs. Both env vars exist so the fixture server can stand in for the release host | `install.sh:37-38` |
-| Asset naming | `$PRODUCT-$TARGET`, plus `.exe` on Windows | `install.sh:261-265` |
-| Integrity verification | **Yes — SHA-256 sidecar, mandatory.** Non-2xx on the sidecar is fatal ("The digest sidecar is mandatory evidence. Its absence is a hard failure, not a fallback signal"); the digest must match `^[0-9a-f]{64}$`; then compared against the downloaded file | `install.sh:305-327` |
-| Post-download identity check | The staged binary is executed and must report a version, or the install aborts | `install.sh:333-337` |
-| Transport | HTTPS only. A non-HTTPS URL is refused unless `CARGO_CLEANME_INSTALL_ALLOW_INSECURE=1`; an unrecognised scheme is always refused. A connection-level failure prints `000` and is fatal | `install.sh:209-221` |
-| Install target | `/usr/local/bin` when `id -u` is 0, else `$HOME/.local/bin`; overridable with `--dir` | `install.sh:157-163` |
-| Existing install | **Refuses.** `fail "$DEST already exists. Re-run with --force to replace it."` — replacement requires an explicit `--force` | `install.sh:174-176` |
-| Cargo fallback | When no prebuilt binary matches, resolves `cargo` and builds from source. Entered on an unrecognised triple or a genuine **404** only; a 5xx or transport fault stays fatal "so a release host outage can never silently become a local build" | `install.sh:150-154`, `install.sh:277-285` |
-| Dependencies | Requires `curl` plus `sha256sum` or `shasum` for the prebuilt path | `install.sh:179-195` |
-| Failure behaviour | Diagnostics to stderr, non-zero exit; the binary is staged in a temp dir and moved only after every check passes | `install.sh:255`, `install.sh:322-337` |
+| Asset naming | `$PRODUCT-$TARGET`, plus `.exe` on Windows | `install.sh:469-474` |
+| Integrity verification | **Yes — SHA-256 sidecar, mandatory.** Non-2xx on the sidecar is fatal ("The digest sidecar is mandatory evidence. Its absence is a hard failure, not a fallback signal"); the digest must match `^[0-9a-f]{64}$`; then compared against the downloaded file | `install.sh:515-537` |
+| Post-download identity check | The staged binary is executed and must report a version, or the install aborts | `install.sh:540-545` |
+| Transport | HTTPS only. A non-HTTPS URL is refused unless `CARGO_CLEANME_INSTALL_ALLOW_INSECURE=1`; an unrecognised scheme is always refused. A connection-level failure prints `000` and is fatal | `install.sh:238-252` |
+| Install target | `/usr/local/bin` when `id -u` is 0, else `$HOME/.local/bin`; overridable with `--dir` | `install.sh:189-195` |
+| Existing install | **Refuses.** `fail "$DEST already exists. Re-run with --force to replace it."` — replacement requires an explicit `--force` | `install.sh:205-207` |
+| Cargo fallback | When no prebuilt binary matches, resolves `cargo` and builds from source. Entered on an unrecognised triple or a genuine **404** only; a 5xx or transport fault stays fatal "so a release host outage can never silently become a local build" | `install.sh:178-182`, `install.sh:659-671` |
+| Dependencies | Requires `curl` plus `sha256sum` or `shasum` for the prebuilt path | `install.sh:209-216` |
+| Failure behaviour | Diagnostics to stderr, non-zero exit; the binary is staged in a temp dir and moved only after every check passes | `install.sh:462`, `install.sh:532-545` |
+| Shell PATH persistence | Since C027, a default non-root install appends one bounded guarded block to a single zsh/bash startup file **after** the verified binary is placed, and still prints the export for the current shell. Skipped for `--dir`, system scope, unsupported shells, unsafe targets, `--no-shell-profile`, and `--no-path`. See §3.1a | `install.sh:282-459`, `install.sh:683-753` |
+
+### 3.1a Shell PATH persistence (C027)
+
+Before C027 the POSIX wrapper implemented M010B literally: it detected whether
+the destination was on `PATH` and, if not, printed `export PATH=…`. The fixture
+assertion was that stdout contained the word `PATH`, so a printed instruction and
+a persistent integration were indistinguishable — which is why a first install
+on a stock macOS account, where `$HOME/.local/bin` is not on `PATH`, could report
+success while a newly opened terminal could not resolve the binary.
+
+The contract is now a **state transition on a profile**, asserted as one.
+
+The helpers are separable operations rather than one trailing `case`
+(`install.sh:282-459`): `path_has_dir` asks whether the destination is already
+on `PATH`; `shell_profile_target` selects a supported startup file; 
+`profile_target_is_safe` refuses anything that is not a writable regular file or
+a creatable file in an existing directory; `profile_has_active_entry` decides
+whether the profile already integrates the directory *for real*;
+`append_profile_entry` writes the guarded block; and
+`profile_persistence_permitted` decides whether this invocation may persist at
+all. The final gate is one line (`install.sh:750-753`): PATH handling happens
+only when the caller wants it and the destination is not already on `PATH`.
+
+Four properties are load-bearing, and each is a mutation-checked case:
+
+- **Guarded, not unconditional.** The entry is a `case ":$PATH:"` guard, so
+  sourcing the profile repeatedly leaves the directory on `PATH` exactly once.
+- **Idempotent.** `profile_has_active_entry` recognises the installer's own
+  marker pair, so a `--force` re-install writes nothing.
+- **"Active" means active.** A commented-out line, an `echo`, or an unrelated
+  variable that mentions `.local/bin` does **not** suppress the append; only an
+  uncommented `PATH` assignment naming the directory does.
+- **Bounded and non-fatal.** The block is appended only after the verified
+  binary is placed; a symlink, directory, FIFO, or unwritable target is refused
+  by name rather than written; and a failed append leaves the installed binary
+  in place. The append ignores `SIGXFSZ` so a file-size-limit failure surfaces as
+  an ordinary write error (`install.sh:436-459`) instead of killing the script
+  mid-install.
+
+Two environment seams exist so a fixture on one host can exercise the other
+platform's *PATH-integration policy* — `CARGO_CLEANME_INSTALL_PATH_PROFILE_OS`
+(which startup file bash targets) and `CARGO_CLEANME_INSTALL_SYSTEM_SCOPE`
+(refuse persistence, as a root install must). Neither is reachable from the
+transport, digest, identity, or placement checks, which all run first and read no
+override.
 
 ### 3.2 `packaging/install.ps1`
 
@@ -220,16 +266,16 @@ shell-appropriate:
   *can* be machine-checked and is not: that neither destination is ever inside a
   Cargo root, which is the property §2 depends on.
 - The insecure-transport escape hatch is POSIX-only
-  (`CARGO_CLEANME_INSTALL_ALLOW_INSECURE`, `install.sh:213-215`); PowerShell has
+  (`CARGO_CLEANME_INSTALL_ALLOW_INSECURE`, `install.sh:245-248`); PowerShell has
   no equivalent because it enforces TLS at the protocol level instead.
 - The POSIX Cargo fallback is driven by a static `case` over triples
-  (`install.sh:141-148`); the Windows one is reached from a runtime
+  (`install.sh:168-176`); the Windows one is reached from a runtime
   `$target` emptiness check (`install.ps1:96-100`). Same outcome, different
   mechanism.
 
 ### 3.4 The installer fixtures
 
-`packaging/tests/test_installers.py` (991 lines) is the installer qualification
+`packaging/tests/test_installers.py` (1762 lines) is the installer qualification
 suite, and `packaging/tests/fixture_server.py` (160 lines) is a local fixture
 server that stands in for the GitHub release service. **No test in this suite
 contacts the public GitHub service or a real release** — the CI job comment
@@ -237,8 +283,8 @@ states this explicitly (`.github/workflows/ci.yml:38-40`).
 
 **The Windows cases do execute on a Windows runner.** The job matrix is
 `[ubuntu-latest, macos-latest, windows-latest]` (`.github/workflows/ci.yml:47`)
-and the suite is invoked on all three. The suite contains 15 named cases
-(`packaging/tests/test_installers.py:766-782`):
+and the suite is invoked on all three. The cross-platform roster has 15 named cases
+(`packaging/tests/test_installers.py:1471-1487`):
 
 | Case | What it pins down |
 | --- | --- |
@@ -260,10 +306,42 @@ and the suite is invoked on all three. The suite contains 15 named cases
 
 The last three are the C012 repair. `case_fake_cargo_is_actually_resolved`
 exists specifically because a stub `cargo` earlier in `PATH` could have made a
-green result meaningless, and `self_test()` (`packaging/tests/test_installers.py:785`)
+green result meaningless, and `self_test()` (`packaging/tests/test_installers.py:1519`)
 proves the guards reject a deliberately broken setup. The premise-negative
 self-test runs on every matrix lane, including Windows, specifically because
-that is where the defect lived (`.github/workflows/ci.yml:57-63`).
+that is where the defect lived (`.github/workflows/ci.yml:86-91`).
+
+**A second roster exists for the C027 PATH work**, and it is separate because
+its cases have a different signature and only apply to `install.sh`: they assert
+a state transition on a shell profile, which `install.ps1` does not have. The 19
+cases are in `POSIX_PATH_CASES`
+(`packaging/tests/test_installers.py:1496-1516`) and run only on a host that can
+run the POSIX block. Both rosters are tuples and the driver counts what it ran
+(`packaging/tests/test_installers.py:1735-1752`), because a case quietly dropped
+from a roster would otherwise shrink coverage while the run stayed green — the
+same failure mode this suite exists to prevent.
+
+Every PATH case isolates `HOME`, `SHELL`, and `ZDOTDIR` into a fixture-owned
+directory and drives the wrapper with a curated `PATH` that contains no
+user-local bin directory, so "the destination is already on `PATH`" is a real
+condition and not an accident of the runner's environment. The cases the plan
+enumerated are all present, plus four the implementation surfaced: a missing
+`ZDOTDIR` directory (which must not be created), a FIFO target (which would
+*block* a wrapper lacking the regular-file guard), the `case` guard itself
+(asserted by sourcing the profile twice), and the fresh-shell resolution.
+
+**The macOS outcome has its own script.**
+`packaging/tests/qualify_macos_fresh_shell.py` runs the fixture install on a real
+macOS host and then starts a fresh `zsh -l -i` with the fixture `HOME`, asserting
+`command -v cargo-cleanme` resolves the *exact* installed fixture binary. It also
+asserts the negative direction in the same environment — the same shell must
+**not** resolve it when the profile entry is removed — because without that, a
+`PATH` that happened to contain the directory would make the positive result
+meaningless. It runs with `--require-macos` in the installer lane
+(`.github/workflows/ci.yml:74-84`) so a lane that was supposed to prove this and
+could not fails instead of skipping. `qualify()` takes the shell as a parameter,
+so a Linux host drives the identical sequence with bash rather than
+reimplementing it.
 
 ## 4. Generated documentation
 
@@ -835,7 +913,7 @@ real self-update defects**:
 The diagnosis behind C017 is stated in the suite itself: the case "was green for
 an entire release cycle precisely because nothing ever checked the guards in the
 direction that matters: with the stub *not* reachable, and with the real tool
-winning the lookup" (`packaging/tests/test_installers.py:786-791`). The fixtures
+winning the lookup" (`packaging/tests/test_installers.py:1520-1560`). The fixtures
 had been built to pass, not to be shown capable of failing.
 
 The consequence, stated without softening: **a defect of the C016 or C017 class
@@ -942,9 +1020,9 @@ Reported as determined, not assumed.
 | --- | --- |
 | **Is the published crate guaranteed to compile and work standalone?** | Partly. `config.toml` is in the allowlist and the check enforces it, so the `include_str!` coupling holds. But the check is static: it validates the manifest, not a build of the *published package*. Nothing I found builds the staged `.crate` standalone. A file needed at runtime but outside the allowlist would fail at **compile** time if referenced via `include_str!`/`include_bytes!` (loud, CI would likely catch it), and at **runtime** if referenced by path or as a data file (quiet, and not covered by any check I found). |
 | **Can `completions/` and `man/` drift from the parser?** | Yes, by construction — they are tracked generated artefacts. The `generated-docs` job in `ci.yml:72` regenerates and diffs, so drift is caught at PR time. This is the one drift risk in this component that is genuinely closed. |
-| **Is the installer's download integrity verified?** | **Yes — SHA-256 sidecar, mandatory, on both installers.** `install.sh` requires a 2xx on the sidecar, requires the digest to match `^[0-9a-f]{64}$`, and compares it to the downloaded file (`install.sh:305-327`); `install.ps1` does the same via `Get-FileHash -Algorithm SHA256` (`install.ps1:125`, `225-235`). Both comment the rule in the same words: "The digest sidecar is mandatory evidence. Its absence is a hard failure, not a fallback signal." Both also *execute* the staged binary afterwards and abort if it does not report a version (`install.sh:333-337`, `install.ps1:16`). Three fixture cases pin the negative cases (`case_checksum_absent_is_fatal`, `case_malformed_digest`, `case_digest_mismatch`) and a fourth (`case_wrong_candidate`) pins that a correctly-named but wrong binary is caught. **What it is not: a signature.** See the last row. |
-| **Do the two installers behave equivalently for every user-facing case?** | For the contract — supported triples, asset names, install names, mandatory sidecar, 404-only fallback, refuse-to-overwrite without an explicit force flag, post-download version check — yes, and it is machine-checked or fixture-covered on both sides. The differences that remain are shell-appropriate (destination rule, TLS mechanism) rather than behavioural. The one property I could **not** find a check for: that neither destination is ever inside a Cargo root. That property is what keeps installer-created installations updatable (§2), and it is currently enforced only by convention and by reading the source. |
-| **Unsupported platform/arch — clear message or confusing 404?** | A clear message, and deliberately not a raw 404. An unrecognised OS or arch fails immediately with a pointer to `cargo install --locked` (`install.sh:130`, `install.sh:137`); a recognised family with no published binary enters the Cargo source build (`install.sh:150-154`, `install.ps1:96-100`); a 404 on a contracted asset is treated as genuine absence and also falls back, while a 5xx or transport fault stays fatal precisely so an outage cannot silently become a local build (`install.sh:277-285`, `install.ps1:208-215`). Fixtures cover the path: `case_binary_404_falls_back`, `case_cargo_missing`, `case_cargo_produces_nothing`. |
+| **Is the installer's download integrity verified?** | **Yes — SHA-256 sidecar, mandatory, on both installers.** `install.sh` requires a 2xx on the sidecar, requires the digest to match `^[0-9a-f]{64}$`, and compares it to the downloaded file (`install.sh:515-537`); `install.ps1` does the same via `Get-FileHash -Algorithm SHA256` (`install.ps1:125`, `225-235`). Both comment the rule in the same words: "The digest sidecar is mandatory evidence. Its absence is a hard failure, not a fallback signal." Both also *execute* the staged binary afterwards and abort if it does not report a version (`install.sh:540-545`, `install.ps1:16`). Three fixture cases pin the negative cases (`case_checksum_absent_is_fatal`, `case_malformed_digest`, `case_digest_mismatch`) and a fourth (`case_wrong_candidate`) pins that a correctly-named but wrong binary is caught. **What it is not: a signature.** See the last row. |
+| **Do the two installers behave equivalently for every user-facing case?** | For the contract — supported triples, asset names, install names, mandatory sidecar, 404-only fallback, refuse-to-overwrite without an explicit force flag, post-download version check — yes, and it is machine-checked or fixture-covered on both sides. **PATH persistence is deliberately POSIX-only since C027** (§3.1a): the POSIX wrapper appends a guarded profile block, PowerShell does not persist an environment variable at all. That is the one contract *asymmetry* between the two installers, and it is intentional — the plan scoped C027 to `install.sh` and left Windows environment-variable persistence untouched. The differences that remain are shell-appropriate (destination rule, TLS mechanism) rather than behavioural. The one property I could **not** find a check for: that neither destination is ever inside a Cargo root. That property is what keeps installer-created installations updatable (§2), and it is currently enforced only by convention and by reading the source. |
+| **Unsupported platform/arch — clear message or confusing 404?** | A clear message, and deliberately not a raw 404. An unrecognised OS or arch fails immediately with a pointer to `cargo install --locked` (`install.sh:157`, `install.sh:164`); a recognised family with no published binary enters the Cargo source build (`install.sh:178-182`, `install.ps1:96-100`); a 404 on a contracted asset is treated as genuine absence and also falls back, while a 5xx or transport fault stays fatal precisely so an outage cannot silently become a local build (`install.sh:659-671`, `install.ps1:208-215`). Fixtures cover the path: `case_binary_404_falls_back`, `case_cargo_missing`, `case_cargo_produces_nothing`. |
 | **Is `cargo install --locked` guaranteed to resolve with zero non-registry sources?** | The lockfile is in the allowlist so resolution data ships, and the identity gate checks that `Cargo.lock` agrees with `Cargo.toml` on the version. I did **not** find a check that asserts a zero-non-registry-source count for the published crate, and the installers' own fallback builds invoke Cargo against whatever source configuration the host has. Not established. |
 | **Are `Cargo.toml` version, `CHANGELOG.md` version, git tag, and published crate version checked against each other?** | **Yes, and in one function.** `check_identity` (`scripts/check-release-identity.py:91-144`) asserts, in order: the tag is an exact `v<major.minor.patch>` with no pre-release or build metadata; the tag's version equals `Cargo.toml`'s; `Cargo.lock` records the same version (with the stated reason — "a `--locked` release build would fail, or would build a different version than the tag names"); the tag resolves to an existing commit **and** points at the revision being released; and `CHANGELOG.md` has an entry for that exact version. `check_clean_tree` (line 147) then rejects a dirty checkout. The published crate version is the manifest version, so the four are tied together transitively. |
 | **Any manual step in the release process?** | Yes, enumerated: (1) **publishing the staged draft** — the release workflow deliberately cannot do it, and that separation is the point; (2) **nothing for the rehearsal** — since M011C it runs automatically on `release: published`, with `workflow_dispatch` retained only as a recovery surface (§8.2.1, §8.3). **Reading** that run remains a human step; (3) the staging validation's **real-installer step runs on one host platform only** — since M011B the validation itself is a hosted workflow, but that step is unchanged — the other four targets rest on the contract check and hosted CI (`c014-status.md:196,212`); (4) deciding **whether the glibc 2.17 floor may be advertised** — it is a build fact from `cargo_zigbuild` with no runtime qualification behind it, which is why the contract check requires an explicit non-claim in the README (`check-release-contract.py:486-509`). |
@@ -980,13 +1058,13 @@ the release workflows.
    not.
 6. **Does your installer change touch digest handling?** Three fixture cases
    exist specifically to prove a missing, malformed, or mismatched `.sha256`
-   aborts the install (`packaging/tests/test_installers.py:766-782`). If you
+   aborts the install (`packaging/tests/test_installers.py:1471-1487`). If you
    make the checksum optional, you are removing a guarantee, and the fixtures
    must be changed deliberately rather than incidentally.
 8. **Are your new fixtures capable of failing?** After C012, a green fixture
    that has only ever passed is not evidence. If you add a case, prove it rejects
    a broken premise, following `self_test()`
-   (`packaging/tests/test_installers.py:785`).
+   (`packaging/tests/test_installers.py:1519`).
 9. **Did you touch the release workflow?** The contract check fails if a
    publication or clobber path reappears
    (`scripts/check-release-contract.py:527`), and `release-drift.yml` fails if
