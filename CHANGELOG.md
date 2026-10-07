@@ -8,6 +8,8 @@ command-line, JSON, and release-asset contracts are the stable surface.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-10-07
+
 ### Fixed — distribution
 
 - **The POSIX installer reported success while a new terminal could not find the
