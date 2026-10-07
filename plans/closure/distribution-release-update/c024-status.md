@@ -185,7 +185,7 @@ Two further checks, because a Windows-only test cannot run on this machine:
 | Windows lane | `checks (windows-latest)` on run **`37516727455`** — `success`, 292 inline tests, and the log names `a_bracketed_canonical_spelling_is_matched_literally_on_windows ... ok` rather than showing it skipped. It could not be made vacuous: the junction is made with `cmd /c mklink /J` and the assertion carries its stderr, so a lane where the fixture cannot run **fails** — which is exactly what two runs in a row did (§4) |
 | macOS lane | `checks (macos-latest)` on run `37516727455` — `success`. The two new Unix-only cases ran there |
 | Fixture-portability guard | `python3 scripts/check-fixture-portability.py --self-test` → "all four rules verified in both directions"; the run → "35 fixture file(s) clean". The new Windows fixture carries an explicit `fixture-scope:` justification **and** a `#[cfg(windows)]` gate, so it satisfies the guard by being genuinely scoped rather than by being exempted |
-| MSRV | Not run locally: toolchain 1.89 is not installed on this machine (only 1.80, stable, and nightlies). The hosted `msrv` job runs `cargo +1.89 check --locked --all-targets` and `cargo +1.89 test --locked --all-targets` on every push, and is `success` on `37516727455`. No API newer than what the file already used was introduced (`str::replace`, `format!`, `Path`, `Cow`) |
+| MSRV | `cargo +1.89 check --locked --all-targets` clean and `cargo +1.89 test --locked --all-targets` **318 passed, 0 failed** on toolchain 1.89.0. **An earlier draft of this record said the toolchain was not installed and deferred this to the hosted job; that was wrong, and it was wrong because I had read a truncated toolchain list.** The hosted `msrv` job is green on `37516727455` as well |
 
 ## 7. Verification actually run
 
@@ -205,18 +205,19 @@ python3 scripts/check-staged-validation-contract.py (+ --self-test)   pass
 python3 scripts/check-installer-contract.py (+ --self-test)  pass
 python3 scripts/check-selector-qualification.py (+ --self-test)  pass
 cargo run --features dev-tools --bin generate-docs -- --check   13 artifacts match
+cargo +1.89 check --locked --all-targets                    pass
+cargo +1.89 test  --locked --all-targets                    318 passed, 0 failed
 CI run 37516727455 on 0a7a596                                all 9 jobs success, incl. windows-latest
 ```
 
-**Not run, deliberately:**
+**Not run at the time of writing, deliberately:**
 
-- `scripts/release-check.sh` — `AGENTS.md` §3 says it needs a clean tree, the
-  `eggpack` binary and toolchain 1.89, and is not routine verification. This is
-  not a release, and every documentation gate it would invoke was run
-  individually above instead.
-- `cargo package` / `cargo publish --dry-run` — no release is being made. The
-  published crate is unchanged until the next release, and the CHANGELOG entry
-  is `## [Unreleased]`, not a version heading.
+- `scripts/release-check.sh` — `AGENTS.md` §3 says it is not routine
+  verification, and C024 was not a release. Every documentation gate it invokes
+  was run individually above instead. (It **is** run for the 0.2.2 release that
+  carries this fix; see that release's closure record.)
+- `cargo package` / `cargo publish --dry-run` — no release was being made when
+  this record was written. The crate first carried this fix as **0.2.2**.
 
 ## 8. Documentation consequences, and a finding this produced
 

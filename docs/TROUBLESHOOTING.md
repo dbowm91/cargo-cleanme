@@ -2,13 +2,16 @@
 
 ## Check this first: known defects by version
 
-Two defects in the `0.1.x` line affected the updater. Both were found by the
-project's own release rehearsals rather than by a test, and both are fixed.
-They are listed first because they are the only cases where a correct-looking
-run did the wrong thing.
+Every row below is a case where a correct-looking run did the wrong thing, and
+none of them was found by a test — each was found by the project's own release
+rehearsals or post-release interrogation. The `0.1.x` updater defects are the
+oldest; the 0.2.0 defects are the reason 0.2.0 is yanked; the `exclude` defect
+is the reason the table now leads with a matching rule rather than with an
+action.
 
 | If you are on | Check | Fixed in |
 |---|---|---|
+| **0.2.1 and earlier** | An `exclude` naming a directory with `[` or `]` in its canonical path **did not exclude it** on Windows | **0.2.2** |
 | **0.2.0** | `--dry-run clean ROOT` **performed a real cleanup** | **0.2.1** (0.2.0 yanked) |
 | **0.2.0** | A region containing another project's **source tree was deleted** | **0.2.1** (0.2.0 yanked) |
 | **0.1.1 – 0.1.4** | `update` could replace a binary **Cargo owns**, silently, with exit `0` | **0.1.5** |
@@ -204,11 +207,11 @@ exclude = ["**/archived"]      # matches
 On **0.2.1 and earlier** an `exclude` naming a directory whose canonical path
 contains `[` or `]` — legal in a Windows file name — silently failed to match
 it, because the canonical rewrite refused every Windows spelling and so spliced
-the name in unescaped: `real[abc]` was read as a character class. That is fixed;
-the directory names in a pattern are now matched literally on every platform,
-and `docs/USAGE.md` documents the rule. Before the fix, work around it with a
-prefix that resolves to a name without brackets, or with `--config` patterns
-written against the canonical path.
+the name in unescaped: `real[abc]` was read as a character class. A project you
+excluded could therefore still be cleaned. **Fixed in 0.2.2**: directory names in
+a pattern are matched literally on every platform, and `docs/USAGE.md` documents
+the rule. Before the fix, work around it with a prefix that resolves to a name
+without brackets, or with patterns written against the canonical path.
 
 ## Installation
 
