@@ -171,22 +171,22 @@ def qualify(shell_path: str, login_shell: str, shell_flags: list[str], profile_n
             for line in (read_profile(profile) or "").splitlines():
                 print(f"  | {line}")
 
-            # The point of the case: a *fresh* shell, not this process. The
-            # command arrives on stdin rather than via `-c`, because a
-            # command-string shell is not interactive for startup-file purposes
-            # on every shell; a login+interactive shell reading a command from
-            # stdin is what a terminal does, and that is the state under test.
+            # The point of the case: a *fresh* login+interactive shell, which is
+            # what Terminal starts, not this process.
             #
-            # The probe keeps the host PATH. The curated tool PATH is for the
-            # installer only: macOS `/etc/zprofile` calls `path_helper`, which a
-            # tool-only PATH cannot resolve, and the rest of startup -- including
-            # `.zshrc` -- never runs, so the case would fail for the wrong reason.
+            # Two environment details decide whether this measures the profile at
+            # all. ZDOTDIR is *removed* rather than set empty: zsh consults
+            # ZDOTDIR in place of HOME whenever it is present at all, so an empty
+            # value sends it looking for `/.zshrc`. And PATH stays the host's --
+            # the curated tool PATH is for the installer only, because macOS
+            # `/etc/zprofile` calls `path_helper`, which a tool-only PATH cannot
+            # resolve, and startup then stops before `.zshrc` is read.
             flags = " ".join(shell_flags)
             print(f"\n--- fresh {Path(shell_path).name} {flags} resolves the installed binary ---")
-            probe_env = {**os.environ, "HOME": str(home), "ZDOTDIR": ""}
+            probe_env = {k: v for k, v in os.environ.items() if k != "ZDOTDIR"}
+            probe_env["HOME"] = str(home)
             probe = subprocess.run(
-                [shell_path, *shell_flags],
-                input=f"command -v {PRODUCT}\n",
+                [shell_path, *shell_flags, f"command -v {PRODUCT}"],
                 capture_output=True, text=True, env=probe_env, timeout=60, check=False,
             )
             resolved = probe.stdout.strip().splitlines()[-1].strip() if probe.stdout.strip() else ""
@@ -218,8 +218,7 @@ def qualify(shell_path: str, login_shell: str, shell_flags: list[str], profile_n
             profile.rename(hidden)
             try:
                 bare = subprocess.run(
-                    [shell_path, *shell_flags],
-                    input=f"command -v {PRODUCT}\n",
+                    [shell_path, *shell_flags, f"command -v {PRODUCT}"],
                     capture_output=True, text=True, env=probe_env, timeout=60, check=False,
                 )
             finally:
