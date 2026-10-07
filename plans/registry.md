@@ -28,6 +28,7 @@ C021 planning baseline: `f3dfd7a718d236a5a0b0b664fb74fe02ee7b0f62`
 C022/M013 planning baseline: `f3d0d9c8c435063bb67940b8dd1c95605141e0e7`
 C023 planning baseline: `eaa7bba1cd70513a7bf48a99d7d9ffe19334a539`
 C025 planning baseline: `35905c5841effadcdb32e3ad4b5f396e4e9096ef`
+C026 planning baseline: `129ac21db3e39dd578df7df5ad6cdeefabc8acb0`
 Immutability policy enabled: `2026-10-05T13:34:38Z` (repository-level, not owner-enforced)
 
 ## Subsystem status
@@ -35,16 +36,17 @@ Immutability policy enabled: `2026-10-05T13:34:38Z` (repository-level, not owner
 | Subsystem | Status | Roadmap | Current milestone | Blocker |
 |---|---|---|---|---|
 | Artifact discovery and cleanup | **released through 0.2.2; no open corrective** | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | none | Both destructive defects are fixed, qualified by tests shown to fail against the old behaviour, and published as 0.2.1. The one medium finding the requalification surfaced — the canonical-glob rewrite was a no-op on Windows — is fixed by C024 and **shipped in 0.2.2**. |
-| Distribution, release, and update | **no open item; C023 and M011C closed** | `plans/subsystems/distribution-release-update-roadmap.md` | none | C023 and M011C are **closed**. The condition both were waiting on — a green **automatic** `release: published` five-lane smoke — was met by the v0.2.2 release, run `37561575727`: all five lanes green with `from_version=v0.2.1`. That is the first green automatic smoke in the project's history; the v0.2.0 and v0.2.1 automatic runs both failed and remain recorded as failures. |
+| Distribution, release, and update | **C026 ready; product/release line otherwise closed** | `plans/subsystems/distribution-release-update-roadmap.md` | C026 | none | v0.2.2 closed the C023/M011C operational evidence line. C026 is a documentation/control-surface and repository-hygiene corrective: reconcile the remaining post-v0.2.2 current-state drift, architecture/agent-entry facts, and stale branches without changing product or release behavior. |
 
 ## Open work
 
-**There is no open implementation plan, and no conditional-evidence debt.** The
-last one — a green *automatic* `release: published` five-lane smoke, which C023
-criterion 11 and M011C both named — was discharged by the v0.2.2 release
-(run `37561575727`). C024's fix is closed **and shipped**. What remains open is
-`C010`, which is `proposed` and blocked on an upstream `eggup-curl` change that
-this repository cannot make; nothing here waits on it.
+**C026 is the sole ready cargo-cleanme-local implementation handoff.** It is a
+post-v0.2.2 reconciliation/cleanup pass, not a product milestone: it audits and
+repairs stale present-tense planning/architecture/operator prose, proves stale
+branch history is preserved before retirement, and leaves Phase 14 undefined.
+The release/product line itself is closed through v0.2.2. `C010` remains
+`proposed`, upstream, and non-blocking. See
+`plans/implementation/distribution-release-update/c026-post-v0.2.2-repository-reconciliation-cleanup-and-polish.md`.
 
 **C023 is closed, conditionally.** Both destructive defects that shipped in
 0.2.0 are fixed and published as 0.2.1, whose published binary passes both
