@@ -83,7 +83,7 @@ later green run does not convert them into passes.
 | M011B — staged-release validation workflow gate | **closed** | `plans/closure/distribution-release-update/m011b-status.md` | None outstanding. Automatic run 37418179489 passed all six steps against the real draft, including a measured `GLIBC_2.17.0` floor. Its first three executions exposed three defects, now fixed. |
 | M011C — published-release smoke automation | **closed** | `plans/closure/distribution-release-update/m011c-status.md` | The automatic `release: published` trigger is **demonstrated three times**: v0.2.0 (run `37419183947`), v0.2.1 (run `37507738147`), and v0.2.2 (run `37561575727`). The first two **failed**, the first because of three defects in the automation path and the second because C023 had just yanked 0.2.0 and the resolver chose that now-uninstallable version as its rehearsal source. Fixed in the resolver, which now picks the greatest *installable* predecessor. Five-lane green evidence for `v0.1.6 -> v0.2.1` comes from the manual rehearsal surface (run `37508262225`). **The third automatic run discharged the qualification**: v0.2.2's run `37561575727` was green on all five lanes with `from_version=v0.2.1`. The v0.2.0 and v0.2.1 automatic runs both failed and stay recorded as failures. |
 | M011D — Cargo selector qualification lifecycle | **closed** | `plans/closure/artifact-discovery-cleanup/m011d-status.md` | None outstanding. The hosted matrix is a recurring maintenance lane, not a release gate. **Addendum:** the gate had never actually run — both jobs passed a plural `toolchains:` input to an action that declares a singular `toolchain:`, and died on "'toolchain' is a required input". Fixed and re-verified. |
-| C026 — post-v0.2.2 repository reconciliation, cleanup, and polish | **closed** | `plans/closure/distribution-release-update/c026-status.md` | Documentation/control-surface and repository-hygiene corrective, not a product milestone. Reconciled the post-v0.2.2 present-tense drift across the registry, both roadmaps, `architecture/`, and the agent/operator entry points; corrected `architecture/overview.md`'s Phase-11 finding rows and its stale version/script/ADR counts; retired four stale remote branches after proving zero unique commits for three of them and content-preservation for the fourth. **No Rust changed, no release performed, no failed run rewritten as passing, and no historical record edited.** |
+| C026 — post-v0.2.2 repository reconciliation, cleanup, and polish | **closed** | `plans/closure/distribution-release-update/c026-status.md` | Documentation/control-surface and repository-hygiene corrective, not a product milestone. Reconciled the post-v0.2.2 present-tense drift across the registry, both roadmaps, `architecture/`, and the agent/operator entry points; re-derived 20 `file.rs:N` citations from source, including an `overview.md` mode table that still described the pre-ADR-003 CLI and an `AGENTS.md` line that still claimed cleanup was opt-in; corrected the stale version/script/ADR counts; retired four stale remote branches after proving zero unique commits for three of them and content-preservation for the fourth. **No Rust changed, no release performed, no failed run rewritten as passing, and no historical record edited.** |
 
 **Release discipline for the next release, derived from the v0.2.2-closed
 process.** This is a handoff note, not an open plan: there is no requirement
@@ -225,6 +225,18 @@ detecting its defect shape:
 | `packaging/tests/test_installers.py --self-test` | a stub that is not the tool the subject resolves |
 | `scripts/smoke-release-candidate.py` | a smoke case that passes while its subject fails |
 | `scripts/check-doc-citations.py` | documentation citing lines that no longer exist |
+
+`check-doc-citations.py` is the clearest illustration of why a green guard is
+only half an answer, because it gates the **mechanically** decidable half. At
+C026's baseline it reported 16 documents clean while `architecture/overview.md`
+described a cleanup mode table that had been removed by ADR 003 and a hoisted-
+universe mechanism that no longer existed in that form. Every cited line was in
+range, ordered, and in a real file. The sentences were still wrong, and an agent
+obeying that mode table would have chosen `CargoPreview` where `Simulate` is the
+safe mode. The guard catches rot; it cannot catch a citation that resolves to the
+wrong idea, which is why C026 re-derived each touched citation from `src/`
+rather than shifting the old numbers — see
+[`c026-status.md` §5](../closure/distribution-release-update/c026-status.md).
 
 The same reasoning applies to prose. `architecture/` cites source by line, so a
 fix that adds or removes lines silently invalidates every citation past that

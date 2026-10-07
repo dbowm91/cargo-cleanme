@@ -1,6 +1,7 @@
 # C026 — Post-v0.2.2 Repository Reconciliation, Branch Cleanup, and Polish
 
-Status: ready
+Status: closed — see
+[`plans/closure/distribution-release-update/c026-status.md`](../../closure/distribution-release-update/c026-status.md)
 
 Repository baseline: `aac5b685e116b67aadda06bacac5788c483b1499`
 
