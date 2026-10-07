@@ -1,15 +1,16 @@
 # C027 — POSIX Installer User-Local PATH Persistence Corrective — status
 
-Status: **conditionally closed.**
+Status: **closed.** (Was conditionally closed until the publication condition in
+§1 was discharged; see `plans/closure/distribution-release-update/r023-status.md`
+for the v0.2.3 release record.)
 
 Plan: `plans/implementation/distribution-release-update/c027-posix-installer-user-local-path-persistence-corrective.md`
 
 Repository baseline: `59c0be9422e52b23bbb771fe94943cb004670b59`
 Implementation branch: `plans/c027-posix-installer-path-persistence`
 
-Disposition: **conditionally closed** — the single remaining condition is a
-published release carrying this installer, which C027 does not authorise. §1
-states it precisely.
+Disposition: **closed** — the publication condition in §1 was discharged by the
+v0.2.3 release on 2026-10-07 (`r023-status.md`).
 
 Implementation branch: `plans/c027-posix-installer-path-persistence`
 Pull request: [#9](https://github.com/dbowm91/cargo-cleanme/pull/9)
@@ -28,27 +29,42 @@ Original plan and closure corrected, and deliberately not edited:
 
 Date: 2026-10-07
 
-## 1. Why this disposition and not `closed`
+## 1. Why this was conditionally closed, and what closed it
 
-Every acceptance criterion in §12 of the plan is satisfied except the standing
-condition the plan itself wrote: **a published immutable release must carry the
-corrected `install.sh`, followed by public-release evidence that the shipped
-installer preserves the hosted macOS fresh-shell result.**
+When this record was first written, every acceptance criterion in §12 of the
+plan was satisfied except the standing condition the plan itself wrote: **a
+published immutable release must carry the corrected `install.sh`, followed by
+public-release evidence that the shipped installer preserves the hosted macOS
+fresh-shell result.** The published v0.2.2 wrapper was immutable and retained
+the old behaviour by design, and C027 did not authorise, select, or advance a
+release (§13 forbids publishing solely because the implementation landed). So the
+correct maximum disposition was `conditionally closed`, and the plan's §14
+wording was honoured literally.
 
-The published v0.2.2 wrapper is immutable and retains the old behaviour by
-design. Nothing C027 did changes that, and C027 did not authorise, select, or
-advance a release (§13 of the plan forbids publishing solely because the
-implementation landed). So the correct maximum disposition is
-`conditionally closed`, and the plan's §14 wording is honoured literally: "Until
-that last item exists, the correct maximum disposition is `conditionally
-closed`."
+That condition was discharged on 2026-10-07 by **v0.2.3**:
 
-The operational closure dependency named in the plan header is discharged
-differently than expected in one respect and not at all in the other. The
-*hosted-platform* evidence exists and is green. The *public-release* evidence
-does not exist because no release has been published. A future release that
-carries this installer discharges the second half; it is a release-discipline
-item, not a code item, and no future plan is blocked on it (§9).
+- `r023-status.md` is the release record. Tag `v0.2.3`, source
+  `7b4c632740107af6b3c5116c5249cdb83451f2c6`, immutable, crates.io
+  `ec6206d578beee28bc82bb63b142a097d38e825b7aabe4c277dc5dc48be9bd4f`, not
+  yanked.
+- The staged `install.sh` was verified to *contain the fix* before publication,
+  not merely to satisfy inventory and digest checks.
+- The **published** installer at the `v0.2.3` tag is byte-identical to that
+  validated asset (`cc59833b0a3c5c816c63ad85e359e81dafad802a62de2ea2deb4391100031eaa`),
+  and run from outside the repository it installs `cargo-cleanme 0.2.3`, writes
+  the managed block, and is resolved by a fresh shell — and stops being resolved
+  once that entry is removed.
+- The automatic five-target published-release smoke, run `37652257315`, is
+  **green on all five targets**, `from_version=v0.2.2` → `to_version=v0.2.3`.
+
+One honest limitation survives and is recorded in `r023-status.md` §9.1: the
+public-release fresh-shell run above is **Linux**. The macOS fresh-shell proof
+remains the fixture-lane evidence of §5, executed over the same `install.sh`
+bytes this release ships — which is what makes the digest comparison the
+load-bearing step. A lane running the *public* installer on a macOS runner was
+not built, and this record does not pretend otherwise.
+
+**C027 is closed.**
 
 ## 2. What changed
 
@@ -124,7 +140,7 @@ exactly this and the mutation runs in §6 are what prove it.
 | 8. existing installer integrity/fallback/identity/security tests remain green | the 15-case cross-platform roster is unchanged and green on all three lanes | passed |
 | 9. hosted Linux/macOS/Windows installer lanes are green | run `37586963589`: all three `installers` jobs success; `Release drift guard` `37586963594` success | passed |
 | 10. documentation no longer claims the POSIX wrapper is manual-PATH-only | `docs/INSTALLING.md` gains a "PATH integration" section; `docs/TROUBLESHOOTING.md` gains "installed but a new terminal cannot find it"; `README.md` and `docs/AUTOMATION.md` no longer say the tool "never modifies your PATH"; `architecture/15` gains §3.1a; `CHANGELOG.md` has an `[Unreleased]` entry | passed |
-| final: a published release carries the fix | **none** | **not satisfied** — §1 |
+| final: a published release carries the fix | `r023-status.md`: tag `v0.2.3` at `7b4c632`, immutable, crates.io sha256 `ec6206d57…`, smoke `37652257315` green on five targets, published installer digest-identical to the validated asset and verified working end to end | passed |
 
 ## 4. The fixture cases, and what each one actually measures
 
@@ -370,14 +386,14 @@ in `src/` — C027 changed no Rust at all.
 
 ## 9. What future work this unblocks, and what it does not
 
-**No plan is blocked by C027.** Stated explicitly because "conditionally closed"
-is easy to read as "something is waiting":
+**No plan is blocked by C027, and none was blocked by it while it was
+conditionally closed.** Stated explicitly because a conditional closure is easy
+to read as "something is waiting":
 
-- The product and release line remains published through **v0.2.2**. C027 does
-  not authorise a release and does not select a version.
-- A future release that carries this installer discharges the remaining
-  operational condition. That is release discipline, not an open implementation
-  plan.
+- The product and release line is now published through **v0.2.3**, which
+  carries this installer.
+- The remaining item was release discipline, not an open implementation plan,
+  and it is discharged.
 - `C010` remains `proposed`, upstream, and non-blocking, exactly as before.
 - **No Phase 14 feature milestone has been accepted and none was activated by
   this pass.**
@@ -441,12 +457,13 @@ is a distribution-surface change, not a product decision).
 
 ## 12. Disposition
 
-**C027 is conditionally closed.**
+**C027 is closed.**
 
-Ten of the plan's eleven acceptance criteria are satisfied and evidenced; the
-eleventh is a publication event that C027 explicitly does not authorise. The
+All eleven of the plan's acceptance criteria are satisfied and evidenced. The
 implementation is complete, the evidence is green on all three hosted platforms,
-and the one platform-limited case skips loudly rather than passing vacuously.
+the one platform-limited case skips loudly rather than passing vacuously, and
+the corrected installer is published, immutable, attested, and smoke-tested on
+five targets.
 
 The corrective worked as a corrective is supposed to: it found the defect, it
 found three defects in its own evidence, and it recorded all four rather than

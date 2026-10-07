@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: **published through v0.2.2; C027 conditionally closed.** C022 is closed; M013's v0.2.0 publication was corrected by C023; C023 published immutable v0.2.1, attested it, and yanked crates.io 0.2.0. Its acceptance criterion 11 and M011C's operational condition were both **met on 2026-10-07** by the v0.2.2 release: run `37561575727` was green on all five automatic lanes with `from_version=v0.2.1`, the first green automatic smoke in the project's history. **C023 and M011C are both closed.** C024 is **closed and shipped in v0.2.2**. C025 and C026 are closed. **C027 is conditionally closed:** it corrected the published POSIX installer's first-install UX — a default non-root install now safely persists the canonical user-local bin directory for supported zsh/bash shells instead of only printing PATH guidance. Implementation and hosted Linux/macOS/Windows evidence are complete; the single remaining condition is a published release carrying the corrected installer, which C027 does not authorise. C010 remains an independent upstream request, `proposed` and non-blocking. No Phase 14 feature milestone has been accepted.
+Status: **published through v0.2.3; C027 closed.** C022 is closed; M013's v0.2.0 publication was corrected by C023; C023 published immutable v0.2.1, attested it, and yanked crates.io 0.2.0. Its acceptance criterion 11 and M011C's operational condition were both **met on 2026-10-07** by the v0.2.2 release: run `37561575727` was green on all five automatic lanes with `from_version=v0.2.1`, the first green automatic smoke in the project's history. **C023 and M011C are both closed.** C024 is **closed and shipped in v0.2.2**. C025 and C026 are closed. **C027 is closed and shipped in v0.2.3:** it corrected the POSIX installer's first-install UX — a default non-root install now safely persists the canonical user-local bin directory for supported zsh/bash shells instead of only printing PATH guidance. Implementation and hosted Linux/macOS/Windows evidence were complete before release; v0.2.3 carries the fix, its automatic five-target smoke (`37652257315`) is green, and the published installer was verified end to end from outside the repository. C010 remains an independent upstream request, `proposed` and non-blocking. No Phase 14 feature milestone has been accepted.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 
@@ -778,8 +778,9 @@ Phase 14 was defined or activated.**
 
 ### 12.7 C027 — POSIX installer user-local PATH persistence corrective
 
-Status: **conditionally closed.** Closure record:
-`plans/closure/distribution-release-update/c027-status.md`.
+Status: **closed — shipped in v0.2.3.** Closure record:
+`plans/closure/distribution-release-update/c027-status.md`; release record:
+`plans/closure/distribution-release-update/r023-status.md`.
 
 Implementation landed in `b011c85` plus three evidence repairs (`a114367`,
 `17b91ca`, `9d5b4f6`), each forced by a red hosted macOS run and each recorded as
@@ -788,9 +789,9 @@ nine jobs; the macOS lane's fresh `zsh -l -i -c` resolved the exact installed
 fixture binary, and the same shell did not resolve it once the profile entry was
 removed.
 
-The remaining condition is a published release carrying the corrected
-installer. **C027 does not authorise one**, so the roadmap's status above says
-"conditionally closed" rather than "closed".
+The publication condition was discharged by **v0.2.3** (tag `v0.2.3` at
+`7b4c632`, immutable, automatic smoke `37652257315` green on five targets). The
+status above therefore reads "closed".
 
 Plan:
 
