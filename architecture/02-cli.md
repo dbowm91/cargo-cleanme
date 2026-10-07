@@ -569,7 +569,7 @@ so the path is resolved for every subcommand — including `config path`,
 
 1. **Parser and generated docs must agree.** Completions and manpages are
    generated from this clap model, and CI fails on drift: `generated-docs`
-   (`.github/workflows/ci.yml:64-76`) runs
+   (`.github/workflows/ci.yml:72-84`) runs
    `cargo run --quiet --features dev-tools --bin generate-docs -- --check`,
    comparing regenerated output against the checked-in `man/` and
    `completions/` trees. `xtask/src/main.rs:96` builds the model from

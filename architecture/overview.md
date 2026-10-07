@@ -9,7 +9,7 @@ per-component deep dives that follow.
   modules, 17 source files, 23,468 lines of Rust in `src/`, no async runtime
   of its own, and exactly one binary dependency that matters for safety
   (`cargo metadata`).
-- **Version:** 0.2.0 (unreleased) · **Edition:** 2024 · **MSRV:** 1.89
+- **Version:** 0.2.2 (published) · **Edition:** 2024 · **MSRV:** 1.89
 - **Deep dives:** 15 documents, one per component, linked from §3 and §9.
 
 ---
@@ -138,8 +138,8 @@ Supporting surfaces, outside `src/`:
 
 | Surface | Deep dive |
 |---|---|
-| `tests/` (2 suites + shared harness), `scripts/` (13 contract checkers), `.github/workflows/ci.yml` | [Testing & verification](14-testing-and-verification.md) |
-| `packaging/`, `completions/`, `man/`, `release/`, `xtask/`, the 3 release workflows | [Distribution & release](15-distribution-and-release.md) |
+| `tests/` (2 suites + shared harness), `scripts/` (17 scripts), `.github/workflows/ci.yml` | [Testing & verification](14-testing-and-verification.md) |
+| `packaging/`, `completions/`, `man/`, `release/`, `xtask/`, the 6 GitHub workflows | [Distribution & release](15-distribution-and-release.md) |
 | `plans/`, `examples/`, `docs/` — decision records, qualification harness, user docs | referenced from the relevant deep dives |
 
 Note that `architecture/` is itself outside the `Cargo.toml` `include`
@@ -149,53 +149,56 @@ allowlist, so none of this documentation ships in the published crate.
 
 ## 4. The scan pipeline
 
-`run_scan` in `main.rs:302` is the read-only pipeline. Nine steps, in order:
+`run_scan` in `main.rs:485` is the read-only pipeline. Nine steps, in order:
 
-1. **Resolve config** — `config::load_or_create` (`main.rs:316`).
+1. **Resolve config** — `config::load_or_create` (`main.rs:496`).
 2. **Resolve scope** — `policy::resolve` turns `{cli_root, full}` into concrete
-   roots + a recency window (`main.rs:317`).
+   roots + a recency window (`main.rs:506`).
 3. **Discover manifests** — `discovery::discover_manifests_with_attribution`
    walks the scope for `Cargo.toml`, recording *why* anything was skipped
-   (`main.rs:338`).
+   (`main.rs:527`).
 4. **Partition uncertainty** — permission-denied / metadata / vanished
-   diagnostics are pulled out as `uncertainty` (`main.rs:344`). This vector
+   diagnostics are pulled out as `uncertainty` (`main.rs:537`). This vector
    later decides whether learned state may be trusted.
 5. **Resolve workspaces** — `workspace::resolve_workspaces` shells out to
-   `cargo metadata` once per unique canonical workspace root (`main.rs:364`).
+   `cargo metadata` once per unique canonical workspace root (`main.rs:557`).
 6. **Reconcile state** — for a Full scan, `discovery_state::reconcile_full`
    folds observations into the learned-root set and publishes atomically
-   (`main.rs:403`).
+   (`main.rs:596`, publishing at `main.rs:608`).
 7. **Build physical groups** — `workspace::build_groups`; nested/duplicate
-   output roots collapse to one group so bytes are counted once (`main.rs:475`).
+   output roots collapse to one group so bytes are counted once (`main.rs:654`).
 8. **Analyze** — `workspace::analyze_groups` measures each group in parallel
-   via `traverse` and classifies activity (`main.rs:483`).
-9. **Render** — human (`report::render`, `main.rs:535`) or JSON
-   (`output::scan`, `main.rs:528`).
+   via `traverse` and classifies activity (`main.rs:662`).
+9. **Render** — human (`report::render`, `main.rs:721`) or JSON
+   (`output::scan`, `main.rs:709`).
 
 Steps 3–5 and 7–8 are the expensive parts; step 6 is the part that makes the
 next run cheap.
 
 ## 5. The cleanup pipeline
 
-`clean` is not a scan plus a `rm`. It is a separate, guarded transaction with
-three modes (`main.rs:102`):
+`clean` is not a scan plus a `rm`. It is a separate, guarded transaction. The
+modes are `CleanMode` in `cleanup.rs:36`, mapped from flags by
+`cli::clean_mode` (`cli.rs:224`):
 
 | Mode | Flag | What it does |
 |---|---|---|
-| `Preview` | default, or `--dry-run` | Asks Cargo what it *would* remove. No deletion. |
-| `Simulate` | `--dryrun` | Full ownership proof + selection, but the deletion step is a no-op. |
-| `Execute` | `--yes` | Proof, then actually removes. |
+| `Execute` | default | Proof, then actually removes through Cargo. |
+| `Simulate` | `--dry-run` (hidden alias `--dryrun`) | Full ownership proof + selection, with no `cargo clean` process of any kind spawned. |
+| `CargoPreview` | `--cargo-preview` | The same final proof, then Cargo's own `clean --dry-run --verbose`. Cargo *is* spawned here; simulation is the mode that spawns nothing. |
 
-Note the deliberate spelling split: `--dry-run` (Cargo preview) and `--dryrun`
-(simulation) are different flags with different meanings (`main.rs:100-110`).
+Note the deliberate spelling split. Since ADR 003, canonical `--dry-run` means
+**simulation** and Cargo's own preview moved to `--cargo-preview`; `--dryrun`
+is a hidden compatibility alias selecting the same simulation mode
+(`cli.rs:224-237`).
 Deletion itself is always performed by `cargo clean`, never by direct
 filesystem removal, so Cargo's own bookkeeping cannot be bypassed.
 
-Cleanup roots come from three sources, in priority order (`main.rs:113`): an
-explicit `ROOT` argument, `--full` (runs a Full scan, then uses learned roots),
-or `--known` (uses only the Routine scope). They are canonicalized and
-de-duplicated by `collapse_roots` (`main.rs:269`) so nested roots cannot produce
-overlapping deletions.
+Cleanup roots come from three sources, resolved by `resolve_cleanup_roots`
+(`main.rs:314`): an explicit `ROOT` argument, `--full` (runs a Full scan, then
+uses learned roots), or `--known` (uses only the Routine scope). They are
+canonicalized and de-duplicated by `collapse_roots` (`main.rs:440`) so nested
+roots cannot produce overlapping deletions.
 
 ---
 
@@ -212,7 +215,7 @@ things a reviewer should check first in any change.
    user authorize a location for deletion; it cannot upgrade an unproven
    ownership class. `covering_is_authorized_roots` returns `Ok(false)` for any
    non-`PrivateBounded` class *before* it inspects a path
-   (`cleanup.rs:493-495`). See [Cleanup §5](09-cleanup.md).
+   (`cleanup.rs:544-546`). See [Cleanup §5](09-cleanup.md).
 3. **Re-validate at the last moment.** Proof work is repeated immediately
    before each spawn, because a workspace can change between scan and delete.
 4. **Fail closed on uncertainty.** Every uncertainty becomes a diagnostic, and
@@ -236,20 +239,25 @@ source before any change was made** — three did not survive that check, and on
 was materially misdescribed. Status is current as of the commit that fixed
 items 1, 7, 8, 10 and 11.
 
+Items 3-6 are re-verified as of the Phase-11 and Phase-12 closures (all of
+C018/C019/C021-C025 are now closed). Their findings were real when recorded and
+each is now closed by shipped code; the deep dives that carry them were updated in
+the same pass, so these rows point at completed work rather than at a plan.
+
 | # | Finding | Status |
 |---|---|---|
 | 1 | **JSON `scope` label was derived from CLI flags, not the resolved policy.** A scan configured with `scan.root` resolves to `ScanScope::Explicit` but reported `"routine"`. | **Fixed.** Now derived from `policy.scope` via `main::scope_label`, with a regression test that fails against the old code. |
-| 2 | **A failed ownership proof at cleanup time is recorded as a per-candidate skip, so the process can exit `0`.** | **Kept deliberately.** Per-candidate ineligibility is a legitimate skip with a typed reason code; the scan-time path at `cleanup.rs:795` still blocks. See the correction below. |
-| 3 | **Self-update provenance classification fails *open* in four paths.** | **Open hardening, C018 ready.** Current behavior is unchanged; `plans/implementation/distribution-release-update/c018-self-update-provenance-uncertainty-fail-closed.md` replaces avoidable manager-evidence ambiguity with fail-closed typed provenance while preserving real self-managed installs. |
-| 4 | **Release integrity rests on HTTPS plus a self-published checksum — no signature verification anywhere.** | **Open hardening, M011A ready.** `plans/implementation/distribution-release-update/011a-immutable-release-attestation-and-verification.md` adds immutable-release attestation/verification first; independent signing/SLSA remains an Eggpack Phase 12 trust-model decision. |
-| 5 | **The live self-update rehearsal is manual** (`workflow_dispatch`-only), and it is the only thing that has ever caught a self-update defect. | **Open hardening, M011C ready.** `plans/implementation/distribution-release-update/011c-published-release-smoke-automation.md` adds a release-published path with deterministic predecessor selection and bounded crates.io-authority coordination. |
-| 6 | **Two `scripts/` files are wired into nothing** — `validate-staged-release.py` (the sole "published bytes == qualified bytes" proof) and `qualify-cargo-selectors.sh`. | **Open hardening, split into M011B/M011D.** M011B adds a trusted post-Eggpack staged-draft validation workflow; M011D adds a real-Cargo selector qualification lifecycle. Both keep the scripts' environment-specific roles instead of forcing them into ordinary PR execution. |
+| 2 | **A failed ownership proof at cleanup time is recorded as a per-candidate skip, so the process can exit `0`.** | **Kept deliberately.** Per-candidate ineligibility is a legitimate skip with a typed reason code; the scan-time path at `cleanup.rs:846` still blocks. See the correction below. |
+| 3 | **Self-update provenance classification fails *open* in four paths.** | **Closed (C018).** Fail-closed typed provenance shipped: manager-evidence ambiguity is gone and real self-managed installs are preserved. Every published release from 0.1.6 onward refuses without remote acquisition or mutation when local provenance forbids replacement. |
+| 4 | **Release integrity rests on HTTPS plus a self-published checksum — no signature verification anywhere.** | **Closed for the planned scope (M011A).** Immutable-release attestation and verification shipped, enabled, and verified live. Independent signing/SLSA was deliberately deferred and remains an open Eggpack trust-model decision; see [Distribution §7.5](15-distribution-and-release.md). |
+| 5 | **The live self-update rehearsal is manual** (`workflow_dispatch`-only), and it is the only thing that has ever caught a self-update defect.** | **Closed (M011C).** Automatic on `release: published`, with deterministic predecessor selection and a bounded crates.io-authority wait. Demonstrated three times; run `37561575727` (v0.2.2) was the first green automatic five-lane run. `workflow_dispatch` remains the manual recovery path, and [Distribution §8.2](15-distribution-and-release.md) is the historical record of what that gap used to cost. |
+| 6 | **Two `scripts/` files are wired into nothing** — `validate-staged-release.py` (the sole "published bytes == qualified bytes" proof) and `qualify-cargo-selectors.sh`.** | **Closed (M011B, M011D).** Both are now wired: `validate-staged-release.py` runs automatically on a real Eggpack staged draft before human publication, and `qualify-cargo-selectors.sh` runs on a recurring hosted real-Cargo matrix. Neither was forced into ordinary PR execution. |
 | 7 | **Ten divergences between `plans/output-schema-v1.md` and the code, in both directions.** | **Fixed.** The code is authoritative; the schema document was corrected — `selector_estimate_bytes` nullity, the 19th `reason_code`, the 6th policy disposition, `effective_policy`'s four fields, `units[].detail` always-present, the `outcome` value set, `mode` always emitted, and the scan exit-code case. |
 | 8 | **Exit codes responded to only some stderr warnings**, and a failed discovery-state save contradicted the module's own "state is an optimization only" invariant. | **Fixed** for the state-save case: it no longer changes the exit code, which also makes the Full and Routine branches agree. The remaining warning/exit-code asymmetry is documented, not changed. |
 | 9 | **Dead public API** in a published crate. | **Kept, documented** in §7.1 below. |
 | 10 | **A reachable panic in `traverse::measure_many_targets`**: duplicate indices are forwarded into `dua_core::walk_roots`, whose `assert_eq!` is not a debug assert. | **Fixed.** A repeated index is now measured once and every occurrence of that index reports the same measurement, with a unit test. |
 | 11 | **`config.toml` said the ignore/unignore filters apply "only to global discovery"; the code applies them to Routine too.** | **Fixed.** The template comment now states the real rule: filters apply to global and Routine, and an explicit root bypasses them. |
-| 12 | **ADR 001 describes symlinked output roots as producing an "inventory diagnostic"; the code makes them inert — no group and no diagnostic.** | **Open.** Adding a diagnostic is not a free change: `cleanup.rs:795` blocks on *any* non-empty discovery diagnostic, so a new one here widens the block condition. |
+| 12 | **ADR 001 describes symlinked output roots as producing an "inventory diagnostic"; the code makes them inert — no group and no diagnostic.** | **Open.** Adding a diagnostic is not a free change: `cleanup.rs:846` blocks on *any* non-empty discovery diagnostic, so a new one here widens the block condition. |
 | 13 | **The uncertainty contract is enforced at two different thresholds** — `main.rs` extracts three diagnostic categories, `cleanup.rs` blocks on any diagnostic. | **Open, and arguably intentional:** the cleanup path being stricter is fail-closed. Recorded because the asymmetry is invisible from either module alone. |
 | 14 | **`discovery_state`'s `covered` skip can drop a root that also intersects uncertainty, before the uncertainty veto is reached.** | **Not a bug — checked and dismissed.** The collapse always replaces an ancestor with a *descendant*, so the remembered set only ever narrows. Narrowing means less cleanup on the next run, which is fail-safe. |
 
@@ -277,22 +285,28 @@ reviewer:
   `main.rs`'s derivation, so the label logic was simply **untested** — which is
   why it was wrong, and why the fix adds a test rather than correcting one.
 - **Item 2's mechanism was unreachable.** The reported cause — a shared hoisted
-  universe failing via `hoisted.get()?` — cannot occur: `cleanup.rs:976`
-  initialises the universe immediately before the call at `:979`. The real path
-  is the per-candidate skip at `cleanup.rs:991-995`.
+  universe failing via `hoisted.get()?` — cannot occur: the universe is
+  initialised immediately before the call that consumes it (`cleanup.rs:1049`).
+  The real path is the per-candidate skip, where a `ProofFailure` becomes a
+  `skipped` row and the unit is abandoned (`cleanup.rs:1061-1064`).
 - **Item 3 is a documented decision, not an oversight**, and the doc comment
   states the reasoning explicitly.
 
 ## 8. How the code got this way
 
-The shape above is not accidental. `plans/` holds the decision record — 2
-accepted ADRs, ~30 milestone plans, and a matching closure record for each. Two
-are load-bearing for the architecture:
+The shape above is not accidental. `plans/` holds the decision record — 3
+accepted ADRs, ~30 milestone plans, and a matching closure record for each. All
+three are load-bearing for the architecture:
 
 - **ADR 001 — workspace output ownership and cleanup authorization.** Defines the
   ownership classification that invariant 1 is built on.
 - **ADR 002 — adaptive Routine/Full discovery.** Defines the two scan modes, the
   learned-root state file, and the uncertainty rule in invariant 4.
+- **ADR 003 — canonical maintenance invocation and unattended output.** Defines
+  the current front door: bare `cargo cleanme` is Routine *Execute*, `--dry-run`
+  is the zero-spawn simulation preview, and the updater's JSON output is the
+  unattended surface. Read it before changing anything in §5's mode table, or you
+  will be reasoning from the pre-0.2.0 CLI.
 
 The project's own summary of its recurring lesson (from `plans/registry.md`) is
 worth carrying into any review: *a green test proves only that its own premises

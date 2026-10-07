@@ -1,6 +1,6 @@
 ## Artifact Discovery and Cleanup Roadmap
 
-Status: Phase 12 implementation remains **closed** under ADR 003. Its first published realization, immutable v0.2.0, carried two destructive defects; **C023 is closed** — its last open criterion, a green **automatic** `release: published` five-lane smoke, was met by the v0.2.2 release (run `37561575727`). Both defects are fixed and shipped in v0.2.1, and crates.io 0.2.0 is yanked and disclosed. **C024** — Windows glob canonicalization — is **closed and shipped in v0.2.2**: the canonical-glob rewrite now runs on Windows, and the hosted Windows lane observed the fix. **C025** is closed. **C026 is ready** as a cross-subsystem planning/architecture/repository-hygiene corrective; it changes no cleanup or matching semantics.
+Status: Phase 12 implementation remains **closed** under ADR 003. Its first published realization, immutable v0.2.0, carried two destructive defects; **C023 is closed** — its last open criterion, a green **automatic** `release: published` five-lane smoke, was met by the v0.2.2 release (run `37561575727`). Both defects are fixed and shipped in v0.2.1, and crates.io 0.2.0 is yanked and disclosed. **C024** — Windows glob canonicalization — is **closed and shipped in v0.2.2**: the canonical-glob rewrite now runs on Windows, and the hosted Windows lane observed the fix. **C025** is closed. **C026 is closed** — a cross-subsystem planning/architecture/repository-hygiene corrective that changed no cleanup or matching semantics. **No implementation plan in this subsystem is open.**
 
 
 Repository audit baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
@@ -913,17 +913,21 @@ The initial read-only boundary was reached when M001-M003 closed with evidence t
 
 ## Post-v0.2.2 repository reconciliation — C026
 
-Status: **ready**, cross-listed from the distribution/release planning line.
+Status: **closed** — closure record:
+`plans/closure/distribution-release-update/c026-status.md`, cross-listed from the
+distribution/release planning line.
 
 Plan:
 
 - `plans/implementation/distribution-release-update/c026-post-v0.2.2-repository-reconciliation-cleanup-and-polish.md`
 
-C026 is cross-listed here because its audit includes this roadmap,
+C026 was cross-listed here because its audit included this roadmap,
 `architecture/overview.md`, agent-entry documentation, and stale branch
-retirement. It does **not** reopen artifact-discovery/cleanup implementation and
-does not authorize any change to ADR 001 ownership/freshness proof, ADR 003 CLI
+retirement. It did **not** reopen artifact-discovery/cleanup implementation and
+did not authorize any change to ADR 001 ownership/freshness proof, ADR 003 CLI
 semantics, selector support, policy, or destructive behavior.
 
-If the reconciliation finds a real cleanup/discovery defect, that finding must
-receive a separate corrective rather than being implemented under C026.
+It found no cleanup or discovery defect requiring a separate corrective, so this
+roadmap's terminal sections needed no substantive change beyond the C026 status
+line itself. See the closure record for the classification of every hit it
+surveyed and the historical statements it deliberately left intact.

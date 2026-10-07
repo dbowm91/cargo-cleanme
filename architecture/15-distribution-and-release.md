@@ -118,15 +118,33 @@ That distinction is not cosmetic. The `v0.1.3 → v0.1.4` rehearsal (C017) found
 in those two published versions
 (`plans/closure/distribution-release-update/c017-status.md`).
 
-Current version is **0.1.6**; the changelog records 0.1.0 through 0.1.6 and
-**nothing has been yanked**. Yanking was explicitly considered and rejected: the
-defects in 0.1.1 and 0.1.2 are updater-only, their scan, clean, config, and
-reporting behaviour is correct, and "yanking would misdescribe releases whose
-scan, clean, config, and reporting behavior is correct"
+Current version is **0.2.2**; the changelog records 0.1.0 through 0.2.2, and
+**v0.2.0 is the only yanked release** on crates.io. The other nine are not
+yanked.
+
+The yanking decision is recorded here in full because it was made twice and
+resolved differently, and the second time is the harder case.
+
+**0.1.1 and 0.1.2 were not yanked.** The defects were updater-only — their scan,
+clean, config, and reporting behaviour was correct — and "yanking would
+misdescribe releases whose scan, clean, config, and reporting behavior is correct"
 (`plans/closure/distribution-release-update/c014-status.md`, "Disposition"). The
-C017 defect in 0.1.1–0.1.4 was instead disclosed in the 0.1.5 changelog entry
-with a safe upgrade route, on the grounds that a silent-success updater bug does
-not make the rest of the release wrong.
+C017 defect in 0.1.1–0.1.4 was disclosed in the 0.1.5 changelog entry with a safe
+upgrade route instead: a silent-success updater bug does not make the rest of the
+release wrong.
+
+**0.2.0 was yanked**, because the case is different in kind. Post-release
+interrogation of the immutable published bytes found two *destructive* defects —
+`--dry-run clean ROOT` performing a real cleanup, and a region containing another
+project's source tree being deleted. A release that can delete unrelated source
+is not "correct except for the updater"; every user of 0.2.0 was at risk, not
+only users of the updater. The safe upgrade route is 0.2.1, and its defects are
+disclosed in `CHANGELOG.md`, `README.md`, `docs/INSTALLING.md`, and
+`docs/TROUBLESHOOTING.md`.
+
+**0.2.0's bytes and tag were not rewritten**, which is the rule: a yank is a
+pointer change on the registry, never a mutation of published artefacts. See
+`plans/closure/distribution-release-update/c023-status.md`.
 
 ## 3. The bootstrap installers
 
@@ -324,7 +342,7 @@ via `git ls-files`). The generator's output is therefore a tracked artefact and
 is subject to drift by construction: it is regenerated only when someone
 remembers to run it.
 
-The `generated-docs` job in `.github/workflows/ci.yml:64` closes that gap. It runs
+The `generated-docs` job in `.github/workflows/ci.yml:72` closes that gap. It runs
 the generator in its `--check` mode — `cargo run --quiet --features dev-tools
 --bin generate-docs -- --check` (`ci.yml:74`) — which regenerates in memory and
 fails if the result differs from what is committed, rather than writing over it.
@@ -780,74 +798,102 @@ scenario is asserted before its behaviour is** — the installed binary's identi
 and digest are proven to be the published ones before `update` is asked to do
 anything.
 
-### 8.2 The live self-update rehearsal: manual, and that is the finding
+### 8.2 The live self-update rehearsal: what manual-only cost, and what M011C fixed
 
-**The rehearsal is manual. It is `workflow_dispatch`-only, with no `push` or
-`pull_request` trigger, and nothing else in `.github/workflows/` performs it.**
-The workflow says so itself: "Manual only. This rehearses the *real* self-update
-transaction against two public releases, so it must be triggered deliberately
-during release qualification and must not run on every push"
-(`post-release-smoke.yml:3-5`). It takes `from_version` and `to_version` as
-required inputs, defaulting to `0.1.1` and `0.1.2` — two *already published*
-versions, which is precisely why it cannot be a CI job: it can only run once the
-thing it tests already exists in public.
+**Historical reading, preserved deliberately.** Everything in this section
+describes the state of the repository **before M011C**, when the rehearsal was
+`workflow_dispatch`-only. That constraint is what C016, C017, and the C023
+post-release interrogation all exploited. It is retained because §8.3 records
+the automation that replaced it, and a reviewer who reads only §8.3 has no idea
+what was actually being paid. It is not a description of the current
+`post-release-smoke.yml`, which carries two triggers.
 
-The machinery is good — five targets, purpose-matched runners, two scenarios,
-asserted premises, `contents: read`, no `|| true`. **The trigger is a human
-decision, and nothing enforces that anyone makes it.**
+The workflow's own comment said so at the time: "Manual only. This rehearses the
+*real* self-update transaction against two public releases, so it must be
+triggered deliberately during release qualification and must not run on every
+push". It took `from_version` and `to_version` as required inputs — two
+*already published* versions, which is precisely why it could not be a CI job: it
+can only run once the thing it tests already exists in public.
 
-This matters because the rehearsal is **the only thing that has ever caught real
-self-update defects**:
+The machinery was already good — five targets, purpose-matched runners, two
+scenarios, asserted premises, `contents: read`, no `|| true`. **The trigger was
+a human decision, and nothing enforced that anyone made it.**
 
-- **`v0.1.1 → v0.1.2`** found C016: the identity check could never match, so
+This mattered because the rehearsal is **the only thing that has ever caught
+real self-update defects**:
+
+- **`v0.1.1 -> v0.1.2`** found C016: the identity check could never match, so
   self-update failed. It failed *loudly* and mutated nothing, which is why 0.1.1
   and 0.1.2 were judged correct-except-for-the-updater and not yanked.
-- **`v0.1.3 → v0.1.4`** found C017: a Cargo-managed binary was misdetected and
+- **`v0.1.3 -> v0.1.4`** found C017: a Cargo-managed binary was misdetected and
   **silently replaced** — a silent success rather than a loud failure, and a
   violation of the exact property in §2. Both versions shipped published.
-- `v0.1.4 → v0.1.5` was an *expected-failure* rehearsal (it must fail, because
+- `v0.1.4 -> v0.1.5` was an *expected-failure* rehearsal (it must fail, because
   the installing binary would still be the broken published 0.1.4), and
-  `v0.1.5 → v0.1.6` was the proving rehearsal that found two further defects.
+  `v0.1.5 -> v0.1.6` was the proving rehearsal that found two further defects.
 
 The diagnosis behind C017 is stated in the suite itself: the case "was green for
 an entire release cycle precisely because nothing ever checked the guards in the
 direction that matters: with the stub *not* reachable, and with the real tool
 winning the lookup" (`packaging/tests/test_installers.py:786-791`). The fixtures
-had been built to pass, not to be shown capable of failing. The premise-negative
-harness added afterwards is the right structural answer and it now runs in CI —
-but it addresses the *static* half. The rehearsal, which is where the defect
-actually lived, is still a human action against a published release.
+had been built to pass, not to be shown capable of failing.
 
 The consequence, stated without softening: **a defect of the C016 or C017 class
-can ship again.** The scenario for it is short. A maintainer publishes v0.1.7. CI
-is green — the workflow cannot even attempt a rehearsal, because
-`post-release-smoke.yml` has no push trigger and the default `to_version` still
-points at 0.1.2. If nobody remembers to dispatch the workflow with
-`--from 0.1.6 --to 0.1.7`, the release ships unverified on precisely the
-dimension where the two shipped defects lived, and no gate in §7 fails.
+could ship.** The scenario was short. A maintainer publishes v0.1.7. CI is green —
+the workflow cannot even attempt a rehearsal, because `post-release-smoke.yml`
+has no push trigger. If nobody remembers to dispatch the workflow, the release
+ships unverified on precisely the dimension where the two shipped defects lived,
+and no gate in §7 fails. The shipped defects were also *silent* (C017) or *loud
+but untested* (C016); neither would show up as a red build, a failed install, or
+a failed smoke, because both live in the commit path that no pre-publication
+check exercises.
 
-Two things make this worse than it first appears. First, the shipped defects were
-*silent* (C017) or *loud but untested* (C016) — neither would show up as a red
-build, a failed install, or a failed smoke, because both live in the commit path
-that no pre-publication check exercises. Second, the rehearsal is the one place
-where the §2 provenance property is tested end to end against real published
-bytes; everything else in this document is static analysis of a manifest or a
-script.
+That the rehearsal was a program rather than a step was already clear then:
+C017's own record notes the `v0.1.5 -> v0.1.6` run **failed on the harness, not
+the product** on its first attempt, and that this was the third harness bug the
+line had found.
 
-What the project has done about the *class* of problem is real and worth
-recording: the fixtures were made premise-negative, the identity gate got a
-`self_test()`, and the rehearsal itself was hardened — C017's own record notes
-that the `v0.1.5 → v0.1.6` run **failed on the harness, not the product** on its
-first attempt, and that this was the third harness bug the rehearsal line had
-found. The lesson the project drew is correct: a live rehearsal is a program, and
-like any program its first runs find bugs in itself. But the gap is the trigger,
-not the program. The release line's own status record rates the updater rehearsal
-**partial** (`plans/closure/distribution-release-update/010d-status.md:83`) and
-notes that the commit path "cannot be until a version newer than 0.1.1 exists" —
-a constraint that was true when written and remains structurally true, because it
-is a function of what has been published, not of what the automation supports.
+### 8.2.1 What closing it actually looked like
 
-## 8.4 Hosted release automation (Phase 11)
+**M011C closed the trigger gap, and the closure record does not claim more than
+that.** `post-release-smoke.yml` now carries `release: published` plus the
+retained manual dispatch; see §8.3 for the two new failure shapes it introduced
+and the machinery that handles them.
+
+The automatic trigger has now fired **three times**, and the honest scoreboard is
+that **two of the three failed**:
+
+| Release | Run | Result | Why |
+| --- | --- | --- | --- |
+| v0.2.0 | `37419183947` | **failed** | Three defects in the automation path itself. |
+| v0.2.1 | `37507738147` | **failed** | C023 had just yanked v0.2.0; the resolver picked that now-uninstallable version as its rehearsal source. Fixed by consulting crates.io's yanked set (`cfdc910`). |
+| v0.2.2 | `37561575727` | **green, all five lanes** | `from_version=v0.2.1`, resolved to an installable predecessor. The first green automatic run in the project's history. |
+
+Two things follow, and both matter more than the green run.
+
+First, **the automation found real defects immediately, in its own first use.**
+Both failures were in the automatic path, not in the product, and both were
+invisible to every pre-existing gate. That is the §8.2 argument surviving its own
+fix: a rehearsal nobody dispatches is a rehearsal nobody reads, and one that
+fires but fails is still not a rehearsal that has been *acted on*.
+
+Second, **the constraint that seemed permanently structural is not.** The
+pre-M011C record rated the updater rehearsal **partial**
+(`plans/closure/distribution-release-update/010d-status.md:83`) and noted that
+the commit path "cannot be until a version newer than 0.1.1 exists". That was true
+when written and was correctly understood as a property of *what has been
+published*, not of what the automation supports. It was not a permanent blocker;
+it was a queue with a fixed processing time. The lesson the project drew was
+correct but incomplete: the gap was the trigger, not the program — and the
+program also needed to be hardened before the trigger was safe to expose.
+
+What remains manual, deliberately: `workflow_dispatch` is kept as the recovery
+surface, because an automatic trigger is not a substitute for being able to
+re-run a known transition on demand. And **reading** the run is still a human
+step. Nothing forces anyone to open the result, which is the same class of gap at
+a smaller scale — see checklist item 13.
+
+## 8.3 Hosted release automation (Phase 11)
 
 Three workflows were added in Phase 11, and the common property is that each one
 turns a previously manual or undocumented step into an enforcement point **while
@@ -895,13 +941,13 @@ Reported as determined, not assumed.
 | Question | Determination |
 | --- | --- |
 | **Is the published crate guaranteed to compile and work standalone?** | Partly. `config.toml` is in the allowlist and the check enforces it, so the `include_str!` coupling holds. But the check is static: it validates the manifest, not a build of the *published package*. Nothing I found builds the staged `.crate` standalone. A file needed at runtime but outside the allowlist would fail at **compile** time if referenced via `include_str!`/`include_bytes!` (loud, CI would likely catch it), and at **runtime** if referenced by path or as a data file (quiet, and not covered by any check I found). |
-| **Can `completions/` and `man/` drift from the parser?** | Yes, by construction — they are tracked generated artefacts. The `generated-docs` job in `ci.yml:64` regenerates and diffs, so drift is caught at PR time. This is the one drift risk in this component that is genuinely closed. |
+| **Can `completions/` and `man/` drift from the parser?** | Yes, by construction — they are tracked generated artefacts. The `generated-docs` job in `ci.yml:72` regenerates and diffs, so drift is caught at PR time. This is the one drift risk in this component that is genuinely closed. |
 | **Is the installer's download integrity verified?** | **Yes — SHA-256 sidecar, mandatory, on both installers.** `install.sh` requires a 2xx on the sidecar, requires the digest to match `^[0-9a-f]{64}$`, and compares it to the downloaded file (`install.sh:305-327`); `install.ps1` does the same via `Get-FileHash -Algorithm SHA256` (`install.ps1:125`, `225-235`). Both comment the rule in the same words: "The digest sidecar is mandatory evidence. Its absence is a hard failure, not a fallback signal." Both also *execute* the staged binary afterwards and abort if it does not report a version (`install.sh:333-337`, `install.ps1:16`). Three fixture cases pin the negative cases (`case_checksum_absent_is_fatal`, `case_malformed_digest`, `case_digest_mismatch`) and a fourth (`case_wrong_candidate`) pins that a correctly-named but wrong binary is caught. **What it is not: a signature.** See the last row. |
 | **Do the two installers behave equivalently for every user-facing case?** | For the contract — supported triples, asset names, install names, mandatory sidecar, 404-only fallback, refuse-to-overwrite without an explicit force flag, post-download version check — yes, and it is machine-checked or fixture-covered on both sides. The differences that remain are shell-appropriate (destination rule, TLS mechanism) rather than behavioural. The one property I could **not** find a check for: that neither destination is ever inside a Cargo root. That property is what keeps installer-created installations updatable (§2), and it is currently enforced only by convention and by reading the source. |
 | **Unsupported platform/arch — clear message or confusing 404?** | A clear message, and deliberately not a raw 404. An unrecognised OS or arch fails immediately with a pointer to `cargo install --locked` (`install.sh:130`, `install.sh:137`); a recognised family with no published binary enters the Cargo source build (`install.sh:150-154`, `install.ps1:96-100`); a 404 on a contracted asset is treated as genuine absence and also falls back, while a 5xx or transport fault stays fatal precisely so an outage cannot silently become a local build (`install.sh:277-285`, `install.ps1:208-215`). Fixtures cover the path: `case_binary_404_falls_back`, `case_cargo_missing`, `case_cargo_produces_nothing`. |
 | **Is `cargo install --locked` guaranteed to resolve with zero non-registry sources?** | The lockfile is in the allowlist so resolution data ships, and the identity gate checks that `Cargo.lock` agrees with `Cargo.toml` on the version. I did **not** find a check that asserts a zero-non-registry-source count for the published crate, and the installers' own fallback builds invoke Cargo against whatever source configuration the host has. Not established. |
 | **Are `Cargo.toml` version, `CHANGELOG.md` version, git tag, and published crate version checked against each other?** | **Yes, and in one function.** `check_identity` (`scripts/check-release-identity.py:91-144`) asserts, in order: the tag is an exact `v<major.minor.patch>` with no pre-release or build metadata; the tag's version equals `Cargo.toml`'s; `Cargo.lock` records the same version (with the stated reason — "a `--locked` release build would fail, or would build a different version than the tag names"); the tag resolves to an existing commit **and** points at the revision being released; and `CHANGELOG.md` has an entry for that exact version. `check_clean_tree` (line 147) then rejects a dirty checkout. The published crate version is the manifest version, so the four are tied together transitively. |
-| **Any manual step in the release process?** | Yes, enumerated: (1) **publishing the staged draft** — the release workflow deliberately cannot do it, and that separation is the point; (2) **dispatching the live self-update rehearsal** against two published versions — since M011C this also runs automatically on `release: published`, with `workflow_dispatch` retained as the rehearsal surface (§8.2); (3) the staging validation's **real-installer step runs on one host platform only** — since M011B the validation itself is a hosted workflow, but that step is unchanged — the other four targets rest on the contract check and hosted CI (`c014-status.md:196,212`); (4) deciding **whether the glibc 2.17 floor may be advertised** — it is a build fact from `cargo_zigbuild` with no runtime qualification behind it, which is why the contract check requires an explicit non-claim in the README (`check-release-contract.py:486-509`). |
+| **Any manual step in the release process?** | Yes, enumerated: (1) **publishing the staged draft** — the release workflow deliberately cannot do it, and that separation is the point; (2) **nothing for the rehearsal** — since M011C it runs automatically on `release: published`, with `workflow_dispatch` retained only as a recovery surface (§8.2.1, §8.3). **Reading** that run remains a human step; (3) the staging validation's **real-installer step runs on one host platform only** — since M011B the validation itself is a hosted workflow, but that step is unchanged — the other four targets rest on the contract check and hosted CI (`c014-status.md:196,212`); (4) deciding **whether the glibc 2.17 floor may be advertised** — it is a build fact from `cargo_zigbuild` with no runtime qualification behind it, which is why the contract check requires an explicit non-claim in the README (`check-release-contract.py:486-509`). |
 | **Blast radius of a compromised release — is there signature verification?** | **Closed for the first time by M011A, and narrowly.** Immutable releases are enabled for `dbowm91/cargo-cleanme` (repository policy, enabled 2026-10-05), so a published release's assets and tag can no longer be replaced, and GitHub issues a signed attestation binding the release to its repository, tag, commit, and every asset digest. `scripts/verify-release-attestation.py` verifies it and fails closed on policy-off, release-mutable, attestation-missing/unparseable, wrong-repository/tag, unattested-asset, digest-mismatch, inventory drift, and missing-or-old-`gh` states. **The trust root is still GitHub's release and attestation infrastructure.** This is not an independent maintainer-key signature and not SLSA build provenance, and it does not become one by being described loosely. A compromise of the GitHub release account still yields a self-consistent artefact every check accepts. Releases v0.1.0–v0.1.6 predate the policy, remain mutable, and must not be described as attested or recreated. |
 
 ## 10. Review checklist
@@ -911,7 +957,8 @@ the release workflows.
 
 1. **Did you change the `src/cli.rs` command surface?** Regenerate completions
    and manpages in the same commit, or the `generated-docs` job fails
-   (`.github/workflows/ci.yml:64`). Adding a subcommand means a ninth manpage;
+   (`.github/workflows/ci.yml:72`). There are currently eight manpages — one per
+   subcommand, plus the root page — so adding a subcommand means a ninth manpage and
    removing one means deleting a page.
 2. **Do not "normalise" the underscore prefix** on `completions/_cargo-cleanme`
    or `completions/_cargo-cleanme.ps1`. It is required by zsh and PowerShell
@@ -960,13 +1007,25 @@ the release workflows.
 12. **Are you relying on the smoke as proof the updater works?** It is not. The
     per-target consumer validator proves the artefact runs and self-identifies
     (`release/eggpack/consumer-validators.json`); it does not exercise the
-    self-replacement commit path. Only the live rehearsal covers that, and it is
-    `workflow_dispatch`-only (`post-release-smoke.yml:6-7`).
-13. **If you cut a release, dispatch the rehearsal before you consider the line
-    closed.** C016 and C017 both shipped because nothing forced this step. The
+    self-replacement commit path. Only the live rehearsal covers that. Since
+    M011C it runs automatically on `release: published`
+    (`post-release-smoke.yml:6-7`); `workflow_dispatch` is retained as the
+    manual recovery surface.
+13. **If you cut a release, read its automatic smoke run before you consider
+    the line closed.** C016 and C017 both shipped because nothing forced a
+    rehearsal. Nothing forces that step now either — it is automatic, which is
+    the fix, but *reading the result* is still on you. The
     `v0.1.5 → v0.1.6` pattern — run the rehearsal, expect the first run to fail
     on the harness, fix the harness, re-run — is the documented practice, and
-    it has found real defects each time.
+    it has found real defects each time. Three automatic runs later, the honest
+    record is that **two of the three failed**: v0.2.0 on three defects in the
+    automation path, and v0.2.1 because C023 had just yanked v0.2.0 and the
+    resolver picked that uninstallable predecessor. Only v0.2.2's run
+    `37561575727` was green on all five lanes. A failed automatic run is evidence
+    to act on, not noise to re-run until it looks better.
+14. **Does your release yank its own immediate predecessor?** Then check that the
+    resolver picks an installable source. That is exactly the case that broke
+    v0.2.1's run, and the resolver now consults crates.io's yanked set.
 
 See also [12-self-update.md](12-self-update.md) for the provenance classifier
 these installers must satisfy, and

@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: **C026 ready; release/product line otherwise closed.** C022 is closed; M013's v0.2.0 publication was corrected by C023; C023 published immutable v0.2.1, attested it, and yanked crates.io 0.2.0. Its acceptance criterion 11 and M011C's operational condition were both **met on 2026-10-07** by the v0.2.2 release: run `37561575727` was green on all five automatic lanes with `from_version=v0.2.1`, the first green automatic smoke in the project's history. **C023 and M011C are both closed.** C024 is **closed and shipped in v0.2.2**. C026 is a bounded post-release planning/architecture/repository-hygiene corrective and changes no distribution behavior. C010 remains an independent upstream request.
+Status: **closed through v0.2.2.** C022 is closed; M013's v0.2.0 publication was corrected by C023; C023 published immutable v0.2.1, attested it, and yanked crates.io 0.2.0. Its acceptance criterion 11 and M011C's operational condition were both **met on 2026-10-07** by the v0.2.2 release: run `37561575727` was green on all five automatic lanes with `from_version=v0.2.1`, the first green automatic smoke in the project's history. **C023 and M011C are both closed.** C024 is **closed and shipped in v0.2.2**. C025 and C026 are closed; C026 was a bounded post-release planning/architecture/repository-hygiene corrective that changed no distribution behavior. **No distribution corrective is open.** C010 remains an independent upstream request, `proposed` and non-blocking. No Phase 14 milestone has been accepted.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 
@@ -436,17 +436,21 @@ All three closed outright. M011A and M011B reached that when their evidence
 existed; M011C reached it on 2026-10-07, when run `37561575727` produced the
 first green **automatic** `release: published` smoke on all five lanes for the
 v0.2.2 release, discharging the condition it had held open.
-  Each retains one outstanding *hosted* evidence, and all four are supplied by the
-  same event: the first release published from `main` after 2026-10-05. M011A's
-  immutable-releases policy is enabled and verified live, so that release is also
-  the first to carry an attestation.
+
+The paragraph that previously sat here described four outstanding *hosted*
+evidences supplied by "the first release published from `main` after
+2026-10-05". That release happened: v0.2.0 supplied C018/M011A/M011B, v0.2.1
+carried the C023 safety fixes, and v0.2.2 supplied the automatic-smoke evidence
+and shipped C024. None of the four is outstanding.
 
 
 ### 11.1 C018 — Self-update provenance uncertainty fail-closed
 
 Plan: `plans/implementation/distribution-release-update/c018-self-update-provenance-uncertainty-fail-closed.md`
 
-Status: **closed for implementation; published-release evidence outstanding**.
+Status: **closed.** Published 0.1.6 refused in both the default Cargo home and
+`--root` with 0.2.0 available, bytes byte-identical before and after. The fix
+is carried by every published release from 0.1.6 onward.
 
 C018 corrects the residual C017 ownership boundary. Cargo-manager evidence that
 is present but unreadable, malformed, or otherwise ambiguous must not collapse
@@ -507,7 +511,8 @@ The v0.2.1 failure was C023's own yank reaching the harness —
 `select_predecessor` consulted GitHub release suitability but not crates.io
 installability, so it chose a yanked v0.2.0 that no lane could install. Fixed in
 `cfdc910`, self-test corrected in `b0b41fc`, both landed. No automatic run for
-v0.2.1 can be recreated; the next publication supplies the missing evidence.
+v0.2.1 can be recreated — `release: published` fires once per release — and the
+missing evidence was supplied by the v0.2.2 release instead.
 
 M011C preserves the existing five-target real updater rehearsal but adds an
 automatic stable `release.published` path. It deterministically selects the
@@ -522,9 +527,9 @@ remains available for recovery/historical transitions.
 
 - Generated Eggpack CI remains generated and drift-checked.
 - Product evidence workflows never gain publication authority.
-- The first future release is not considered fully closed until the staged
-  validator, immutable-release verification, and automatic post-release smoke
-  all produce the evidence their plans require.
+- A release is not fully closed until the staged validator, immutable-release
+  verification, and automatic post-release smoke all produce the evidence their
+  plans require. v0.2.2 is the first release for which all three are green.
 - Failure after immutable publication creates a corrective/new patch release;
   bytes/tags are not rewritten.
 - SHA-256 remains local integrity evidence even after release attestation is
@@ -699,7 +704,7 @@ behavior.
 
 It existed because current summaries disagreed with the accepted evidence:
 
-- C023 is conditionally closed, but several current-status sentences called it
+- C023 was conditionally closed, but several current-status sentences called it
   simply closed or still ready;
 - the automatic v0.2.1 smoke fired and failed, but several summaries called it
   observed-green and said M011C was discharged;
@@ -708,13 +713,13 @@ It existed because current summaries disagreed with the accepted evidence:
 - the canonical roadmap still described completed v0.2.1 publication/yank work
   in future tense.
 
-**Resolution:** C023's header now reads conditionally closed and agrees with its
-own disposition; its finding count is five, derived from §11's headings rather
-than remembered; §13 no longer claims a M011C upgrade; M011C carries the
-v0.2.1 addendum and is still conditionally closed; this roadmap, the cleanup
-roadmap, `plans/registry.md`, and `plans/002-long-term-roadmap.md` all state the
-same current state. No failed run was rewritten as passing and no historical
-evidence was edited.
+**Resolution (as C025 recorded it, on 2026-10-06):** C023's header read
+conditionally closed and agreed with its own disposition; its finding count was
+derived from §11's headings rather than remembered; §13 made no M011C upgrade
+claim; M011C carried the v0.2.1 addendum and was still conditionally closed;
+this roadmap, the cleanup roadmap, `plans/registry.md`, and
+`plans/002-long-term-roadmap.md` all stated the same current state. No failed
+run was rewritten as passing and no historical evidence was edited.
 
 C024 was left untouched by that reconciliation and was taken afterwards: it is
 now closed, and its fix **shipped in 0.2.2** (release record
@@ -732,17 +737,18 @@ the state on 2026-10-06.
 
 ### 12.6 C026 — Post-v0.2.2 repository reconciliation, cleanup, and polish
 
-Status: **ready**.
+Status: **closed** — closure record:
+`plans/closure/distribution-release-update/c026-status.md`.
 
 Plan:
 
 - `plans/implementation/distribution-release-update/c026-post-v0.2.2-repository-reconciliation-cleanup-and-polish.md`
 
-C026 is the bounded handoff after the v0.2.2 release closed the remaining
-C023/M011C operational evidence. It does not reopen Phase 11, Phase 12, Phase
+C026 was the bounded handoff after the v0.2.2 release closed the remaining
+C023/M011C operational evidence. It did not reopen Phase 11, Phase 12, Phase
 13, C023, C024, C025, or the v0.2.2 release record.
 
-Its scope is deliberately non-product:
+Its scope was deliberately non-product:
 
 - reconcile stale *current-state* registry/roadmap/architecture/operator prose
   against the accepted v0.2.2 evidence while preserving historical records;
@@ -753,9 +759,12 @@ Its scope is deliberately non-product:
 - leave the next product milestone undefined.
 
 Repository baseline: `aac5b685e116b67aadda06bacac5788c483b1499`.
-Registration branch:
+Implementation branch:
 `plans/c026-post-v0.2.2-reconciliation-cleanup`.
 
-C026 must stop and open a separate corrective if the audit discovers a real
-product/release defect. It must not hide implementation work inside a
-documentation cleanup.
+**Outcome.** The reconciliation completed with no product, release, schema, or
+configuration change, and found no medium-or-higher implementation defect that
+needed a separate corrective. Four stale remote branches were retired after
+proving that three had zero unique commits and that the fourth's unique commit
+was content-preserved on `main`. **No distribution corrective remains open, and
+no Phase 14 was defined or activated.**
