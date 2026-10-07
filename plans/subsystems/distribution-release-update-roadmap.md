@@ -1,6 +1,6 @@
 # Distribution, Release, and Update Roadmap
 
-Status: **closed through v0.2.2.** C022 is closed; M013's v0.2.0 publication was corrected by C023; C023 published immutable v0.2.1, attested it, and yanked crates.io 0.2.0. Its acceptance criterion 11 and M011C's operational condition were both **met on 2026-10-07** by the v0.2.2 release: run `37561575727` was green on all five automatic lanes with `from_version=v0.2.1`, the first green automatic smoke in the project's history. **C023 and M011C are both closed.** C024 is **closed and shipped in v0.2.2**. C025 and C026 are closed; C026 was a bounded post-release planning/architecture/repository-hygiene corrective that changed no distribution behavior. **No distribution corrective is open.** C010 remains an independent upstream request, `proposed` and non-blocking. No Phase 14 milestone has been accepted.
+Status: **published through v0.2.2; C027 ready.** C022 is closed; M013's v0.2.0 publication was corrected by C023; C023 published immutable v0.2.1, attested it, and yanked crates.io 0.2.0. Its acceptance criterion 11 and M011C's operational condition were both **met on 2026-10-07** by the v0.2.2 release: run `37561575727` was green on all five automatic lanes with `from_version=v0.2.1`, the first green automatic smoke in the project's history. **C023 and M011C are both closed.** C024 is **closed and shipped in v0.2.2**. C025 and C026 are closed. **C027 is the active corrective handoff:** the published POSIX installer installs a normal user copy under `$HOME/.local/bin` but only prints PATH guidance instead of safely persisting the canonical user-local bin directory for supported shells. C010 remains an independent upstream request, `proposed` and non-blocking. No Phase 14 feature milestone has been accepted.
 
 Repository audit baseline: `85b5d4adee81f363c788505aa2f7d0136eb5ff0b`
 
@@ -768,3 +768,36 @@ needed a separate corrective. Four stale remote branches were retired after
 proving that three had zero unique commits and that the fourth's unique commit
 was content-preserved on `main`. **No distribution corrective remains open, and
 no Phase 14 was defined or activated.**
+
+### 12.7 C027 — POSIX installer user-local PATH persistence corrective
+
+Status: **ready**.
+
+Plan:
+
+- `plans/implementation/distribution-release-update/c027-posix-installer-user-local-path-persistence-corrective.md`
+
+Repository baseline: `59c0be9422e52b23bbb771fe94943cb004670b59`.
+
+C027 corrects M010B forward. M010B required a normal POSIX install to report the
+installed path and PATH guidance; the shipped wrapper satisfies that literal
+contract but leaves `$HOME/.local/bin` unpersisted. That is especially visible
+on a fresh macOS zsh account, where the verified binary may install successfully
+and still not resolve in a newly opened terminal until the user manually edits
+their shell configuration.
+
+The corrective adopts the bounded Gregg-style model without copying unrelated
+daemon/update behavior: profile integration is post-install UX, only for the
+canonical non-root `$HOME/.local/bin` destination, only for supported zsh/bash
+profiles, idempotent, non-evaluating, non-system-wide, and non-fatal after a
+successful binary placement. A current-shell export remains necessary because a
+piped installer cannot mutate its parent environment.
+
+The existing fixture missed the defect because its happy path uses a custom
+temporary `--dir` and passes when textual PATH guidance is emitted. C027
+therefore requires state-transition tests plus hosted macOS evidence that a
+fresh zsh process resolves the exact fixture-installed binary.
+
+Implementation may close locally only conditionally. Final closure requires a
+published immutable release carrying the corrected installer and public-release
+macOS fresh-shell evidence. C027 does not itself authorize that publication.
