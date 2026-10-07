@@ -94,18 +94,20 @@ def main() -> int:
         print(f"skip: {note}")
         return 0
 
-    return qualify(zsh, "/bin/zsh", ["-l", "-i"], ".zshrc")
+    # `-l -i -c` is the shape Terminal produces: a login+interactive shell running a
+    # command string. Without `-c`, zsh reads the argument as a script file name
+    # ("can't open input file"), which measures nothing here.
+    return qualify(zsh, "/bin/zsh", ["-l", "-i", "-c"], ".zshrc")
 
 
 def qualify(shell_path: str, login_shell: str, shell_flags: list[str], profile_name: str) -> int:
-    # `profile_name` is what the wrapper will select for `login_shell` on this
-    # host; it is a parameter so the Linux harness drives the same sequence.
     """Run the fixture install and the fresh-shell assertion.
 
-    Split out from `main` with the shell as a parameter so a Linux host can
-    drive the identical sequence with bash. A local harness reimplementing this
-    would be a second version of the evidence, which is the thing C027 exists to
-    stop; calling it is the whole point.
+    `login_shell` is the value the wrapper will see in `$SHELL`, and
+    `profile_name` the startup file it will therefore select; both are parameters
+    so a Linux host drives the identical sequence with bash. A local harness
+    reimplementing this would be a second version of the evidence, which is the
+    thing C027 exists to stop; calling it is the whole point.
     """
     if os.name == "nt" or (not hasattr(os, "geteuid")) or os.geteuid() == 0:
         # Root installs take the /usr/local/bin system destination, which is
