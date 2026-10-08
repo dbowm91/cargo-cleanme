@@ -10,7 +10,7 @@ Source roadmap: `plans/subsystems/artifact-discovery-cleanup-roadmap.md`; correc
 
 Prior accepted plans / closure evidence being corrected **forward**, not rewritten:
 
-- `plans/implementation/artifact-discovery-cleanup/006e-adaptive-routine-full-discovery-state.md`; `plans/closure/artifact-discovery-cleanup/006e-status.md` (verify historical naming before creating closure references).
+- `plans/implementation/artifact-discovery-cleanup/006e-adaptive-routine-full-discovery-state.md`; `plans/closure/artifact-discovery-cleanup/006e-status.md` (historical closure).
 - `plans/implementation/artifact-discovery-cleanup/c005-uncertainty-aware-state-reconciliation-and-config-edit-hardening.md`; `plans/closure/artifact-discovery-cleanup/c005-status.md`.
 - `plans/implementation/artifact-discovery-cleanup/007-learned-full-cleanup-orchestration.md`; `plans/closure/artifact-discovery-cleanup/007-status.md`.
 - `plans/implementation/artifact-discovery-cleanup/c006-combined-root-cleanup-ownership-universe.md`; `plans/closure/artifact-discovery-cleanup/c006-status.md`.
@@ -96,7 +96,7 @@ Implement one shared classification seam usable by bare Routine cleanup, `clean 
 - Keep `learned_root_retention_days = 30` by default and `0` meaning no *age-based* expiration.
 - Runtime omission of an absent root **does not rewrite** `discovery-state.json` and does not delete its project records; later recurrence remains discoverable and Full can relearn it.
 - In complete Full reconciliation only, add a narrowly specified removal rule for a learned-root directory **positively confirmed nonexistent** at reconciliation time, independent of project-recency retention, provided the relevant coverage was complete and no path-intersecting uncertainty applies. Distinguish `path is physically absent` from `path exists but no Cargo.toml was found`; the latter retains ADR 002 age behavior.
-- Confirm this narrow absence case is compatible with ADR 002 `5–6; if implementation requires changing an accepted decision, add a clearly labeled *forward* ADR amendment before changing the pruning rule. Do not silently reinterpret a prior closed plan.
+- Confirm this narrow absence case is compatible with ADR 002 §§5–6; if implementation requires changing an accepted decision, add a clearly labeled *forward* ADR amendment before changing the pruning rule. Do not silently reinterpret a prior closed plan.
 - Preserve newer-schema protection, corrupt-state read fallback, atomic publication, future-clock semantics, deduplication/collapse and concurrent publisher behavior. No state format migration for this corrective.
 - Never prune a root from a partial/failed Full pass, including inaccessible ancestor/mount conditions that make positive absence uncertain.
 
@@ -159,4 +159,4 @@ No hard-coded exclusions for `.codex`, `.git`, temporary worktrees, filesystem p
 
 ## 12. Required closure handoff
 
-Write `plans/closure/artifact-discovery-cleanup/c028-status.md` only after implementation. Include the implementation commit/PR, requirement-to-test evidence matrix for `10, failing original baseline reproduction, exact post-fix direct and Cargo-subcommand runs, fixture-created and fixture-deleted paths, root-classification and reappearance evidence, all-mode zero-spawn controls, state before/after showing Full-only negative pruning, platform/MSRV CI links, commands actually run (including failures), residual risks, and eventual published artifact/installed-release evidence. Update this subsystem roadmap and `plans/registry.md` to the disposition actually earned. No green-by-description closure.
+Write `plans/closure/artifact-discovery-cleanup/c028-status.md` only after implementation. Include the implementation commit/PR, requirement-to-test evidence matrix for §10, failing original baseline reproduction, exact post-fix direct and Cargo-subcommand runs, fixture-created and fixture-deleted paths, root-classification and reappearance evidence, all-mode zero-spawn controls, state before/after showing Full-only negative pruning, platform/MSRV CI links, commands actually run (including failures), residual risks, and eventual published artifact/installed-release evidence. Update this subsystem roadmap and `plans/registry.md` to the disposition actually earned. No green-by-description closure.
