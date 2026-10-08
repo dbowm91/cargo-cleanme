@@ -527,6 +527,21 @@ Discovery state is machine-local JSON and is normally self-managed.
   upgraded before it can be reconciled.
 - A persistence failure is reported on stderr and never changes the exit code.
 - Deleting discovery state is **not** the normal recovery procedure.
+- A learned or seed location that provably vanished (`ENOENT`) or is
+  positively not a directory is **omitted from the current cleanup run** with
+  a bounded diagnostic; the remaining roots still receive complete ownership
+  proof. The omission is never written back — only a complete Full
+  reconciliation can change learned state.
+- A learned or seed location that is a symlink (never followed, including
+  broken links) or that cannot be read is **not** omitted: the run blocks
+  with a typed whole-scope report and exit `1`, because omitting it could
+  conceal an expected scan tree. Explicit roots (`scan.root`, `scan ROOT`,
+  `clean ROOT`) are never omitted; any defect in one is a fatal usage error.
+- A complete, certain Full reconciliation prunes learned directories that are
+  positively confirmed nonexistent, independent of retention. An existing
+  directory with no projects keeps the age rule below, and uncertainty,
+  partial/failed Full passes, newer schemas, and unpublishable state never
+  shrink the learned scope.
 
 A rootless `scan` (Full) on a typical workstation reports permission-denied diagnostics
 for platform roots it cannot read. Those are expected, and they are why a

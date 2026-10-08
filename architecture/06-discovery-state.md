@@ -264,7 +264,7 @@ Returns `Option<String>`: `None` for `Missing` and `Loaded` (both are normal
 outcomes that need no explanation), and a distinct sentence per failure —
 "ignoring unusable discovery state …" / "… uses unsupported schema N; update
 cargo-cleanme" / "cannot read discovery state …". It is consumed by
-`main.rs:418-420` and by `policy.rs:122`.
+`main.rs:885` and by `policy.rs:436`.
 
 ## 4. Reconciliation
 
@@ -356,33 +356,43 @@ this path?" in one lookup instead of a scan per old root. The comment at
 `:160-163` justifies the early `break` (`:169`): if an ancestor is already
 indexed, its own ancestors are too, so the rest of the walk is redundant.
 
-**6. Old roots: retain or drop (`:174-188`).** For each `old` in
+**6. Old roots: retain, prune, or drop (`:174-205`).** For each `old` in
 `prior.learned_roots`:
 
 ```rust
 if covered.contains(&old.path) { continue; }                                 // :175-177
-if uncertainty.iter().any(|p| uncertainty_intersects(&old.path, p))           // :178-180
-    || old.last_project_seen_at > observed_at                                 // :181
-    || retention_days == 0                                                   // :182
+// C028 narrow absence pruning (:178-194): positively confirmed nonexistent
+// (`ENOENT`) and uncovered by uncertainty → drop independent of retention.
+if uncertainty.iter().any(|p| uncertainty_intersects(&old.path, p))           // :195-197
+    || old.last_project_seen_at > observed_at                                 // :198
+    || retention_days == 0                                                   // :199
     || observed_at.saturating_sub(old.last_project_seen_at)
-        <= u64::from(retention_days) * 86400                                 // :183-184
+        <= u64::from(retention_days) * 86400                                 // :200-201
 { learned.push(old.clone()); }
 ```
 
-Four independent reasons to keep an old root. Note the **ordering**: the
-`covered` test at `:175` short-circuits *before* the uncertainty test at `:178`.
-This ordering is the single most consequential detail in the function and is
-analysed in §5 and §8.
+Five reasons to keep or drop an old root, evaluated in order. Note the
+**ordering**: the `covered` test at `:175` short-circuits *before* both the
+absence probe at `:185-191` and the uncertainty test at `:195`. The absence
+probe itself requires no intersecting uncertainty (`:185-187`) and a
+`symlink_metadata` failure of exactly `ErrorKind::NotFound` (`:188-191`) —
+never `Path::exists`, which conflates errors. "Exists but no project was
+found" falls through to the age rule; symlinks, regular files, permission
+failures, and indeterminate errors are never positive absence, so they keep
+the old retention behaviour. This ordering is the single most consequential
+detail in the function and is analysed in §5 and §8.
 
 Retention arithmetic: `u64::from(retention_days) * 86400` is overflow-free
 because `config::load` caps the value at 3650 (`config.rs:107-111`), giving at
 most 315,360,000 — which is also what makes `policy.rs:46`'s `as u16` cast
 lossless. `saturating_sub` means a future `old.last_project_seen_at` cannot
-wrap; it is caught by the explicit `>` guard at `:181` first anyway. This is the
+wrap; it is caught by the explicit `>` guard at `:198` first anyway. This is the
 ADR §5 rule "Future timestamps fail conservative: they do not cause expiration"
-(`:80`) implemented literally.
+(`:80`) implemented literally. The C028 absence probe is deliberately *not*
+arithmetic: it distinguishes "physically absent" from "present but
+unobserved", and only the former bypasses retention.
 
-**7. Sort and containment-collapse (`:189-215`).** `learned` is sorted by path;
+**7. Sort and containment-collapse (`:206-232`).** `learned` is sorted by path;
 since a parent always sorts before its children, every possible parent is
 already represented when its child is reached. Each root is then folded into its
 nearest already-represented ancestor, taking the **max** of the two
@@ -495,8 +505,9 @@ every learned root via `root.starts_with("/")`.
 Consequences, all verifiable from the code above:
 
 - In practice, one permission-denied directory on a Full scan retains the entire
-  learned-root set through rule 1 of `:178-180`. The retention/expiry path is
-  unreachable for that generation.
+  learned-root set through rule 1 of `:195-197`. The retention/expiry path is
+  unreachable for that generation — and so is the C028 absence probe, which
+  requires no intersecting uncertainty.
 - `localized_uncertainty_retains_intersecting_roots_and_publishes_positives`
   (`:553`) asserts a behaviour that is correct for the function but is not
   reachable through `main.rs` today. It is a green test whose premise the
@@ -641,20 +652,24 @@ expire from Routine scope and are rediscoverable by a later Full scan.
 
 | Consumer | Call site | Reads | Notes |
 |---|---|---|---|
-| `policy::routine_roots` | `policy.rs:88` | `load_default()` | Routine scope root set. |
-| `policy::routine_roots_from_state` | `policy.rs:96-125` | `StateLoad`, `learned_roots`, `last_project_seen_at`, `now_seconds()` | Re-implements the retention filter independently at `policy.rs:112-118` (same three clauses as `discovery_state.rs:181-184`, plus its own `now < r.last_project_seen_at` future-timestamp clause). Seeds are always unioned in first (`policy.rs:101-104`); a non-`Loaded` load falls back to seeds + one warning (`policy.rs:105-123`). |
-| `clean --full` roots | `main.rs:120-131` | `learned_roots[].path` | Becomes plain `Vec<PathBuf>` roots, canonicalized and containment-collapsed by `collapse_roots` (`main.rs:154`, `:269-283`). |
-| `clean --full` / `--known` generation | `main.rs:125`, `main.rs:144-147` | `last_full_at` | `Option<u64>` → `state_generation`. `--known` takes roots from `policy::resolve` and reads *only* the stamp. Explicit `ROOT` sets it to `None` (`main.rs:114`). |
-| `run_scan`, Full branch | `main.rs:357-422` | everything | `load_default`, `full_reconciliation_prior`, `now_seconds`, `ProjectObservation`, `reconcile_full`, `publish`. |
-| `run_scan`, Routine/Explicit branch | `main.rs:423-452` | `learned_roots[].last_project_seen_at` | The touch branch. Mutates only timestamps; never adds roots, never removes them, never touches `projects` or `last_full_at`. Advances a root when `project.starts_with(&root.path)` (`main.rs:443`) for an observed workspace root. |
-| Human output | `main.rs:211-215` | `state_generation` | `println!("state generation last_full_at={generation} (Unix seconds)")` — Human format only, and only when a generation exists, so it prints for `--full` and `--known` and is absent for an explicit root. |
-| JSON output | `main.rs:187`, `main.rs:228` | `state_generation` | Serialized as `state_generation_last_full_at: Option<u64>` (`output.rs:61`, `output.rs:236`). |
+| `policy::routine_roots` | `policy.rs:397` | `load_default()` | Routine scan root set. |
+| `policy::routine_roots_from_state` | `policy.rs:410-439` | `StateLoad`, `learned_roots`, `last_project_seen_at`, `now_seconds()` | Re-implements the retention filter independently at `policy.rs:427-430` (same three clauses as `discovery_state.rs:198-201`, plus its own `now < r.last_project_seen_at` future-timestamp clause). Seeds are always unioned in first (`policy.rs:415-418`); a non-`Loaded` load falls back to seeds + one warning (`policy.rs:436-438`). |
+| `policy::routine_cleanup_candidates` | `policy.rs:363` | `StateLoad`, `learned_roots`, `last_project_seen_at`, `now_seconds()` | C028: the cleanup-only variant. Same age filter, but raw paths with provenance and no canonicalization, so classification (`policy.rs:156`) sees a symlink before any collapse could resolve it. |
+| `clean --full` roots | `policy.rs:328`, `main.rs:598` | `learned_roots[].path` of the in-memory generation | C028: `full_cleanup_roots` consumes the generation the just-finished reconciliation proved — never a disk reload — then `admit_automatic` classifies before collapsing. A missing generation or non-zero reconciliation refuses cleanup. |
+| `clean --full` / maintenance generation | `main.rs:330` | `last_full_at` | `Option<u64>` → `state_generation`. |
+| `run_scan`, Full branch | `main.rs:818-888` | everything | `load_default`, `full_reconciliation_prior`, `now_seconds`, `ProjectObservation`, `reconcile_full`, `publish`. Returns the proven generation in `ScanOutcome::full_state` (`main.rs:727`) even when the save fails, so `clean --full` never falls back to a stale disk generation. |
+| `run_scan`, Routine/Explicit branch | `main.rs:889-905` | `learned_roots[].last_project_seen_at` | The touch branch. Mutates only timestamps; never adds roots, never removes them, never touches `projects` or `last_full_at`. Advances a root when `project.starts_with(&root.path)` (`main.rs:895`) for an observed workspace root. |
+| Human output | `main.rs:330` | `state_generation` | `println!("state generation last_full_at={generation} (Unix seconds)")` — Human format only, and only when a generation exists. |
+| JSON output | `main.rs:650` | `state_generation` | Serialized as `state_generation_last_full_at: Option<u64>` (`output.rs:61`, `output.rs:236`). |
 
 `cleanup.rs` has **no** import of this module (verified by grep over `src/`).
-Learned roots reach it only as opaque root paths through
-`clean_with_roots_policy_selector` (`main.rs:200-209`). That is the structural
-expression of ADR §8: the module that authorizes deletion has no access to the
-state that decides where to look.
+Learned roots reach it only as admitted root paths plus an `AdmissionPremise`
+of safely omitted roots through
+`clean_with_roots_policy_selector_guarded` (`cleanup.rs:829`, called from
+`run_engine_guarded` at `main.rs:365`). That is the structural expression of
+ADR §8: the module that authorizes deletion has no access to the state that
+decides where to look, and the omitted set travels alongside only so the
+engine can re-prove the boundary before spawning.
 
 ### If a consumer reads an incompatible future schema
 
@@ -938,29 +953,37 @@ against the code, not against its test count.
    `!complete`?** `reconcile_full`'s only refusal site is `:122-124`. A new
    refusal reason must be added to `Reconciliation` (`:101-105`) and will need
    a matching `main.rs:413-415` message.
-2. **Is the `covered` skip still before the uncertainty test?** `discovery_state.rs:175-177`
-   must precede `:178-180`. Reversing them lets a re-observed ancestor prune a
-   root that the uncertainty veto was supposed to protect.
+2. **Is the three-rule order intact — `covered`, then absence, then the
+   uncertainty-gated retention?** `discovery_state.rs:175-177` must precede the
+   absence probe (`:178-194`), which must precede the retention rule
+   (`:195-204`). Coverage short-circuits before either drop/retain decision;
+   the absence probe carries its own no-intersecting-uncertainty precondition
+   (`:185-187`) and `ENOENT`-only positive absence (`:188-191`). Hoisting the
+   retention rule ahead of the probe reintroduces age-based retention for
+   physically absent roots — the C028 defect.
 3. **Does `full_reconciliation_prior` still return `None` for
    `UnsupportedNewer` and `Unavailable`?** `discovery_state.rs:54-61`. This is
-   the whole overwrite-safety gate; `:486-498` is the only test.
+   the whole overwrite-safety gate; `full_reconciliation_never_selects_newer_or_unavailable_state_for_publication` (`:508`) is the only test.
 4. **Is the version pre-check still before the typed decode?**
-   `discovery_state.rs:301-313` must stay ahead of `:320`. Reversed, a v3 file
+   `discovery_state.rs:319-334` must stay ahead of `:341`. Reversed, a v3 file
    that this binary cannot parse becomes `RecoverableInvalid` and is then
    overwritten.
 5. **Does the publish still go through temp + rename, and still remove its temp
-   on failure?** `discovery_state.rs:343-353` and `replace_file` at `:376-400`.
-   The success-path test is `:636`'s failure twin; a truncate-in-place
-   regression would leave `last_full_at` corruptible.
+   on failure?** `discovery_state.rs:360-375` and `replace_file` at `:398-421`.
+   The success-path test is `unique_temp_attempts_replace_existing_state`
+   (`:554`); its failure twin is
+   `failed_replacement_preserves_existing_destination_and_cleans_temp`
+   (`:732`). A truncate-in-place regression would leave `last_full_at`
+   corruptible.
 6. **Has anything besides the module's own temp file become deletable?**
    `discovery_state.rs:351` is the only `remove_file` in the file, and
    `discovery_state.rs:1-9` is the only import block. Both are one-line
    invariants that a careless refactor breaks silently.
 7. **Is `observed_at` still `now.max(prior.last_full_at.unwrap_or(0))`?**
    `discovery_state.rs:126`. Removing the `max` reintroduces a regressing
-   generation stamp and makes the future-timestamp guard at `:181` the only
+   generation stamp and makes the future-timestamp guard at `:198` the only
    remaining defence.
-8. **Do `policy.rs:112-118` and `discovery_state.rs:181-184` still agree?** The
+8. **Do `policy.rs:427-430` and `discovery_state.rs:198-201` still agree?** The
    retention predicate is duplicated across the module boundary. Any change to
    one must be made to the other, and the fact that Routine applies it at read
    time while Full applies it at write time is easy to miss.
@@ -974,5 +997,5 @@ against the code, not against its test count.
     structurally absent: the exit decision reads only `full_incomplete`
     (`main.rs:590-592`) and there is no flag to set. The regression to watch
     for is someone reintroducing a save-result branch into that `if` — the
-    module's own doc comment at `discovery_state.rs:338` is the authority to
+    module's own `publish` unavailability error at `discovery_state.rs:355` is the authority to
     cite when arguing against it.

@@ -238,7 +238,7 @@ not a crash. The reasons you will actually see:
 | `reason=` | What it means |
 |---|---|
 | `ownership_unproven` | at least one discovered manifest could not be resolved, so coverage of the scope is unproven and **nothing** was cleaned |
-| `incomplete_discovery` | discovery produced diagnostics, so the combined ownership universe is incomplete |
+| `incomplete_discovery` | discovery produced diagnostics, so the combined ownership universe is incomplete — including an automatic (seed/learned) root that is a symlink or cannot be read, which is never silently omitted |
 
 Both mean "no bytes were removed", by construction. Re-running rarely helps;
 the cause is usually an unbuildable or in-flux workspace inside the scope.

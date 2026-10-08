@@ -77,7 +77,9 @@ fn run(cli: Cli) -> Result<i32, AppError> {
     match cli.invocation() {
         Invocation::Update { dry_run } => run_update(dry_run, options.format),
         Invocation::Config(command) => run_config(command, &path, options.format),
-        Invocation::Scan(intent) => run_scan(intent, &path, options, EmitReport::Yes),
+        Invocation::Scan(intent) => {
+            run_scan(intent, &path, options, EmitReport::Yes).map(|outcome| outcome.code)
+        }
         Invocation::Cleanup(request) => run_cleanup(request, &path, options),
     }
 }
@@ -186,10 +188,23 @@ fn run_config(
 
 /// The roots a resolved cleanup intent operates on, plus the machine scope
 /// label describing what was actually resolved.
+///
+/// Admission is provenance-aware (C028): `roots` holds only admitted
+/// automatic roots plus strict explicit roots, collapsed after admission so an
+/// invalid identity can never be hidden by canonicalization. `omitted_paths`
+/// remembers safely omitted automatic roots for the late pre-spawn recheck;
+/// `blocked` carries a whole-scope safety block when an automatic root is a
+/// symlink or indeterminately unreadable, in which case no cleanup runs.
 struct ResolvedCleanup {
     roots: Vec<std::path::PathBuf>,
     scope_label: &'static str,
     state_generation: Option<u64>,
+    omitted_diagnostics: Vec<String>,
+    omitted: Vec<cargo_cleanme::policy::AutomaticOmission>,
+    blocked: Option<cargo_cleanme::cleanup::ScopeBlock>,
+    /// True for Routine/Full scopes whose roots are automatic hints; false
+    /// for explicit scopes where every defect stays a fatal usage error.
+    automatic: bool,
 }
 
 fn run_cleanup(
@@ -199,11 +214,7 @@ fn run_cleanup(
 ) -> Result<i32, AppError> {
     let config = config::load_or_create(config_path)?;
     let mode = request.mode;
-    let mut resolved = resolve_cleanup_roots(&request.scope, config_path, &config, options)?;
-    // Canonicalize, dedupe, and collapse exactly as the combined-root cleanup
-    // path requires, so the reported root list, the empty-scope check, and the
-    // roots the engine re-collapses all describe the same set.
-    resolved.roots = collapse_roots(resolved.roots);
+    let resolved = resolve_cleanup_roots(&request.scope, config_path, &config, options)?;
     let configured = &config.cleanup.policy;
     let overrides = &request.overrides;
     let policy = cargo_cleanme::cleanup::CleanupPolicy {
@@ -232,6 +243,37 @@ fn run_cleanup(
                 .clone()
                 .map(cargo_cleanme::cleanup::CleanupSelector::Package)
         });
+    // Bounded, deterministic stderr notes for safely omitted automatic roots.
+    // Human mode may name paths; log mode carries only the count in its one
+    // line, so paths never reach a retained history pane.
+    if !resolved.omitted_diagnostics.is_empty() && options.format != OutputFormat::Log {
+        for diagnostic in &resolved.omitted_diagnostics {
+            eprintln!("cargo-cleanme: {diagnostic}");
+        }
+    }
+    if let Some(block) = resolved.blocked.clone() {
+        // An automatic root is a symlink or indeterminately unreadable:
+        // omission could conceal an expected scan tree, so nothing is
+        // traversed and no Cargo process runs in any mode. This is a typed
+        // whole-scope block (exit 1), never a fatal usage error.
+        let report = cargo_cleanme::cleanup::CleanReport {
+            results: Vec::new(),
+            diagnostics: resolved.omitted.len(),
+            failed: 0,
+            mode,
+            counters: Default::default(),
+            scope_blocked: Some(block),
+            unresolved_ownership: Vec::new(),
+            selected_roots: resolved.roots.clone(),
+            discovered_manifests: 0,
+            resolved_workspaces: 0,
+            units_considered: 0,
+            effective_policy: Some(policy),
+            selector,
+        };
+        emit_cleanup(&report, &resolved, &resolved.roots, options, "");
+        return Ok(1);
+    }
     if resolved.roots.is_empty() {
         // A successful no-op, not an error: there was simply nothing bounded
         // to clean. The report still states the resolved operation, scope, and
@@ -268,15 +310,17 @@ fn run_cleanup(
     // top-level error reporter with the bar still live, and `BarState::drop`
     // *finishes* the bar rather than clearing it, so the retained line stayed
     // on screen above the `cargo-cleanme: …` message.
-    let cleanup = cargo_cleanme::cleanup::clean_with_roots_policy_selector(
-        &resolved.roots,
-        config.scan.recency_seconds,
-        &config.cleanup.allowed_output_roots,
+    let premise = cargo_cleanme::cleanup::AdmissionPremise {
+        omitted: resolved.omitted.clone(),
+    };
+    let cleanup = run_engine_guarded(
+        &resolved,
+        &config,
         mode,
-        &cargo_cleanme::cleanup::SystemCleanupRunner,
         &renderer,
         &policy,
-        selector,
+        selector.clone(),
+        Some(premise),
     );
     renderer.finish_and_clear();
     let report = cleanup?;
@@ -307,6 +351,105 @@ fn run_cleanup(
     })
 }
 
+/// Run the combined cleanup engine against admitted roots, defending the
+/// narrow race in which an admitted automatic root disappears between
+/// admission and the engine's own strict validation.
+///
+/// On a fatal `InvalidRoot` over an automatic scope, the whole automatic set
+/// is reclassified once with fresh metadata and — only when the offender now
+/// proves safely omittable — the engine is re-run over the rebuilt universe
+/// from scratch. Any other outcome becomes a typed whole-scope block, never a
+/// silent sibling cleanup against a stale proof. Explicit scopes propagate
+/// the fatal error unchanged.
+#[allow(clippy::too_many_arguments)]
+fn run_engine_guarded(
+    resolved: &ResolvedCleanup,
+    config: &config::Config,
+    mode: cargo_cleanme::cleanup::CleanMode,
+    renderer: &cargo_cleanme::progress::IndicatifRenderer,
+    policy: &cargo_cleanme::cleanup::CleanupPolicy,
+    selector: Option<cargo_cleanme::cleanup::CleanupSelector>,
+    premise: Option<cargo_cleanme::cleanup::AdmissionPremise>,
+) -> Result<cargo_cleanme::cleanup::CleanReport, AppError> {
+    let attempt = |roots: &[std::path::PathBuf],
+                   premise: Option<cargo_cleanme::cleanup::AdmissionPremise>| {
+        cargo_cleanme::cleanup::clean_with_roots_policy_selector_guarded(
+            roots,
+            config.scan.recency_seconds,
+            &config.cleanup.allowed_output_roots,
+            mode,
+            &cargo_cleanme::cleanup::SystemCleanupRunner,
+            renderer,
+            policy,
+            selector.clone(),
+            premise,
+        )
+    };
+    match attempt(&resolved.roots, premise.clone()) {
+        Ok(report) => Ok(report),
+        Err(AppError::InvalidRoot { path, reason }) if resolved.automatic => {
+            let entries: cargo_cleanme::policy::CleanupCandidates = resolved
+                .roots
+                .iter()
+                .cloned()
+                .map(|r| (r, cargo_cleanme::policy::RootProvenance::Automatic))
+                .collect();
+            match cargo_cleanme::policy::classify_cleanup_roots(entries) {
+                Ok(reclassified)
+                    if reclassified.blocked.is_empty()
+                        && reclassified
+                            .omitted_paths()
+                            .iter()
+                            .any(|p| p.display().to_string() == path) =>
+                {
+                    let omitted = reclassified.omitted.clone();
+                    let admitted = collapse_roots(reclassified.admitted);
+                    if admitted.is_empty() {
+                        return Ok(cargo_cleanme::cleanup::CleanReport {
+                            results: Vec::new(),
+                            diagnostics: 0,
+                            failed: 0,
+                            mode,
+                            counters: Default::default(),
+                            scope_blocked: None,
+                            unresolved_ownership: Vec::new(),
+                            selected_roots: Vec::new(),
+                            discovered_manifests: 0,
+                            resolved_workspaces: 0,
+                            units_considered: 0,
+                            effective_policy: Some(policy.clone()),
+                            selector: selector.clone(),
+                        });
+                    }
+                    let rebuilt = cargo_cleanme::cleanup::AdmissionPremise { omitted };
+                    attempt(&admitted, Some(rebuilt))
+                }
+                _ => Ok(cargo_cleanme::cleanup::CleanReport {
+                    results: Vec::new(),
+                    diagnostics: resolved.omitted.len(),
+                    failed: 0,
+                    mode,
+                    counters: Default::default(),
+                    scope_blocked: Some(cargo_cleanme::cleanup::ScopeBlock::new(
+                        cargo_cleanme::cleanup::ScopeBlockReason::IncompleteDiscovery,
+                        format!(
+                            "cleanup root {path} became invalid during admission ({reason}); no cleanup commands were run"
+                        ),
+                    )),
+                    unresolved_ownership: Vec::new(),
+                    selected_roots: resolved.roots.clone(),
+                    discovered_manifests: 0,
+                    resolved_workspaces: 0,
+                    units_considered: 0,
+                    effective_policy: Some(policy.clone()),
+                    selector: selector.clone(),
+                }),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// Resolve a cleanup scope into concrete bounded roots and its machine label.
 ///
 /// The label always describes the scope that was actually resolved, never the
@@ -318,13 +461,25 @@ fn resolve_cleanup_roots(
     options: RunOptions,
 ) -> Result<ResolvedCleanup, AppError> {
     match scope {
-        CleanupScope::Root(root) => Ok(ResolvedCleanup {
-            // Accept a relative CLI root for ergonomics, but keep the cleanup
-            // safety boundary absolute.
-            roots: vec![cli::absolutize_root(root)],
-            scope_label: "explicit",
-            state_generation: None,
-        }),
+        CleanupScope::Root(root) => {
+            // Explicit roots stay authoritative: no omission, no fallback to
+            // a smaller implicit set. The engine's strict validation reports
+            // the defect as a fatal usage error.
+            let absolute = cli::absolutize_root(root);
+            let classified = cargo_cleanme::policy::classify_cleanup_roots(vec![(
+                absolute,
+                cargo_cleanme::policy::RootProvenance::Explicit,
+            )])?;
+            Ok(ResolvedCleanup {
+                roots: collapse_roots(classified.admitted),
+                scope_label: "explicit",
+                state_generation: None,
+                omitted_diagnostics: Vec::new(),
+                omitted: Vec::new(),
+                blocked: None,
+                automatic: false,
+            })
+        }
         CleanupScope::Full => {
             // The Full reconciliation here is a *side effect of choosing cleanup
             // roots*, not something the user asked to see. Emitting its report
@@ -332,29 +487,20 @@ fn resolve_cleanup_roots(
             // stdout and, in JSON mode, would emit two JSON documents — breaking
             // the one-document-per-invocation property the automation contract
             // depends on. Diagnostics and --stats still reach stderr.
-            let code = run_scan(ScanIntent::Full, config_path, options, EmitReport::No)?;
-            if code != 0 {
-                // Previously this returned the scan's own exit code silently;
-                // an incomplete reconciliation means the learned-root set is
-                // not trustworthy enough to clean, and the caller must be told
-                // that no cleanup happened rather than seeing a bare exit code.
-                return Err(AppError::Config(format!(
-                    "full reconciliation reported an incomplete scan (exit {code}); \
-                     no cleanup commands were run against its unproven learned roots"
-                )));
+            //
+            // C028: roots come from the in-memory generation just reconciled,
+            // never from a disk reload that could be an older generation when
+            // publication failed, was unsupported, or was unavailable. No
+            // fresh generation means no cleanup.
+            let outcome = run_scan(ScanIntent::Full, config_path, options, EmitReport::No)?;
+            if !outcome.publish_ok {
+                eprintln!(
+                    "cargo-cleanme: discovery state was not saved; cleaning the reconciled in-memory generation only"
+                );
             }
-            let state = match cargo_cleanme::discovery_state::load_default() {
-                cargo_cleanme::discovery_state::StateLoad::Loaded(state) => Some(state),
-                _ => None,
-            };
-            Ok(ResolvedCleanup {
-                roots: state
-                    .as_ref()
-                    .map(|s| s.learned_roots.iter().map(|r| r.path.clone()).collect())
-                    .unwrap_or_default(),
-                scope_label: "full",
-                state_generation: state.as_ref().and_then(|s| s.last_full_at),
-            })
+            let (entries, generation) =
+                cargo_cleanme::policy::full_cleanup_roots(outcome.code, outcome.full_state)?;
+            Ok(admit_automatic(entries, "full", generation))
         }
         // Bare maintenance and `clean` with no scope selector land here and use
         // exactly the same maintenance policy: a configured legacy
@@ -368,33 +514,121 @@ fn resolve_cleanup_roots(
                 },
                 &config.scan,
             )?;
-            let (roots, scope_label) = match policy.scope {
-                ScanScope::Routine(roots) => (roots, "routine"),
+            match policy.scope {
                 // The configured-root override is the scope that gets
                 // cleaned. Discarding it produced a bare maintenance run that
                 // reported a successful Explicit no-op it never performed.
-                ScanScope::Explicit(root) => (vec![root], "explicit"),
-                ScanScope::ExplicitRoots(roots) => (roots, "explicit"),
+                ScanScope::Explicit(root) => {
+                    let classified = cargo_cleanme::policy::classify_cleanup_roots(vec![(
+                        root,
+                        cargo_cleanme::policy::RootProvenance::Explicit,
+                    )])?;
+                    Ok(ResolvedCleanup {
+                        roots: collapse_roots(classified.admitted),
+                        scope_label: "explicit",
+                        state_generation: match cargo_cleanme::discovery_state::load_default() {
+                            cargo_cleanme::discovery_state::StateLoad::Loaded(state) => {
+                                state.last_full_at
+                            }
+                            _ => None,
+                        },
+                        omitted_diagnostics: Vec::new(),
+                        omitted: Vec::new(),
+                        blocked: None,
+                        automatic: false,
+                    })
+                }
+                ScanScope::ExplicitRoots(roots) => {
+                    let entries = roots
+                        .into_iter()
+                        .map(|r| (r, cargo_cleanme::policy::RootProvenance::Explicit))
+                        .collect();
+                    let classified = cargo_cleanme::policy::classify_cleanup_roots(entries)?;
+                    Ok(ResolvedCleanup {
+                        roots: collapse_roots(classified.admitted),
+                        scope_label: "explicit",
+                        state_generation: None,
+                        omitted_diagnostics: Vec::new(),
+                        omitted: Vec::new(),
+                        blocked: None,
+                        automatic: false,
+                    })
+                }
+                ScanScope::Routine(_) => {
+                    // C028: cleanup admission classifies the raw candidates —
+                    // never the canonicalized `policy.scope` set, whose
+                    // collapse would already have resolved a symlinked root
+                    // into its target and hidden the invalid identity.
+                    let home = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf());
+                    let Some(home) = home else {
+                        return Ok(admit_automatic(Vec::new(), "routine", None));
+                    };
+                    let (entries, warning) = cargo_cleanme::policy::routine_cleanup_candidates(
+                        &home,
+                        config.scan.learned_root_retention_days as u16,
+                        cargo_cleanme::discovery_state::load_default(),
+                    );
+                    if let Some(warning) = warning {
+                        eprintln!("cargo-cleanme: {warning}; using seed/configured Routine roots");
+                    }
+                    let generation = match cargo_cleanme::discovery_state::load_default() {
+                        cargo_cleanme::discovery_state::StateLoad::Loaded(state) => {
+                            state.last_full_at
+                        }
+                        _ => None,
+                    };
+                    Ok(admit_automatic(entries, "routine", generation))
+                }
                 // A non-Full resolve never produces Global. Failing closed
                 // beats silently treating it as "nothing to do".
-                ScanScope::Global(_) => {
-                    return Err(AppError::Config(
-                        "maintenance scope resolved to a global scan, which is unreachable; \
+                ScanScope::Global(_) => Err(AppError::Config(
+                    "maintenance scope resolved to a global scan, which is unreachable; \
                          refusing to treat it as an empty cleanup scope"
-                            .into(),
-                    ));
-                }
-            };
-            let generation = match cargo_cleanme::discovery_state::load_default() {
-                cargo_cleanme::discovery_state::StateLoad::Loaded(state) => state.last_full_at,
-                _ => None,
-            };
-            Ok(ResolvedCleanup {
-                roots,
-                scope_label,
-                state_generation: generation,
-            })
+                        .into(),
+                )),
+            }
         }
+    }
+}
+
+/// Admit one automatic (Routine/Full) candidate set: classify by provenance
+/// before collapse, collapse admitted paths only, remember omissions for the
+/// late pre-spawn recheck, and convert symlink/uncertain roots into a typed
+/// whole-scope block instead of a fatal error or a silent scope reduction.
+fn admit_automatic(
+    entries: cargo_cleanme::policy::CleanupCandidates,
+    scope_label: &'static str,
+    state_generation: Option<u64>,
+) -> ResolvedCleanup {
+    let classified = cargo_cleanme::policy::classify_cleanup_roots(entries)
+        .expect("automatic classification never returns a fatal error");
+    let omitted = classified.omitted.clone();
+    let omitted_diagnostics = classified.omission_diagnostics();
+    let blocked = if classified.blocked.is_empty() {
+        None
+    } else {
+        let mut paths: Vec<String> = classified
+            .blocked
+            .iter()
+            .map(|b| b.path.display().to_string())
+            .collect();
+        paths.sort();
+        Some(cargo_cleanme::cleanup::ScopeBlock::new(
+            cargo_cleanme::cleanup::ScopeBlockReason::IncompleteDiscovery,
+            format!(
+                "automatic cleanup scope is uncertain for {} root(s); no cleanup commands were run",
+                paths.len(),
+            ),
+        ))
+    };
+    ResolvedCleanup {
+        roots: collapse_roots(classified.admitted),
+        scope_label,
+        state_generation,
+        omitted_diagnostics,
+        omitted,
+        blocked,
+        automatic: true,
     }
 }
 
@@ -482,12 +716,26 @@ enum EmitReport {
     No,
 }
 
+/// The outcome of one scan: the process exit code plus, for a Full scan,
+/// the in-memory reconciled generation and whether its publication survived.
+///
+/// C028: `clean --full` consumes the generation reconciled by the traversal
+/// it just ran — never a disk reload that could be an older generation when
+/// publication failed, was unsupported, or was unavailable. A failed save
+/// stays a stderr warning for a read-only scan, but a Full cleanup without a
+/// fresh in-memory generation is blocked.
+struct ScanOutcome {
+    code: i32,
+    full_state: Option<cargo_cleanme::discovery_state::DiscoveryState>,
+    publish_ok: bool,
+}
+
 fn run_scan(
     intent: ScanIntent,
     config_path: &std::path::Path,
     options: RunOptions,
     emit_report: EmitReport,
-) -> Result<i32, AppError> {
+) -> Result<ScanOutcome, AppError> {
     use cargo_cleanme::{domain, progress};
     use std::time::SystemTime;
 
@@ -565,6 +813,8 @@ fn run_scan(
 
     use cargo_cleanme::discovery_state::StateLoad;
     let loaded_state = cargo_cleanme::discovery_state::load_default();
+    let mut full_state: Option<cargo_cleanme::discovery_state::DiscoveryState> = None;
+    let mut publish_ok = true;
     if full {
         let selected = cargo_cleanme::discovery_state::full_reconciliation_prior(&loaded_state);
         if let Some((prior, replacing_invalid)) = selected {
@@ -605,6 +855,11 @@ fn run_scan(
                     .as_deref(),
             ) {
                 cargo_cleanme::discovery_state::Reconciliation::Publish(next) => {
+                    // The proven in-memory generation travels with this scan
+                    // outcome regardless of what publication does next, so a
+                    // Full cleanup can consume exactly what the traversal
+                    // proved even when the save fails.
+                    full_state = Some(next.clone());
                     match cargo_cleanme::discovery_state::publish(&next) {
                         Ok(()) => {
                             if replacing_invalid {
@@ -614,15 +869,18 @@ fn run_scan(
                             }
                         }
                         Err(error) => {
+                            publish_ok = false;
                             eprintln!("cargo-cleanme: discovery state was not saved: {error}")
                         }
                     }
                 }
                 cargo_cleanme::discovery_state::Reconciliation::NoPublication(reason) => {
+                    publish_ok = false;
                     eprintln!("cargo-cleanme: discovery state was not reconciled: {reason}")
                 }
             }
         } else {
+            publish_ok = false;
             let message = loaded_state
                 .diagnostic()
                 .unwrap_or_else(|| "discovery state cannot be safely read".into());
@@ -776,7 +1034,15 @@ fn run_scan(
     // branch has always ignored the identical failure. Failing the exit code
     // here made the two branches disagree about the same event.
     if full_incomplete {
-        return Ok(1);
+        return Ok(ScanOutcome {
+            code: 1,
+            full_state,
+            publish_ok,
+        });
     }
-    Ok(0)
+    Ok(ScanOutcome {
+        code: 0,
+        full_state,
+        publish_ok,
+    })
 }

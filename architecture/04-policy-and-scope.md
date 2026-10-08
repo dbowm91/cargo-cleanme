@@ -28,13 +28,13 @@ five modules:
 
 | Dependency | Used at | For |
 |---|---|---|
-| `crate::config::ScanConfig` | `policy.rs:2`, `policy.rs:251` | input config |
+| `crate::config::ScanConfig` | `policy.rs:2`, `policy.rs:19` | input config |
 | `crate::domain::{DiscoveryFilters, EffectiveScanPolicy, ScanRequest, ScanScope}` | `policy.rs:3` | in/out vocabulary |
 | `crate::error::AppError` | `policy.rs:4` | the only error type returned |
-| `crate::discovery_state` | `policy.rs:88`, `:99`, `:106-107` | `load_default`, `StateLoad`, `now_seconds` |
-| `crate::discovery::effective_rustup_home` | `policy.rs:243` | managed-tool prune list |
+| `crate::discovery_state` | `policy.rs:402`, `:413`, `:420-421` | `load_default`, `StateLoad`, `now_seconds` |
+| `crate::discovery::effective_rustup_home` | `policy.rs:595` | managed-tool prune list |
 
-Plus the `directories` crate (`policy.rs:82`) and, on Windows only,
+Plus the `directories` crate (`policy.rs:396`) and, on Windows only,
 `windows_sys` (`policy.rs:166-169`).
 
 **Boundary with `discovery.rs` prune helpers.** `discovery.rs` owns the
@@ -47,8 +47,8 @@ registry tree must never trigger Cargo resolution even under an explicit root,
 whereas the rustup list applies **only** to `Global` or `Routine`
 (`discovery.rs:332-338`) and is sourced from
 `policy::global_discovery_policy().managed_tool_prunes`, populated by
-`managed_rust_prunes()` (`policy.rs:242-246`). `policy.rs` reaches into
-`discovery` exactly once (`policy.rs:243`), for a single path; everything else
+`managed_rust_prunes()` (`policy.rs:594`). `policy.rs` reaches into
+`discovery` exactly once (`policy.rs:595`), for a single path; everything else
 flows the other way.
 
 **I/O: it does perform I/O, read-only.** The module is a *decision* module, not a
@@ -60,14 +60,14 @@ calls are reads:
 | Call | Location | Reads |
 |---|---|---|
 | `fs::symlink_metadata` | `policy.rs:32` | explicit root stat |
-| `Path::is_dir` (seeds) | `policy.rs:103` | seed existence |
-| `directories::BaseDirs::new()` | `policy.rs:82` | env / platform home |
-| `discovery_state::load_default()` | `policy.rs:88` | state JSON file |
-| `discovery_state::now_seconds()` | `policy.rs:107` | wall clock |
-| `Path::new("/usr/local").is_dir()` | `policy.rs:131` | macOS filesystem |
+| `Path::is_dir` (seeds) | `policy.rs:417` | seed existence |
+| `directories::BaseDirs::new()` | `policy.rs:396` | env / platform home |
+| `discovery_state::load_default()` | `policy.rs:402` | state JSON file |
+| `discovery_state::now_seconds()` | `policy.rs:421` | wall clock |
+| `Path::new("/usr/local").is_dir()` | `policy.rs:445` | macOS filesystem |
 | `GetLogicalDrives` / `GetDriveTypeW` | `policy.rs:170`, `:179` | Windows volumes |
-| `fs::canonicalize` | `policy.rs:220` | root identity |
-| `discovery::effective_rustup_home` | `policy.rs:243` | `RUSTUP_HOME`, home |
+| `fs::canonicalize` | `policy.rs:571` | root identity |
+| `discovery::effective_rustup_home` | `policy.rs:595` | `RUSTUP_HOME`, home |
 | `eprintln!` | `policy.rs:91` | one stderr warning line |
 
 It never writes to disk and never spawns a process. The single `eprintln!` at
@@ -293,16 +293,16 @@ by default while Linux is not — the same reasoning that drives
 **This function is pure and does no filtering.** It is a literal `join` over a
 fixed array: no existence check, no config read, no env read, no state read.
 Existence filtering happens one level up, in `routine_roots_from_state`
-(`policy.rs:101-104`: `.filter(|p| p.is_dir())`).
+(`policy.rs:417`: `.filter(|p| p.is_dir())`).
 
-**Who supplies `home`:** `routine_roots` (`policy.rs:81-84`) builds it itself
+**Who supplies `home`:** `routine_roots` (`policy.rs:395-397`) builds it itself
 from `directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf())` — the
 same crate and accessor used by `discovery.rs:148` and `discovery.rs:172`, but
 obtained independently of `main.rs`. `policy::resolve` cannot inject a home
 directory; `routine_seed_candidates` is the only seam, and it exists so the list
 can be asserted without touching the real home directory. If
 `BaseDirs::new()` returns `None`, `routine_roots` returns an empty `Vec`
-(`policy.rs:82-84`) and Routine silently degrades to "no roots", which
+(`policy.rs:396-397`) and Routine silently degrades to "no roots", which
 `discovery.rs:344-353` reports as `Info` / `PlatformRoot`.
 
 **Heuristic vs exact:**
@@ -320,9 +320,9 @@ can be asserted without touching the real home directory. If
 the only call site is `policy.rs:101`. It is public surface without an internal
 consumer.
 
-**Assembly.** `routine_roots_from_state` (`policy.rs:96-125`) concatenates
+**Assembly.** `routine_roots_from_state` (`policy.rs:410-439`) concatenates
 existing seeds first, then each learned root passing the retention test, then
-hands the vector to `canonical_dedup_roots`. Retention (`policy.rs:112-117`):
+hands the vector to `canonical_dedup_roots`. Retention (`policy.rs:427-430`):
 
 ```rust
 retention_days == 0
@@ -333,8 +333,33 @@ retention_days == 0
 `retention_days == 0` disables expiration and a future timestamp fails
 conservative — both match ADR 002 §5. A `StateLoad` that is not `Loaded`
 (`Missing`, `RecoverableInvalid`, `UnsupportedNewer`, `Unavailable`) yields
-`load.diagnostic()` as a warning and **keeps the seeds** (`policy.rs:105-123`),
+`load.diagnostic()` as a warning and **keeps the seeds** (`policy.rs:419-437`),
 matching ADR 002 §7's fail-soft rule for a corrupt state file.
+
+### Cleanup admission is provenance-aware, scan assembly is not (C028)
+
+`resolve` above decides what a *scan* walks. Cleanup admission is a separate
+seam that runs before any collapse, because collapsing first would resolve a
+symlinked root into its target and hide the invalid identity:
+
+- `RootProvenance` (`policy.rs:88`) labels each candidate `Explicit` or
+  `Automatic`; `ClassifiedRoots` (`policy.rs:115`) carries the admitted,
+  safely omitted (`AutomaticOmission::NotFound` / `NonDirectory`,
+  `policy.rs:97`), and blocking (`AutomaticBlock`, `policy.rs:108`) sets.
+- `classify_cleanup_roots` (`policy.rs:156`) uses `symlink_metadata` and the
+  real `io::ErrorKind` — never `Path::exists`/`is_dir`, which conflate errors
+  and follow symlinks — and has no catch-all `Err(_) => continue`.
+- `routine_cleanup_candidates` (`policy.rs:363`) supplies the raw Routine
+  candidates (existing seeds in any form plus age-eligible learned roots)
+  without canonicalization, so a symlinked seed reaches classification as a
+  link. `full_cleanup_roots` (`policy.rs:328`) supplies the Full roots from
+  the in-memory generation the reconciliation just proved, or refuses.
+- `recheck_admission_premise` (`policy.rs:229`) re-examines the premise with
+  fresh metadata before the first final proof and before every later spawn;
+  `CleanupCandidates` (`policy.rs:318`) is the shared candidate type.
+
+Omission diagnostics are deterministic and sorted
+(`ClassifiedRoots::omission_diagnostics`, `policy.rs:132`).
 
 ## 6. Global discovery policy
 
@@ -457,20 +482,24 @@ subtree to be scanned twice.
    (`policy.rs:42`). Pinned by `cli_root_wins_and_bypasses_filters`
    (`policy.rs:282`).
 4. **A Routine root is *not* guaranteed to be under `$HOME` by this module.**
-   Seeds are (`policy.rs:77`), but learned roots are taken verbatim from
-   `state.learned_roots[].path` (`policy.rs:118`) with a recency test and
-   nothing else — no containment check is performed here. The "no
-   broad/platform roots are learned" guarantee is a *derivation-time* rule in
-   `discovery_state.rs` (`is_broad_root` at `discovery_state.rs:220`, the
-   home-equality filter at `discovery_state.rs:151`), i.e. ADR 002 §2, and it is
-   not re-asserted here. A hand-edited or stale state file can therefore inject a
-   root outside the home directory into Routine scope, and `clean --known` will
-   use it.
+    Seeds are (`policy.rs:77`), but learned roots are taken verbatim from
+    `state.learned_roots[].path` (`policy.rs:432`) with a recency test and
+    nothing else — no containment check is performed here. The "no
+    broad/platform roots are learned" guarantee is a *derivation-time* rule in
+    `discovery_state.rs` (`is_broad_root` at `discovery_state.rs:241`, the
+    home-equality filter at `discovery_state.rs:151`), i.e. ADR 002 §2, and it is
+    not re-asserted here. A hand-edited or stale state file can therefore inject a
+    root outside the home directory into Routine scope, and `clean --known` will
+    use it.
 5. **A stale configured root is a hard error, not a fallback.** `config::load`
-   validates only that `scan.root` is absolute (`config.rs:112-114`), never
-   that it exists. A deleted `scan.root` makes *every* scan and every bare
-   invocation fail with `AppError::InvalidRoot` → exit code 2 (`main.rs:9-12`).
-   There is no degradation path back to Routine.
+    validates only that `scan.root` is absolute (`config.rs:112-114`), never
+    that it exists. A deleted `scan.root` makes *every* scan and every bare
+    invocation fail with `AppError::InvalidRoot` → exit code 2 (`main.rs:9-12`).
+    There is no degradation path back to Routine. Since C028 this is true only
+    of *explicit* roots: a deleted automatically learned/seed root is omitted
+    (proven absence/non-directory) or blocks with a typed report (symlink or
+    unreadable), via the admission seam above — a stale advisory path can no
+    longer reach explicit-root validation and abort the run.
 6. **Empty Routine roots are not an error.** `resolve` returns
    `Ok(Routine(vec![]))`; `discovery.rs:344-353` emits `Info` / `PlatformRoot`
    "no Routine roots are available; run `scan --full` or scan an explicit root".
@@ -504,15 +533,23 @@ subtree to be scanned twice.
 ## 8. Testing
 
 `policy.rs` **does** have an inline `#[cfg(test)] mod tests` at
-`policy.rs:248-349` — 101 of its 349 lines. The five tests:
+`policy.rs:601` — the tests:
 
 | Test | Line | Covers |
 |---|---|---|
-| `macos_global_policy_prunes_protected_usr_and_enumerates_usr_local` | `policy.rs:256` | macOS prune list, `/usr/local` root promotion, `/Library` + `/Applications` *not* pruned (`#[cfg(unix)]`) |
-| `linux_global_policy_keeps_the_existing_pseudo_filesystem_prunes` | `policy.rs:274` | the four Linux pseudo-filesystem prunes, and `/usr` absent (`#[cfg(unix)]`) |
-| `cli_root_wins_and_bypasses_filters` | `policy.rs:282` | CLI root over configured root over a configured `ignore`/`unignore`; asserts `ScanScope::Explicit`, `DiscoveryFilters::Bypassed`, `recency == 300` |
-| `configured_root_wins_over_global` | `policy.rs:305` | configured root yields `ScanScope::Explicit` rather than Global/Routine |
-| `routine_state_errors_fall_back_to_seeds_with_one_warning` | `policy.rs:326` | `RecoverableInvalid` and `UnsupportedNewer` both fall back to existing seeds and produce a warning |
+| `macos_global_policy_prunes_protected_usr_and_enumerates_usr_local` | `policy.rs:608` | macOS prune list, `/usr/local` root promotion, `/Library` + `/Applications` *not* pruned (`#[cfg(unix)]`) |
+| `a_root_inside_a_global_prune_survives_the_collapse_as_its_own_root` | `policy.rs:635` | a prune-contained exception root survives composition; ordinary nesting still folds (`#[cfg(unix)]`) |
+| `linux_global_policy_keeps_the_existing_pseudo_filesystem_prunes` | `policy.rs:656` | the four Linux pseudo-filesystem prunes, and `/usr` absent (`#[cfg(unix)]`) |
+| `cli_root_wins_and_bypasses_filters` | `policy.rs:664` | CLI root over configured root over a configured `ignore`/`unignore`; asserts `ScanScope::Explicit`, `DiscoveryFilters::Bypassed`, `recency == 300` |
+| `configured_root_wins_over_global` | `policy.rs:687` | configured root yields `ScanScope::Explicit` rather than Global/Routine |
+| `full_resolution_ignores_a_configured_root` | `policy.rs:708` | `full: true` returns Global before `config.root` is consulted |
+| `maintenance_scope_is_routine_without_a_configured_root` | `policy.rs:736` | no configured root resolves to `ScanScope::Routine` regardless of machine seeds |
+| `routine_state_errors_fall_back_to_seeds_with_one_warning` | `policy.rs:755` | `RecoverableInvalid` and `UnsupportedNewer` both fall back to existing seeds and produce a warning |
+| `automatic_roots_classify_by_provenance_and_explicit_roots_stay_strict` | `policy.rs:783` | C028 decision table: automatic `NotFound`/non-directory omit, explicit defects stay fatal |
+| `symlinked_automatic_roots_block_and_are_never_followed_or_omitted` | `policy.rs:831` | C028: symlink-to-dir and broken-link automatic roots block (`#[cfg(unix)]`) |
+| `cleanup_candidates_preserve_symlinked_seed_identity_for_admission` | `policy.rs:943` | C028: raw candidates carry the link itself, and classification blocks it (`#[cfg(unix)]`) |
+| `admission_premise_recheck_detects_reappearance_and_disappearance` | `policy.rs:868` | C028 late recheck: reappearance/disappearance invalidates the premise; surviving files and vanished non-directories do not |
+| `full_cleanup_consumes_only_a_fresh_in_memory_generation` | `policy.rs:913` | C028: non-zero reconciliation or missing generation refuses; fresh state yields automatic roots plus generation |
 
 Scope behaviour is covered mostly **one level down**, in `discovery.rs`, by
 constructing `EffectiveScanPolicy` directly rather than through `resolve` — via
@@ -546,12 +583,12 @@ the JSON `scope` field equals `"explicit"` — but per §7.9 that string comes f
   `global_discovery_policy()` call at `policy.rs:23` are never executed by a
   test; the platform tables are covered only through the pure `unix_policy`
   helper. The `#[cfg(windows)]` body (`policy.rs:164-188`) is untested too.
-- `canonical_dedup_roots` and `lexical_identity` (`policy.rs:219-278`) are
+- `canonical_dedup_roots` and `lexical_identity` (`policy.rs:533-592`) are
   covered only indirectly, via the discovery tests above — the
   unresolvable-root branch (the L16 fix) has no direct test. The `other unix`
-  arm (`policy.rs:154-156`) and the `BaseDirs::new() == None` branch
-  (`policy.rs:82-84`) are uncovered.
-- The retention filter (`policy.rs:112-117`) is not directly tested:
+  arm (`policy.rs:493-495`) and the `BaseDirs::new() == None` branch
+  (`policy.rs:398-400`) are uncovered.
+- The retention filter (`policy.rs:427-430`) is not directly tested:
   `retention_days == 0`, boundary equality, and the future-timestamp case.
 - `clean --known` root derivation (`main.rs:133-148`), including the
   configured-root interaction in §7.8, has no integration test in
@@ -567,18 +604,18 @@ the JSON `scope` field equals `"explicit"` — but per §7.9 that string comes f
    turns that into empty ignore/unignore slices.
 3. **Every new `GlobalDiscoveryPolicy` field needs a `#[cfg]`-paired
    definition.** The two `global_discovery_policy` bodies are
-   `policy.rs:127` (`#[cfg(unix)]`) and `policy.rs:165` (`#[cfg(windows)]`); a
+   `policy.rs:441` (`#[cfg(unix)]`) and `policy.rs:503` (`#[cfg(windows)]`); a
    field added to one and not the other is a platform-specific compile error
    that only one CI job will catch.
 4. **New seed names must be absolute-joinable and case variants must be
    deliberate.** `policy.rs:61-75`; the pairs exist because of volume
    case-sensitivity (`discovery.rs:108-125`).
-5. **A new retention rule must fail conservative.** `policy.rs:112-117` keeps
+5. **A new retention rule must fail conservative.** `policy.rs:427-430` keeps
    the root when `retention_days == 0` or the timestamp is in the future; ADR
    002 §5 requires the same for any new expiry path.
 6. **Do not add a containment check to learned roots here without reading
-   `discovery_state.rs:220` first** — `is_broad_root` already exists at
-   derivation time; `policy.rs:118` deliberately consumes learned paths
+   `discovery_state.rs:241` first** — `is_broad_root` already exists at
+   derivation time; `policy.rs:434` deliberately consumes learned paths
    verbatim.
 7. **A `u16`/`u32` or range assumption must be traced to `config::load`.**
    `policy.rs:46` narrows `u32 → u16` on the strength of
@@ -592,9 +629,9 @@ the JSON `scope` field equals `"explicit"` — but per §7.9 that string comes f
    and `main.rs:174-194` turn this module's output into the bounded root list
    a destructive command receives; re-verify §7.8 and §7.10 before landing.
 10. **Add a test for any branch you touch.** The Full branch
-    (`policy.rs:20-29`), the Windows body (`policy.rs:164-188`), and the
-    retention filter (`policy.rs:112-117`) are currently untested; use
-    `unix_policy`'s injected booleans (`policy.rs:141`) for platform tables
+    (`policy.rs:20-29`), the Windows body (`policy.rs:503-528`), and the
+    retention filter (`policy.rs:427-430`) are currently untested; use
+    `unix_policy`'s injected booleans (`policy.rs:480`) for platform tables
     and `routine_roots_from_state`'s injected `StateLoad`
-    (`policy.rs:96-100`) for state behaviour — those are the two seams the
+    (`policy.rs:410-414`) for state behaviour — those are the two seams the
     module already provides.

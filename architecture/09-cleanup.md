@@ -133,18 +133,22 @@ single-root wrappers are test/consumer surface and carry no production weight.
 **Entry-point delegation chain.**
 
 ```text
-clean_with_roots_policy_selector   :737   ← main.rs:200 calls this
-  └─ clean_with_roots_policy       :715   (selector = None)
-       └─ clean_with_roots         :695   (policy = CleanupPolicy::default())
-            └─ clean_with          :676   (roots = [root])
-                 └─ clean          :659   (SystemCleanupRunner + NoopObserver)
+clean_with_roots_policy_selector   :788   ← run_engine_guarded (main.rs:365) calls the guarded form
+  └─ clean_with_roots_policy_selector_guarded :829   (premise = None for the unguarded path)
+  └─ clean_with_roots_policy       :766   (selector = None)
+       └─ clean_with_roots         :746   (policy = CleanupPolicy::default())
+            └─ clean_with          :727   (roots = [root])
+                 └─ clean          :710   (SystemCleanupRunner + NoopObserver)
 ```
 
 Each layer supplies only the defaults its caller omitted. `clean` is the only
 wrapper injecting a concrete runner and observer. Grepping `src/` finds no
 in-crate caller of `clean`, `clean_with`, or `clean_with_roots` other than
-tests — `main.rs:200` goes straight to the widest form and supplies
-`SystemCleanupRunner` itself.
+tests — `main.rs` goes through `run_engine_guarded` and supplies
+`SystemCleanupRunner` itself. The unguarded `clean_with_roots_policy_selector`
+delegates with `premise = None` and exists so the public root contract stays
+strict: every selected root is still validated, whatever the caller proved
+beforehand.
 
 ---
 
@@ -249,20 +253,42 @@ is safe (`Simulate` is stricter than `Preview`), but a mode line, or a
 "simulation is an estimate, not Cargo's own dry run" note in the `Simulate`
 footer, would close it.
 
-**Where roots come from** (`main.rs:113-153`), all funnelled into
-`clean_with_roots_policy_selector`:
+**Where roots come from** (`main.rs:457-592`, C028), all funnelled into
+`clean_with_roots_policy_selector_guarded` via `run_engine_guarded`
+(`main.rs:365`):
 
 | Source | Code | Roots |
 | --- | --- | --- |
-| Explicit `ROOT` | `:114-116` | `[cli::absolutize_root(&root)]` — relative input accepted for ergonomics, absolutized before becoming the safety boundary. |
-| `--full` | `:117-131` | Runs a full scan first (bailing with its exit code), then `state.learned_roots`; `last_full_at` becomes `state_generation` in the report. |
-| `--known` | `:132-148` | `policy::resolve(...).scope` must be `ScanScope::Routine(roots)`; anything else yields empty. |
-| None | `:149-153` | `AppError::Config("clean requires ROOT, --known, or --full")`. |
+| Explicit `ROOT` | `main.rs:464-482` | `[cli::absolutize_root(&root)]` classified `Explicit` — relative input accepted for ergonomics, absolutized before becoming the safety boundary. Any defect is fatal. |
+| `--full` | `main.rs:483-504` | The in-memory generation the just-finished Full reconciliation proved (`policy::full_cleanup_roots`, `policy.rs:328`), classified `Automatic` by `admit_automatic` (`main.rs:598`). No disk reload, so a failed save cannot resurrect stale roots. |
+| Maintenance / `--known` | `main.rs:509-591` | Raw Routine candidates (`policy::routine_cleanup_candidates`, `policy.rs:363`) classified `Automatic` before any collapse; a configured `scan.root` takes the strict explicit path instead. |
+| None | — | `AppError` (unknown scope) or a typed `ScopeBlock` (symlink/unreadable automatic root) — never a silent subset. |
 
-`main.rs:153` applies `collapse_roots`, and `cleanup.rs:755` applies it again;
-the module re-validates the collapsed set at `:764-766` with the comment that
-collapsing only narrows the set, so survivors still need checking. An empty root
-set short-circuits in `main.rs:174-191` and never reaches this module.
+`admit_automatic` collapses admitted paths only (`main.rs:625`), remembers
+omissions for the late recheck, and converts symlink/uncertain automatic
+roots into a whole-scope `ScopeBlock` (exit 1) rather than a fatal error.
+`run_engine_guarded` additionally defends the admission→validation race: a
+fatal `InvalidRoot` over an automatic scope triggers one fresh
+reclassification, and only a now-proven-omittable offender rebuilds the
+universe from scratch (`main.rs:391-425`); anything else becomes a typed
+block, never a sibling cleanup against a stale proof.
+`cleanup.rs:848` applies `collapse_roots` again and re-validates the collapsed
+set at `:857-859` with the comment that collapsing only narrows the set, so
+survivors still need checking. An empty admitted set short-circuits in
+`run_cleanup` and never reaches this module; a blocked set reports without
+traversing anything.
+
+### The admission premise and its late recheck (C028)
+
+`AdmissionPremise` (`cleanup.rs:824`) carries the safely omitted automatic
+roots alongside the admitted set. The engine re-examines the premise with
+fresh `symlink_metadata` — no timers, sleeps, or cached metadata — at two
+moments: before the first candidate reaches final proof (`cleanup.rs:1089`)
+and before every later Cargo spawn (`cleanup.rs:1199`). A violated premise
+returns the completed results plus a whole-scope `IncompleteDiscovery` block
+instead of spawning. Policy-skipped units never reach proof and need no
+guard. `violated_admission_premise_blocks_with_zero_cargo_spawns`
+(`cleanup.rs:3414`) proves the block with zero spawns in both directions.
 
 ---
 
@@ -779,7 +805,7 @@ built once (`:976-978`) and shared, so a `ProofUniverse.failure` makes
 report where every row is `Skipped` with `SkippedOwnershipUnproven` or
 `SkippedChangedBeforeCleanup` — but `report.scope_blocked` stays `None` and
 `report.failed` stays `0`, because neither early-return site is reached.
-`main.rs:257-261` therefore returns exit code **0**. Tested at
+`main.rs:277-303` therefore returns exit code **0**. Tested at
 `universe_workspace_that_cannot_reresolve_fails_closed` (`:5520-5546`): the row
 is `Skipped` with "could not be re-proven" and `clean_calls()` is empty —
 safety fully preserved, the *signal* is a normal-looking skip. Fail-closed is
@@ -889,7 +915,7 @@ code says so.**
 
 | Site | Check |
 | --- | --- |
-| `validate_cleanup_root:1402` | A clean ROOT must be a real, non-symlink directory. |
+| `validate_cleanup_root:1541` | A clean ROOT must be a real, non-symlink directory. |
 | `covering_is_authorized_roots:517-522` | A symlink allowed root is `Err`. |
 | `workspace.rs:732-734` | A symlink output root marks the whole workspace `uncertain_ws` upstream. |
 | Proof `:1989-1991` | Every covering root re-checked with `symlink_metadata`; a symlink is "preflight changed: covering root became symlink". |
@@ -926,7 +952,7 @@ once (`equal_and_nested_target_build_are_one_unit_and_one_invocation` `:5306`).
 
 ### Is the exit-code behaviour correct?
 
-`main.rs:257-261` returns `1` if `report.failed > 0 || report.scope_blocked.is_some()`.
+`main.rs:347-351` returns `1` if `report.failed > 0 || report.scope_blocked.is_some()`.
 `report.failed` is incremented only at `:1072` (spawn error) and `:1091` (non-zero
 exit). `scope_blocked` is set only at `:804` and `:841` — the two scan-time
 incompleteness sites.

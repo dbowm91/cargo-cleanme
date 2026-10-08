@@ -11,6 +11,7 @@ action.
 
 | If you are on | Check | Fixed in |
 |---|---|---|
+| **0.2.3 and earlier** | A deleted automatically learned scan location (for example a removed worktree) aborts bare `cargo cleanme` with `invalid scan root … No such file or directory` | **Unreleased** (C028; see below) |
 | **0.2.1 and earlier** | An `exclude` naming a directory with `[` or `]` in its canonical path **did not exclude it** on Windows | **0.2.2** |
 | **0.2.0** | `--dry-run clean ROOT` **performed a real cleanup** | **0.2.1** (0.2.0 yanked) |
 | **0.2.0** | A region containing another project's **source tree was deleted** | **0.2.1** (0.2.0 yanked) |
@@ -25,6 +26,34 @@ success and exiting `0`. There is no honest description of 0.2.0 that also says
 "everything else was fine", so it is yanked. Existing installations and
 lockfiles are unaffected — a yank stops new resolution, it does not break what
 you already have.
+
+### If you are on 0.2.3 or earlier: a deleted learned location aborts bare cleanup
+
+Bare `cargo cleanme` fails before doing anything:
+
+```text
+cargo-cleanme: invalid scan root /home/you/.codex/worktrees/1749: No such file or directory (os error 2)
+```
+
+That path is a transient developer tree the tool learned on an earlier Full
+reconciliation and that has since been deleted. Every other root would have
+been safe to process, but the stale advisory path reaches the strict
+explicit-root validation and aborts the whole run with exit `2`. Nothing is
+cleaned, and nothing is corrupted — the failure is availability, not safety.
+
+Until you are on the release carrying the C028 corrective, work around it by
+naming an explicit scope, which never consults learned state:
+
+```sh
+cargo cleanme clean ~/Projects --dry-run   # preview first
+cargo cleanme clean ~/Projects              # then run it
+```
+
+Deleting `discovery-state.json` also unblocks the run (learned roots are
+rebuilt by the next Full `scan`), at the cost of forgetting every learned
+location. With the corrective in place, the stale location is omitted with a
+diagnostic, symlinked or unreadable automatic locations block with a typed
+report instead of a fatal error, and explicit roots stay strict.
 
 ### If you are on 0.2.0: two things it could do that it should never have done
 

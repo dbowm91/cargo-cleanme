@@ -8,6 +8,24 @@ command-line, JSON, and release-asset contracts are the stable surface.
 
 ## [Unreleased]
 
+### Fixed — discovery and cleanup scope
+
+- **A deleted, automatically learned scan location no longer aborts otherwise
+  safe Routine maintenance.** Bare `cargo cleanme` failed with
+  `invalid scan root <path>: No such file or directory` when a previously
+  learned directory — for example a removed worktree — no longer existed, and
+  no other root was processed. Automatically seeded and learned roots are now
+  admitted by provenance before any collapse: positively absent (`ENOENT`) and
+  positively non-directory roots are omitted from the current invocation with
+  a bounded diagnostic, while symlinks (never followed, including broken
+  links) and unreadable/indeterminate roots block the run with a typed
+  whole-scope report instead of a fatal error. Explicit roots (`scan.root`,
+  `scan ROOT`, `clean ROOT`) keep strict fatal semantics, every destructive
+  candidate is still proven against one fresh combined ownership universe with
+  a late pre-spawn recheck, Routine omission never rewrites learned state,
+  and a complete certain Full reconciliation now prunes definitively
+  nonexistent learned directories independent of retention.
+
 ## [0.2.3] - 2026-10-07
 
 ### Fixed — distribution

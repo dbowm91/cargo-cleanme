@@ -175,6 +175,23 @@ pub fn reconcile_full(
         if covered.contains(&old.path) {
             continue;
         }
+        // Narrow absence pruning (C028): a learned-root directory positively
+        // confirmed nonexistent (`ENOENT` via `symlink_metadata`, never
+        // `Path::exists`) is removed independent of project-recency
+        // retention, but only after a complete Full pass whose coverage does
+        // not intersect the path with uncertainty. "Exists but no project was
+        // found" keeps ADR 002 age behavior; symlinks, files, permission
+        // failures and indeterminate errors are never positive absence.
+        if !uncertainty
+            .iter()
+            .any(|p| uncertainty_intersects(&old.path, p))
+            && matches!(
+                fs::symlink_metadata(&old.path).map_err(|e| e.kind()),
+                Err(std::io::ErrorKind::NotFound)
+            )
+        {
+            continue;
+        }
         if uncertainty
             .iter()
             .any(|p| uncertainty_intersects(&old.path, p))
@@ -607,14 +624,22 @@ mod tests {
 
     #[test]
     fn zero_retention_disables_expiration_and_nested_roots_collapse() {
+        // C028 absence pruning removes positively nonexistent paths
+        // independent of retention, so the retention half of this case needs
+        // roots that actually exist: fiction under `/work` would now be
+        // pruned for absence rather than retained for age.
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("work");
+        let child = parent.join("old");
+        fs::create_dir_all(&child).unwrap();
         let prior = DiscoveryState {
             learned_roots: vec![
                 LearnedRoot {
-                    path: "/work".into(),
+                    path: parent.clone(),
                     last_project_seen_at: 1,
                 },
                 LearnedRoot {
-                    path: "/work/old".into(),
+                    path: child,
                     last_project_seen_at: 1,
                 },
             ],
@@ -625,7 +650,73 @@ mod tests {
             panic!("completed Full should publish")
         };
         assert_eq!(state.learned_roots.len(), 1);
-        assert_eq!(state.learned_roots[0].path, Path::new("/work"));
+        assert_eq!(state.learned_roots[0].path, parent);
+    }
+
+    /// C028: a learned root positively confirmed nonexistent (`ENOENT`) is
+    /// pruned by a complete certain Full independent of retention, while an
+    /// existing-but-empty root keeps ADR 002 age behavior.
+    #[test]
+    fn complete_certain_full_prunes_only_positively_absent_learned_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("still-here");
+        fs::create_dir(&existing).unwrap();
+        let absent = dir.path().join("deleted-worktree");
+        assert!(!absent.exists());
+        let prior = DiscoveryState {
+            learned_roots: vec![
+                LearnedRoot {
+                    path: absent.clone(),
+                    last_project_seen_at: 100_000_000 - 86400,
+                },
+                LearnedRoot {
+                    path: existing.clone(),
+                    last_project_seen_at: 100_000_000 - 86400,
+                },
+            ],
+            ..Default::default()
+        };
+        // Fresh retention would retain both; absence still prunes the deleted
+        // path while the existing-but-unobserved root keeps age behavior.
+        let result = reconcile_full(&prior, &[], &[], true, 100_000_000, 30, None);
+        let Reconciliation::Publish(state) = result else {
+            panic!("completed Full should publish")
+        };
+        assert!(
+            !state.learned_roots.iter().any(|r| r.path == absent),
+            "positively absent root must be pruned: {:?}",
+            state.learned_roots
+        );
+        assert!(
+            state.learned_roots.iter().any(|r| r.path == existing),
+            "existing-but-unobserved root keeps retention: {:?}",
+            state.learned_roots
+        );
+        // Intersecting uncertainty vetoes even positive absence: the boundary
+        // cannot be proved, so the root is retained.
+        let uncertain = reconcile_full(
+            &prior,
+            &[],
+            std::slice::from_ref(&absent),
+            true,
+            100_000_000,
+            30,
+            None,
+        );
+        let Reconciliation::Publish(state) = uncertain else {
+            panic!("completed Full should publish")
+        };
+        assert!(
+            state.learned_roots.iter().any(|r| r.path == absent),
+            "uncertain absence must retain: {:?}",
+            state.learned_roots
+        );
+        // An incomplete Full never prunes: without a complete traversal there
+        // is no evidence of absence at all.
+        assert_eq!(
+            reconcile_full(&prior, &[], &[], false, 100_000_000, 30, None),
+            Reconciliation::NoPublication("Full traversal was incomplete")
+        );
     }
 
     #[test]

@@ -795,6 +795,48 @@ pub fn clean_with_roots_policy_selector(
     policy: &CleanupPolicy,
     selector: Option<CleanupSelector>,
 ) -> Result<CleanReport, AppError> {
+    clean_with_roots_policy_selector_guarded(
+        roots,
+        recency_seconds,
+        allowed_output_roots,
+        mode,
+        runner,
+        observer,
+        policy,
+        selector,
+        None,
+    )
+}
+
+/// The admission premise a provenance-aware caller proved before invoking the
+/// engine: `omitted` paths were positively absent/non-directory when the
+/// combined ownership universe was bounded, so their reappearance (or
+/// unreadability) invalidates that boundary.
+///
+/// When `premise` is present, the engine re-examines it with fresh
+/// `symlink_metadata` (no timers, sleeps, or cached metadata) at the last
+/// responsible moment: before the first candidate reaches final proof and
+/// before every later Cargo spawn. A violated premise blocks the pending and
+/// all later candidates with a typed whole-scope block instead of spawning.
+/// Policy-skipped units never reach proof and need no guard: nothing spawns
+/// for them either way.
+#[derive(Clone, Debug, Default)]
+pub struct AdmissionPremise {
+    pub omitted: Vec<crate::policy::AutomaticOmission>,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn clean_with_roots_policy_selector_guarded(
+    roots: &[PathBuf],
+    recency_seconds: u64,
+    allowed_output_roots: &[PathBuf],
+    mode: CleanMode,
+    runner: &dyn CleanupRunner,
+    observer: &dyn ProgressObserver,
+    policy: &CleanupPolicy,
+    selector: Option<CleanupSelector>,
+    premise: Option<AdmissionPremise>,
+) -> Result<CleanReport, AppError> {
     let includes = compile_policy_globs(&policy.include)?;
     let excludes = compile_policy_globs(&policy.exclude)?;
     // Validate every root before doing anything observable: an invalid
@@ -1036,6 +1078,26 @@ pub fn clean_with_roots_policy_selector(
             observer.unit_completed(cleanup_phase);
             continue;
         }
+        // C028: late admission-premise recheck. The omitted roots were the
+        // boundary assumption of the ownership universe built above; if one
+        // reappeared (or became unreadable), or an admitted root changed,
+        // the proof would cover the wrong set. Block the pending and all
+        // later candidates with a stable reason instead of spawning. Fresh
+        // `symlink_metadata` on every check: no timers, sleeps, or cache.
+        if let Some(premise) = premise.as_ref()
+            && let Some((path, reason)) =
+                crate::policy::recheck_admission_premise(&roots, &premise.omitted)
+        {
+            report.scope_blocked = Some(ScopeBlock::new(
+                ScopeBlockReason::IncompleteDiscovery,
+                format!(
+                    "cleanup admission premise changed for {}: {reason}; no further cleanup commands were run",
+                    path.display()
+                ),
+            ));
+            report.counters = counters.clone();
+            return Ok(report);
+        }
         // C003 §7.3: single final CleanupUnit proof shared by
         // Preview/Simulate/Execute, re-validated against the complete bounded
         // ownership universe. Simulate runs every non-mutating gate Execute
@@ -1128,6 +1190,24 @@ pub fn clean_with_roots_policy_selector(
                 // Proof was generated immediately before spawn and is consumed
                 // here with no intervening mutation window beyond the spawn
                 // itself (fail-closed TOCTOU minimization, not elimination).
+                // C028: the premise is re-examined before *every* spawn, not
+                // just before the first proof, so a root that reappears
+                // mid-run blocks the remaining candidates instead of letting
+                // them run against a stale boundary.
+                if let Some(premise) = premise.as_ref()
+                    && let Some((path, reason)) =
+                        crate::policy::recheck_admission_premise(&roots, &premise.omitted)
+                {
+                    report.scope_blocked = Some(ScopeBlock::new(
+                        ScopeBlockReason::IncompleteDiscovery,
+                        format!(
+                            "cleanup admission premise changed for {}: {reason}; no further cleanup commands were run",
+                            path.display()
+                        ),
+                    ));
+                    report.counters = counters.clone();
+                    return Ok(report);
+                }
                 let frozen = proof.frozen_env.clone();
                 let args = clean_args(&proof, mode, selector.as_ref());
                 let cwd = proof.workspace_root.clone();
@@ -3326,6 +3406,85 @@ mod tests {
         assert_eq!(report.results[0].outcome, CleanOutcome::Skipped);
         assert!(report.results[0].detail.contains("changed"));
         assert!(runner.base.clean_calls().is_empty());
+    }
+
+    /// C028: the late admission-premise guard blocks before any Cargo spawn
+    /// when a skipped root reappears, and stays quiet when the premise holds.
+    #[test]
+    fn violated_admission_premise_blocks_with_zero_cargo_spawns() {
+        let (_d, root, target) = valid_fixture(1);
+        let noop = NoopObserver;
+        let policy = CleanupPolicy::default();
+
+        // Control: a premise whose omitted path is still absent proceeds to a
+        // normal decision with no block.
+        let absent = root.parent().unwrap().join("still-absent");
+        assert!(!absent.exists());
+        let runner = FakeCleanupRunner::new(&root, &target, 1);
+        let ok = clean_with_roots_policy_selector_guarded(
+            std::slice::from_ref(&root),
+            0,
+            &[],
+            CleanMode::Simulate,
+            &runner,
+            &noop,
+            &policy,
+            None,
+            Some(AdmissionPremise {
+                omitted: vec![crate::policy::AutomaticOmission::NotFound(absent.clone())],
+            }),
+        )
+        .unwrap();
+        assert!(ok.scope_blocked.is_none());
+        assert!(runner.clean_calls().is_empty());
+
+        // The skipped root reappears as a directory between admission and the
+        // final proof: the pending candidate must block, not simulate against
+        // a stale boundary.
+        std::fs::create_dir(&absent).unwrap();
+        let runner2 = FakeCleanupRunner::new(&root, &target, 1);
+        let blocked = clean_with_roots_policy_selector_guarded(
+            std::slice::from_ref(&root),
+            0,
+            &[],
+            CleanMode::Simulate,
+            &runner2,
+            &noop,
+            &policy,
+            None,
+            Some(AdmissionPremise {
+                omitted: vec![crate::policy::AutomaticOmission::NotFound(absent.clone())],
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            blocked.scope_blocked.as_ref().map(|b| b.reason),
+            Some(ScopeBlockReason::IncompleteDiscovery)
+        );
+        assert!(runner2.clean_calls().is_empty());
+        assert!(
+            blocked
+                .scope_blocked
+                .as_ref()
+                .is_some_and(|b| b.message.contains("no further cleanup commands were run"))
+        );
+
+        // An admitted root that disappears is the same violation from the
+        // other side: block, never clean the sibling against the old proof.
+        // (The engine consults the same pure function before first proof, so
+        // this pins the shared premise check, not a second engine path.)
+        std::fs::remove_dir(&absent).unwrap();
+        let gone = root.parent().unwrap().join("admitted-then-deleted");
+        std::fs::create_dir(&gone).unwrap();
+        std::fs::remove_dir(&gone).unwrap();
+        let violation = crate::policy::recheck_admission_premise(
+            std::slice::from_ref(&gone),
+            std::slice::from_ref(&crate::policy::AutomaticOmission::NotFound(absent.clone())),
+        );
+        assert!(
+            violation.is_some(),
+            "a disappeared admitted root invalidates the premise"
+        );
     }
 
     #[test]

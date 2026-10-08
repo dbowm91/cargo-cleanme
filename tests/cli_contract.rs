@@ -2171,3 +2171,488 @@ fn the_json_update_branch_prints_only_the_tested_seam() {
          distribution-release-update/c022-pre-release-machine-contract-hardening.md §5"
     );
 }
+
+// ---------------------------------------------------------------------------
+// C028 — stale learned-root availability and cleanup-scope corrective.
+//
+// Platform scope: every case substitutes the POSIX Cargo stub from
+// `common::write_fake_cargo` and overrides `$HOME`/`$XDG_STATE_HOME`, which the
+// Windows profile/known-folder APIs ignore; the Windows lane covers the
+// equivalent strict-explicit-root path through the existing invalid-root
+// cases. Symlink and permission cases are Unix-gated at the call site for the
+// same reason `write_fake_cargo` documents.
+// ---------------------------------------------------------------------------
+
+/// A Routine-scope fixture with isolated learned state: `$HOME` holds a seed
+/// sibling project and `$XDG_STATE_HOME` (Linux) or the macOS application
+/// data directory holds a caller-written `discovery-state.json`.
+///
+/// The state path is computed, not hardcoded, and every case below asserts the
+/// omission/blocked evidence that only appears when the binary read that
+/// exact file — so a wrong path fails the test instead of passing silently.
+#[cfg(unix)]
+struct StaleLearnedFixture {
+    _temp: tempfile::TempDir,
+    home: PathBuf,
+    sibling: PathBuf,
+    target: PathBuf,
+    config: PathBuf,
+    log: PathBuf,
+    args_log: PathBuf,
+    bin: PathBuf,
+    state_home: PathBuf,
+}
+
+#[cfg(unix)]
+impl StaleLearnedFixture {
+    fn new() -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let projects = home.join("Projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        let sibling = common::inactive_project(&projects, "sibling");
+        let target = sibling.join("target");
+        let bin = temp.path().join("bin");
+        common::write_fake_cargo(&bin, temp.path());
+        let config = temp.path().join("config.toml");
+        fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
+        Self {
+            log: temp.path().join("cargo.log"),
+            args_log: temp.path().join("cargo-args.log"),
+            state_home: temp.path().join("state-home"),
+            _temp: temp,
+            home,
+            sibling,
+            target,
+            config,
+            bin,
+        }
+    }
+
+    fn state_file(&self) -> PathBuf {
+        // Mirrors `discovery_state::state_path` for the overridden
+        // environment: XDG state home on Linux, the application data
+        // directory under the overridden `$HOME` on macOS.
+        #[cfg(target_os = "macos")]
+        {
+            self.home
+                .join("Library/Application Support/cargo-cleanme/discovery-state.json")
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.state_home.join("cargo-cleanme/discovery-state.json")
+        }
+    }
+
+    fn write_state(&self, learned: &[PathBuf]) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let roots: Vec<serde_json::Value> = learned
+            .iter()
+            .map(|p| serde_json::json!({"path": p, "last_project_seen_at": now}))
+            .collect();
+        let state = serde_json::json!({"schema_version": 2, "last_full_at": now, "projects": [], "learned_roots": roots});
+        let path = self.state_file();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, serde_json::to_string(&state).unwrap()).unwrap();
+    }
+
+    /// A learned root that was present when learned and deleted before the
+    /// run: the reported Codex-worktree lifecycle in miniature.
+    fn write_deleted_learned_root(&self) -> PathBuf {
+        let stale = self._temp.path().join("deleted-worktree");
+        std::fs::create_dir(&stale).unwrap();
+        self.write_state(std::slice::from_ref(&stale));
+        std::fs::remove_dir(&stale).unwrap();
+        assert!(!stale.exists());
+        stale
+    }
+
+    fn run(&self, args: &[&str]) -> std::process::Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args([
+            "--config",
+            self.config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "json",
+        ]);
+        command.args(args);
+        command
+            .env("HOME", &self.home)
+            .env("XDG_STATE_HOME", &self.state_home)
+            .env("PATH", path_with(&self.bin))
+            .env("FIXTURE_ROOT", &self.sibling)
+            .env("FIXTURE_TARGET", &self.target)
+            .env("CARGO_LOG", &self.log)
+            .env("CARGO_ARGS_LOG", &self.args_log)
+            .output()
+            .unwrap()
+    }
+
+    fn run_log(&self, args: &[&str]) -> std::process::Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args([
+            "--config",
+            self.config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "log",
+        ]);
+        command.args(args);
+        command
+            .env("HOME", &self.home)
+            .env("XDG_STATE_HOME", &self.state_home)
+            .env("PATH", path_with(&self.bin))
+            .env("FIXTURE_ROOT", &self.sibling)
+            .env("FIXTURE_TARGET", &self.target)
+            .env("CARGO_LOG", &self.log)
+            .env("CARGO_ARGS_LOG", &self.args_log)
+            .output()
+            .unwrap()
+    }
+
+    /// The same argv through Cargo's external-subcommand entry point, with the
+    /// premise asserted the C012 way: the staged binary must provably be the
+    /// one Cargo resolves.
+    fn run_as_plugin(&self, args: &[&str]) -> std::process::Output {
+        let staged = self
+            .bin
+            .join(format!("cargo-cleanme{}", std::env::consts::EXE_SUFFIX));
+        fs::copy(env!("CARGO_BIN_EXE_cargo-cleanme"), &staged).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = fs::metadata(&staged).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&staged, permissions).unwrap();
+        }
+        let path = path_with(&self.bin);
+        assert_staged_is_resolved(&path, &staged);
+
+        let real_cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let mut command = Command::new("cargo");
+        command.args(["cleanme", "--config"]);
+        command.arg(&self.config);
+        command.args(["--no-progress", "--format", "json"]);
+        command.args(args);
+        command
+            .env("PATH", &path)
+            .env("HOME", &self.home)
+            .env("XDG_STATE_HOME", &self.state_home)
+            .env("CARGO_REAL", real_cargo)
+            .env("FIXTURE_ROOT", &self.sibling)
+            .env("FIXTURE_TARGET", &self.target)
+            .env("CARGO_LOG", &self.log)
+            .env("CARGO_ARGS_LOG", &self.args_log)
+            .output()
+            .unwrap()
+    }
+
+    fn clean_calls(&self) -> usize {
+        common::cargo_calls(&self.log, "clean")
+    }
+
+    fn cargo_calls(&self, subcommand: &str) -> usize {
+        common::cargo_calls(&self.log, subcommand)
+    }
+
+    fn artifact(&self) -> PathBuf {
+        self.target.join("artifact.bin")
+    }
+}
+
+/// C028 premise-negative control and primary regression: a directory that was
+/// legitimately learned while present and removed before the next bare
+/// Execute/Simulate must not abort the run, and the surviving sibling still
+/// receives the same decision simulation and execution agree on.
+///
+/// Against the unfixed baseline this exact run exits 2 with
+/// `invalid scan root <stale>: No such file or directory (os error 2)` and
+/// cleans nothing; the assertions below (exit 0, `cleaned == 1`, one Cargo
+/// clean, artifact gone) distinguish the absence-path defect from any other
+/// error.
+#[cfg(unix)]
+#[test]
+fn stale_learned_root_is_omitted_and_bare_routine_execute_cleans_the_sibling() {
+    for via_plugin in [false, true] {
+        let fixture = StaleLearnedFixture::new();
+        let stale = fixture.write_deleted_learned_root();
+        assert!(fixture.artifact().exists(), "premise: artifact exists");
+
+        let output = if via_plugin {
+            fixture.run_as_plugin(&[])
+        } else {
+            fixture.run(&[])
+        };
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "via_plugin={via_plugin}: a stale learned root must not abort Routine cleanup:\nstdout: {}\nstderr: {stderr}",
+            String::from_utf8_lossy(&output.stdout),
+        );
+        assert!(
+            !stderr.contains("invalid scan root"),
+            "via_plugin={via_plugin}: the baseline fatal must be gone: {stderr}"
+        );
+        assert!(
+            stderr.contains("omitting unavailable"),
+            "via_plugin={via_plugin}: the omission must be reported truthfully: {stderr}"
+        );
+        // Exactly one JSON envelope on stdout.
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(json["operation"], "clean");
+        assert_eq!(json["scope"], "routine", "{json}");
+        assert_eq!(json["mode"], "execute", "{json}");
+        assert_eq!(json["result"]["summary"]["cleaned"], 1, "{json}");
+        // The effective universe is the surviving seed tree, not the stale
+        // path and not an empty set.
+        let selected = json["result"]["selected_roots"].as_array().unwrap();
+        assert!(
+            !selected.is_empty(),
+            "the surviving root must be traversed: {json}"
+        );
+        assert!(
+            !selected
+                .iter()
+                .any(|r| r.as_str().unwrap() == stale.to_str().unwrap()),
+            "the stale root must not be traversed: {json}"
+        );
+        assert_eq!(fixture.clean_calls(), 1, "via_plugin={via_plugin}: {json}");
+        assert!(
+            !fixture.artifact().exists(),
+            "via_plugin={via_plugin}: execute must clean the sibling"
+        );
+    }
+}
+
+/// The Simulate/Execute parity half: the same stale-root run under `--dry-run`
+/// reaches the same universe with zero Cargo clean spawns of any kind.
+#[cfg(unix)]
+#[test]
+fn stale_learned_root_simulate_agrees_with_execute_and_spawns_no_cargo_clean() {
+    let fixture = StaleLearnedFixture::new();
+    fixture.write_deleted_learned_root();
+
+    let output = fixture.run(&["--dry-run"]);
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["operation"], "clean");
+    assert_eq!(json["scope"], "routine", "{json}");
+    assert_eq!(json["mode"], "simulate", "{json}");
+    assert_eq!(json["result"]["summary"]["simulated"], 1, "{json}");
+    assert_eq!(json["result"]["summary"]["cleaned"], 0, "{json}");
+    assert_eq!(
+        fixture.clean_calls(),
+        0,
+        "simulation must invoke no cargo clean of any kind"
+    );
+    assert!(
+        fixture.artifact().exists(),
+        "simulation must not remove anything"
+    );
+    assert!(fixture.cargo_calls("metadata") >= 1, "{json}");
+}
+
+/// Explicit roots stay authoritative: a missing configured `scan.root` and a
+/// missing explicit `clean ROOT` are fatal usage errors with zero Cargo clean
+/// spawns, even alongside available seed/learned paths.
+#[cfg(unix)]
+#[test]
+fn missing_explicit_roots_stay_fatal_with_zero_cargo_clean_spawns() {
+    // Configured scan.root, missing.
+    let fixture = StaleLearnedFixture::new();
+    let missing = fixture._temp.path().join("missing-explicit-root");
+    let body = format!(
+        "[scan]\nrecency_seconds = 300\nroot = {}\n",
+        toml::Value::String(missing.to_str().unwrap().replace('\\', "\\\\"))
+    );
+    fs::write(&fixture.config, body).unwrap();
+    let output = fixture.run(&[]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a missing configured root is a usage error: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fixture.clean_calls(), 0);
+    assert!(fixture.artifact().exists());
+
+    // Explicit CLI root, missing.
+    let fixture = StaleLearnedFixture::new();
+    let missing = fixture._temp.path().join("missing-cli-root");
+    let output = fixture.run(&["clean", missing.to_str().unwrap()]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a missing explicit CLI root is a usage error: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fixture.clean_calls(), 0);
+    assert!(fixture.artifact().exists());
+}
+
+/// All automatic roots safely missing is a successful, truthfully empty no-op:
+/// exit 0 with zero Cargo clean/preview spawns — never a fatal error and
+/// never a claim that zero roots were traversed silently.
+#[cfg(unix)]
+#[test]
+fn all_automatic_roots_missing_is_a_successful_empty_no_op() {
+    let fixture = StaleLearnedFixture::new();
+    // Remove the seed tree so nothing automatic remains but the stale root.
+    std::fs::remove_dir_all(fixture.home.join("Projects")).unwrap();
+    fixture.write_deleted_learned_root();
+
+    let output = fixture.run(&["--dry-run"]);
+    assert!(
+        output.status.success(),
+        "an empty automatic scope is not an error:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["operation"], "clean", "{json}");
+    assert_eq!(json["scope"], "routine", "{json}");
+    assert_eq!(json["result"]["units"], serde_json::json!([]), "{json}");
+    assert_eq!(fixture.clean_calls(), 0);
+    assert_eq!(fixture.cargo_calls("metadata"), 0);
+}
+
+/// A regular file where an automatic root was is positive non-directory
+/// evidence: omit it like absence. A symlink (even to a directory) is never
+/// followed and never treated as positive absence: block with exit 1 and zero
+/// spawns of any kind.
+#[cfg(unix)]
+#[test]
+fn automatic_file_root_is_omitted_and_symlink_root_blocks_without_traversal() {
+    // Regular file: omitted, sibling still cleaned.
+    let fixture = StaleLearnedFixture::new();
+    let file = fixture._temp.path().join("file-instead-of-dir");
+    fs::write(&file, b"not a directory").unwrap();
+    fixture.write_state(&[file]);
+    let output = fixture.run(&[]);
+    assert!(
+        output.status.success(),
+        "a file-typed automatic root must be omitted:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["result"]["summary"]["cleaned"], 1, "{json}");
+    assert_eq!(fixture.clean_calls(), 1);
+
+    // Symlink to a directory: blocked, nothing traversed, nothing spawned —
+    // not even workspace resolution. This is the `is_dir`-follows-symlinks
+    // trap: `Path::is_dir` says true, the walker would never descend.
+    let fixture = StaleLearnedFixture::new();
+    let target = fixture._temp.path().join("link-target");
+    std::fs::create_dir(&target).unwrap();
+    let link = fixture._temp.path().join("symlinked-root");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    assert!(link.is_dir(), "premise: is_dir follows the symlink");
+    fixture.write_state(&[link]);
+    let output = fixture.run(&["--dry-run"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a symlinked automatic root must block, not omit:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["result"]["scope_blocked"], true, "{json}");
+    assert_eq!(fixture.clean_calls(), 0);
+    assert_eq!(
+        fixture.cargo_calls("metadata"),
+        0,
+        "a blocked scope resolves nothing"
+    );
+
+    // Broken symlink: the same block, never positive absence.
+    let fixture = StaleLearnedFixture::new();
+    let broken = fixture._temp.path().join("broken-root");
+    std::os::unix::fs::symlink(fixture._temp.path().join("nowhere"), &broken).unwrap();
+    fixture.write_state(&[broken]);
+    let output = fixture.run(&["--dry-run"]);
+    assert_eq!(output.status.code(), Some(1));
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["result"]["scope_blocked"], true, "{json}");
+    assert_eq!(fixture.clean_calls(), 0);
+}
+
+/// An unreadable automatic root is indeterminate coverage, not absence: block
+/// with exit 1 and zero spawns. Skipped with the premise stated when the
+/// process can still read through the mode bits (e.g. running as root), where
+/// the fixture could not produce the indeterminate state it claims.
+#[cfg(unix)]
+#[test]
+fn unreadable_automatic_root_blocks_instead_of_omitting() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = StaleLearnedFixture::new();
+    let locked = fixture._temp.path().join("locked-root");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if locked.read_dir().is_ok() {
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+    fixture.write_state(&[locked]);
+    let output = fixture.run(&["--dry-run"]);
+    std::fs::set_permissions(
+        fixture._temp.path().join("locked-root"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "an unreadable automatic root must block:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["result"]["scope_blocked"], true, "{json}");
+    assert_eq!(fixture.clean_calls(), 0);
+}
+
+/// Log mode tells the truth without leaking paths: the stale-root omission
+/// stays one bounded ASCII line with exit 0, and the symlink block reports
+/// `status=blocked` with exit 1.
+#[cfg(unix)]
+#[test]
+fn stale_and_blocked_automatic_roots_keep_the_bounded_log_contract() {
+    let fixture = StaleLearnedFixture::new();
+    let stale = fixture.write_deleted_learned_root();
+    let output = fixture.run_log(&["--dry-run"]);
+    assert!(output.status.success());
+    let line = assert_bounded_log_line(&output.stdout);
+    assert!(line.contains(" op=clean "), "{line}");
+    assert!(line.contains(" scope=routine "), "{line}");
+    assert!(
+        !line.contains(stale.to_str().unwrap()),
+        "no paths in log: {line}"
+    );
+
+    let fixture = StaleLearnedFixture::new();
+    let target = fixture._temp.path().join("log-link-target");
+    std::fs::create_dir(&target).unwrap();
+    let link = fixture._temp.path().join("log-link-root");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    fixture.write_state(std::slice::from_ref(&link));
+    let output = fixture.run_log(&["--dry-run"]);
+    assert_eq!(output.status.code(), Some(1));
+    let line = assert_bounded_log_line(&output.stdout);
+    assert!(line.contains(" status=blocked "), "{line}");
+    assert!(
+        !line.contains(link.to_str().unwrap()),
+        "no paths in log: {line}"
+    );
+}

@@ -78,6 +78,320 @@ pub fn routine_seed_candidates(home: &Path) -> Vec<PathBuf> {
     .collect()
 }
 
+/// Provenance of a cleanup root candidate.
+///
+/// Explicit roots are caller-selected (`scan.root`, `scan ROOT`, `clean ROOT`)
+/// and authoritative: any defect is fatal. Automatic roots (seed hints and
+/// learned state) are search hints only: proven absence/non-directory omits
+/// them from the current invocation, while uncertainty blocks mutation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RootProvenance {
+    Explicit,
+    Automatic,
+}
+
+/// A safely omittable automatic root: its absence or non-directory type was
+/// positively established with `symlink_metadata`, so excluding it from this
+/// invocation cannot conceal an expected scan tree.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AutomaticOmission {
+    NotFound(PathBuf),
+    NonDirectory(PathBuf),
+}
+
+/// An automatic root that cannot be safely omitted: a symlink (never followed,
+/// including broken links) or an indeterminate filesystem failure
+/// (`PermissionDenied`, `EIO`, unknown). Omitting it could conceal an
+/// expected scan tree, so the run must block mutation with a typed report
+/// rather than reduce the ownership universe.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AutomaticBlock {
+    pub path: PathBuf,
+    pub reason: String,
+}
+
+/// The outcome of provenance-aware admission over one candidate root set.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ClassifiedRoots {
+    pub admitted: Vec<PathBuf>,
+    pub omitted: Vec<AutomaticOmission>,
+    pub blocked: Vec<AutomaticBlock>,
+}
+
+impl ClassifiedRoots {
+    pub fn omitted_paths(&self) -> Vec<PathBuf> {
+        self.omitted
+            .iter()
+            .map(|o| match o {
+                AutomaticOmission::NotFound(p) | AutomaticOmission::NonDirectory(p) => p.clone(),
+            })
+            .collect()
+    }
+
+    /// Deterministic, bounded human diagnostics for safely omitted roots.
+    pub fn omission_diagnostics(&self) -> Vec<String> {
+        let mut diagnostics: Vec<String> = self
+            .omitted
+            .iter()
+            .map(|o| match o {
+                AutomaticOmission::NotFound(p) => {
+                    format!("omitting unavailable learned root {}", p.display())
+                }
+                AutomaticOmission::NonDirectory(p) => {
+                    format!("omitting non-directory learned root {}", p.display())
+                }
+            })
+            .collect();
+        diagnostics.sort();
+        diagnostics
+    }
+}
+
+/// Classify cleanup root candidates by provenance without touching
+/// canonicalization, so invalid identities cannot be hidden by collapse.
+///
+/// Uses `symlink_metadata` and the actual `io::ErrorKind`: `Path::exists` and
+/// `Path::is_dir` conflate errors and follow symlinks. There is deliberately
+/// no catch-all `Err(_) => continue`: every indeterminate failure blocks.
+pub fn classify_cleanup_roots(entries: CleanupCandidates) -> Result<ClassifiedRoots, AppError> {
+    let mut out = ClassifiedRoots::default();
+    for (path, provenance) in entries {
+        match (fs::symlink_metadata(&path), provenance) {
+            (Ok(meta), RootProvenance::Explicit) => {
+                if !meta.is_dir() || meta.file_type().is_symlink() {
+                    return Err(AppError::InvalidRoot {
+                        path: path.display().to_string(),
+                        reason: "expected a real directory".into(),
+                    });
+                }
+                out.admitted.push(path);
+            }
+            (Ok(meta), RootProvenance::Automatic) => {
+                if meta.file_type().is_symlink() {
+                    out.blocked.push(AutomaticBlock {
+                        path: path.clone(),
+                        reason: format!(
+                            "automatic root {} is a symlink; refusing to follow or omit",
+                            path.display()
+                        ),
+                    });
+                } else if meta.is_dir() {
+                    out.admitted.push(path);
+                } else {
+                    out.omitted.push(AutomaticOmission::NonDirectory(path));
+                }
+            }
+            (Err(e), RootProvenance::Explicit) => {
+                return Err(AppError::InvalidRoot {
+                    path: path.display().to_string(),
+                    reason: e.to_string(),
+                });
+            }
+            (Err(e), RootProvenance::Automatic) => {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    out.omitted.push(AutomaticOmission::NotFound(path));
+                } else if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    out.blocked.push(AutomaticBlock {
+                        path: path.clone(),
+                        reason: format!("cannot access automatic root {}: {e}", path.display()),
+                    });
+                } else {
+                    out.blocked.push(AutomaticBlock {
+                        path: path.clone(),
+                        reason: format!(
+                            "indeterminate filesystem state for automatic root {}: {e}",
+                            path.display()
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    out.admitted.sort();
+    out.admitted.dedup();
+    Ok(out)
+}
+
+/// Re-examine one admission premise immediately before a destructive spawn.
+///
+/// `omitted` holds the safely omitted automatic roots with the kind of
+/// positive evidence each was omitted on, and `admitted` holds the roots the
+/// ownership universe was built from:
+/// - a `NotFound` omission is violated by any existence or any indeterminate
+///   failure;
+/// - a `NonDirectory` omission is violated only by a directory, a symlink, or
+///   an indeterminate failure — a deleted file is still no tree;
+/// - an admitted root must still be a real (non-symlink) directory.
+///
+/// Any violation invalidates the boundary the proof was built on, so the
+/// caller must block rather than spawn. Returns the first invalidating path
+/// and its reason, if any.
+pub fn recheck_admission_premise(
+    admitted: &[PathBuf],
+    omitted: &[AutomaticOmission],
+) -> Option<(PathBuf, String)> {
+    for omission in omitted {
+        let (path, must_stay_absent) = match omission {
+            AutomaticOmission::NotFound(p) => (p, true),
+            AutomaticOmission::NonDirectory(p) => (p, false),
+        };
+        match fs::symlink_metadata(path) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Some((
+                    path.clone(),
+                    format!(
+                        "skipped root {} reappeared as a symlink; ownership boundary is unproven",
+                        path.display()
+                    ),
+                ));
+            }
+            Ok(meta) if meta.is_dir() => {
+                return Some((
+                    path.clone(),
+                    format!(
+                        "skipped root {} reappeared as a directory; ownership boundary is unproven",
+                        path.display()
+                    ),
+                ));
+            }
+            Ok(_) if must_stay_absent => {
+                return Some((
+                    path.clone(),
+                    format!(
+                        "skipped root {} reappeared; ownership boundary is unproven",
+                        path.display()
+                    ),
+                ));
+            }
+            // A non-directory that is still a non-directory — or has since
+            // vanished entirely — still contributes no tree.
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Some((
+                    path.clone(),
+                    format!(
+                        "skipped root {} is now unreadable ({e}); ownership boundary is unproven",
+                        path.display()
+                    ),
+                ));
+            }
+        }
+    }
+    for path in admitted {
+        match fs::symlink_metadata(path) {
+            Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => {}
+            Ok(_) => {
+                return Some((
+                    path.clone(),
+                    format!(
+                        "admitted root {} changed type; ownership proof is stale",
+                        path.display()
+                    ),
+                ));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Some((
+                    path.clone(),
+                    format!(
+                        "admitted root {} disappeared; ownership proof is stale",
+                        path.display()
+                    ),
+                ));
+            }
+            Err(e) => {
+                return Some((
+                    path.clone(),
+                    format!(
+                        "admitted root {} is now unreadable ({e}); ownership proof is stale",
+                        path.display()
+                    ),
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// Cleanup root candidates with provenance: each path plus whether it is a
+/// caller-selected explicit root or an automatic search hint.
+pub type CleanupCandidates = Vec<(PathBuf, RootProvenance)>;
+
+/// Decide `clean --full` roots from a finished Full reconciliation.
+///
+/// The roots come from the in-memory generation the traversal just proved,
+/// never from a disk reload that could be an older generation when
+/// publication failed, was unsupported, or was unavailable. A failed save
+/// stays a stderr warning for the caller; only a missing fresh generation
+/// (or a non-zero reconciliation) refuses cleanup. Every returned root is
+/// [`RootProvenance::Automatic`] so the shared admission path applies.
+pub fn full_cleanup_roots(
+    reconciliation_code: i32,
+    state: Option<crate::discovery_state::DiscoveryState>,
+) -> Result<(CleanupCandidates, Option<u64>), AppError> {
+    if reconciliation_code != 0 {
+        return Err(AppError::Config(format!(
+            "full reconciliation reported an incomplete scan (exit {reconciliation_code}); \
+             no cleanup commands were run against its unproven learned roots"
+        )));
+    }
+    let Some(state) = state else {
+        return Err(AppError::Config(
+            "full reconciliation produced no fresh generation; \
+             no cleanup commands were run against stale learned roots"
+                .into(),
+        ));
+    };
+    let generation = state.last_full_at;
+    let entries = state
+        .learned_roots
+        .into_iter()
+        .map(|r| (r.path, RootProvenance::Automatic))
+        .collect();
+    Ok((entries, generation))
+}
+
+/// Raw Routine cleanup candidates with provenance, before any
+/// canonicalization or collapse.
+///
+/// Seed hints that exist in any form plus age-eligible learned roots, each
+/// labeled [`RootProvenance::Automatic`]. The caller classifies by provenance
+/// *before* collapsing, so a symlink identity can never be canonicalized into
+/// its target first (a symlinked seed passes `Path::is_dir`, which follows
+/// the link). Scan policy keeps using [`resolve`]; only cleanup admission
+/// uses this seam.
+pub fn routine_cleanup_candidates(
+    home: &Path,
+    retention_days: u16,
+    load: crate::discovery_state::StateLoad,
+) -> (CleanupCandidates, Option<String>) {
+    let mut entries: CleanupCandidates = routine_seed_candidates(home)
+        .into_iter()
+        .filter(|p| fs::symlink_metadata(p).is_ok())
+        .map(|p| (p, RootProvenance::Automatic))
+        .collect();
+    let warning = match load {
+        crate::discovery_state::StateLoad::Loaded(state) => {
+            let now = crate::discovery_state::now_seconds();
+            entries.extend(
+                state
+                    .learned_roots
+                    .into_iter()
+                    .filter(|r| {
+                        retention_days == 0
+                            || now < r.last_project_seen_at
+                            || now.saturating_sub(r.last_project_seen_at)
+                                <= u64::from(retention_days) * 86400
+                    })
+                    .map(|r| (r.path, RootProvenance::Automatic)),
+            );
+            None
+        }
+        load => load.diagnostic(),
+    };
+    (entries, warning)
+}
+
 fn routine_roots(retention_days: u16) -> Vec<PathBuf> {
     let Some(home) = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf()) else {
         return Vec::new();
@@ -460,5 +774,193 @@ mod tests {
             assert_eq!(roots, vec![fs::canonicalize(&seed).unwrap()]);
             assert!(warning.is_some());
         }
+    }
+
+    /// C028 decision table: proven absence/non-directory omits automatic
+    /// roots, symlinks and indeterminate failures block, and every explicit
+    /// defect stays a fatal `InvalidRoot`.
+    #[test]
+    fn automatic_roots_classify_by_provenance_and_explicit_roots_stay_strict() {
+        let d = tempdir().unwrap();
+        let real = d.path().join("present");
+        fs::create_dir(&real).unwrap();
+        let missing = d.path().join("deleted-worktree");
+        assert!(!missing.exists());
+        let file = d.path().join("regular-file");
+        fs::write(&file, b"not a directory").unwrap();
+
+        // Missing + non-directory automatic roots omit; the real sibling is
+        // admitted and no block is raised.
+        let classified = classify_cleanup_roots(vec![
+            (real.clone(), RootProvenance::Automatic),
+            (missing.clone(), RootProvenance::Automatic),
+            (file.clone(), RootProvenance::Automatic),
+        ])
+        .unwrap();
+        assert_eq!(classified.admitted, vec![real.clone()]);
+        assert!(classified.blocked.is_empty());
+        assert_eq!(classified.omitted.len(), 2);
+        assert!(
+            classified
+                .omitted
+                .contains(&AutomaticOmission::NotFound(missing))
+        );
+        assert!(
+            classified
+                .omitted
+                .contains(&AutomaticOmission::NonDirectory(file))
+        );
+
+        // The same defects on explicit roots are fatal, even alongside a
+        // valid automatic sibling.
+        for bad in [d.path().join("nope"), d.path().join("regular-file")] {
+            let Err(crate::error::AppError::InvalidRoot { .. }) = classify_cleanup_roots(vec![
+                (real.clone(), RootProvenance::Automatic),
+                (bad, RootProvenance::Explicit),
+            ]) else {
+                panic!("explicit defects must stay fatal");
+            };
+        }
+    }
+
+    /// C028: a symlinked automatic root (including a symlink to a directory,
+    /// which `Path::is_dir` reports as a directory) is never followed and
+    /// never silently omitted — it blocks. A broken symlink blocks too.
+    #[test]
+    #[cfg(unix)]
+    fn symlinked_automatic_roots_block_and_are_never_followed_or_omitted() {
+        let d = tempdir().unwrap();
+        let target = d.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let link = d.path().join("link-to-dir");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let broken = d.path().join("broken-link");
+        std::os::unix::fs::symlink(d.path().join("nowhere"), &broken).unwrap();
+        // Premise of the test, not the product: `is_dir` follows the link,
+        // which is exactly why classification must use `symlink_metadata`.
+        assert!(link.is_dir());
+
+        for sym in [&link, &broken] {
+            let classified =
+                classify_cleanup_roots(vec![(sym.clone(), RootProvenance::Automatic)]).unwrap();
+            assert!(
+                classified.admitted.is_empty(),
+                "a symlink is never admitted"
+            );
+            assert!(
+                classified.omitted.is_empty(),
+                "a symlink is never positive absence"
+            );
+            assert_eq!(classified.blocked.len(), 1);
+        }
+        // Explicit symlinks stay fatal rather than blocking.
+        let Err(crate::error::AppError::InvalidRoot { .. }) =
+            classify_cleanup_roots(vec![(link, RootProvenance::Explicit)])
+        else {
+            panic!("explicit symlink must be fatal");
+        };
+    }
+
+    /// C028 late premise recheck: a skipped root that reappears (or becomes
+    /// unreadable) and an admitted root that disappears both invalidate the
+    /// boundary the proof was built on.
+    #[test]
+    fn admission_premise_recheck_detects_reappearance_and_disappearance() {
+        let d = tempdir().unwrap();
+        let admitted = d.path().join("admitted");
+        fs::create_dir(&admitted).unwrap();
+        let skipped = d.path().join("skipped");
+        assert!(!skipped.exists());
+        let check = |admitted: &PathBuf, omission: &AutomaticOmission| {
+            recheck_admission_premise(
+                std::slice::from_ref(admitted),
+                std::slice::from_ref(omission),
+            )
+        };
+        let absent = AutomaticOmission::NotFound(skipped.clone());
+
+        // Stable premise: nothing changed.
+        assert!(check(&admitted, &absent).is_none());
+
+        // The skipped path reappears as a directory.
+        fs::create_dir(&skipped).unwrap();
+        assert!(check(&admitted, &absent).is_some());
+
+        // A file-typed omission is undisturbed by the file surviving — and by
+        // its later deletion, which is still no tree — but not by a
+        // directory taking its place.
+        let file = d.path().join("file-skip");
+        fs::write(&file, b"x").unwrap();
+        let nondir = AutomaticOmission::NonDirectory(file.clone());
+        assert!(check(&admitted, &nondir).is_none());
+        fs::remove_file(&file).unwrap();
+        assert!(check(&admitted, &nondir).is_none());
+        fs::create_dir(&file).unwrap();
+        assert!(check(&admitted, &nondir).is_some());
+        fs::remove_dir(&file).unwrap();
+
+        // The admitted root disappears instead.
+        fs::remove_dir(&skipped).unwrap();
+        fs::remove_dir(&admitted).unwrap();
+        let (path, _) = check(&admitted, &absent).expect("must flag");
+        assert_eq!(path, admitted);
+    }
+
+    /// C028: `clean --full` consumes the fresh in-memory generation or
+    /// refuses. A non-zero reconciliation and a missing generation both stay
+    /// fatal; a failed save is the caller's warning, not this decision.
+    #[test]
+    fn full_cleanup_consumes_only_a_fresh_in_memory_generation() {
+        let state = || crate::discovery_state::DiscoveryState {
+            schema_version: crate::discovery_state::CURRENT_SCHEMA,
+            last_full_at: Some(77),
+            learned_roots: vec![crate::discovery_state::LearnedRoot {
+                path: PathBuf::from("/work/a"),
+                last_project_seen_at: 77,
+            }],
+            ..Default::default()
+        };
+        // No fresh generation, no cleanup — even with a zero exit code.
+        assert!(full_cleanup_roots(0, None).is_err());
+        // An incomplete reconciliation never authorizes stale roots.
+        assert!(full_cleanup_roots(1, Some(state())).is_err());
+        // The fresh generation yields automatic roots plus its timestamp.
+        let (entries, generation) = full_cleanup_roots(0, Some(state())).unwrap();
+        assert_eq!(
+            entries,
+            vec![(PathBuf::from("/work/a"), RootProvenance::Automatic)]
+        );
+        assert_eq!(generation, Some(77));
+    }
+
+    /// C028: cleanup candidates preserve a symlinked seed's own identity.
+    /// Classifying the *canonicalized* set would resolve the link into its
+    /// target and admit a real directory — the exact hiding the admission
+    /// path must not do. The candidates therefore carry the link itself, and
+    /// classification blocks it.
+    #[test]
+    #[cfg(unix)]
+    fn cleanup_candidates_preserve_symlinked_seed_identity_for_admission() {
+        let home = tempdir().unwrap();
+        let seed_name = "Projects";
+        let seed = home.path().join(seed_name);
+        fs::create_dir(&seed).unwrap();
+        let target = home.path().join("real-target");
+        fs::create_dir(&target).unwrap();
+        // Replace the seed directory with a symlink to another directory.
+        fs::remove_dir(&seed).unwrap();
+        std::os::unix::fs::symlink(&target, &seed).unwrap();
+        assert!(seed.is_dir(), "premise: is_dir follows the seed symlink");
+
+        let (entries, _) =
+            routine_cleanup_candidates(home.path(), 30, crate::discovery_state::StateLoad::Missing);
+        assert!(
+            entries.contains(&(seed.clone(), RootProvenance::Automatic)),
+            "candidates must carry the link, not its target: {entries:?}"
+        );
+        let classified = classify_cleanup_roots(entries).unwrap();
+        assert!(classified.admitted.is_empty());
+        assert_eq!(classified.blocked.len(), 1);
+        assert_eq!(classified.blocked[0].path, seed);
     }
 }

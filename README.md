@@ -92,7 +92,9 @@ cargo cleanme --format json                 # one versioned JSON document on std
 **The maintenance scope** is a configured legacy `scan.root` when one is set
 (exclusive, explicit), otherwise bounded seed roots plus active learned roots.
 Rootless `scan` is always Full and ignores `scan.root`, so configuration can
-never silently narrow the reconciliation command.
+never silently narrow the reconciliation command. Learned locations that
+provably vanished are omitted for the run with a diagnostic; symlinked or
+unreadable locations block instead, and explicit roots stay strict.
 
 ### Scan output
 

@@ -935,7 +935,8 @@ surveyed and the historical statements it deliberately left intact.
 
 ## Post-v0.2.3 corrective — C028 stale learned-root availability and cleanup-scope integrity
 
-Status: **ready** (implementation not started; no release authorized).
+Status: **closing** (implementation landed in the working tree with local
+verification green; not released, hosted lanes not run).
 
 Planning branch: `plans/c028-stale-learned-roots-corrective`; baseline: `bd89fb1a5f8e1ba5ec5e41ff5586e082c2352149`.
 
@@ -943,8 +944,12 @@ Plan:
 
 - `plans/implementation/artifact-discovery-cleanup/c028-stale-learned-root-availability-and-cleanup-scope-corrective.md`
 
+Closure record: `plans/closure/artifact-discovery-cleanup/c028-status.md`
+(implementation evidence; release, hosted qualification, and
+installed-release smoke outstanding).
+
 Corrects forward from M006E/C005 learned-state handling, M007/C006 combined-root cleanup and M012A's canonical bare Routine Execute; does not rewrite their closed implementation or closure records. A deleted automatically learned temporary worktree can remain inside the 30-day retention window and pass `policy::routine_roots_from_state` without filesystem validation. `clean_with_roots_policy_selector` then validates all roots as strict explicit inputs, so `NotFound` aborts the entire ordinary `cargo cleanme` command with exit 2 and leaves healthy siblings untouched. The `clean --full` path also reloads learned roots from the persisted state after a Full scan, so a Routine-only filter would be incomplete.
 
 C028 requires provenance-aware root classification before combined discovery, definitive absence/non-directory filtering only for automatically selected roots, unmodified strict handling of user-selected explicit roots, bounded omission diagnostics, and no silent skip on unreadable/symlink-ambiguous coverage. All remaining roots must form one fresh combined ownership universe; late reappearance/deletion cannot bypass C003/C004/C006 proofs. Runtime omissions do not themselves write discovery state; complete certain Full reconciliation may prune definitely nonexistent learned directories through an explicit ADR-002-compatible forward rule, while preserving age retention for existing-but-empty roots and negative-state protection for partial/uncertain scans. Fresh Full cleanup must not use an older cached state generation after a failed reconciliation/publication.
 
-Required evidence includes an initial failing baseline reproduction, real Cargo-external command fixtures alongside valid sibling roots, deterministic races and false-green controls, all cleanup modes and exit/output contract assertions, a Linux/macOS/Windows and Rust 1.89 qualification matrix, and a future published-artifact smoke/closure receipt. No Rust code, historical closure record, or release tag is changed by the planning handoff.
+Required evidence includes an initial failing baseline reproduction, real Cargo-external command fixtures alongside valid sibling roots, deterministic races and false-green controls, all cleanup modes and exit/output contract assertions, a Linux/macOS/Windows and Rust 1.89 qualification matrix, and a future published-artifact smoke/closure receipt. The implementation, local verification, regression matrix (minus the live `clean --full` walk and hosted lanes), and documentation are recorded in the closure record; hosted qualification, publication, and installed-release smoke remain future release work. No Rust code, historical closure record, or release tag is changed by the planning handoff.
