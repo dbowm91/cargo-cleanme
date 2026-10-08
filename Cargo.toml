@@ -1,6 +1,6 @@
 [package]
 name = "cargo-cleanme"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 rust-version = "1.89"
 description = "Safely clean inactive Cargo build artifacts through Cargo"

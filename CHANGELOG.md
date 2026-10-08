@@ -8,6 +8,8 @@ command-line, JSON, and release-asset contracts are the stable surface.
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-10-08
+
 ### Fixed — discovery and cleanup scope
 
 - **A deleted, automatically learned scan location no longer aborts otherwise
