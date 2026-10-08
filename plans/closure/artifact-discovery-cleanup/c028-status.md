@@ -9,10 +9,12 @@ lanes have not run from this tree, and installed-release smoke verification
 does not exist. v0.2.3 remains unfixed, as the registry states.
 
 Implementation base: plan baseline `bd89fb1a5f8e1ba5ec5e41ff5586e082c2352149`
-(`main`, 2026-10-08); this record describes the uncommitted working tree on
-top of `66ed090`. No commit is claimed; the handoff branch
-`plans/c028-stale-learned-roots-corrective` is the plan's, not a landing
-record.
+(`main`, 2026-10-08); implementation landed as commit `24a9e82` on the
+handoff branch `plans/c028-stale-learned-roots-corrective`. Pre-push review
+(2026-10-08) additionally removed a vacuous engine assertion, reverted an
+unrelated CHANGELOG drive-by, and re-derived every citation the diff shifted
+plus every citation the implementation added; pre-existing baseline-stale
+citations are inventoried in §6 item 4 rather than repaired.
 
 Date: 2026-10-08
 
@@ -75,7 +77,7 @@ the absence rule was checked against ADR 002 §§5–6 and fits inside them
 | `python3 scripts/check-doc-citations.py` | 16 documents clean |
 | `git diff --check` | clean |
 | `scripts/release-check.sh` | **not run** (requires clean tree, `eggpack`, toolchain 1.89; forbidden as routine verification) |
-| hosted Linux/macOS/Windows + MSRV | **not run** — no commit, no push, no lane exists for an uncommitted tree |
+| hosted Linux/macOS/Windows + MSRV | **pending CI on the pushed branch** — implementation commit `24a9e82`; local MSRV 1.89 check + full suite green (372 passed) |
 
 ## 4. Premise-negative evidence
 
