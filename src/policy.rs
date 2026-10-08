@@ -942,7 +942,10 @@ mod tests {
     #[cfg(unix)]
     fn cleanup_candidates_preserve_symlinked_seed_identity_for_admission() {
         let home = tempdir().unwrap();
-        let seed_name = "Projects";
+        // "Developer" has no case-variant among the seed names, so this stays
+        // exactly one candidate on case-insensitive macOS runners too
+        // ("Projects" would also match "projects" there and block twice).
+        let seed_name = "Developer";
         let seed = home.path().join(seed_name);
         fs::create_dir(&seed).unwrap();
         let target = home.path().join("real-target");

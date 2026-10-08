@@ -2208,7 +2208,11 @@ impl StaleLearnedFixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
-        let projects = home.join("Projects");
+        // "Developer" is a seed name with no case-variant among the seed
+        // names, so exactly one seed candidate exists even on
+        // case-insensitive macOS runners (a "Projects" dir would also match
+        // the "projects" seed there and admit a duplicate root).
+        let projects = home.join("Developer");
         std::fs::create_dir_all(&projects).unwrap();
         let sibling = common::inactive_project(&projects, "sibling");
         let target = sibling.join("target");
@@ -2508,7 +2512,7 @@ fn missing_explicit_roots_stay_fatal_with_zero_cargo_clean_spawns() {
 fn all_automatic_roots_missing_is_a_successful_empty_no_op() {
     let fixture = StaleLearnedFixture::new();
     // Remove the seed tree so nothing automatic remains but the stale root.
-    std::fs::remove_dir_all(fixture.home.join("Projects")).unwrap();
+    std::fs::remove_dir_all(fixture.home.join("Developer")).unwrap();
     fixture.write_deleted_learned_root();
 
     let output = fixture.run(&["--dry-run"]);
