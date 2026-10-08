@@ -77,7 +77,7 @@ the absence rule was checked against ADR 002 §§5–6 and fits inside them
 | `python3 scripts/check-doc-citations.py` | 16 documents clean |
 | `git diff --check` | clean |
 | `scripts/release-check.sh` | **not run** (requires clean tree, `eggpack`, toolchain 1.89; forbidden as routine verification) |
-| hosted Linux/macOS/Windows + MSRV | **pending CI on the pushed branch** — implementation commit `24a9e82`; local MSRV 1.89 check + full suite green (372 passed) |
+| hosted Linux/macOS/Windows + MSRV | **green** — CI `37801034285`, all 9 jobs success (checks ×3 OS, installers ×3 OS, generated-docs, benchmark, MSRV 1.89); local MSRV 1.89 check + full suite also green (372 passed) |
 
 ## 4. Premise-negative evidence
 
@@ -130,10 +130,16 @@ see §7.
    (`src/discovery_state.rs:660`), and the shared `admit_automatic` path the
    live Routine cases exercise. A hosted full-machine run remains the only
    way to observe the composed path.
-2. **Hosted lanes not run.** Linux/macOS/Windows and MSRV 1.89 qualification
-   from this tree is outstanding. The new CLI cases are `#[cfg(unix)]` with
-   the POSIX stub justification recorded at the call site; the unreadable-root
-   case skips with its premise stated under privilege.
+2. **Hosted lanes ran green — after catching a real defect.** The first push's
+   macOS lane failed one new unit test (`cleanup_candidates_...`, `blocked`
+   2 vs 1): on case-insensitive APFS the seed candidates `Projects` and
+   `projects` resolve to the same directory, so the symlinked seed blocked
+   twice and the CLI fixture would have admitted a duplicate root. Local
+   Linux could not see it. Fixed in `a25b4e8` by using the case-twin-free
+   seed name `Developer` in the unit test and the `StaleLearnedFixture`
+   (with the rationale at the call site), re-verified locally (43 CLI + 325
+   lib), and re-pushed to full green. The unreadable-root CLI case runs (not
+   skipped) on the macOS lane: runners are non-root, so the premise holds.
 3. **No release carries the fix.** Publication, installed-command smoke, and
    the five-target automatic smoke are future release work under the
    distribution subsystem, not this plan.

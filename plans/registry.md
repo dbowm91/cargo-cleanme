@@ -42,9 +42,10 @@ Immutability policy enabled: `2026-10-05T13:34:38Z` (repository-level, not owner
 ## Open work
 
 **C028 is closing: implementation, regression evidence, documentation, and
-the local verification ladder are complete and landed as commit `24a9e82`**
+the local verification ladder are complete and landed (implementation
+`24a9e82`, macOS case-twin test fix `a25b4e8`)**
 (`plans/closure/artifact-discovery-cleanup/c028-status.md`). It has not
-shipped, and hosted lanes have not run; full
+shipped, and hosted lanes are green (CI `37801034285`, all 9 jobs success); full
 `closed` status additionally requires a released version containing C028,
 real installed-command smoke verification, and the release record.
 

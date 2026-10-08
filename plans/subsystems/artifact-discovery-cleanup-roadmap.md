@@ -935,8 +935,9 @@ surveyed and the historical statements it deliberately left intact.
 
 ## Post-v0.2.3 corrective — C028 stale learned-root availability and cleanup-scope integrity
 
-Status: **closing** (implementation landed as commit `24a9e82` with local
-verification green; not released, hosted lanes not run).
+Status: **closing** (implementation landed as commits `24a9e82` + `a25b4e8`
+with local verification green and hosted CI `37801034285` all 9 jobs
+success; not released, installed-release smoke outstanding).
 
 Planning branch: `plans/c028-stale-learned-roots-corrective`; baseline: `bd89fb1a5f8e1ba5ec5e41ff5586e082c2352149`.
 
