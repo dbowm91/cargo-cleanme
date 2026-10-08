@@ -2,11 +2,12 @@
 
 Plan: `plans/implementation/artifact-discovery-cleanup/c028-stale-learned-root-availability-and-cleanup-scope-corrective.md`
 
-Disposition: **closing** — implementation, regression evidence, documentation,
-and local verification complete on this tree. **Not closed**: no release
-carries the fix (the plan authorizes none), hosted Linux/macOS/Windows/MSRV
-lanes have not run from this tree, and installed-release smoke verification
-does not exist. v0.2.3 remains unfixed, as the registry states.
+Disposition: **closed — shipped in 0.2.4.** Implementation, regression
+evidence, documentation, hosted lanes, publication, and installed-release
+smoke are all complete: tag `v0.2.4` at `24ec57a` carries the fix, the
+automatic five-target smoke `37850582892` (v0.2.3 → v0.2.4) is green, and the
+release record is
+`plans/closure/distribution-release-update/r024-status.md`.
 
 Implementation base: plan baseline `bd89fb1a5f8e1ba5ec5e41ff5586e082c2352149`
 (`main`, 2026-10-08); implementation landed as commit `24a9e82` on the
@@ -140,9 +141,17 @@ see §7.
    (with the rationale at the call site), re-verified locally (43 CLI + 325
    lib), and re-pushed to full green. The unreadable-root CLI case runs (not
    skipped) on the macOS lane: runners are non-root, so the premise holds.
-3. **No release carries the fix.** Publication, installed-command smoke, and
-   the five-target automatic smoke are future release work under the
-   distribution subsystem, not this plan.
+3. **The release condition is discharged by v0.2.4.** Tag `v0.2.4` at
+   `24ec57a` (immutable release id `407294986`) carries exactly this plan's
+   tree plus the version bump and regenerated man pages; the staged binary
+   was verified to contain the fix before publication (bare clean over a
+   deleted learned root: exit 0, `omitting unavailable learned root`,
+   sibling cleaned through Cargo, state untouched); the automatic
+   five-target smoke `37850582892` (v0.2.3 → v0.2.4) is green; crates.io
+   `0.2.4` (sha256 `61e97a6e…`, not yanked) is published from a detached
+   worktree of the tag. Full evidence:
+   `plans/closure/distribution-release-update/r024-status.md`. C028 is
+   **closed**.
 4. **Pre-existing doc drift observed but out of scope.** `04-policy-and-scope.md`
    §7.8/§7.9 still describe pre-M012A behaviour (configured-root scope label,
    `clean --known` empty-set interaction) that M012A already fixed in code.
