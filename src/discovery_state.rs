@@ -108,6 +108,58 @@ pub fn uncertainty_intersects(root: &Path, uncertain: &Path) -> bool {
     root == uncertain || root.starts_with(uncertain) || uncertain.starts_with(root)
 }
 
+/// Whether an automatically selected maintenance root is a durable developer
+/// location. This is a scope hygiene rule only: Full discovery and explicit
+/// roots remain unaffected.
+pub fn automatic_root_is_maintainable(path: &Path, home: Option<&Path>) -> bool {
+    // Preserve symlink identity for the admission layer, which must block it
+    // rather than silently treating its target's location as provenance.
+    if fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        return true;
+    }
+    let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut forbidden = Vec::new();
+    if let Some(home) = home {
+        forbidden.extend([
+            home.join(".local/share/Trash"),
+            home.join(".Trash"),
+            home.join(".codex/worktrees"),
+            home.join(".npm"),
+            home.join(".cache"),
+            home.join("go/pkg/mod"),
+            home.join(".local/share/pnpm/store"),
+        ]);
+    }
+    if let Some(cargo_home) = crate::discovery::effective_cargo_home() {
+        forbidden.extend([cargo_home.join("registry"), cargo_home.join("git")]);
+    }
+    if let Some(go_cache) = std::env::var_os("GOMODCACHE")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+    {
+        forbidden.push(go_cache);
+    }
+    // Test harnesses commonly place a synthetic home below the system temp
+    // directory; a root inside that explicit home is classified by its
+    // home-relative provenance below, not by the fixture's container path.
+    if !home.is_some_and(|home| canonical.starts_with(home)) {
+        forbidden.push(std::env::temp_dir());
+    }
+    if forbidden.iter().any(|root| {
+        let root = fs::canonicalize(root).unwrap_or_else(|_| root.clone());
+        canonical == root || canonical.starts_with(root)
+    }) {
+        return false;
+    }
+    if canonical
+        .components()
+        .any(|component| component.as_os_str() == "node_modules")
+    {
+        return false;
+    }
+    true
+}
+
 /// Reconcile only after a complete Full traversal. Localized uncertainty retains
 /// intersecting old roots while positive observations are always merged.
 pub fn reconcile_full(
@@ -144,12 +196,18 @@ pub fn reconcile_full(
         .collect();
     let mut learned = Vec::<LearnedRoot>::new();
     for o in observations {
-        let project = o.workspace.as_deref().or_else(|| o.manifest.parent());
-        if let Some(project) = project {
+        // A raw manifest is positive inventory, not proof of a maintainable
+        // project location. Only Cargo-resolved workspaces seed Routine roots.
+        if let Some(project) = o.workspace.as_deref()
+            && automatic_root_is_maintainable(project, home)
+        {
             let candidate = project
                 .parent()
                 .filter(|p| Some(*p) != home && !is_broad_root(p))
                 .unwrap_or(project);
+            if !automatic_root_is_maintainable(candidate, home) {
+                continue;
+            }
             let path = fs::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf());
             learned.push(LearnedRoot {
                 path,
@@ -175,6 +233,19 @@ pub fn reconcile_full(
         if covered.contains(&old.path) {
             continue;
         }
+        if uncertainty
+            .iter()
+            .any(|p| uncertainty_intersects(&old.path, p))
+        {
+            learned.push(old.clone());
+            continue;
+        }
+        // Positively recognizable cache/runtime provenance is sufficient to
+        // remove an old unknown-origin automatic root. Access failure alone is
+        // never used as negative evidence.
+        if !automatic_root_is_maintainable(&old.path, home) {
+            continue;
+        }
         // Narrow absence pruning (C028): a learned-root directory positively
         // confirmed nonexistent (`ENOENT` via `symlink_metadata`, never
         // `Path::exists`) is removed independent of project-recency
@@ -192,10 +263,7 @@ pub fn reconcile_full(
         {
             continue;
         }
-        if uncertainty
-            .iter()
-            .any(|p| uncertainty_intersects(&old.path, p))
-            || old.last_project_seen_at > observed_at
+        if old.last_project_seen_at > observed_at
             || retention_days == 0
             || observed_at.saturating_sub(old.last_project_seen_at)
                 <= u64::from(retention_days) * 86400
@@ -423,6 +491,62 @@ fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unresolved_and_cache_manifests_never_create_routine_roots() {
+        let home = tempfile::tempdir().unwrap();
+        let projects = home.path().join("projects/app");
+        let cache = home.path().join(".npm/node_modules/pkg");
+        let transient = home.path().join(".codex/worktrees/session");
+        for path in [&projects, &cache, &transient] {
+            fs::create_dir_all(path).unwrap();
+        }
+        let observations = [
+            ProjectObservation {
+                manifest: projects.join("Cargo.toml"),
+                workspace: Some(projects.clone()),
+            },
+            ProjectObservation {
+                manifest: cache.join("Cargo.toml"),
+                workspace: Some(cache.clone()),
+            },
+            ProjectObservation {
+                manifest: transient.join("Cargo.toml"),
+                workspace: Some(transient.clone()),
+            },
+            ProjectObservation {
+                manifest: home.path().join("vendor/Cargo.toml"),
+                workspace: None,
+            },
+        ];
+        let Reconciliation::Publish(state) = reconcile_full(
+            &DiscoveryState::default(),
+            &observations,
+            &[],
+            true,
+            100,
+            30,
+            Some(home.path()),
+        ) else {
+            panic!("complete Full reconciliation should publish")
+        };
+        assert_eq!(
+            state.projects.len(),
+            4,
+            "Full inventory keeps every manifest"
+        );
+        assert!(
+            state
+                .learned_roots
+                .iter()
+                .any(|r| r.path == home.path().join("projects"))
+        );
+        assert!(state.learned_roots.iter().all(|r| {
+            !r.path.starts_with(home.path().join(".npm"))
+                && !r.path.starts_with(home.path().join(".codex"))
+                && r.path != home.path().join("vendor")
+        }));
+    }
     #[test]
     fn v1_migrates_in_memory_and_newer_schema_is_rejected() {
         let d = tempfile::tempdir().unwrap();
@@ -649,8 +773,9 @@ mod tests {
         let Reconciliation::Publish(state) = result else {
             panic!("completed Full should publish")
         };
-        assert_eq!(state.learned_roots.len(), 1);
-        assert_eq!(state.learned_roots[0].path, parent);
+        // The fixture lives under the host's temporary directory, which is
+        // deliberately excluded from automatic maintenance learning.
+        assert!(state.learned_roots.is_empty());
     }
 
     /// C028: a learned root positively confirmed nonexistent (`ENOENT`) is
@@ -688,8 +813,8 @@ mod tests {
             state.learned_roots
         );
         assert!(
-            state.learned_roots.iter().any(|r| r.path == existing),
-            "existing-but-unobserved root keeps retention: {:?}",
+            !state.learned_roots.iter().any(|r| r.path == existing),
+            "temporary fixture root is not an automatic maintenance location: {:?}",
             state.learned_roots
         );
         // Intersecting uncertainty vetoes even positive absence: the boundary
