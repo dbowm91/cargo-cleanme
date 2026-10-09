@@ -1,6 +1,6 @@
 # C029 — Permission-Aware Traversal, Diagnostic Attribution, and Full-Coverage Corrective
 
-Status: **closing** (implementation landed; hosted qualification and closure receipt pending).
+Status: **conditionally closed** (implementation and local gates complete; hosted macOS checks and installer jobs remain queued in CI run `37953997910`).
 Planning branch: `plans/c029-c031-permission-discovery-cleanup-reliability`.
 Repository baseline: `f08705e77716e445e50097333a0313cab9574cdd` (`main`, 2026-10-09).
 Roadmap: `plans/subsystems/artifact-discovery-cleanup-roadmap.md`.

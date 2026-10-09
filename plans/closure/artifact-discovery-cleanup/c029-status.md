@@ -1,8 +1,8 @@
 # C029 — Permission-aware traversal and Full coverage corrective
 
-Status: **closing** — local implementation and verification are complete; hosted qualification is pending.
+Status: **conditionally closed** — local implementation and verification are complete; hosted macOS checks and installer jobs remain queued.
 
-Implementation commits: `653c8f6` (coverage-aware traversal and Full state/exit wiring), `651c97a` (1,001-event bounded aggregation control), plus the shared documentation/control-surface commit recorded in this branch.
+Implementation commits: `653c8f6` (coverage-aware traversal and Full state/exit wiring), `651c97a` (1,001-event bounded aggregation control), `0f8f10f` (premise-negative unreadable-root control), and documentation/control-surface commit `60ee214`.
 
 ## Requirement-to-evidence matrix
 
@@ -30,7 +30,7 @@ The first local clippy run rejected one nested conditional; it was corrected bef
 
 ## Platform and fixture evidence
 
-The permission fixture verifies the unreadable premise before exercising mode `000`; it fails if the effective identity can still read the directory. The synthetic 1,001-event accumulator test is platform-independent. Hosted Linux/macOS/Windows and Rust 1.89 CI qualification is pending the pushed branch run.
+The permission fixture verifies the unreadable premise before exercising mode `000`; it fails if the effective identity can still read the directory. The synthetic 1,001-event accumulator test is platform-independent. Hosted run `37953385660` is not closure evidence: Ubuntu/MSRV passed, Windows failed in a C030 fixture assertion, and macOS was canceled while queued. Corrected-head run `37953997910` passes Ubuntu, Windows, MSRV, generated docs, benchmark, and Linux/Windows installer jobs; its macOS checks and installer jobs remain queued. The correction is in `fc673fd`.
 
 ## Limitations and findings
 
@@ -40,4 +40,4 @@ The permission fixture verifies the unreadable premise before exercising mode `0
 
 Unresolved findings: no known correctness defect. Cross-platform hosted qualification remains an external closure requirement.
 
-Disposition: **closing** pending hosted qualification.
+Disposition: **conditionally closed** pending the two macOS jobs in run `37953997910`.
