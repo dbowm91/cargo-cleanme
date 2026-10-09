@@ -9,7 +9,7 @@ per-component deep dives that follow.
   modules, 17 source files, 24,754 lines of Rust in `src/`, no async runtime
   of its own, and exactly one binary dependency that matters for safety
   (`cargo metadata`).
-- **Version:** 0.2.4 (published) · **Edition:** 2024 · **MSRV:** 1.89
+- **Version:** 0.2.5 (published) · **Edition:** 2024 · **MSRV:** 1.89
 - **Deep dives:** 15 documents, one per component, linked from §3 and §9.
 
 ---
