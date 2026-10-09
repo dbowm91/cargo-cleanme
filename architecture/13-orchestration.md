@@ -10,7 +10,7 @@
 > the `scope`-label fix and the state-publish exit-code fix is preserved by the
 > findings themselves (§7, §8), not by a banner claiming them.
 
-`src/main.rs`, 737 lines, zero inline tests. The only module that reaches every
+`src/main.rs`, 1046 lines, zero inline tests. The only module that reaches every
 other one, and the only place the two pipelines are stitched together.
 
 ## 1. Responsibility
@@ -20,9 +20,9 @@ wiring, the reconciliation branch deciding whether persisted state is rewritten
 (`:500-579`), and the choice of output surface. It owns **no domain logic**:
 scope to `policy::resolve` (`:310-316`, `:438-444`), classification to
 `workspace::analyze_groups` (`:594-603`), authorization and mode semantics to
-`cleanup::clean_with_roots_policy_selector` (`:224-233`), and even "is this
-incomplete?" to merely *reading* a `PlatformRoot` + `Error` diagnostic
-(`:524-527`, `:605-609`).
+`cleanup::clean_with_roots_policy_selector` (`:224-233`), and traversal
+completeness to the `ManifestDiscovery::coverage_complete` result, shared by
+Full reconciliation and exit status.
 
 **It declares two types.** `RunOptions` (`:60-66`) is the process-wide triple
 `no_progress` / `stats` / `format`, built once in `run` (`:69-73`) and passed to
@@ -269,7 +269,7 @@ deleted, not a report. If that is ever contentious it is a one-line change at
 
 ## 4. The scan pipeline
 
-`run_scan` — `src/main.rs:733-1048`, **four** parameters: `intent: ScanIntent`,
+`run_scan` — `src/main.rs:733-1046`, **four** parameters: `intent: ScanIntent`,
 `config_path`, `options: RunOptions`, `emit_report: EmitReport`. Since C028 it
 returns `ScanOutcome` (`:727`) — the exit code plus the proven Full generation
 (§7). In order:
@@ -617,7 +617,7 @@ notice if `replacing_invalid` (`:863-869`); failing prints
 
 ### A failed publish no longer changes the exit code
 
-`src/main.rs:1036-1047` is the whole exit decision:
+`src/main.rs:1036-1046` is the whole exit decision:
 
 ```rust
 if full_incomplete {

@@ -96,6 +96,13 @@ never silently narrow the reconciliation command. Learned locations that
 provably vanished are omitted for the run with a diagnostic; symlinked or
 unreadable locations block instead, and explicit roots stay strict.
 
+Full scans are best-effort for inventory: protected or unreadable subtrees can
+leave coverage partial. Such scans retain discovered projects but do not
+publish a complete learned-state generation. Routine learning uses only
+Cargo-resolved workspaces in durable developer locations; package caches,
+Trash, temporary trees, `node_modules`, and transient Codex worktrees stay out
+of automatic maintenance while remaining discoverable in Full scans.
+
 ### Scan output
 
 Scan finds inactive output. It never deletes.

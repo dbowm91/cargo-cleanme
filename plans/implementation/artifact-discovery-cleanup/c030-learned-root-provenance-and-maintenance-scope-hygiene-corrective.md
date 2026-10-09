@@ -1,6 +1,6 @@
 # C030 — Learned-Root Provenance and Routine Maintenance Scope Hygiene
 
-Status: **ready** (planning only; implementation and publication outstanding).
+Status: **closing** (implementation landed; hosted qualification and closure receipt pending).
 Planning branch: `plans/c029-c031-permission-discovery-cleanup-reliability`.
 Repository baseline: `f08705e77716e445e50097333a0313cab9574cdd` (`main`, 2026-10-09).
 Roadmap: `plans/subsystems/artifact-discovery-cleanup-roadmap.md`.

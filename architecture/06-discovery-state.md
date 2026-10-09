@@ -109,6 +109,16 @@ variants are `"resolved"` and `"manifest_observed_unresolved"`.
 | `path` | `PathBuf` | Canonicalized search container. **Required.** | `reconcile_full` (`:153-155`) |
 | `last_project_seen_at` | `u64` | Positive-observation stamp, seconds. **Required.** | `reconcile_full` (`:156`); advanced by the Routine touch |
 
+Since C030, only observations with a successfully resolved Cargo workspace can
+create a new `LearnedRoot`. The exact manifest inventory still records
+unresolved manifests. Before parent promotion, the resolved project path and
+candidate are checked by `automatic_root_is_maintainable`; recognizable package
+caches, Trash, temporary locations, `node_modules`, and transient Codex
+worktrees are not promoted into Routine scope. The same check filters legacy
+learned roots from automatic Routine use and removes known-disallowed roots on
+a complete certain Full reconciliation. Unknown coverage still prevents
+publication, and an uncertainty intersecting a legacy root preserves it.
+
 `LearnedRoot` carries **no** `#[serde(default)]` on either field. An entry
 missing either one makes the whole file `RecoverableInvalid` — a strictness the
 `DiscoveryState` struct-level default does not extend to array elements.

@@ -320,14 +320,19 @@ can be asserted without touching the real home directory. If
 the only call site is `policy.rs:101`. It is public surface without an internal
 consumer.
 
-**Assembly.** `routine_roots_from_state` (`policy.rs:410-439`) concatenates
-existing seeds first, then each learned root passing the retention test, then
-hands the vector to `canonical_dedup_roots`. Retention (`policy.rs:427-430`):
+**Assembly.** `routine_roots_from_state` concatenates existing seeds first,
+then learned roots that pass both retention and the automatic-maintenance
+location policy, then hands the vector to `canonical_dedup_roots`. The shared
+`discovery_state::automatic_root_is_maintainable` rule excludes known cache,
+Trash, temporary, node_modules, and transient Codex worktree locations from
+Routine selection. It is not a Full discovery filter and does not affect an
+explicit root. Retention remains:
 
 ```rust
-retention_days == 0
+automatic_root_is_maintainable(path, home)
+    && (retention_days == 0
     || now < r.last_project_seen_at               // future timestamp: keep
-    || now.saturating_sub(r.last_project_seen_at) <= u64::from(retention_days) * 86400
+    || now.saturating_sub(r.last_project_seen_at) <= u64::from(retention_days) * 86400)
 ```
 
 `retention_days == 0` disables expiration and a future timestamp fails

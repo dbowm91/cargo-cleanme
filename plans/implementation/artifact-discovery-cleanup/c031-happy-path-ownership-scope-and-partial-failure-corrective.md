@@ -1,6 +1,6 @@
 # C031 — Routine Cleanup Happy-Path, Ownership Scope, and Partial-Failure Corrective
 
-Status: **blocked** for destructive boundary change, **ready for research/negative-control fixtures**. Planning only.
+Status: **closing** for the safe whole-scope path; **blocked** for partial-scope cleanup pending an accepted ownership decision.
 Planning branch: `plans/c029-c031-permission-discovery-cleanup-reliability`.
 Repository baseline: `f08705e77716e445e50097333a0313cab9574cdd` (`main`, 2026-10-09).
 Source: `plans/subsystems/artifact-discovery-cleanup-roadmap.md`.
@@ -57,6 +57,17 @@ Read proposed ADR 004, current C004/C006 and final `ProofUniverse`/refresh code.
 
 Decide explicitly whether to (1) retain whole-scope fail-closed and prioritize hygiene/diagnostic usability, or (2) **accept a rigorous ADR 004 boundary and implement only certified partitioning**. If no proof stronger than filesystem location can be provided, record option (1); a 'per-root fallback' without proof is prohibited. If (2) is accepted, write a forward accepted ADR amendment naming which C004/C006 guarantee changes and why, and define proof/late-refresh/cancellation semantics *before modifying `cleanup.rs`*.
 
+**Research result (2026-10-09): retain option (1).** A workspace can select
+`target-dir` through Cargo configuration and environment; a successfully
+resolved workspace can therefore redirect output into another root. An
+unresolved manifest supplies no authoritative output set at all, and an
+unreadable subtree supplies no manifest paths to resolve. A late workspace or
+configuration change can also alter the participant graph; the current final
+refresh is sound because it revalidates the complete frozen combined universe.
+Filesystem disjointness between scan roots is not an independence certificate.
+ADR 004 remains proposed and unaccepted, so the C004/C006 whole-scope block is
+retained. No partitioning code or partial Execute path was added.
+
 ### E. Conditional independent-scope implementation (blocked)
 
 Only following D/ADR acceptance: implement certificate-driven graph partitions, discovery provenance and partial block propagation. Every Cargo invocation remains one atomic complete `CleanupUnit`. Any cross-root overlap, unknown location, unresolved potential owner, environment ambiguity, or TOCTOU expands the blocked component. Evaluate full multi-root coverage before executing any component, and re-prove freshness against frozen effective roots and the exact participant universe before each spawn. Do not optimize by caching an incomplete universe. Preview/Simulate/Execute must agree on eligible/blocked components; Simulate spawns no Cargo clean, Preview cannot preview blocked units; Execute is Cargo-mediated only.
@@ -91,4 +102,11 @@ Closure path: `plans/closure/artifact-discovery-cleanup/c031-status.md`. Mark co
 
 Stop destructive work for any unresolved ADR status, missing proof of cross-root independence, a negative test that can pass from an unrelated failure, uncertain Cargo/environment output identities, incomplete pre-spawn refresh, machine-contract ambiguity, or any observed unexpected deletion. A clean-looking output is not proof. Never weaken `Shared`/`Uncertain`/`ExternalUnproven` or skip an unresolved manifest merely to make the observed command exit 0.
 
-This plan itself only registers the work. It changes no Rust, does not authorize a release, and does not claim an implemented happy-path fix.
+**Safe track completed in implementation commits `e58825b` and its preceding
+C029/C030 commits:** cleanup now resolves discovered manifests and constructs
+workspace/unit counts before returning an incomplete-discovery block. A
+premise-checked subprocess test proves those counts are measured, metadata was
+attempted, and `cargo clean` was not spawned. The complete healthy Routine
+execute/simulate path remains qualified by the existing `bare_invocation_*`
+subprocess cases. No JSON v1 shape or exit-code contract changed. The
+independent-scope track remains blocked as recorded above.

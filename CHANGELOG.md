@@ -8,6 +8,22 @@ command-line, JSON, and release-asset contracts are the stable surface.
 
 ## [Unreleased]
 
+### Fixed — discovery and maintenance scope
+
+- Full traversal errors without a child path are now reported as bounded,
+  unknown-location coverage loss instead of being attributed to the selected
+  root. A partial Full inventory keeps positive manifests but does not publish
+  a complete learned-state generation and exits 1.
+- Only Cargo-resolved workspaces in durable developer locations contribute new
+  automatic Routine roots. Recognized Cargo/npm/Go caches, Trash, temporary
+  trees, `node_modules`, and transient Codex worktrees remain visible to Full
+  discovery but are omitted from Routine selection; explicit scans remain
+  available.
+- Cleanup now resolves discovered manifests before returning an incomplete
+  discovery block, so reported workspace and cleanup-unit counts reflect work
+  actually attempted. Discovery uncertainty still blocks the whole cleanup
+  scope and produces no `cargo clean` spawn.
+
 ## [0.2.4] - 2026-10-08
 
 ### Fixed — discovery and cleanup scope
