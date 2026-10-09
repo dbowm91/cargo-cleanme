@@ -47,8 +47,22 @@ configured root can never silently narrow the canonical reconciliation command.
 `scan ROOT` remains the explicit per-invocation override, and any explicit
 effective scope bypasses the configured `ignore`/`unignore` filters.
 
+Full means an exhaustive **attempt** across the platform roots available to
+the current user, not elevated access. If traversal cannot read a subtree,
+the scan keeps positive manifest results, reports bounded unknown-location
+coverage loss, exits 1, and does not publish a complete learned-state
+generation. Use `scan ROOT` when you need a bounded result for one accessible
+tree.
+
 Learned roots are **search hints only**. Complete manifest coverage and fresh
 ownership proof are rebuilt before anything is cleaned.
+
+New learned roots come only from successfully Cargo-resolved workspaces in
+durable developer locations. Full inventory still includes unusual accessible
+Cargo manifests, including package-manager content; cache, Trash, temporary,
+`node_modules`, and transient Codex worktree paths are not automatically
+selected for Routine maintenance. Explicit roots remain available and keep
+their existing strict safety checks.
 
 ### scan
 

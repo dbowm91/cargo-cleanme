@@ -882,35 +882,9 @@ pub fn clean_with_roots_policy_selector_guarded(
     counters.discovery_nanos = counters
         .discovery_nanos
         .saturating_add(crate::domain::elapsed_nanos(discovery_elapsed));
+    let discovery_diagnostic_count = discovered.diagnostics.len();
     let mut diagnostics: Vec<ScanDiagnostic> = discovered.diagnostics;
     let manifests = discovered.manifests;
-
-    if !diagnostics.is_empty() {
-        let mut report = CleanReport {
-            results: Vec::new(),
-            diagnostics: diagnostics.len(),
-            failed: 0,
-            mode,
-            counters: ScanCounters::default(),
-            scope_blocked: None,
-            unresolved_ownership: Vec::new(),
-            selected_roots: roots.clone(),
-            discovered_manifests: manifests.len(),
-            resolved_workspaces: 0,
-            units_considered: 0,
-            effective_policy: Some(policy.clone()),
-            selector: selector.clone(),
-        };
-        report.scope_blocked = Some(ScopeBlock::new(
-            ScopeBlockReason::IncompleteDiscovery,
-            format!(
-                "combined cleanup ownership universe is incomplete: {} discovery diagnostic(s); no cleanup commands were run",
-                diagnostics.len()
-            ),
-        ));
-        report.counters = counters;
-        return Ok(report);
-    }
 
     // Workspace resolution, physical grouping, fail-fast analysis, and
     // CleanupUnit construction share one clock.
@@ -945,6 +919,22 @@ pub fn clean_with_roots_policy_selector_guarded(
     // The blocked report carries the counters measured up to the point the
     // block was raised, exactly as the successful path does at the end.
     report.counters = counters.clone();
+
+    // Discovery uncertainty still blocks the complete cleanup scope, but
+    // report the actual read-only resolution outcome instead of returning
+    // misleading zero workspace/unit counts before Cargo was attempted.
+    if discovery_diagnostic_count > 0 {
+        report.scope_blocked = Some(ScopeBlock::new(
+            ScopeBlockReason::IncompleteDiscovery,
+            format!(
+                "combined cleanup ownership universe is incomplete: {} discovery diagnostic(s); resolved {} workspace(s), considered {} cleanup unit(s); no cleanup commands were run",
+                discovery_diagnostic_count,
+                workspaces.len(),
+                units.len()
+            ),
+        ));
+        return Ok(report);
+    }
 
     if !unresolved_ownership.is_empty() {
         let unresolved = unresolved_ownership.len();

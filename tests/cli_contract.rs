@@ -2604,10 +2604,10 @@ fn unreadable_automatic_root_blocks_instead_of_omitting() {
     let locked = fixture._temp.path().join("locked-root");
     std::fs::create_dir(&locked).unwrap();
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
-    if locked.read_dir().is_ok() {
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
-        return;
-    }
+    assert!(
+        locked.read_dir().is_err(),
+        "premise: effective test identity must not read mode-000 root"
+    );
     fixture.write_state(&[locked]);
     let output = fixture.run(&["--dry-run"]);
     std::fs::set_permissions(
@@ -2625,6 +2625,41 @@ fn unreadable_automatic_root_blocks_instead_of_omitting() {
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["result"]["scope_blocked"], true, "{json}");
     assert_eq!(fixture.clean_calls(), 0);
+}
+
+/// A traversal diagnostic still blocks cleanup, but read-only Cargo metadata
+/// resolution must be reflected in the report rather than represented as zero.
+#[cfg(unix)]
+#[test]
+fn incomplete_discovery_reports_actual_resolution_counts_and_spawns_no_clean() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = StaleLearnedFixture::new();
+    let inaccessible = fixture.home.join("Developer/inaccessible");
+    fs::create_dir(&inaccessible).unwrap();
+    fs::set_permissions(&inaccessible, fs::Permissions::from_mode(0o000)).unwrap();
+    assert!(
+        fs::read_dir(&inaccessible).is_err(),
+        "premise: child is unreadable"
+    );
+
+    let output = fixture.run(&["--dry-run"]);
+    fs::set_permissions(&inaccessible, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["result"]["scope_blocked"], true, "{json}");
+    assert_eq!(json["result"]["discovered_manifests"], 1, "{json}");
+    assert_eq!(json["result"]["resolved_workspaces"], 1, "{json}");
+    assert_eq!(json["result"]["units_considered"], 1, "{json}");
+    assert!(
+        fixture.cargo_calls("metadata") > 0,
+        "Cargo metadata was attempted"
+    );
+    assert_eq!(
+        fixture.clean_calls(),
+        0,
+        "incomplete discovery blocks every clean"
+    );
 }
 
 /// Log mode tells the truth without leaking paths: the stale-root omission

@@ -258,6 +258,15 @@ fn entry_is_within_any(entry: &dua_core::Entry, root: &Path, prefixes: &[PathBuf
         .any(|prefix| entry_is_within(entry, root, prefix))
 }
 
+fn record_walk_error(counts: &mut (u64, u64, u64), kind: std::io::ErrorKind) {
+    counts.0 = counts.0.saturating_add(1);
+    if kind == std::io::ErrorKind::PermissionDenied {
+        counts.1 = counts.1.saturating_add(1);
+    } else if kind == std::io::ErrorKind::NotFound {
+        counts.2 = counts.2.saturating_add(1);
+    }
+}
+
 /// Whether a *global-only* system prune covers this entry.
 ///
 /// A walk root strictly inside a system prune re-opens that prune for its own
@@ -303,6 +312,9 @@ pub struct ManifestDiscovery {
     pub counters: ScanCounters,
     /// Bounded top-level subtree attribution for `--stats` qualification.
     pub top_level_entries: std::collections::BTreeMap<PathBuf, u64>,
+    /// False when traversal skipped any region whose exact location was not
+    /// supplied by dua-core. Such a walk is positive inventory only.
+    pub coverage_complete: bool,
 }
 
 /// Manifest-first discovery: every plausible user `Cargo.toml` without
@@ -355,6 +367,7 @@ pub fn discover_manifests_with_attribution(
     let mut diagnostics = Vec::new();
     let mut visited = 0u64;
     let mut pruned = 0u64;
+    let mut coverage_complete = true;
     if global {
         if roots.is_empty() && matches!(policy.scope, ScanScope::Routine(_)) {
             diagnostics.push(ScanDiagnostic {
@@ -395,6 +408,7 @@ pub fn discover_manifests_with_attribution(
             &mut diagnostics,
             &mut visited,
             &mut pruned,
+            &mut coverage_complete,
             observer,
             discovery_workers,
             profile_subtrees,
@@ -408,8 +422,10 @@ pub fn discover_manifests_with_attribution(
         ScanScope::Explicit(_) | ScanScope::ExplicitRoots(_)
     );
     let mut visited_dirs = 0u64;
+    let mut coverage_complete = true;
     for root in roots {
         if !root_is_usable(&root, &mut diagnostics) {
+            coverage_complete = false;
             continue;
         }
         discover_manifests_root(
@@ -423,6 +439,7 @@ pub fn discover_manifests_with_attribution(
             &mut visited_dirs,
             &mut pruned,
             observer,
+            &mut coverage_complete,
         )?;
     }
     manifests.sort();
@@ -440,6 +457,7 @@ pub fn discover_manifests_with_attribution(
         diagnostics,
         counters,
         top_level_entries: std::collections::BTreeMap::new(),
+        coverage_complete,
     })
 }
 
@@ -491,6 +509,7 @@ fn discover_global_roots(
     diagnostics: &mut Vec<ScanDiagnostic>,
     visited: &mut u64,
     pruned: &mut u64,
+    coverage_complete: &mut bool,
     observer: &dyn ProgressObserver,
     discovery_workers: usize,
     profile_subtrees: bool,
@@ -501,6 +520,7 @@ fn discover_global_roots(
     let mut canonical_roots = Vec::new();
     for root in roots {
         if !root_is_usable(root, diagnostics) {
+            *coverage_complete = false;
             continue;
         }
         canonical_roots.push((
@@ -581,32 +601,17 @@ fn discover_global_roots(
     let mut manifest_validation_time = std::time::Duration::ZERO;
     let mut last_profile = std::time::Instant::now();
     let traversal_started = std::time::Instant::now();
-    // Traversal errors arrive in worker-completion order, which is not
-    // reproducible. They are buffered per root and flushed in root order so the
-    // diagnostic stream is byte-identical across runs (L8).
-    let mut walk_diagnostics: HashMap<usize, Vec<ScanDiagnostic>> = HashMap::new();
+    // Keep bounded aggregate counts per selected root; never retain one
+    // diagnostic allocation per traversal event.
+    let mut walk_errors: HashMap<usize, (u64, u64, u64)> = HashMap::new();
     let mut visited_dirs = 0u64;
     for (root_idx, event) in walk {
         let entry = match event {
             dua_core::RootEvent::Entry(Ok(e)) => e,
             dua_core::RootEvent::Entry(Err(e)) => {
-                // dua-core reports the io error without the entry it applies
-                // to, so the scan root is the finest honest attribution
-                // available; a deeper path would be a guess. The OS error is
-                // carried in the message so the cause stays actionable (L3).
-                walk_diagnostics
-                    .entry(root_idx)
-                    .or_default()
-                    .push(ScanDiagnostic {
-                        severity: DiagnosticSeverity::Warning,
-                        category: if e.kind() == std::io::ErrorKind::PermissionDenied {
-                            DiagnosticCategory::PermissionDenied
-                        } else {
-                            DiagnosticCategory::Metadata
-                        },
-                        path: roots.get(root_idx).map(|(_, root)| root.clone()),
-                        message: format!("filesystem traversal entry could not be read: {e}"),
-                    });
+                *coverage_complete = false;
+                let counts = walk_errors.entry(root_idx).or_default();
+                record_walk_error(counts, e.kind());
                 continue;
             }
             dua_core::RootEvent::Finished => {
@@ -731,12 +736,27 @@ fn discover_global_roots(
     if batch_pruned > 0 {
         observer.dirs_pruned(batch_pruned);
     }
-    let mut buffered: Vec<(usize, ScanDiagnostic)> = walk_diagnostics
-        .into_iter()
-        .flat_map(|(idx, ds)| ds.into_iter().map(move |d| (idx, d)))
-        .collect();
-    buffered.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.message.cmp(&b.1.message)));
-    diagnostics.extend(buffered.into_iter().map(|(_, d)| d));
+    let mut buffered: Vec<_> = walk_errors.into_iter().collect();
+    buffered.sort_by_key(|(idx, _)| *idx);
+    for (_idx, (events, denied, vanished)) in buffered {
+        diagnostics.push(ScanDiagnostic {
+            severity: DiagnosticSeverity::Warning,
+            category: if denied > 0 {
+                DiagnosticCategory::PermissionDenied
+            } else if vanished > 0 {
+                DiagnosticCategory::Vanished
+            } else {
+                DiagnosticCategory::Metadata
+            },
+            // dua-core's error event has no child path. A root here would
+            // falsely identify the entire root as unreadable.
+            path: None,
+            message: format!(
+                "{events} traversal error(s): {denied} permission-denied, {vanished} vanished, {} other; skipped region location unknown",
+                events.saturating_sub(denied).saturating_sub(vanished)
+            ),
+        });
+    }
     if profile_subtrees {
         eprintln!(
             "scan phase: traversal_complete elapsed={:.3}s visited={} manifest_candidates={manifest_candidates} manifests_validated={manifest_validated} manifest_validation_seconds={:.3} diagnostics={}",
@@ -793,6 +813,7 @@ fn discover_global_roots(
         diagnostics: std::mem::take(diagnostics),
         counters,
         top_level_entries,
+        coverage_complete: *coverage_complete,
     })
 }
 
@@ -808,6 +829,7 @@ fn discover_manifests_root(
     visited_dirs: &mut u64,
     pruned: &mut u64,
     observer: &dyn ProgressObserver,
+    coverage_complete: &mut bool,
 ) -> Result<(), AppError> {
     let walker_root = root.to_path_buf();
     let root_path = walker_root.clone();
@@ -819,6 +841,7 @@ fn discover_manifests_root(
     let descend_prunes = prunes.to_vec();
     let mut batch_visited = 0u64;
     let mut batch_pruned = 0u64;
+    let mut traversal_errors = (0u64, 0u64, 0u64);
     let mut walk = dua_core::walk(
         &walker_root,
         traverse::worker_threads(),
@@ -850,17 +873,8 @@ fn discover_manifests_root(
         let entry = match item {
             Ok(e) => e,
             Err(e) => {
-                let category = if e.kind() == std::io::ErrorKind::PermissionDenied {
-                    DiagnosticCategory::PermissionDenied
-                } else {
-                    DiagnosticCategory::Metadata
-                };
-                diagnostics.push(ScanDiagnostic {
-                    severity: DiagnosticSeverity::Warning,
-                    category,
-                    path: Some(root.to_path_buf()),
-                    message: format!("filesystem traversal entry could not be read: {e}"),
-                });
+                *coverage_complete = false;
+                record_walk_error(&mut traversal_errors, e.kind());
                 continue;
             }
         };
@@ -911,6 +925,26 @@ fn discover_manifests_root(
     if batch_pruned > 0 {
         observer.dirs_pruned(batch_pruned);
     }
+    if traversal_errors.0 > 0 {
+        diagnostics.push(ScanDiagnostic {
+            severity: DiagnosticSeverity::Warning,
+            category: if traversal_errors.1 > 0 {
+                DiagnosticCategory::PermissionDenied
+            } else if traversal_errors.2 > 0 {
+                DiagnosticCategory::Vanished
+            } else {
+                DiagnosticCategory::Metadata
+            },
+            path: None,
+            message: format!(
+                "{} traversal error(s): {} permission-denied, {} vanished, {} other; skipped region location unknown",
+                traversal_errors.0,
+                traversal_errors.1,
+                traversal_errors.2,
+                traversal_errors.0.saturating_sub(traversal_errors.1).saturating_sub(traversal_errors.2)
+            ),
+        });
+    }
     Ok(())
 }
 
@@ -919,6 +953,76 @@ mod tests {
     use super::*;
     use crate::progress::NoopObserver;
     use tempfile::tempdir;
+
+    #[test]
+    fn more_than_one_thousand_walk_errors_stay_one_bounded_root_record() {
+        let mut by_root = HashMap::<usize, (u64, u64, u64)>::new();
+        for _ in 0..1_001 {
+            record_walk_error(
+                by_root.entry(0).or_default(),
+                std::io::ErrorKind::PermissionDenied,
+            );
+        }
+        assert_eq!(by_root.len(), 1, "the accumulator stores roots, not events");
+        assert_eq!(by_root[&0], (1_001, 1_001, 0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_child_keeps_accessible_inventory_and_unknown_coverage_bounded() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let d = tempdir().unwrap();
+        let root = d.path();
+        let readable = root.join("readable");
+        let unreadable = root.join("unreadable");
+        fs::create_dir(&readable).unwrap();
+        fs::create_dir(&unreadable).unwrap();
+        fs::write(
+            readable.join("Cargo.toml"),
+            "[package]\nname='ok'\nversion='0.1.0'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+        assert!(
+            fs::read_dir(&unreadable).is_err(),
+            "premise: effective user cannot read child"
+        );
+
+        let mut manifests = Vec::new();
+        let mut diagnostics = Vec::new();
+        let mut visited = 0;
+        let mut visited_dirs = 0;
+        let mut pruned = 0;
+        let mut coverage_complete = true;
+        discover_manifests_root(
+            root,
+            &Filters::new(&[], &[]).unwrap(),
+            false,
+            &[],
+            &mut manifests,
+            &mut diagnostics,
+            &mut visited,
+            &mut visited_dirs,
+            &mut pruned,
+            &NoopObserver,
+            &mut coverage_complete,
+        )
+        .unwrap();
+        assert_eq!(manifests, vec![readable.join("Cargo.toml")]);
+        assert!(!coverage_complete);
+        assert_eq!(diagnostics.len(), 1, "one aggregate per selected root");
+        assert_eq!(
+            diagnostics[0].category,
+            DiagnosticCategory::PermissionDenied
+        );
+        assert!(
+            diagnostics[0].path.is_none(),
+            "the engine supplies no child path"
+        );
+        assert!(diagnostics[0].message.contains("location unknown"));
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o700)).unwrap();
+    }
 
     /// Collect the walk entries `dua_core` actually produces for `roots`, using
     /// the same `walk_roots` machinery production drives in
@@ -1087,6 +1191,7 @@ mod tests {
             &mut Vec::new(),
             &mut 0,
             &mut 0,
+            &mut true,
             &NoopObserver,
             traverse::worker_threads(),
             false,
@@ -1160,6 +1265,7 @@ mod tests {
             &mut Vec::new(),
             &mut 0,
             &mut 0,
+            &mut true,
             &NoopObserver,
             traverse::worker_threads(),
             false,
@@ -1213,6 +1319,7 @@ mod tests {
             &mut Vec::new(),
             &mut 0,
             &mut 0,
+            &mut true,
             &NoopObserver,
             traverse::worker_threads(),
             false,
@@ -1310,6 +1417,7 @@ mod tests {
                         &mut Vec::new(),
                         &mut 0,
                         &mut 0,
+                        &mut true,
                         &NoopObserver,
                         workers,
                         false,

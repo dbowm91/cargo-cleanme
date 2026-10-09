@@ -55,6 +55,22 @@ location. With the corrective in place, the stale location is omitted with a
 diagnostic, symlinked or unreadable automatic locations block with a typed
 report instead of a fatal error, and explicit roots stay strict.
 
+## Full scans report partial coverage for unreadable subtrees
+
+Full scans run with the current user's permissions. They continue inventorying
+accessible paths, but `dua-core` does not attach the failing child path to its
+traversal error event. The report therefore describes the skipped region as
+unknown-location coverage loss rather than labeling the selected root as
+unreadable. A partial Full scan exits `1` and does not publish a new complete
+learned-state generation. Use an explicit accessible root to narrow the scan;
+do not run as root just to suppress the diagnostic.
+
+Full inventory and Routine maintenance have different purposes. A valid Cargo
+manifest in a cache remains visible during Full discovery, but only a
+Cargo-resolved workspace in a durable developer location can create a new
+automatic Routine root. Existing cache/runtime roots are filtered during
+Routine admission; explicitly named roots retain their strict semantics.
+
 ### If you are on 0.2.0: two things it could do that it should never have done
 
 Both were found by the project's own post-release interrogation and confirmed by

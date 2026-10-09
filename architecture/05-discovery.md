@@ -318,21 +318,19 @@ Small, but not a limit the code enforces.
 |---|---|---|
 | `Info` + `PlatformRoot` + `path: None` | `:282-291` | Routine scope with no available roots; report-only |
 | `Error` + `PlatformRoot` + `path: Some(root)` | `:392-403` | root is a symlink (`:386`) or unavailable/not a dir (`:388`) |
-| `Warning` + `PermissionDenied` or `Metadata` + `path: Some(root)` | `:519-528`, `:770-776` | an entry the walker could not read; category chosen by `io::ErrorKind` (`:521-525`, `:765-769`) |
+| `Warning` + `PermissionDenied` or `Metadata` + `path: None` | `:602-616`, `:856-872` | aggregated traversal errors; dua-core does not supply a failing child path |
 
 **Attribution honesty.** dua-core reports an I/O error *without* the entry it
-applies to, so the path recorded is the scan root — the finest honest attribution
-available, with the OS error carried in the message (comment `:512-515`, L3). The
-resulting coarseness is deliberate: one unreadable subtree marks its whole root
-uncertain, and `discovery_state::uncertainty_intersects`
-(`discovery_state.rs:107-109`) then protects every learned root intersecting it.
+applies to. The diagnostic therefore has `path: None`; recording the selected
+root would falsely say that the whole root was unreadable. Errors are aggregated
+per selected root into one deterministic summary, and `ManifestDiscovery` marks
+coverage incomplete. Unknown-location loss prevents a Full generation from
+publishing, protecting all negative state observations without guessing a path.
 
-**Diagnostic-stream determinism.** The global path buffers per root and sorts by
-`(root index, message)` (`:646-651`, comment `:503-505`, L8), so its stream is
-byte-identical across runs. That comment's claim is module-wide but the guarantee
-is not: the sequential path pushes in encounter order (`:770-776`) with no
-buffering, so two or more errors under one explicit root can be reported in either
-order. Manifests and counters are unaffected.
+**Diagnostic-stream determinism.** Both walkers emit at most one summary per
+selected root. The global path sorts summaries by root index (`:729-740`); the
+summary retains total event counts while diagnostic memory stays bounded by the
+selected-root count.
 
 ### The `main.rs` contract, and how it can break
 
@@ -345,31 +343,25 @@ let uncertainty: Vec<PathBuf> = discovered.diagnostics.iter()
     .filter_map(|d| d.path.clone()).collect();
 ```
 
-That vector is what stops a Full scan from retiring a learned root
-(`main.rs:387-397` → `reconcile_full`, which retains every old learned root
-intersecting `uncertainty`: `discovery_state.rs:113-124`, `:176-181`). Three facts
-to hold onto:
+That vector still carries known, path-specific uncertainty into
+`reconcile_full`. Unknown-location traversal errors have no path and therefore
+cannot be represented in the vector; `ManifestDiscovery::coverage_complete`
+separately gates both reconciliation and Full exit status. An incomplete walk
+does not publish any generation, so unknown loss cannot be interpreted as
+negative evidence.
 
-- The names are exactly `PermissionDenied`, `Metadata`, `Vanished`
-  (`domain.rs:68-75`). This module emits only the first two — `Vanished` appears
-  nowhere in it; it is an output/workspace-side category (`output.rs:127`), so its
-  presence in the list is defensive breadth, not a discovery responsibility.
-- `filter_map(|d| d.path.clone())` silently drops pathless diagnostics, so the
-  `Info`/`PlatformRoot` "no Routine roots" note (`:283-290`) contributes nothing
-  to uncertainty.
-- **The coupling.** A new category meaning "I could not see here" that is not in
-  that list is treated as *certainty*: the corresponding learned root becomes
-  eligible for retirement, invisibly. The same applies to the two
-  `PlatformRoot && Error` checks (`main.rs:383-386` for reconciliation
-  completeness, `main.rs:479-483` → exit 1 at `main.rs:574-576`). Three places
-  must be edited together.
+- The diagnostic categories distinguish `PermissionDenied`, `Vanished`, and
+  other metadata errors. Traversal summaries count each class, although a mixed
+  aggregate uses one representative category for the row.
+- Known localized diagnostics still use their paths to protect intersecting
+  old roots. Pathless informational diagnostics remain non-uncertain.
+- The coverage flag, rather than a duplicated category predicate, decides
+  whether Full can publish state and whether it exits 1.
 
-There is a **stricter** consumer the scan path does not show: `cleanup.rs:795-809`
-returns early with `scope_blocked` if the discovery diagnostics vector is
-*non-empty at all*, and `cleanup.rs:1613-1618` refuses to re-prove ownership if
-the re-walk produced any diagnostic. So on the destructive path a new *benign*
-warn-level diagnostic here would silently disable `clean` entirely — the sharpest
-edge in the module.
+Cleanup still treats any discovery diagnostic as a whole-scope block and the
+final proof re-walk refuses any diagnostic. It now performs metadata resolution
+before returning that block so workspace and unit counts describe attempted
+work; no cleanup process is spawned from the partial universe.
 
 ---
 

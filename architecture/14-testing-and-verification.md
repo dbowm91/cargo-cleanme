@@ -8,7 +8,7 @@
 
 The verification apparatus does three distinct jobs. The third is what makes it unusual.
 
-**(a) Product behaviour.** 327 inline `#[test]` functions in `src/`, plus two integration suites that drive the compiled binary as a subprocess: ownership proof, cleanup authorization, the three clean modes, workspace resolution, the versioned JSON contract.
+**(a) Product behaviour.** 330 declared inline `#[test]` functions in `src/`, plus two integration suites that drive the compiled binary as a subprocess: ownership proof, cleanup authorization, the three clean modes, workspace resolution, the versioned JSON contract.
 
 **(b) Structural contracts invisible at runtime.** 17 scripts in `scripts/` and 6 GitHub workflows. No product code path can detect a file left out of the published crate's `include` allowlist, completions drifted from `cli.rs`, a tag pointing at the wrong commit, or release bytes differing from qualified bytes. These are properties of the repository *as an artifact* — see [Distribution & release](15-distribution-and-release.md). **The inventory of those 17 scripts is itself machine-checked**: `check-doc-citations.py` requires the [§5](#5-the-contract-checkers) table to be exactly the set of scripts on disk, in both directions and without duplicates, so a new checker cannot ship while the table keeps describing an older repository.
 
@@ -23,8 +23,8 @@ were the premises, and is any of them unchecked?*
 
 | Layer | Location | Count | What it can catch | What it cannot catch |
 |---|---|---:|---|---|
-| Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 327 `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
-| Integration — CLI contract | `tests/cli_contract.rs` (2,658 lines) | 43 `#[test]` | The subprocess boundary end to end: argv normalization, exit codes, JSON shape, log-line shape, `--stats` stream discipline, selector behaviour, usage conflicts, stale-learned-root admission | Internals of `run()`; anything on a real machine; 28 of the 43 are `#[cfg(unix)]` |
+| Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 330 declared `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
+| Integration — CLI contract | `tests/cli_contract.rs` (2,697 lines) | 44 `#[test]` | The subprocess boundary end to end: argv normalization, exit codes, JSON shape, log-line shape, `--stats` stream discipline, selector behaviour, usage conflicts, stale-learned-root admission, incomplete-discovery stage counts | Internals of `run()`; anything on a real machine; platform-gated cases are excluded on other lanes |
 | Integration — end to end | `tests/end_to_end.rs` (840 lines) | 4 `#[test]` | Full production-pipeline scans against synthetic trees with real mtimes, under both a filtered Routine scope and an explicit scope | Cleanup, update, config editing |
 | Shared harness | `tests/common/mod.rs` (240 lines) | 0 tests | `set_path_modified` / `backdate_file` (per-platform mtime control), `inactive_project` tree construction, `write_fake_cargo` / `cargo_calls` (unix only) | — |
 | Contract checkers | `scripts/` | **17** (see note) | Published-crate contents, fixture portability, installer/shape/smoke contracts, release identity, benchmark regression, and the completeness of this inventory | That a fixture case proves its intended branch (explicitly disclaimed) |
@@ -44,20 +44,20 @@ from `src/`, never copied between documents.
 
 | File | `#[test]` | `mod tests` opens at | Total lines | Lines in test module |
 |---|---:|---:|---:|---:|
-| `src/cleanup.rs` | 73 | 2493 | 6585 | 4093 |
-| `src/workspace.rs` | 57 | 1527 | 4517 | 2992 |
-| `src/update.rs` | 45 | 1237 | 2773 | 1538 |
-| `src/discovery.rs` | 34 | 918 | 2079 | 1163 |
+| `src/cleanup.rs` | 73 | 2482 | 6575 | 4094 |
+| `src/workspace.rs` | 57 | 1526 | 4517 | 2992 |
+| `src/update.rs` | 45 | 1236 | 2773 | 1538 |
+| `src/discovery.rs` | 36 | 951 | 2187 | 1237 |
 | `src/cli.rs` | 27 | 400 | 1025 | 627 |
-| `src/config.rs` | 19 | 578 | 1443 | 867 |
+| `src/config.rs` | 19 | 577 | 1443 | 867 |
 | `src/output.rs` | 17 | 462 and 822 | 941 | 481 |
-| `src/progress.rs` | 13 | 510 | 840 | 332 |
-| `src/discovery_state.rs` | 13 | 424 | 786 | 363 |
-| `src/policy.rs` | 13 | 601 | 966 | 366 |
+| `src/progress.rs` | 13 | 509 | 840 | 332 |
+| `src/discovery_state.rs` | 14 | 491 | 918 | 428 |
+| `src/policy.rs` | 13 | 646 | 1018 | 373 |
 | `src/report.rs` | 7 | 73 | 195 | 124 |
 | `src/traverse.rs` | 6 | 496 | 624 | 130 |
-| `src/editor.rs` | 2 | 157 | 215 | 60 |
-| `src/domain.rs` | 1 | 384 | 411 | 29 |
+| `src/editor.rs` | 2 | 156 | 215 | 60 |
+| `src/domain.rs` | 1 | 383 | 411 | 29 |
 | `src/error.rs` | 0 | — | 16 | — |
 | `src/lib.rs` | 0 | — | 15 | — |
 | `src/main.rs` | 0 | — | 1048 | — |
@@ -250,6 +250,14 @@ Eleven run on every platform; eighteen are `#[cfg(unix)]` because they need the
 | `log_mode_fatal_error_is_one_bounded_stderr_line_and_no_stdout` | 1605 | A fatal error is a bounded stderr line; stdout stays empty, so a consumer reads one stream |
 | `json_and_human_output_are_unchanged_by_log_mode` | 1648 | Adding the third format did not perturb the two existing byte-for-byte outputs |
 | `log_is_an_explicit_value_and_invalid_formats_still_fail_closed` | 1693 | `log` is an accepted `--format` value; an unknown one still exits 2 (`cli_contract.rs:1709`) |
+
+The discovery unit suite also has a Unix permission-premise fixture in
+`discovery.rs::unreadable_child_keeps_accessible_inventory_and_unknown_coverage_bounded`.
+It verifies `read_dir` actually fails for the test process before relying on
+mode `000`, then checks that the readable sibling manifest remains inventoried,
+one diagnostic is retained with no fabricated path, and the traversal is
+marked incomplete. It intentionally fails if run as an identity that can still
+read the fixture, rather than reporting a false green.
 
 ### The machine-contract checklist
 
@@ -541,23 +549,23 @@ testing can see, because the subject is bytes on a registry and a CDN.
 
 | Module | Lines | Tests | Tests / prod. lines | Verdict |
 |---|---:|---:|---:|---|
-| `cleanup.rs` | 6585 | 73 | 73 / 2492 | Appropriate. Most safety-critical module has the most tests; the race fakes show the hard cases were found and pinned |
-| `workspace.rs` | 3918 | 47 | 47 / 1445 | Appropriate, and the fakes are argument-focused rather than result-focused — the right instinct |
-| `update.rs` | 2644 | 44 | 44 / 1210 | Reasonable unit coverage, but this is the module whose defects (C011, C016, C017) escaped to production. Unit tests cannot see a transport that cannot reach its authority. Its transaction-hygiene evidence was briefly a false green too — see R6 |
-| `discovery.rs` | 1866 | 32 | 32 / 901 | Adequate for a filesystem walk with attribution; the attribution logic is pure and testable |
-| `cli.rs` | 901 | 24 | 24 / 380 | Good |
-| `config.rs` | 632 | 14 | 14 / 373 | Good for its surface |
-| `progress.rs` | 703 | 12 | 12 / 498 | Thin relative to size. Terminal-capability detection is mostly untested, and integration tests force `--no-progress` (`cli_contract.rs:183`), excluding the renderer from end-to-end coverage by construction |
-| `discovery_state.rs` | 793 | 13 | 13 / 370 | Adequate, including the C028 absence-pruning case that separates `ENOENT` from age, uncertainty, and incompleteness |
-| `output.rs` | 671 | 11 | 11 / 425 | **Split verdict, and the split is the finding.** All 11 tests are inside `pub mod log` (`output.rs:426`) and cover the bounded-ASCII-line contract hard — size bound, whole-value truncation, worst-case head fit, field-order determinism, status triage. The *envelope* layer above it (`EnvelopeV1` at `output.rs:8`, `scan()` at `:103`, `cleanup()` at `:158`, both `schema_version: 1` literals at `:140` and `:206`) still has **zero** in-file tests |
+| `cleanup.rs` | 6575 | 73 | 73 / 2481 | Appropriate. Most safety-critical module has the most tests; the race fakes show the hard cases were found and pinned |
+| `workspace.rs` | 4517 | 57 | 57 / 1525 | Appropriate, and the fakes are argument-focused rather than result-focused — the right instinct |
+| `update.rs` | 2773 | 45 | 45 / 1235 | Reasonable unit coverage, but this is the module whose defects (C011, C016, C017) escaped to production. Unit tests cannot see a transport that cannot reach its authority. Its transaction-hygiene evidence was briefly a false green too — see R6 |
+| `discovery.rs` | 2187 | 36 | 36 / 950 | Permission traversal has a premise-checked Unix fixture; 1,001 synthetic errors prove per-root aggregation stays bounded |
+| `cli.rs` | 1025 | 27 | 27 / 398 | Good |
+| `config.rs` | 1443 | 19 | 19 / 576 | Good for its surface |
+| `progress.rs` | 840 | 13 | 13 / 508 | Thin relative to size. Terminal-capability detection is mostly untested, and integration tests force `--no-progress` (`cli_contract.rs:183`), excluding the renderer from end-to-end coverage by construction |
+| `discovery_state.rs` | 918 | 14 | 14 / 490 | Candidate provenance and cache/runtime exclusion are pinned alongside C028 absence handling |
+| `output.rs` | 941 | 17 | 17 / 425 | **Split verdict, and the split is the finding.** The in-file tests cover bounded log output and update JSON; the scan/cleanup envelope layer still has **zero** direct in-file tests |
 | `report.rs` | 195 | 7 | 7 / 71 | **Unusually good for its size.** Covers control-character and non-UTF-8 path escaping, zero-state wording, the full `format_bytes` ladder including `u64::MAX`, group ordering with the path tie-break, and total de-duplication across equal physical roots. Two are `#[cfg(unix)]` (`report.rs:88`, `:101`) because they use `OsString::from_vec` |
-| `policy.rs` | 966 | 13 | 13 / 600 | Adequate for the module deciding the Routine/Full scope boundary since C028: the decision table, symlink refusal, premise recheck, Full-generation freshness, and raw-candidate identity are each pinned |
+| `policy.rs` | 1018 | 13 | 13 / 645 | Adequate for the module deciding the Routine/Full scope boundary: decision table, symlink refusal, premise recheck, Full-generation freshness, and raw-candidate identity are pinned |
 | `traverse.rs` | 599 | 6 | 6 / 469 | **Too low for the module that walks the whole filesystem.** No test double for traversal-scale error attribution; and `source_activity` (`:268`) has no production caller |
 | `editor.rs` | 215 | 2 | 2 / 155 | Low, but the process-exec behaviour is covered end to end at `cli_contract.rs:676`, the right place for it |
-| `domain.rs` | 381 | 0 | 0 / 381 | Defensible. Pure data, exercised transitively. Semantic *rules* live in the modules that interpret the types |
+| `domain.rs` | 411 | 1 | 1 / 382 | Defensible. Pure data, exercised transitively. Semantic *rules* live in the modules that interpret the types |
 | `error.rs` | 16 | 0 | — | Defensible |
 | `lib.rs` | 15 | 0 | — | Defensible |
-| `main.rs` | 1048 | 0 | 0 / 1048 | **Zero inline tests for the composition root**, which grew 266 lines in C028. Partly mitigated — `cli_contract.rs` runs the binary as a subprocess, so `main()` and `run()` execute in all 43 cases and four non-zero exit codes are pinned (`1` at `:361`, `:1021` and `:2651`, `2` at `:1863` and `:2480`, `17` at `:724`), with `0` asserted implicitly via `status.success()`. But `run()`'s structure is opaque, and the Full-generation selection it performs has no live subprocess run (unit-pinned at `src/policy.rs:913` instead) |
+| `main.rs` | 1046 | 0 | 0 / 1046 | **Zero inline tests for the composition root.** Partly mitigated — `cli_contract.rs` runs the binary as a subprocess and pins several non-zero exit paths, but `run()`'s structure remains opaque |
 
 The contrast in the last three rows is the finding. The *human* renderer beside the
 *machine* DTO layer has 7 unusually strong tests, while the envelope layer below the log

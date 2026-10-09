@@ -30,26 +30,26 @@ C023 planning baseline: `eaa7bba1cd70513a7bf48a99d7d9ffe19334a539`
 C025 planning baseline: `35905c5841effadcdb32e3ad4b5f396e4e9096ef`
 C026 planning baseline: `129ac21db3e39dd578df7df5ad6cdeefabc8acb0`
 C027 planning baseline: `59c0be9422e52b23bbb771fe94943cb004670b59`
+C029–C031 planning baseline: `f08705e77716e445e50097333a0313cab9574cdd` (2026-10-09)
 Immutability policy enabled: `2026-10-05T13:34:38Z` (repository-level, not owner-enforced)
 
 ## Subsystem status
 
 | Subsystem | Status | Roadmap | Current milestone | Blocker |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | **C028 closed — shipped in 0.2.4** | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | none open | Stale learned roots no longer abort bare Routine Execute (provenance admission, late recheck, Full-generation freshness, Full-only absence pruning); hosted lanes green, release record `r024-status.md`, automatic five-target smoke green. |
+| Artifact discovery and cleanup | **C029/C030/C031 closed** | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | C031 partial-scope decision | Corrected-head run `37953997910` is green on Ubuntu, Windows, macOS, MSRV, generated docs, benchmark, and Linux/Windows/macOS installers. C031 retains combined-universe fail-closed behavior; ADR 004 remains proposed and blocks partial-scope Execute. C028 remains closed/shipped in 0.2.4. |
 | Distribution, release, and update | **published through 0.2.4; C027 closed** | `plans/subsystems/distribution-release-update-roadmap.md` | none open | v0.2.4 carries the C028 stale-learned-root fix (tag `v0.2.4` at `24ec57a`, immutable, crates.io sha256 `61e97a6e…`, automatic smoke `37850582892` green on five targets, v0.2.3 → v0.2.4). C027 corrected the first-install UX — a default non-root install persists `$HOME/.local/bin` into a supported zsh/bash profile, while `--dir`, system installs, unsupported shells, unsafe targets, `--no-shell-profile`, and `--no-path` stay non-mutating — and **shipped in v0.2.3** (tag `v0.2.3` at `7b4c632`, immutable, crates.io sha256 `ec6206d57…`, automatic smoke `37652257315` green on five targets). 19 state-transition fixture cases, hosted Linux/macOS/Windows evidence, and the published-installer end-to-end check are all recorded in the closure record. |
 
 ## Open work
 
-**C028 is closed — shipped in 0.2.4**: implementation, regression evidence,
-documentation, and the verification ladder are complete and landed
-(implementation `24a9e82`, macOS case-twin test fix `a25b4e8`)
-(`plans/closure/artifact-discovery-cleanup/c028-status.md`). Hosted lanes are
-green, `v0.2.4` carries the fix, the automatic five-target smoke
-(`37850582892`, v0.2.3 → v0.2.4) is green, and the release record is
-`plans/closure/distribution-release-update/r024-status.md`.
+**Current handoff — C029–C031 safe tracks are closed.** Baseline `f08705e`; handoff branch `plans/c029-c031-permission-discovery-cleanup-reliability`. Corrected-head run `37953997910` is green on Ubuntu, Windows, macOS, MSRV, generated docs, benchmark, and Linux/Windows/macOS installers:
 
-Plan: `plans/implementation/artifact-discovery-cleanup/c028-stale-learned-root-availability-and-cleanup-scope-corrective.md` (handoff branch `plans/c028-stale-learned-roots-corrective`; baseline `bd89fb1a5f8e1ba5ec5e41ff5586e082c2352149`). The reported bare `cargo cleanme` failure on a deleted Codex worktree is caused by retained learned roots reaching strict explicit-root cleanup validation. The corrective requires provenance-aware admission for Routine and Full, a single complete combined universe after filtering, late absence/reappearance checks, strict explicit roots, Full-generation freshness, deterministic CLI diagnostics/exit evidence, regression negative controls, and Linux/macOS/Windows/MSRV gates. The plan does not authorize release. Implementation and closure record are complete in the tree; hosted evidence, publication, release, and installed-release smoke are outstanding.
+- **C029 (closed):** implemented in `653c8f6`/`651c97a`; bounded pathless coverage diagnostics and partial Full gating. See `plans/closure/artifact-discovery-cleanup/c029-status.md`.
+- **C030 (closed):** implemented in `e7a9a82`; resolved durable workspaces only create Routine roots, known cache/runtime locations are filtered without suppressing Full inventory. See `plans/closure/artifact-discovery-cleanup/c030-status.md`.
+- **C031 safe track (closed):** implemented in `e58825b` with subprocess regression `0f8f10f`; accurate resolution/unit counts precede the still-fail-closed whole-scope block. See `plans/closure/artifact-discovery-cleanup/c031-status.md`.
+- **Handoff / blocker:** No hosted qualification remains outstanding. ADR 001/C003/C004/C006 combined-universe fail-closed rules remain binding. ADR 004 is still proposed; partial-scope Execute remains blocked because unresolved or unreadable participants cannot be proven independent. No further eligible implementation plan is unblocked by these corrective closures.
+
+**C028 is historical and closed — shipped in v0.2.4.** Its availability fix and published-artifact smoke are complete; see `plans/closure/artifact-discovery-cleanup/c028-status.md` and `plans/closure/distribution-release-update/r024-status.md`. C029–C031 do not reopen C028.
 
 C027 is **closed** and shipped in **v0.2.3**. It corrected M010B's deliberately
 weak POSIX PATH contract — the v0.2.2 installer installed to `$HOME/.local/bin`
@@ -60,7 +60,7 @@ new terminal could not find the binary. Plan:
 Closure record: `plans/closure/distribution-release-update/c027-status.md`.
 Release record: `plans/closure/distribution-release-update/r023-status.md`.
 
-The product/release line is published through **v0.2.3**, immutable and
+The product/release line is published through **v0.2.4**, immutable and
 attested, with its five-target automatic smoke green.
 
 Read `plans/closure/distribution-release-update/c027-status.md` §7 before
@@ -90,7 +90,7 @@ later green run does not convert them into passes.
 | Item | Status | Plan / record | Note |
 |---|---|---|---|
 | C028 — stale learned-root availability and cleanup-scope corrective | **closed — shipped in 0.2.4** | `plans/closure/artifact-discovery-cleanup/c028-status.md` | User-observed Linux `ENOENT` on a disappeared learned Codex worktree aborted default Routine Execute with exit 2. The tree now omits proven-absent/non-directory automatic roots with a diagnostic, blocks symlink/unreadable automatic roots with a typed report (exit 1), keeps explicit roots strict (exit 2), rechecks the admission premise before proof and every spawn, prunes definitively nonexistent learned dirs only on complete certain Full, and consumes the in-memory Full generation. Proven by premise-negative baseline repro, 7 subprocess cases (direct + staged plugin), 7 unit tests, hosted lanes green on the branch and on `main`, publication in `v0.2.4` (`r024-status.md`), and the automatic five-target smoke green. |
-| M012A — canonical maintenance CLI and dry-run semantics | **closed** | `plans/closure/artifact-discovery-cleanup/m012a-status.md` | Bare `cargo cleanme` is Routine Execute through the existing combined-root proof; `--dry-run` is zero-Cargo-clean simulation; rootless `scan` is Full and ignores a configured `scan.root`; `clean` defaults to Execute. The destructive-default break shipped at the 0.2.0 minor boundary; current `main` is 0.2.3. Two defects were found and fixed inside the milestone: a configured `scan.root` made `clean --known` a silent no-op, and `clean --full` returned the scan's exit code silently. |
+| M012A — canonical maintenance CLI and dry-run semantics | **closed** | `plans/closure/artifact-discovery-cleanup/m012a-status.md` | Bare `cargo cleanme` is Routine Execute through the existing combined-root proof; `--dry-run` is zero-Cargo-clean simulation; rootless `scan` is Full and ignores a configured `scan.root`; `clean` defaults to Execute. The destructive-default break shipped at the 0.2.0 minor boundary; current `main` is 0.2.4. Two defects were found and fixed inside the milestone: a configured `scan.root` made `clean --known` a silent no-op, and `clean --full` returned the scan's exit code silently. |
 | M012B — bounded unattended log output and greggd integration | **closed** | `plans/closure/artifact-discovery-cleanup/m012b-status.md` | `--format log` emits one bounded deterministic ASCII line (<=384 bytes, no paths, no Cargo stderr) with a typed block-reason code; progress and ordinary diagnostic fan-out are suppressed in that mode; JSON and exit codes unchanged; `docs/AUTOMATION.md` documents the greggd integration. A stale `scan --deep` example in Gregg's docs is a non-blocking downstream handoff. |
 | C019 — exact unignore sibling containment corrective | **closed** | `plans/closure/artifact-discovery-cleanup/c019-status.md` | Corrects M002: a literal ignored ancestor plus an exact unignore re-admitted unrelated siblings. Shipped in v0.2.0 and retained in the C023 v0.2.1 corrective line. |
 | C020 — Windows concurrent first-use config creation race | **closed** | `plans/closure/artifact-discovery-cleanup/c020-status.md` | Corrects `config::create_initial`. Fixed with a process-wide nonce so concurrent first-use staging names cannot collide. Shipped in v0.2.0 and retained in the C023 v0.2.1 corrective line. |
@@ -143,21 +143,25 @@ here that a future release must discharge to unblock anything.
 
 ## Published state
 
-**Eleven** releases are published as GitHub releases and on crates.io.
-**v0.2.0 is yanked**; the other ten are not.
+**Twelve** releases are published as GitHub releases and on crates.io.
+**v0.2.0 is yanked**; the other eleven are not.
 
 Rechecked live against the crates.io API on 2026-10-07, after publishing
 **v0.2.3**: `max_version: 0.2.3`, `total: 11`, and `yanked` is `true` for
 `0.2.0` alone — `0.2.3` through `0.1.0` all report `yanked: false`. The 0.2.0
 yank remains visible in that record as an explicit `yank` audit action at
-`2026-10-06T16:21:49Z`.
+`2026-10-06T16:21:49Z`. **v0.2.4** was published after that recheck; its
+crates.io confirmation (`0.2.4`, `yanked: false`) is recorded in
+[`r024-status.md`](closure/distribution-release-update/r024-status.md).
 
 | Release | crates.io sha256 | GitHub release | Automatic smoke |
 |---|---|---|---|
-| `v0.2.3` (current) | `ec6206d578beee28bc82bb63b142a097d38e825b7aabe4c277dc5dc48be9bd4f` | `immutable: true`, id `405953835` | `37652257315` — green on all five targets |
+| `v0.2.4` (current) | `61e97a6e13dcbf364e15513971c1a973558431dca63b99637ed032465c8c02f7` | `immutable: true`, id `407294986` | `37850582892` — green on all five targets |
+| `v0.2.3` | `ec6206d578beee28bc82bb63b142a097d38e825b7aabe4c277dc5dc48be9bd4f` | `immutable: true`, id `405953835` | `37652257315` — green on all five targets |
 | `v0.2.2` | `acc488b5733a307408103d5207ac2c17b1a4b24099025617a2ea2dd780860050` | `immutable: true`, id `RE_kwDOU5PV0M4YKIbG` | `37561575727` — green on all five targets |
 
 Full evidence in
+[`r024-status.md`](closure/distribution-release-update/r024-status.md),
 [`r023-status.md`](closure/distribution-release-update/r023-status.md) and
 [`r022-status.md`](closure/distribution-release-update/r022-status.md).
 

@@ -23,6 +23,11 @@ This page covers the three things an unattended run needs to get right:
 cleanup, `config`, or `update` invocation, and nothing on stderr for a
 successful run.
 
+When cleanup is blocked by incomplete discovery, the human/JSON report includes
+the workspaces and cleanup units actually resolved after the walk. A diagnostic
+count no longer implies that Cargo resolution was skipped; the `reason` field
+still identifies the whole-scope block, and no cleanup command is spawned.
+
 ```console
 $ cargo cleanme --format log
 cargo-cleanme op=clean status=ok scope=routine mode=execute cleaned=7 skipped=3 failed=0 reclaimed_bytes=19778387968 diagnostics=0

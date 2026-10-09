@@ -97,6 +97,7 @@ pub enum RootProvenance {
 pub enum AutomaticOmission {
     NotFound(PathBuf),
     NonDirectory(PathBuf),
+    NotMaintainable(PathBuf),
 }
 
 /// An automatic root that cannot be safely omitted: a symlink (never followed,
@@ -123,7 +124,9 @@ impl ClassifiedRoots {
         self.omitted
             .iter()
             .map(|o| match o {
-                AutomaticOmission::NotFound(p) | AutomaticOmission::NonDirectory(p) => p.clone(),
+                AutomaticOmission::NotFound(p)
+                | AutomaticOmission::NonDirectory(p)
+                | AutomaticOmission::NotMaintainable(p) => p.clone(),
             })
             .collect()
     }
@@ -140,6 +143,9 @@ impl ClassifiedRoots {
                 AutomaticOmission::NonDirectory(p) => {
                     format!("omitting non-directory learned root {}", p.display())
                 }
+                AutomaticOmission::NotMaintainable(p) => {
+                    format!("omitting non-maintainable learned root {}", p.display())
+                }
             })
             .collect();
         diagnostics.sort();
@@ -154,6 +160,14 @@ impl ClassifiedRoots {
 /// `Path::is_dir` conflate errors and follow symlinks. There is deliberately
 /// no catch-all `Err(_) => continue`: every indeterminate failure blocks.
 pub fn classify_cleanup_roots(entries: CleanupCandidates) -> Result<ClassifiedRoots, AppError> {
+    let home = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf());
+    classify_cleanup_roots_with_home(entries, home.as_deref())
+}
+
+fn classify_cleanup_roots_with_home(
+    entries: CleanupCandidates,
+    home: Option<&Path>,
+) -> Result<ClassifiedRoots, AppError> {
     let mut out = ClassifiedRoots::default();
     for (path, provenance) in entries {
         match (fs::symlink_metadata(&path), provenance) {
@@ -176,7 +190,19 @@ pub fn classify_cleanup_roots(entries: CleanupCandidates) -> Result<ClassifiedRo
                         ),
                     });
                 } else if meta.is_dir() {
-                    out.admitted.push(path);
+                    if crate::discovery_state::automatic_root_is_maintainable(&path, home) {
+                        out.admitted.push(path);
+                    } else if let Err(error) = fs::read_dir(&path) {
+                        out.blocked.push(AutomaticBlock {
+                            path: path.clone(),
+                            reason: format!(
+                                "cannot establish coverage of non-maintainable automatic root {}: {error}",
+                                path.display()
+                            ),
+                        });
+                    } else {
+                        out.omitted.push(AutomaticOmission::NotMaintainable(path));
+                    }
                 } else {
                     out.omitted.push(AutomaticOmission::NonDirectory(path));
                 }
@@ -230,12 +256,31 @@ pub fn recheck_admission_premise(
     admitted: &[PathBuf],
     omitted: &[AutomaticOmission],
 ) -> Option<(PathBuf, String)> {
+    let home = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf());
     for omission in omitted {
         let (path, must_stay_absent) = match omission {
             AutomaticOmission::NotFound(p) => (p, true),
             AutomaticOmission::NonDirectory(p) => (p, false),
+            AutomaticOmission::NotMaintainable(p) => (p, false),
         };
         match fs::symlink_metadata(path) {
+            Ok(meta) if matches!(omission, AutomaticOmission::NotMaintainable(_)) => {
+                if crate::discovery_state::automatic_root_is_maintainable(path, home.as_deref()) {
+                    return Some((
+                        path.clone(),
+                        format!(
+                            "previously omitted root {} is now maintainable; ownership scope changed",
+                            path.display()
+                        ),
+                    ));
+                }
+                if meta.file_type().is_symlink() {
+                    return Some((
+                        path.clone(),
+                        format!("omitted root {} became a symlink", path.display()),
+                    ));
+                }
+            }
             Ok(meta) if meta.file_type().is_symlink() => {
                 return Some((
                     path.clone(),
@@ -424,10 +469,11 @@ fn routine_roots_from_state(
                     .learned_roots
                     .into_iter()
                     .filter(|r| {
-                        retention_days == 0
-                            || now < r.last_project_seen_at
-                            || now.saturating_sub(r.last_project_seen_at)
-                                <= u64::from(retention_days) * 86400
+                        crate::discovery_state::automatic_root_is_maintainable(&r.path, Some(home))
+                            && (retention_days == 0
+                                || now < r.last_project_seen_at
+                                || now.saturating_sub(r.last_project_seen_at)
+                                    <= u64::from(retention_days) * 86400)
                     })
                     .map(|r| r.path),
             );
@@ -791,11 +837,14 @@ mod tests {
 
         // Missing + non-directory automatic roots omit; the real sibling is
         // admitted and no block is raised.
-        let classified = classify_cleanup_roots(vec![
-            (real.clone(), RootProvenance::Automatic),
-            (missing.clone(), RootProvenance::Automatic),
-            (file.clone(), RootProvenance::Automatic),
-        ])
+        let classified = classify_cleanup_roots_with_home(
+            vec![
+                (real.clone(), RootProvenance::Automatic),
+                (missing.clone(), RootProvenance::Automatic),
+                (file.clone(), RootProvenance::Automatic),
+            ],
+            Some(d.path()),
+        )
         .unwrap();
         assert_eq!(classified.admitted, vec![real.clone()]);
         assert!(classified.blocked.is_empty());
