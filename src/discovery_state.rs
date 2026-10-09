@@ -140,10 +140,13 @@ pub fn automatic_root_is_maintainable(path: &Path, home: Option<&Path>) -> bool 
         forbidden.push(go_cache);
     }
     // Test harnesses commonly place a synthetic home below the system temp
-    // directory; a root inside that explicit home is classified by its
-    // home-relative provenance below, not by the fixture's container path.
-    if !home.is_some_and(|home| canonical.starts_with(home)) {
-        forbidden.push(std::env::temp_dir());
+    // directory; allow that home namespace while continuing to exclude the
+    // platform temp root itself (which can sit inside a real Windows home).
+    let temp_root = std::env::temp_dir();
+    let inside_synthetic_home =
+        home.is_some_and(|home| home.starts_with(&temp_root) && canonical.starts_with(home));
+    if !inside_synthetic_home {
+        forbidden.push(temp_root);
     }
     if forbidden.iter().any(|root| {
         let root = fs::canonicalize(root).unwrap_or_else(|_| root.clone());
