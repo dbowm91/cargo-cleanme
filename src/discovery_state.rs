@@ -143,10 +143,14 @@ pub fn automatic_root_is_maintainable(path: &Path, home: Option<&Path>) -> bool 
     // directory; allow that home namespace while continuing to exclude the
     // platform temp root itself (which can sit inside a real Windows home).
     let temp_root = std::env::temp_dir();
-    let inside_synthetic_home =
-        home.is_some_and(|home| home.starts_with(&temp_root) && canonical.starts_with(home));
+    let canonical_temp_root = fs::canonicalize(&temp_root).unwrap_or(temp_root);
+    let canonical_home =
+        home.map(|home| fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf()));
+    let inside_synthetic_home = canonical_home
+        .as_ref()
+        .is_some_and(|home| home.starts_with(&canonical_temp_root) && canonical.starts_with(home));
     if !inside_synthetic_home {
-        forbidden.push(temp_root);
+        forbidden.push(canonical_temp_root);
     }
     if forbidden.iter().any(|root| {
         let root = fs::canonicalize(root).unwrap_or_else(|_| root.clone());
@@ -542,7 +546,7 @@ mod tests {
             state
                 .learned_roots
                 .iter()
-                .any(|r| r.path == home.path().join("projects"))
+                .any(|r| r.path == fs::canonicalize(home.path().join("projects")).unwrap())
         );
         assert!(state.learned_roots.iter().all(|r| {
             !r.path.starts_with(home.path().join(".npm"))
