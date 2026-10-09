@@ -778,6 +778,11 @@ fn run_scan(
         options.stats,
     )?;
     let discovery_elapsed = discovery_start.elapsed();
+    let full_traversal_complete = discovered.coverage_complete
+        && !discovered.diagnostics.iter().any(|d| {
+            d.category == domain::DiagnosticCategory::PlatformRoot
+                && d.severity == domain::DiagnosticSeverity::Error
+        });
     let mut counters = discovered.counters.clone();
     counters.discovery_nanos = counters
         .discovery_nanos
@@ -839,10 +844,7 @@ fn run_scan(
                     }
                 })
                 .collect();
-            let complete = !diagnostics.iter().any(|d| {
-                d.category == domain::DiagnosticCategory::PlatformRoot
-                    && d.severity == domain::DiagnosticSeverity::Error
-            });
+            let complete = full_traversal_complete;
             match cargo_cleanme::discovery_state::reconcile_full(
                 &prior,
                 &observations,
@@ -928,11 +930,7 @@ fn run_scan(
         observer,
     );
 
-    let full_incomplete = full
-        && diagnostics.iter().any(|d| {
-            d.category == domain::DiagnosticCategory::PlatformRoot
-                && d.severity == domain::DiagnosticSeverity::Error
-        });
+    let full_incomplete = full && !full_traversal_complete;
     // Deterministic final report: every group, deduplicated total, stable order.
     let mut report = domain::ScanReport {
         groups: physical
