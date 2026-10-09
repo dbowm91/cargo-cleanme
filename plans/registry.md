@@ -30,26 +30,26 @@ C023 planning baseline: `eaa7bba1cd70513a7bf48a99d7d9ffe19334a539`
 C025 planning baseline: `35905c5841effadcdb32e3ad4b5f396e4e9096ef`
 C026 planning baseline: `129ac21db3e39dd578df7df5ad6cdeefabc8acb0`
 C027 planning baseline: `59c0be9422e52b23bbb771fe94943cb004670b59`
+C029–C031 planning baseline: `f08705e77716e445e50097333a0313cab9574cdd` (2026-10-09)
 Immutability policy enabled: `2026-10-05T13:34:38Z` (repository-level, not owner-enforced)
 
 ## Subsystem status
 
 | Subsystem | Status | Roadmap | Current milestone | Blocker |
 |---|---|---|---|---|
-| Artifact discovery and cleanup | **C028 closed — shipped in 0.2.4** | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | none open | Stale learned roots no longer abort bare Routine Execute (provenance admission, late recheck, Full-generation freshness, Full-only absence pruning); hosted lanes green, release record `r024-status.md`, automatic five-target smoke green. |
+| Artifact discovery and cleanup | **C029/C030 ready; C031 blocked** | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | C029, then C030; C031 research gate | Non-root Full traversal incorrectly attributes >1,100 permission warnings to `/`; bare Routine finds 2,014 manifests but skips resolution because ten discovery diagnostics block the combined scope. C029 corrects coverage/errors, C030 cleans learned-root selection, C031 researches rigorous independent ownership proof. C028 remains closed/shipped in 0.2.4. |
 | Distribution, release, and update | **published through 0.2.4; C027 closed** | `plans/subsystems/distribution-release-update-roadmap.md` | none open | v0.2.4 carries the C028 stale-learned-root fix (tag `v0.2.4` at `24ec57a`, immutable, crates.io sha256 `61e97a6e…`, automatic smoke `37850582892` green on five targets, v0.2.3 → v0.2.4). C027 corrected the first-install UX — a default non-root install persists `$HOME/.local/bin` into a supported zsh/bash profile, while `--dir`, system installs, unsupported shells, unsafe targets, `--no-shell-profile`, and `--no-path` stay non-mutating — and **shipped in v0.2.3** (tag `v0.2.3` at `7b4c632`, immutable, crates.io sha256 `ec6206d57…`, automatic smoke `37652257315` green on five targets). 19 state-transition fixture cases, hosted Linux/macOS/Windows evidence, and the published-installer end-to-end check are all recorded in the closure record. |
 
 ## Open work
 
-**C028 is closed — shipped in 0.2.4**: implementation, regression evidence,
-documentation, and the verification ladder are complete and landed
-(implementation `24a9e82`, macOS case-twin test fix `a25b4e8`)
-(`plans/closure/artifact-discovery-cleanup/c028-status.md`). Hosted lanes are
-green, `v0.2.4` carries the fix, the automatic five-target smoke
-(`37850582892`, v0.2.3 → v0.2.4) is green, and the release record is
-`plans/closure/distribution-release-update/r024-status.md`.
+**Current priority — non-root Full scan and bare Routine cleanup happy paths (planning only).** Baseline `f08705e`; handoff branch `plans/c029-c031-permission-discovery-cleanup-reliability`:
 
-Plan: `plans/implementation/artifact-discovery-cleanup/c028-stale-learned-root-availability-and-cleanup-scope-corrective.md` (handoff branch `plans/c028-stale-learned-roots-corrective`; baseline `bd89fb1a5f8e1ba5ec5e41ff5586e082c2352149`). The reported bare `cargo cleanme` failure on a deleted Codex worktree is caused by retained learned roots reaching strict explicit-root cleanup validation. The corrective requires provenance-aware admission for Routine and Full, a single complete combined universe after filtering, late absence/reappearance checks, strict explicit roots, Full-generation freshness, deterministic CLI diagnostics/exit evidence, regression negative controls, and Linux/macOS/Windows/MSRV gates. The plan did not authorize release. Implementation, closure record, hosted evidence, publication, release, and installed-release smoke are all complete; see the tables above and `plans/closure/distribution-release-update/r024-status.md`.
+- **C029, ready (first):** `plans/implementation/artifact-discovery-cleanup/c029-permission-aware-traversal-and-full-coverage-corrective.md`. Honest unreadable-subtree attribution, bounded/deduplicated diagnostics, partial versus complete Full state/exit behavior. Do not promote incomplete Full into negative learned-state pruning.
+- **C030, ready (second):** `plans/implementation/artifact-discovery-cleanup/c030-learned-root-provenance-and-maintenance-scope-hygiene-corrective.md`. Only Cargo-resolved, durable developer locations become new automatic Routine search roots; Full inventory and explicit override retain unusual paths. Interface dependency on C029 coverage.
+- **C031, research ready but destructive implementation blocked:** `plans/implementation/artifact-discovery-cleanup/c031-happy-path-ownership-scope-and-partial-failure-corrective.md`. Qualify real healthy Routine execution and correct misleading '0 resolved' reporting; partial-scope cleaning requires **acceptance of proposed** `plans/adr/004-proposed-bounded-independent-cleanup-proof-islands.md` plus demonstrable cross-root independence proofs.
+- **Handoff / blocker:** ADR 001/C003/C004/C006 combined-universe fail-closed rules remain binding. Unresolved manifests or unreadable subtrees that could conceal an owner continue blocking destruction. No plan is implemented or release-authorized. Closure evidence must be produced in `c029-status.md`, `c030-status.md`, and `c031-status.md` after failing-direction tests and Linux/macOS/Windows/MSRV qualification.
+
+**C028 is historical and closed — shipped in v0.2.4.** Its availability fix and published-artifact smoke are complete; see `plans/closure/artifact-discovery-cleanup/c028-status.md` and `plans/closure/distribution-release-update/r024-status.md`. C029–C031 do not reopen C028.
 
 C027 is **closed** and shipped in **v0.2.3**. It corrected M010B's deliberately
 weak POSIX PATH contract — the v0.2.2 installer installed to `$HOME/.local/bin`
