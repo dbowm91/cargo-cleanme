@@ -258,6 +258,15 @@ fn entry_is_within_any(entry: &dua_core::Entry, root: &Path, prefixes: &[PathBuf
         .any(|prefix| entry_is_within(entry, root, prefix))
 }
 
+fn record_walk_error(counts: &mut (u64, u64, u64), kind: std::io::ErrorKind) {
+    counts.0 = counts.0.saturating_add(1);
+    if kind == std::io::ErrorKind::PermissionDenied {
+        counts.1 = counts.1.saturating_add(1);
+    } else if kind == std::io::ErrorKind::NotFound {
+        counts.2 = counts.2.saturating_add(1);
+    }
+}
+
 /// Whether a *global-only* system prune covers this entry.
 ///
 /// A walk root strictly inside a system prune re-opens that prune for its own
@@ -602,12 +611,7 @@ fn discover_global_roots(
             dua_core::RootEvent::Entry(Err(e)) => {
                 *coverage_complete = false;
                 let counts = walk_errors.entry(root_idx).or_default();
-                counts.0 = counts.0.saturating_add(1);
-                if e.kind() == std::io::ErrorKind::PermissionDenied {
-                    counts.1 = counts.1.saturating_add(1);
-                } else if e.kind() == std::io::ErrorKind::NotFound {
-                    counts.2 = counts.2.saturating_add(1);
-                }
+                record_walk_error(counts, e.kind());
                 continue;
             }
             dua_core::RootEvent::Finished => {
@@ -837,9 +841,7 @@ fn discover_manifests_root(
     let descend_prunes = prunes.to_vec();
     let mut batch_visited = 0u64;
     let mut batch_pruned = 0u64;
-    let mut traversal_errors = 0u64;
-    let mut permission_errors = 0u64;
-    let mut vanished_errors = 0u64;
+    let mut traversal_errors = (0u64, 0u64, 0u64);
     let mut walk = dua_core::walk(
         &walker_root,
         traverse::worker_threads(),
@@ -872,12 +874,7 @@ fn discover_manifests_root(
             Ok(e) => e,
             Err(e) => {
                 *coverage_complete = false;
-                traversal_errors = traversal_errors.saturating_add(1);
-                if e.kind() == std::io::ErrorKind::PermissionDenied {
-                    permission_errors = permission_errors.saturating_add(1);
-                } else if e.kind() == std::io::ErrorKind::NotFound {
-                    vanished_errors = vanished_errors.saturating_add(1);
-                }
+                record_walk_error(&mut traversal_errors, e.kind());
                 continue;
             }
         };
@@ -928,20 +925,23 @@ fn discover_manifests_root(
     if batch_pruned > 0 {
         observer.dirs_pruned(batch_pruned);
     }
-    if traversal_errors > 0 {
+    if traversal_errors.0 > 0 {
         diagnostics.push(ScanDiagnostic {
             severity: DiagnosticSeverity::Warning,
-            category: if permission_errors > 0 {
+            category: if traversal_errors.1 > 0 {
                 DiagnosticCategory::PermissionDenied
-            } else if vanished_errors > 0 {
+            } else if traversal_errors.2 > 0 {
                 DiagnosticCategory::Vanished
             } else {
                 DiagnosticCategory::Metadata
             },
             path: None,
             message: format!(
-                "{traversal_errors} traversal error(s): {permission_errors} permission-denied, {vanished_errors} vanished, {} other; skipped region location unknown",
-                traversal_errors.saturating_sub(permission_errors).saturating_sub(vanished_errors)
+                "{} traversal error(s): {} permission-denied, {} vanished, {} other; skipped region location unknown",
+                traversal_errors.0,
+                traversal_errors.1,
+                traversal_errors.2,
+                traversal_errors.0.saturating_sub(traversal_errors.1).saturating_sub(traversal_errors.2)
             ),
         });
     }
@@ -953,6 +953,19 @@ mod tests {
     use super::*;
     use crate::progress::NoopObserver;
     use tempfile::tempdir;
+
+    #[test]
+    fn more_than_one_thousand_walk_errors_stay_one_bounded_root_record() {
+        let mut by_root = HashMap::<usize, (u64, u64, u64)>::new();
+        for _ in 0..1_001 {
+            record_walk_error(
+                by_root.entry(0).or_default(),
+                std::io::ErrorKind::PermissionDenied,
+            );
+        }
+        assert_eq!(by_root.len(), 1, "the accumulator stores roots, not events");
+        assert_eq!(by_root[&0], (1_001, 1_001, 0));
+    }
 
     #[cfg(unix)]
     #[test]
