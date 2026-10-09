@@ -8,6 +8,8 @@ command-line, JSON, and release-asset contracts are the stable surface.
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-10-09
+
 ### Fixed — discovery and maintenance scope
 
 - Full traversal errors without a child path are now reported as bounded,
