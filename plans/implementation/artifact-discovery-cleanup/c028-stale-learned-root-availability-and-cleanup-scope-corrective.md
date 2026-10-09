@@ -1,10 +1,6 @@
 # C028 — Stale Learned-Root Availability and Cleanup-Scope Corrective
 
-Status: **closed — shipped in 0.2.4.** Implementation `24a9e82` (plus
-macOS case-twin test fix `a25b4e8`); closure record
-`plans/closure/artifact-discovery-cleanup/c028-status.md`; release record
-`plans/closure/distribution-release-update/r024-status.md` (tag `v0.2.4` at
-`24ec57a`, automatic five-target smoke `37850582892` green).
+Status: **ready** (planning only; not implemented or released).
 
 Repository baseline: `bd89fb1a5f8e1ba5ec5e41ff5586e082c2352149` (`main`, 2026-10-08).
 
