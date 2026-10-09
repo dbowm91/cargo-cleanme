@@ -1,6 +1,6 @@
 # C031 — Routine cleanup happy path, ownership scope, and partial failure
 
-Status: **conditionally closed** — safe whole-scope path implemented; independent partial-scope execution remains blocked by unaccepted ADR 004 and macOS hosted jobs remain queued.
+Status: **closed** for the safe whole-scope corrective; independent partial-scope execution remains blocked by unaccepted ADR 004.
 
 Implementation commit: `e58825b` (read-only resolution/count reporting before the whole-scope incomplete-discovery block), with regression test `0f8f10f` and documentation/control-surface commit `60ee214`.
 
@@ -28,7 +28,7 @@ On 2026-10-09, local uid 1000 (`sugarwookie`), Rust `1.99.0`:
 
 ## Platform and fixture evidence
 
-The subprocess regression proves its own denied-read premise, uses the fixture's resolved fake Cargo on `PATH`, asserts metadata invocation, and checks zero cleanup calls. Existing healthy Routine Execute/Simulate fixtures remain green. Hosted run `37953385660` at `60ee214` passed Ubuntu and MSRV; Windows failed in a C030-only fixture assertion and macOS was canceled while queued. No C031 test failed in that run. Corrected-head run `37953997910` passes Ubuntu, Windows, MSRV, generated docs, benchmark, and Linux/Windows installers; macOS checks and installer jobs remain queued.
+The subprocess regression proves its own denied-read premise, uses the fixture's resolved fake Cargo on `PATH`, asserts metadata invocation, and checks zero cleanup calls. Existing healthy Routine Execute/Simulate fixtures remain green. Hosted run `37953385660` at `60ee214` passed Ubuntu and MSRV; Windows failed in a C030-only fixture assertion and macOS was canceled while queued. No C031 test failed in that run. Corrected-head run `37953997910` passes Ubuntu, Windows, macOS, MSRV, generated docs, benchmark, and Linux/Windows/macOS installers.
 
 ## Known limitations and blocked work
 
@@ -38,4 +38,4 @@ The subprocess regression proves its own denied-read premise, uses the fixture's
 
 Unresolved finding: **medium, deferred by design** — independent proof islands are not established. It is not a defect in the retained whole-scope model and does not block closing the safe track.
 
-Disposition: **conditionally closed** pending macOS hosted qualification; the independent partial-scope track remains blocked.
+Disposition: **closed** for the safe whole-scope track. Hosted run [`37953997910`](https://github.com/dbowm91/cargo-cleanme/actions/runs/37953997910) completed successfully, including both macOS jobs. The independent partial-scope track remains blocked pending an accepted ownership decision (ADR 004).

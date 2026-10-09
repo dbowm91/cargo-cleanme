@@ -1,6 +1,6 @@
 # C031 — Routine Cleanup Happy-Path, Ownership Scope, and Partial-Failure Corrective
 
-Status: **conditionally closed** for the safe whole-scope path; the independent partial-scope track remains **blocked** pending an accepted ownership decision and hosted macOS qualification (`37953997910`).
+Status: **closed** for the safe whole-scope corrective (hosted Linux/macOS/Windows plus MSRV qualification passed in run `37953997910`); the independent partial-scope track remains **blocked** pending an accepted ownership decision.
 Planning branch: `plans/c029-c031-permission-discovery-cleanup-reliability`.
 Repository baseline: `f08705e77716e445e50097333a0313cab9574cdd` (`main`, 2026-10-09).
 Source: `plans/subsystems/artifact-discovery-cleanup-roadmap.md`.

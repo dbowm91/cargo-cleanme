@@ -1,6 +1,6 @@
 # C030 — Learned-root provenance and Routine scope hygiene
 
-Status: **conditionally closed** — local implementation and verification are complete; hosted macOS checks and installer jobs remain queued.
+Status: **closed** — implementation, local verification, and hosted platform qualification are complete.
 
 Implementation commits: `e7a9a82` (state and policy provenance filters), `1a900bb` (platform temporary-root boundary correction), and `fc673fd` (canonical synthetic-home handling for Windows fixtures).
 
@@ -29,7 +29,7 @@ On 2026-10-09, local uid 1000 (`sugarwookie`), Rust `1.99.0`:
 
 ## Platform and fixture evidence
 
-Policy fixtures use a temporary home root, not an account-specific absolute path. They retain Full inventory records while asserting the exact Routine root set. Hosted run `37953385660` at `60ee214` exposed a Windows-only fixture mismatch: canonical learned paths differed from the expected path spelling, and the temporary-home boundary compared long/short Windows paths. Both sides are canonicalized in `fc673fd`. The prior Windows failure is retained. Corrected-head run `37953997910` passes Windows, Ubuntu, MSRV, generated docs, benchmark, and Linux/Windows installers; macOS checks and installer jobs remain queued.
+Policy fixtures use a temporary home root, not an account-specific absolute path. They retain Full inventory records while asserting the exact Routine root set. Hosted run `37953385660` at `60ee214` exposed a Windows-only fixture mismatch: canonical learned paths differed from the expected path spelling, and the temporary-home boundary compared long/short Windows paths. Both sides are canonicalized in `fc673fd`. The prior Windows failure is retained. Corrected-head run `37953997910` passes Windows, Ubuntu, macOS, MSRV, generated docs, benchmark, and Linux/Windows/macOS installers.
 
 ## Limitations and findings
 
@@ -38,6 +38,6 @@ Policy fixtures use a temporary home root, not an account-specific absolute path
 - No new config key or schema version was added. Explicit opt-in beyond existing explicit roots remains outside this corrective.
 - No release or published-artifact qualification was authorized by this plan.
 
-Unresolved findings: no known correctness defect. The initial Windows fixture failure is corrected and retained above; macOS hosted qualification remains outstanding.
+Unresolved findings: no known correctness defect. The initial Windows fixture failure is corrected and retained above; macOS hosted qualification is complete.
 
-Disposition: **conditionally closed** pending the two macOS jobs in run `37953997910`.
+Disposition: **closed**. Hosted run [`37953997910`](https://github.com/dbowm91/cargo-cleanme/actions/runs/37953997910) completed successfully, including both `checks (macos-latest)` and `installers (macos-latest)`.

@@ -1,6 +1,6 @@
 # C029 — Permission-aware traversal and Full coverage corrective
 
-Status: **conditionally closed** — local implementation and verification are complete; hosted macOS checks and installer jobs remain queued.
+Status: **closed** — implementation, local verification, and hosted platform qualification are complete.
 
 Implementation commits: `653c8f6` (coverage-aware traversal and Full state/exit wiring), `651c97a` (1,001-event bounded aggregation control), `0f8f10f` (premise-negative unreadable-root control), and documentation/control-surface commit `60ee214`.
 
@@ -30,7 +30,7 @@ The first local clippy run rejected one nested conditional; it was corrected bef
 
 ## Platform and fixture evidence
 
-The permission fixture verifies the unreadable premise before exercising mode `000`; it fails if the effective identity can still read the directory. The synthetic 1,001-event accumulator test is platform-independent. Hosted run `37953385660` is not closure evidence: Ubuntu/MSRV passed, Windows failed in a C030 fixture assertion, and macOS was canceled while queued. Corrected-head run `37953997910` passes Ubuntu, Windows, MSRV, generated docs, benchmark, and Linux/Windows installer jobs; its macOS checks and installer jobs remain queued. The correction is in `fc673fd`.
+The permission fixture verifies the unreadable premise before exercising mode `000`; it fails if the effective identity can still read the directory. The synthetic 1,001-event accumulator test is platform-independent. Hosted run `37953385660` is not closure evidence: Ubuntu/MSRV passed, Windows failed in a C030 fixture assertion, and macOS was canceled while queued. Corrected-head run `37953997910` passes Ubuntu, Windows, macOS, MSRV, generated docs, benchmark, and Linux/Windows/macOS installer jobs. The correction is in `fc673fd`.
 
 ## Limitations and findings
 
@@ -38,6 +38,6 @@ The permission fixture verifies the unreadable premise before exercising mode `0
 - Diagnostic detail is bounded to one aggregate per selected root. It counts permission-denied, vanished, and other events; exact child attribution remains unavailable.
 - No release or published-artifact qualification was authorized by this plan.
 
-Unresolved findings: no known correctness defect. Cross-platform hosted qualification remains an external closure requirement.
+Unresolved findings: no known correctness defect. Cross-platform hosted qualification is complete.
 
-Disposition: **conditionally closed** pending the two macOS jobs in run `37953997910`.
+Disposition: **closed**. Hosted run [`37953997910`](https://github.com/dbowm91/cargo-cleanme/actions/runs/37953997910) completed successfully, including both `checks (macos-latest)` and `installers (macos-latest)`.
