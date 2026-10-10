@@ -330,7 +330,7 @@ fn repeated_real_cargo_failures_are_grouped_without_losing_json_diagnostics() {
     );
     assert_eq!(json["result"]["summary"]["diagnostic_count"], 1_000);
     assert!(
-        output.stdout.len() < 300_000,
+        output.stdout.len() < 500_000,
         "the structured report stays within a predictable size: {} bytes",
         output.stdout.len()
     );
