@@ -258,6 +258,62 @@ fn json_scope_label_follows_the_resolved_scope_not_the_cli_flags() {
     assert_eq!(json["scope"], "explicit");
 }
 
+#[test]
+fn repeated_real_cargo_failures_are_grouped_without_losing_json_diagnostics() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("projects");
+    fs::create_dir_all(&root).unwrap();
+    let shared_missing_workspace = root.join("missing-workspace");
+    for index in 0..32 {
+        let package = root.join(format!("orphan-{index}"));
+        fs::create_dir_all(package.join("src")).unwrap();
+        fs::write(package.join("src/main.rs"), "fn main() {}\n").unwrap();
+        fs::write(
+            package.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"orphan-{index}\"\nversion = \"0.1.0\"\nworkspace = \"../missing-workspace\"\n"
+            ),
+        )
+        .unwrap();
+    }
+    assert!(
+        !shared_missing_workspace.exists(),
+        "fixture requires every orphan to refer to the same absent workspace"
+    );
+    let config = dir.path().join("config.toml");
+    fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "json",
+            "scan",
+            root.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "read-only scan should retain its partial result: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("32 Cargo workspace lookup failure(s)"),
+        "identical Cargo causes should be summarized with their count: {stderr}"
+    );
+    assert!(
+        stderr.lines().count() <= 8,
+        "repeated failures should not produce one stderr line per manifest: {stderr}"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["result"]["diagnostics"].as_array().unwrap().len(), 32);
+    assert_eq!(json["result"]["summary"]["diagnostic_count"], 32);
+}
+
 /// M012A §7: incompatible scan scope selectors are rejected by the parser, so
 /// they cannot reach traversal at all.
 ///
@@ -2274,6 +2330,21 @@ impl StaleLearnedFixture {
         stale
     }
 
+    fn write_deleted_learned_roots(&self, count: usize) -> Vec<PathBuf> {
+        let stale: Vec<PathBuf> = (0..count)
+            .map(|index| self._temp.path().join(format!("deleted-worktree-{index}")))
+            .collect();
+        for path in &stale {
+            std::fs::create_dir(path).unwrap();
+        }
+        self.write_state(&stale);
+        for path in &stale {
+            std::fs::remove_dir(path).unwrap();
+            assert!(!path.exists());
+        }
+        stale
+    }
+
     fn run(&self, args: &[&str]) -> std::process::Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
         command.args([
@@ -2401,7 +2472,7 @@ fn stale_learned_root_is_omitted_and_bare_routine_execute_cleans_the_sibling() {
             "via_plugin={via_plugin}: the baseline fatal must be gone: {stderr}"
         );
         assert!(
-            stderr.contains("omitting unavailable"),
+            stderr.contains("omitting 1 unavailable learned root(s)"),
             "via_plugin={via_plugin}: the omission must be reported truthfully: {stderr}"
         );
         // Exactly one JSON envelope on stdout.
@@ -2462,6 +2533,45 @@ fn stale_learned_root_simulate_agrees_with_execute_and_spawns_no_cargo_clean() {
         "simulation must not remove anything"
     );
     assert!(fixture.cargo_calls("metadata") >= 1, "{json}");
+}
+
+#[cfg(unix)]
+#[test]
+fn repeated_routine_runs_bound_stale_root_noise_without_mutating_state() {
+    let fixture = StaleLearnedFixture::new();
+    let stale = fixture.write_deleted_learned_roots(100);
+    let state_path = fixture.state_file();
+    let state_before = fs::read(&state_path).unwrap();
+
+    for run_number in 1..=2 {
+        let output = fixture.run(&["--dry-run"]);
+        assert!(
+            output.status.success(),
+            "run {run_number}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("omitting 100 unavailable learned root(s)"),
+            "run {run_number}: expected a bounded summary for all stale hints: {stderr}"
+        );
+        assert!(
+            stderr.lines().count() <= 2,
+            "run {run_number}: stale paths must not fan out into one line each: {stderr}"
+        );
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(json["result"]["summary"]["simulated"], 1, "{json}");
+        assert!(
+            stale.iter().all(|path| !json["result"]["selected_roots"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|root| root.as_str() == path.to_str())),
+            "omitted hints must remain outside the selected universe: {json}"
+        );
+        assert_eq!(fixture.clean_calls(), 0, "simulation must spawn no clean");
+        assert_eq!(fs::read(&state_path).unwrap(), state_before);
+    }
 }
 
 /// Explicit roots stay authoritative: a missing configured `scan.root` and a

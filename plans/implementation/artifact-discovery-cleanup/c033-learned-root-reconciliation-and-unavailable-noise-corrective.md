@@ -1,6 +1,6 @@
 # C033 — Learned-Root Reconciliation and Unavailable-Root Noise Corrective
 
-Status: **ready** for admission/reporting and conservative state-recovery work; automatic **negative persistence** requires explicit adoption of proposed ADR 005, or a documented alternative preserving accepted ADR 002.
+Status: **active** for admission/reporting; deterministic reason-grouped omission summaries and two-invocation evidence over 100 stale roots are implemented. Persistent state recovery remains decision-gated; automatic **negative persistence** requires explicit adoption of proposed ADR 005, or a documented alternative preserving accepted ADR 002.
 Planning-only branch: `plans/c032-c034-routine-cleanup-reliability`.
 Baseline: `7c874ab7998bdac28a6236ec21ae59ec24b915f8` (`main`, published v0.2.5, 2026-10-09).
 Roadmap: `plans/subsystems/artifact-discovery-cleanup-roadmap.md`.

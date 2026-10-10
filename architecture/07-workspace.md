@@ -2,8 +2,8 @@
 
 > Component deep dive · part of the [architecture overview](overview.md)
 
-`src/workspace.rs` — 3771 lines: 1446 production, 2325 inline `#[cfg(test)]`,
-44 `#[test]` functions. The test module begins at `workspace.rs:1446`.
+`src/workspace.rs` — 4568 lines: 1534 production, 3034 inline `#[cfg(test)]`,
+58 `#[test]` functions. The test module begins at `workspace.rs:1535`.
 
 It is the bridge between "we found some `Cargo.toml` files" and "we know which
 physical bytes we are allowed to touch". Everything downstream of it — grouping,

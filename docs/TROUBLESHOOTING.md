@@ -70,6 +70,12 @@ manifest in a cache remains visible during Full discovery, but only a
 Cargo-resolved workspace in a durable developer location can create a new
 automatic Routine root. Existing cache/runtime roots are filtered during
 Routine admission; explicitly named roots retain their strict semantics.
+Repeated omitted roots are summarized by reason with a count and a few example
+paths, so transient worktree IDs do not each produce their own stderr line.
+The saved learned-root hints are still advisory entries in discovery state and
+may be reconsidered on a later Routine run; this summary does not persistently
+retire them. Complete Full reconciliation remains the existing negative-state
+pruning path.
 
 ## A manifest is found but its Cargo workspace cannot be resolved
 

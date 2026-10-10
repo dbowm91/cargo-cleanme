@@ -7,6 +7,7 @@ use cargo_cleanme::{
     domain::ScanScope,
     error::AppError,
 };
+use std::collections::BTreeMap;
 fn main() {
     // clap prints its own message and exits on a usage error, so parsing here
     // rather than inside `run` is what lets a fatal error know the output
@@ -984,10 +985,59 @@ fn run_scan(
             "{} filesystem diagnostics; rerun with a bounded root if needed",
             report.diagnostics.len()
         );
-        // Say what they were: a count alone cannot explain a project that is
-        // deliberately not reported, for example one whose declared output root
-        // turns out to be its own source tree.
-        for diagnostic in report.diagnostics.iter().take(10) {
+        // Cargo failures can repeat for hundreds of manifests. Keep their
+        // complete per-manifest diagnostics in the report/JSON, but group the
+        // human presentation by the bounded cause excerpt.
+        let mut cargo_groups: BTreeMap<String, (usize, Vec<String>)> = BTreeMap::new();
+        let mut other_diagnostics = Vec::new();
+        for diagnostic in &report.diagnostics {
+            let (stage, reason) = if let Some(reason) = diagnostic
+                .message
+                .strip_prefix("cargo locate-project failed:")
+            {
+                ("locate", reason)
+            } else if let Some(reason) = diagnostic.message.strip_prefix("cargo metadata failed:") {
+                ("metadata", reason)
+            } else {
+                other_diagnostics.push(diagnostic);
+                continue;
+            };
+            let cause = reason.split(" | ").skip(1).collect::<Vec<_>>().join(" | ");
+            let reason_key = if cause.is_empty() {
+                reason.trim()
+            } else {
+                &cause
+            };
+            let group = cargo_groups
+                .entry(format!("{stage}: {reason_key}"))
+                .or_insert_with(|| (0, Vec::new()));
+            group.0 += 1;
+            if group.1.len() < 3
+                && let Some(path) = &diagnostic.path
+            {
+                group.1.push(
+                    path.display()
+                        .to_string()
+                        .chars()
+                        .filter(|ch| !ch.is_control())
+                        .take(200)
+                        .collect(),
+                );
+            }
+        }
+        for (cause, (count, paths)) in cargo_groups.iter().take(8) {
+            eprintln!("  {count} Cargo workspace lookup failure(s): {cause}");
+            if !paths.is_empty() {
+                eprintln!("    examples: {}", paths.join(", "));
+            }
+        }
+        let hidden_cargo_groups = cargo_groups.len().saturating_sub(8);
+        if hidden_cargo_groups > 0 {
+            eprintln!("  … {hidden_cargo_groups} additional Cargo failure cause(s)");
+        }
+        // Preserve other diagnostic detail, capped independently of Cargo's
+        // repetition so the normal stderr path remains bounded.
+        for diagnostic in other_diagnostics.iter().take(10) {
             eprintln!(
                 "  {}: {}{}",
                 format!("{:?}", diagnostic.severity).to_lowercase(),
@@ -999,8 +1049,11 @@ fn run_scan(
                     .unwrap_or_default()
             );
         }
-        if report.diagnostics.len() > 10 {
-            eprintln!("  … {} more", report.diagnostics.len() - 10);
+        if other_diagnostics.len() > 10 {
+            eprintln!(
+                "  … {} more non-Cargo diagnostic(s)",
+                other_diagnostics.len() - 10
+            );
         }
     }
     // C002 §7.8: detailed counters/timings are opt-in via `--stats` on

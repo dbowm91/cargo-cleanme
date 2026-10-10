@@ -102,6 +102,10 @@ publish a complete learned-state generation. Routine learning uses only
 Cargo-resolved workspaces in durable developer locations; package caches,
 Trash, temporary trees, `node_modules`, and transient Codex worktrees stay out
 of automatic maintenance while remaining discoverable in Full scans.
+If Cargo cannot resolve one discovered manifest, scans preserve it as an
+unresolved participant and cleanup blocks the selected scope. See
+[Troubleshooting](docs/TROUBLESHOOTING.md#a-manifest-is-found-but-its-cargo-workspace-cannot-be-resolved)
+for reproducing the exact Cargo lookup.
 
 ### Scan output
 
