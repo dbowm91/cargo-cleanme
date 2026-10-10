@@ -1,6 +1,6 @@
 # C032 — Cargo Workspace Resolution Diagnostics and Failure-Noise Corrective
 
-Status: **active** — bounded stderr cause extraction and human grouping are implemented; a real-Cargo subprocess regression now covers 1,000 repeated failures, bounded human output, exact JSON diagnostics and observed locate counts, alongside a 1,000-failure unresolved-ledger test. The broader Cargo failure taxonomy, hosted qualification, and closure remain outstanding.
+Status: **conditionally closed** — implementation, the real-Cargo failure matrix, bounded cause-group qualification, baseline-negative reproduction, documentation, local evidence, and hosted Linux/macOS/Windows/MSRV qualification are complete. The corrective remains open until a published release carries it; this plan does not authorize a release. Evidence: `plans/closure/artifact-discovery-cleanup/c032-status.md`.
 Baseline: `7c874ab7998bdac28a6236ec21ae59ec24b915f8` (`main`, v0.2.5, 2026-10-09).
 Handoff branch: `plans/c032-c034-routine-cleanup-reliability`.
 Source roadmap: `plans/subsystems/artifact-discovery-cleanup-roadmap.md`.
