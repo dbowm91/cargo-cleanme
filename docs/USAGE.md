@@ -159,6 +159,20 @@ from the same workspace need no further processes. An N-member workspace costs
 exactly one locate and one metadata. Membership is never guessed from path
 ancestry or TOML.
 
+Full discovery can find manifests Cargo cannot resolve as workspaces, such as
+an orphaned member or a broken manifest. Such a manifest stays in the
+read-only inventory as unresolved; it does not become a learned maintenance
+root. Cleanup remains blocked while any discovered manifest is unresolved,
+because its Cargo-configured output ownership is unknown. To reproduce the
+underlying Cargo error for one path, run from its parent directory:
+
+```sh
+cargo locate-project --workspace --manifest-path /path/to/Cargo.toml
+```
+
+The diagnostic includes a short, sanitized excerpt of Cargo's error chain.
+Cargo's exact wording can vary by version and failure type.
+
 What that buys:
 
 - **Output roots are never inferred.** `target-dir` / `build-dir` configuration

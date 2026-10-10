@@ -133,23 +133,40 @@ impl ClassifiedRoots {
 
     /// Deterministic, bounded human diagnostics for safely omitted roots.
     pub fn omission_diagnostics(&self) -> Vec<String> {
-        let mut diagnostics: Vec<String> = self
-            .omitted
-            .iter()
-            .map(|o| match o {
-                AutomaticOmission::NotFound(p) => {
-                    format!("omitting unavailable learned root {}", p.display())
-                }
-                AutomaticOmission::NonDirectory(p) => {
-                    format!("omitting non-directory learned root {}", p.display())
-                }
-                AutomaticOmission::NotMaintainable(p) => {
-                    format!("omitting non-maintainable learned root {}", p.display())
-                }
+        let mut groups: std::collections::BTreeMap<&str, Vec<&PathBuf>> =
+            std::collections::BTreeMap::new();
+        for omission in &self.omitted {
+            let (reason, path) = match omission {
+                AutomaticOmission::NotFound(path) => ("unavailable", path),
+                AutomaticOmission::NonDirectory(path) => ("non-directory", path),
+                AutomaticOmission::NotMaintainable(path) => ("non-maintainable", path),
+            };
+            groups.entry(reason).or_default().push(path);
+        }
+        groups
+            .into_iter()
+            .map(|(reason, mut paths)| {
+                paths.sort();
+                let examples = paths
+                    .iter()
+                    .take(3)
+                    .map(|path| {
+                        path.display()
+                            .to_string()
+                            .chars()
+                            .filter(|ch| !ch.is_control())
+                            .take(200)
+                            .collect::<String>()
+                    })
+                    .collect::<Vec<_>>();
+                let sample = if examples.is_empty() {
+                    String::new()
+                } else {
+                    format!("; examples: {}", examples.join(", "))
+                };
+                format!("omitting {} {reason} learned root(s){sample}", paths.len())
             })
-            .collect();
-        diagnostics.sort();
-        diagnostics
+            .collect()
     }
 }
 
@@ -1014,5 +1031,36 @@ mod tests {
         assert!(classified.admitted.is_empty());
         assert_eq!(classified.blocked.len(), 1);
         assert_eq!(classified.blocked[0].path, seed);
+    }
+
+    #[test]
+    fn omission_diagnostics_group_reasons_and_bound_path_samples() {
+        let mut classified = ClassifiedRoots::default();
+        for index in (0..100).rev() {
+            classified
+                .omitted
+                .push(AutomaticOmission::NotFound(PathBuf::from(format!(
+                    "/home/user/.codex/worktrees/{index}"
+                ))));
+        }
+        classified
+            .omitted
+            .push(AutomaticOmission::NonDirectory(PathBuf::from(
+                "/home/user/projects/file",
+            )));
+
+        let diagnostics = classified.omission_diagnostics();
+        assert_eq!(
+            diagnostics.len(),
+            2,
+            "each omission reason gets one summary"
+        );
+        assert!(diagnostics[0].starts_with("omitting 1 non-directory learned root(s)"));
+        assert!(diagnostics[1].starts_with("omitting 100 unavailable learned root(s)"));
+        assert!(diagnostics[1].contains("/home/user/.codex/worktrees/0"));
+        assert!(diagnostics[1].contains("/home/user/.codex/worktrees/1"));
+        assert!(diagnostics[1].contains("/home/user/.codex/worktrees/10"));
+        assert!(!diagnostics[1].contains("/home/user/.codex/worktrees/11"));
+        assert!(diagnostics.iter().all(|line| line.len() < 700));
     }
 }

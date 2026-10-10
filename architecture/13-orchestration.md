@@ -10,7 +10,7 @@
 > the `scope`-label fix and the state-publish exit-code fix is preserved by the
 > findings themselves (§7, §8), not by a banner claiming them.
 
-`src/main.rs`, 1046 lines, zero inline tests. The only module that reaches every
+`src/main.rs`, 1104 lines, zero inline tests. The only module that reaches every
 other one, and the only place the two pipelines are stitched together.
 
 ## 1. Responsibility
@@ -303,8 +303,20 @@ returns `ScanOutcome` (`:727`) — the exit code plus the proven Full generation
 12. `full_incomplete` (`:931-935`); `domain::ScanReport` built (`:937-956`),
     carrying `visited_entries` through.
 13. `phase(Reporting)` (`:957`), `finish_and_clear()` (`:958`), **output always
-    emitted** (`:961-983`), then diagnostics to stderr (`:984-1007`) and `--stats`
-    to stderr (`:1011-1027`).
+    emitted** (`:961-983`), then diagnostics to stderr (`:984-1037`) and `--stats`
+    to stderr (`:1041-1058`).
+
+Cargo locate/metadata failures remain one diagnostic per manifest in the report
+and JSON. Human stderr groups identical bounded Cargo causes, shows at most three
+sanitized representative paths per cause and at most eight causes; the exact
+unresolved participant ledger and counters are not compressed. Other human
+diagnostics retain their own ten-item display cap. This is presentation only and
+does not alter scan coverage or cleanup eligibility.
+
+The TTY progress renderer also reports filesystem discovery diagnostics and
+Cargo workspace-resolution failures as separate totals. It does not render the
+diagnostic text or paths; the counts are populated at the discovery and resolver
+boundaries (`main.rs:778`, `workspace.rs:400-433`, `:575-614`).
 
 **Step 2 deserves the emphasis.** Before M012A a rootless `scan` resolved through
 `policy::resolve` with `full: false`, which meant a configured `scan.root` could
@@ -343,8 +355,8 @@ consuming it (`:495`) passes `EmitReport::No`.
 That parameter is not a formatting convenience. It is the only thing standing
 between `clean --full` and a **double stdout document**, and the JSON envelope is
 built on exactly one document per invocation. So `EmitReport::No` suppresses the
-report and *nothing else*: diagnostics (`:984-1007`) and `--stats`
-(`:1011-1027`) still reach stderr, state reconciliation still runs, and every
+report and *nothing else*: diagnostics (`:984-1037`) and `--stats`
+(`:1041-1058`) still reach stderr, state reconciliation still runs, and every
 decision downstream still reads the report. Only its rendering is withheld.
 
 **This parameter was briefly deleted and had to be restored.** M012A removed the
@@ -417,9 +429,13 @@ else becomes a typed block. Explicit scopes propagate the fatal error
 unchanged.
 
 **Omission diagnostics** are printed to stderr for every format except log
-(`:240-247`): human mode may name paths, log mode carries only the count in
-its one line. A blocked automatic scope reports without traversing anything
-(`:249-275`, `Ok(1)`); an empty admitted set is the successful no-op
+(`:247-253`): policy groups them by typed omission reason and includes a count
+plus at most three sanitized example paths (`policy.rs:135-169`); log mode carries
+only the count in its one line. The full omission list remains available to the
+late pre-spawn premise recheck. Summarization does not mutate learned state, so a
+stale hint may be reconsidered on a later Routine invocation. A blocked
+automatic scope reports without traversing anything (`:255-281`, `Ok(1)`); an
+empty admitted set is the successful no-op
 (`:276-303`, `Ok(0)`).
 
 **Policy** (`:220-236`): `min_reclaimable_bytes` and `min_inactive_seconds`
@@ -482,7 +498,7 @@ boundary itself was refused and no work was attempted; the block is now a typed
 `proof_timings_line()` (`:341`). The two `proof_*` lines are the point of the
 comment at `:335` — "C003 §7.6: cleanup `--stats` must account for the
 final ownership-universe proof work, not only the initial scan". The scan's
-`--stats` (`:1011-1027`) has no proof counters, correctly: a scan performs no
+`--stats` (`:1041-1058`) has no proof counters, correctly: a scan performs no
 proof. So the cleanup line is a superset and the C003 requirement is satisfied
 at this call site rather than inside `cleanup.rs`.
 
@@ -810,7 +826,7 @@ M012A added a third, also deliberate: `clean --full` on an incomplete scan is 2
 | stderr message | Line | Exit effect |
 |---|---:|---|
 | `N filesystem diagnostics; rerun with a bounded root if needed` (+ ≤10 details) | `:986-1007` | **none** — a scan full of `PlatformRoot` errors still exits 0 |
-| `scan stats: …` | `:1011-1027` | none (opt-in) |
+| `scan stats: …` | `:1041-1058` | none (opt-in) |
 | `cleanup stats: …` | `:333-346` | none (opt-in) |
 | `discovery state was not saved: {error}` — **Routine** | `:900-904` | **none** |
 | `{warning}; using seed/configured Routine roots` (from policy) | `src/policy.rs:436`, `src/main.rs:572` | none |
@@ -915,13 +931,13 @@ Verified line numbers:
 | `bare_dry_run_simulates_with_zero_cargo_clean_processes` | 893 | `mode == "simulate"` (`:904`), `simulated == 1 && cleaned == 0` (`:906-907`), **`clean_calls() == 0`** (`:911-915`), artifact still present (`:916-919`), and Cargo *was* used for resolution (`:922`) — so this is a simulation, not a skip |
 | `bare_cleanup_with_no_known_roots_is_a_successful_no_op` | 935 | exit 0, `scope == "routine"` (`:959`), `mode == "execute"` (`:960`), `units == []` (`:962`) — the `:276-303` short circuit through the binary |
 | `bare_cleanup_with_unresolved_ownership_blocks_and_runs_no_cargo_clean` | 969 | blocked bare invocation, exit 1 (`:980`), no `cargo clean` |
-| `stale_learned_root_is_omitted_and_bare_routine_execute_cleans_the_sibling` | 2378 | **the C028 premise-negative regression**, direct and staged-plugin: exit 0, `scope == "routine"`, `cleaned == 1`, one Cargo clean, stale path absent from `selected_roots`, `invalid scan root` absent from stderr |
-| `stale_learned_root_simulate_agrees_with_execute_and_spawns_no_cargo_clean` | 2434 | C028 Simulate/Execute parity: `simulated == 1`, zero clean spawns, artifact kept |
-| `missing_explicit_roots_stay_fatal_with_zero_cargo_clean_spawns` | 2468 | C028 negative control: missing configured `scan.root` and missing `clean ROOT` both exit 2 with zero spawns |
-| `all_automatic_roots_missing_is_a_successful_empty_no_op` | 2508 | C028: all-missing automatic scope exits 0 with `units == []` and zero spawns of any kind |
-| `automatic_file_root_is_omitted_and_symlink_root_blocks_without_traversal` | 2535 | C028 decision table at the CLI: file omitted (sibling cleaned), symlink-to-dir and broken link block with exit 1 and zero metadata calls |
-| `unreadable_automatic_root_blocks_instead_of_omitting` | 2597 | C028: `0o000` automatic root blocks with exit 1; premise-checked skip when the process can still read (e.g. root) |
-| `stale_and_blocked_automatic_roots_keep_the_bounded_log_contract` | 2631 | C028 machine contract: one bounded ASCII log line, no paths, exit 0 on omission and `status=blocked` with exit 1 on the symlink block |
+| `stale_learned_root_is_omitted_and_bare_routine_execute_cleans_the_sibling` | 2438 | C028 premise-negative regression, direct and staged-plugin: exit 0, `scope == "routine"`, `cleaned == 1`, one Cargo clean, stale path absent from `selected_roots`; C033 pins the one-root grouped omission summary |
+| `stale_learned_root_simulate_agrees_with_execute_and_spawns_no_cargo_clean` | 2494 | C028 Simulate/Execute parity: `simulated == 1`, zero clean spawns, artifact kept |
+| `missing_explicit_roots_stay_fatal_with_zero_cargo_clean_spawns` | 2528 | C028 negative control: missing configured `scan.root` and missing `clean ROOT` both exit 2 with zero spawns |
+| `all_automatic_roots_missing_is_a_successful_empty_no_op` | 2568 | C028: all-missing automatic scope exits 0 with `units == []` and zero spawns of any kind |
+| `automatic_file_root_is_omitted_and_symlink_root_blocks_without_traversal` | 2595 | C028 decision table at the CLI: file omitted (sibling cleaned), symlink-to-dir and broken link block with exit 1 and zero metadata calls |
+| `unreadable_automatic_root_blocks_instead_of_omitting` | 2657 | C028: `0o000` automatic root blocks with exit 1; premise-checked skip when the process can still read (e.g. root) |
+| `stale_and_blocked_automatic_roots_keep_the_bounded_log_contract` | 2726 | C028 machine contract: one bounded ASCII log line, no paths, exit 0 on omission and `status=blocked` with exit 1 on the symlink block |
 | `advanced_cleanup_defaults_to_execute_and_cargo_preview_is_explicit` | 1002 | `clean ROOT` with no mode flag executes (`:1015-1019`); `--cargo-preview` gives `mode == "preview"` (`:1028`) |
 | `hidden_compatibility_aliases_map_exactly_to_the_canonical_modes` | 1060 | `--dryrun`/`--yes` map onto `Simulate`/default `Execute` |
 | `known_scan_resolves_routine_without_a_configured_root_and_explicit_with_one` | 1098 | `scan --known` is `routine` with no configured root, `explicit` with one |

@@ -6,7 +6,7 @@ per-component deep dives that follow.
 - **What it is:** a Cargo subcommand (`cargo cleanme`) that finds inactive Cargo
   build artifacts on a machine and either reports or safely reclaims them.
 - **Shape:** one binary (`src/main.rs`) over one library (`src/lib.rs`) of 15
-  modules, 17 source files, 24,754 lines of Rust in `src/`, no async runtime
+  modules, 17 source files, 24,918 lines of Rust in `src/`, no async runtime
   of its own, and exactly one binary dependency that matters for safety
   (`cargo metadata`).
 - **Version:** 0.2.5 (published) · **Edition:** 2024 · **MSRV:** 1.89
@@ -92,9 +92,9 @@ it.**
 ## 3. Module index
 
 Line counts are `total`; where a module carries an inline `#[cfg(test)]`
-module, the `prod` half of the split is given. The crate has **330 inline
-`#[test]` functions**, and **39.4% of them live in the two largest modules**
-(`cleanup.rs` 73 + `workspace.rs` 57). Three modules have **zero** tests:
+module, the `prod` half of the split is given. The crate has **332 inline
+`#[test]` functions**, and **39.5% of them live in the two largest modules**
+(`cleanup.rs` 73 + `workspace.rs` 58). Three modules have **zero** tests:
 `main.rs`, `error.rs`, `lib.rs`.
 
 Test counts in this table are **declared**, not "how many ran on my machine",
@@ -116,18 +116,18 @@ not as a claim that the ordering is verified.
 
 | Module | Lines | Role | Deep dive |
 |---|---:|---|---|
-| [`main.rs`](13-orchestration.md) | 1046 | Binary entry: argv → resolved invocation → dispatch → exit code. The only place the scan and cleanup pipelines are stitched together. | [Orchestration](13-orchestration.md) |
+| [`main.rs`](13-orchestration.md) | 1104 | Binary entry: argv → resolved invocation → dispatch → exit code. The only place the scan and cleanup pipelines are stitched together. | [Orchestration](13-orchestration.md) |
 | [`cli.rs`](02-cli.md) | 1025 / 398 | Clap surface, resolved-invocation model, `cargo`-subcommand argv normalization, scan-root absolutization. | [CLI](02-cli.md) |
 | [`config.rs`](03-config-and-editor.md) | 1443 / 576 | Load/create/validate `config.toml`; embedded template; path resolution. | [Config & editor](03-config-and-editor.md) |
-| [`policy.rs`](04-policy-and-scope.md) | 1018 / 645 | Turns a `ScanRequest` + config into an `EffectiveScanPolicy` — the Routine/Full scope decision — plus C028 provenance admission and C030 maintenance-root hygiene. | [Policy & scope](04-policy-and-scope.md) |
+| [`policy.rs`](04-policy-and-scope.md) | 1066 / 662 | Turns a `ScanRequest` + config into an `EffectiveScanPolicy` — the Routine/Full scope decision — plus C028 provenance admission, C030 maintenance-root hygiene, and bounded C033 omission summaries. | [Policy & scope](04-policy-and-scope.md) |
 | [`discovery.rs`](05-discovery.md) | 2187 / 950 | Finds `Cargo.toml` manifests across a bounded walk, with bounded attribution for traversal coverage loss. | [Discovery](05-discovery.md) |
-| [`discovery_state.rs`](06-discovery-state.md) | 918 / 490 | Persisted learned roots, complete-coverage reconciliation, C030 provenance hygiene, and atomic publish. | [Discovery state](06-discovery-state.md) |
-| [`workspace.rs`](07-workspace.md) | 4517 / 1525 | `cargo metadata` resolution, capability probing, physical grouping, cleanup-unit construction. | [Workspace](07-workspace.md) |
+| [`discovery_state.rs`](06-discovery-state.md) | 925 / 490 | Persisted learned roots, complete-coverage reconciliation, C030 provenance hygiene, and atomic publish. | [Discovery state](06-discovery-state.md) |
+| [`workspace.rs`](07-workspace.md) | 4568 / 1534 | `cargo metadata` resolution, bounded Cargo failure causes, capability probing, physical grouping, cleanup-unit construction. | [Workspace](07-workspace.md) |
 | [`traverse.rs`](08-traverse.md) | 624 / 494 | Parallel size/recency measurement and source-activity classification. | [Traverse](08-traverse.md) |
 | [`cleanup.rs`](09-cleanup.md) | 6575 / 2481 | Authorization, ownership proof, pre-spawn decision, three clean modes, the admission-premise late recheck. The heart of the safety story. | [Cleanup](09-cleanup.md) |
 | [`report.rs`](10-reporting.md) | 195 / 71 | Human-readable rendering of a `ScanReport`; byte formatting. | [Reporting](10-reporting.md) |
 | [`output.rs`](10-reporting.md) | 941 | Versioned machine-readable DTOs (`EnvelopeV1`); the stable JSON contract, including the non-envelope `update` document and its stdout stream; the bounded `--format log` line renderer. | [Reporting](10-reporting.md) |
-| [`progress.rs`](11-progress.md) | 840 / 508 | `ProgressObserver` trait + indicatif renderer; terminal capability detection. | [Progress](11-progress.md) |
+| [`progress.rs`](11-progress.md) | 861 / 524 | `ProgressObserver` trait + indicatif renderer; terminal capability detection. | [Progress](11-progress.md) |
 | [`update.rs`](12-self-update.md) | 2773 / 1234 | Eggup-based self-update: provenance classification, version authority, staged replace. | [Self-update](12-self-update.md) |
 | [`domain.rs`](01-domain-and-errors.md) | 411 | The shared vocabulary: reports, ownership classes, counters, diagnostics. Pure data. | [Domain & errors](01-domain-and-errors.md) |
 | [`error.rs`](01-domain-and-errors.md) | 16 | `AppError` — the six variants the binary can fail with. | [Domain & errors](01-domain-and-errors.md) |

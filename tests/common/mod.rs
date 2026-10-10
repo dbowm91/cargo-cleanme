@@ -189,6 +189,10 @@ dry=no
 for arg in "$@"; do [ "$arg" = "--dry-run" ] && dry=yes; done
 case "$1" in
   locate-project|metadata)
+    if [ "$1" = "locate-project" ] && [ -n "$CARGO_FAIL_LOCATE" ]; then
+      printf 'error: failed searching for potential workspace\nCaused by: fixture lookup failure\n' >&2
+      exit 101
+    fi
     # Real Cargo refuses a manifest it cannot parse. Without this check the
     # stub would answer every query, and a fixture built on an unresolvable
     # manifest would look like a clean one -- the "stub that is not the tool

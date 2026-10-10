@@ -41,6 +41,7 @@ pub trait ProgressObserver: Send + Sync {
     fn dirs_visited(&self, _batch: u64) {}
     fn dirs_pruned(&self, _batch: u64) {}
     fn manifests_found(&self, _batch: u64) {}
+    fn discovery_issues(&self, _count: u64) {}
     fn workspaces_resolved(&self, _batch: u64) {}
     fn cargo_failure(&self) {}
     fn empty_skipped(&self) {}
@@ -66,6 +67,7 @@ pub struct TestObserver {
     pub visited: AtomicU64,
     pub pruned: AtomicU64,
     pub manifests: AtomicU64,
+    pub discovery_issues: AtomicU64,
     pub workspaces: AtomicU64,
     pub cargo_failures: AtomicU64,
     pub empty_skipped: AtomicU64,
@@ -114,6 +116,9 @@ impl ProgressObserver for TestObserver {
     }
     fn manifests_found(&self, batch: u64) {
         self.manifests.fetch_add(batch, Ordering::Relaxed);
+    }
+    fn discovery_issues(&self, count: u64) {
+        self.discovery_issues.fetch_add(count, Ordering::Relaxed);
     }
     fn workspaces_resolved(&self, batch: u64) {
         self.workspaces.fetch_add(batch, Ordering::Relaxed);
@@ -205,7 +210,9 @@ pub struct IndicatifRenderer {
     visited: AtomicU64,
     pruned: AtomicU64,
     manifests: AtomicU64,
+    discovery_issues: AtomicU64,
     workspaces: AtomicU64,
+    cargo_failures: AtomicU64,
     eligible: AtomicU64,
     determinate_total: AtomicU64,
     determinate_done: AtomicU64,
@@ -230,7 +237,9 @@ impl IndicatifRenderer {
             visited: AtomicU64::new(0),
             pruned: AtomicU64::new(0),
             manifests: AtomicU64::new(0),
+            discovery_issues: AtomicU64::new(0),
             workspaces: AtomicU64::new(0),
+            cargo_failures: AtomicU64::new(0),
             eligible: AtomicU64::new(0),
             determinate_total: AtomicU64::new(0),
             determinate_done: AtomicU64::new(0),
@@ -366,17 +375,19 @@ impl IndicatifRenderer {
         let visited = self.visited.load(Ordering::Relaxed);
         let pruned = self.pruned.load(Ordering::Relaxed);
         let manifests = self.manifests.load(Ordering::Relaxed);
+        let discovery_issues = self.discovery_issues.load(Ordering::Relaxed);
         let workspaces = self.workspaces.load(Ordering::Relaxed);
+        let cargo_failures = self.cargo_failures.load(Ordering::Relaxed);
         let eligible = self.eligible.load(Ordering::Relaxed);
         let done = self.determinate_done.load(Ordering::Relaxed);
         let total = self.determinate_total.load(Ordering::Relaxed);
         let msg = if total > 0 {
             format!(
-                "analyzing {done}/{total} visited {visited} pruned {pruned} manifests {manifests} workspaces {workspaces} eligible {eligible}"
+                "analyzing {done}/{total} visited {visited} pruned {pruned} manifests {manifests} workspaces {workspaces} discovery-errors {discovery_issues} cargo-failures {cargo_failures} eligible {eligible}"
             )
         } else {
             format!(
-                "scanning visited {visited} pruned {pruned} manifests {manifests} workspaces {workspaces} eligible {eligible}"
+                "scanning visited {visited} pruned {pruned} manifests {manifests} workspaces {workspaces} discovery-errors {discovery_issues} cargo-failures {cargo_failures} eligible {eligible}"
             )
         };
         if let Some(main) = &self.main {
@@ -463,11 +474,16 @@ impl ProgressObserver for IndicatifRenderer {
         self.manifests.fetch_add(batch, Ordering::Relaxed);
         self.maybe_draw();
     }
+    fn discovery_issues(&self, count: u64) {
+        self.discovery_issues.store(count, Ordering::Relaxed);
+        self.maybe_draw();
+    }
     fn workspaces_resolved(&self, batch: u64) {
         self.workspaces.fetch_add(batch, Ordering::Relaxed);
         self.maybe_draw();
     }
     fn cargo_failure(&self) {
+        self.cargo_failures.fetch_add(1, Ordering::Relaxed);
         self.maybe_draw();
     }
     fn empty_skipped(&self) {
@@ -543,6 +559,9 @@ mod tests {
     fn in_memory_frame_contains_at_most_six_progress_lines() {
         let (r, term) = IndicatifRenderer::new_in_memory_for_test();
         r.phase(ScanPhase::Analysis);
+        r.discovery_issues(7);
+        r.cargo_failure();
+        r.cargo_failure();
         r.units_total(ScanPhase::Analysis, 6);
         for i in 0..6 {
             r.reportable_group(&PathBuf::from(format!("/tmp/g{i}")), (i as u64 + 1) * 100);
@@ -551,6 +570,8 @@ mod tests {
         // Allow the 10 Hz draw target to flush.
         std::thread::sleep(Duration::from_millis(150));
         let contents = term.contents();
+        assert!(contents.contains("discovery-errors 7"), "{contents:?}");
+        assert!(contents.contains("cargo-failures 2"), "{contents:?}");
         let non_empty: Vec<&str> = contents.lines().filter(|l| !l.trim().is_empty()).collect();
         assert!(
             non_empty.len() <= 6,

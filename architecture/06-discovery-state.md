@@ -658,6 +658,12 @@ publish can never hand a half-built root list to `cleanup`.
 The cost of a failure is bounded and matches ADR §3 (`:51-53`): learned roots
 expire from Routine scope and are rediscoverable by a later Full scan.
 
+C033's active reporting slice groups positively omitted automatic roots by
+reason and bounds the displayed path sample. It does not mutate this state
+generation: a missing hint can therefore be reconsidered on a later Routine
+invocation until the established complete-Full pruning or retention rule removes
+it. Persistent targeted retirement remains decision-gated by proposed ADR 005.
+
 ## 7. Consumers
 
 | Consumer | Call site | Reads | Notes |

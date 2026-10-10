@@ -2,8 +2,8 @@
 
 > Component deep dive · part of the [architecture overview](overview.md)
 
-`src/progress.rs` — 703 lines, 498 production (`progress.rs:499` opens the test
-module), 12 `#[test]` functions.
+`src/progress.rs` — 861 lines, 524 production (`progress.rs:525` opens the test
+module), 13 `#[test]` functions.
 
 ## 1. Responsibility
 
@@ -61,8 +61,8 @@ report so a size never renders in two notations within one run. Everything else 
 | `CleanupSimulate` | Application simulation, no Cargo spawned | `cleanup.rs:831` | Yes — `cleanup.rs:927` |
 | `CleanupExecute` | Real cleanup through Cargo | `cleanup.rs:832` | Yes — `cleanup.rs:927` |
 
-`ProgressObserver` — `progress.rs:39-52`. `Send + Sync`. All twelve methods take
-`&self` and **all twelve have default empty bodies**, so an implementor overrides
+`ProgressObserver` — `progress.rs:39-53`. `Send + Sync`. All thirteen methods take
+`&self` and **all thirteen have default empty bodies**, so an implementor overrides
 only what it needs; `impl ProgressObserver for NoopObserver {}` (`progress.rs:58`)
 is a complete, allocation-free implementation.
 
@@ -72,8 +72,9 @@ is a complete, allocation-free implementation.
 | `dirs_visited(u64)` | batch delta | Entries walked, batched at 512 (`discovery.rs:629-631`) | `Discovery` |
 | `dirs_pruned(u64)` | batch delta | Entries cut by prune rules, batched at 64 (`discovery.rs:685-687`) | `Discovery` |
 | `manifests_found(u64)` | batch delta | Validated `Cargo.toml` files (`discovery.rs:682`) | `Discovery` |
+| `discovery_issues(u64)` | final count | Discovery-stage diagnostics, kept separate from Cargo resolution failures (`main.rs:786`) | `Discovery` → `Resolution` |
 | `workspaces_resolved(u64)` | batch delta | Successful `cargo metadata` runs (`workspace.rs:425`) | `Resolution` |
-| `cargo_failure()` | — | One `cargo metadata` run failed (`workspace.rs:360,375,388,526,541,556`) | `Resolution` |
+| `cargo_failure()` | — | One Cargo workspace-resolution command failed, at either locate or metadata (`workspace.rs:400-433`, `:575-614`) | `Resolution` |
 | `empty_skipped()` | — | Group skipped: no eligible bytes (`workspace.rs:958,1154`) | `Analysis` |
 | `active_skipped()` | — | Group skipped: protected by source activity (`workspace.rs:1008,1167`) | `Analysis` |
 | `group_measured(u64)` | bytes | A group finished sizing (`workspace.rs:1179`) | `Analysis` |
@@ -283,7 +284,7 @@ untested one.
 | `top: Mutex<Vec<(PathBuf, u64)>>` | ≤5 largest reportable groups, sorted |
 | `last_draw: Mutex<Option<Instant>>` | The throttle's previous-draw timestamp |
 | `refreshes: AtomicU64` | Draws that passed the gate; `pub` (`:194`) |
-| `visited/pruned/manifests/workspaces/eligible` | Display-only counters |
+| `visited/pruned/manifests/workspaces/discovery-errors/cargo-failures/eligible` | Display-only counters. Discovery-stage diagnostics and Cargo resolution failures remain separate totals. |
 | `determinate_total/determinate_done` | The current scope's progress pair |
 | `current_phase: Mutex<Option<ScanPhase>>` | Re-scoping detector |
 

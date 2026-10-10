@@ -363,8 +363,11 @@ symlinked root into its target and hide the invalid identity:
   fresh metadata before the first final proof and before every later spawn;
   `CleanupCandidates` (`policy.rs:318`) is the shared candidate type.
 
-Omission diagnostics are deterministic and sorted
-(`ClassifiedRoots::omission_diagnostics`, `policy.rs:132`).
+Omission diagnostics are grouped by typed reason and sorted deterministically
+(`ClassifiedRoots::omission_diagnostics`, `policy.rs:135-169`). Each summary
+includes the exact omitted-root count and at most three sanitized paths. The
+omission vector remains complete for `recheck_admission_premise`; reporting does
+not retire persisted state or alter the selected cleanup universe.
 
 ## 6. Global discovery policy
 

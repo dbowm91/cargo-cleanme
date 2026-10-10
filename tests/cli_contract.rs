@@ -258,6 +258,404 @@ fn json_scope_label_follows_the_resolved_scope_not_the_cli_flags() {
     assert_eq!(json["scope"], "explicit");
 }
 
+#[test]
+fn repeated_real_cargo_failures_are_grouped_without_losing_json_diagnostics() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("projects");
+    fs::create_dir_all(&root).unwrap();
+    let shared_missing_workspace = root.join("missing-workspace");
+    for index in 0..1_000 {
+        let package = root.join(format!("orphan-{index}"));
+        fs::create_dir_all(package.join("src")).unwrap();
+        fs::write(package.join("src/main.rs"), "fn main() {}\n").unwrap();
+        fs::write(
+            package.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"orphan-{index}\"\nversion = \"0.1.0\"\nworkspace = \"../missing-workspace\"\n"
+            ),
+        )
+        .unwrap();
+    }
+    assert!(
+        !shared_missing_workspace.exists(),
+        "fixture requires every orphan to refer to the same absent workspace"
+    );
+    let healthy = root.join("healthy");
+    fs::create_dir_all(healthy.join("src")).unwrap();
+    fs::write(
+        healthy.join("Cargo.toml"),
+        "[package]\nname='healthy-sibling'\nversion='0.1.0'\nedition='2021'\n",
+    )
+    .unwrap();
+    fs::write(healthy.join("src/main.rs"), "fn main() {}\n").unwrap();
+    let config = dir.path().join("config.toml");
+    fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--no-progress",
+            "--stats",
+            "--format",
+            "json",
+            "scan",
+            root.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "read-only scan should retain its partial result: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.stderr.len() <= 4_096,
+        "1,000 failures must keep human stderr bounded: {} bytes",
+        output.stderr.len()
+    );
+    assert!(
+        stderr.contains("1000 Cargo locate failure(s): Caused by:"),
+        "identical Cargo causes should be summarized with their count: {stderr}"
+    );
+    assert!(
+        stderr.lines().count() <= 8,
+        "repeated failures should not produce one stderr line per manifest: {stderr}"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        json["result"]["diagnostics"].as_array().unwrap().len(),
+        1_000
+    );
+    assert_eq!(json["result"]["summary"]["diagnostic_count"], 1_000);
+    assert!(
+        output.stdout.len() < 500_000,
+        "the structured report stays within a predictable size: {} bytes",
+        output.stdout.len()
+    );
+    assert!(
+        stderr.contains("locate=1001"),
+        "observed locate count: {stderr}"
+    );
+    assert!(
+        stderr.contains("metadata=1"),
+        "observed metadata count: {stderr}"
+    );
+    assert!(
+        stderr.contains("failures=1000"),
+        "observed failure count: {stderr}"
+    );
+    assert!(
+        stderr.contains("workspaces=1"),
+        "healthy sibling resolution: {stderr}"
+    );
+    assert!(stderr.contains("elapsed="), "elapsed measurement: {stderr}");
+    assert_eq!(json["result"]["discovered_manifests"], 1_001);
+}
+
+/// Sample Cargo's real locate/metadata behavior across common valid and broken
+/// manifest shapes. Assertions pin stage outcomes and invocation context, not
+/// Cargo's localized or toolchain-specific prose.
+#[test]
+fn real_cargo_workspace_failure_matrix_records_stage_and_context() {
+    let temp = tempfile::tempdir().unwrap();
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let version = Command::new(&cargo).arg("--version").output().unwrap();
+    assert!(version.status.success());
+    let cargo_version = String::from_utf8_lossy(&version.stdout).trim().to_owned();
+    assert!(cargo_version.starts_with("cargo "), "{cargo_version}");
+
+    let package = |dir: &std::path::Path, manifest_text: &str| {
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+        fs::write(dir.join("Cargo.toml"), manifest_text).unwrap();
+        fs::write(dir.join("Cargo.lock"), "version = 4\n").unwrap();
+        dir.join("Cargo.toml")
+    };
+    let standalone = package(
+        &temp.path().join("standalone"),
+        "[package]\nname='standalone'\nversion='0.1.0'\nedition='2021'\n",
+    );
+    let workspace = temp.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    fs::write(
+        workspace.join("Cargo.toml"),
+        "[workspace]\nmembers=['member']\nresolver='2'\n[workspace.package]\nversion='0.1.0'\nedition='2021'\n",
+    )
+    .unwrap();
+    fs::write(workspace.join("Cargo.lock"), "version = 4\n").unwrap();
+    let inherited = package(
+        &workspace.join("member"),
+        "[package]\nname='inherited-member'\nversion.workspace=true\nedition.workspace=true\n",
+    );
+    let unlisted_member = package(
+        &workspace.join("unlisted"),
+        "[package]\nname='unlisted-member'\nversion='0.1.0'\nedition='2021'\nworkspace='../'\n",
+    );
+    let orphan = package(
+        &temp.path().join("orphan"),
+        "[package]\nname='orphan'\nversion='0.1.0'\nedition='2021'\nworkspace='../missing-root'\n",
+    );
+    let invalid = package(&temp.path().join("invalid"), "this is invalid toml [\n");
+    let parent = temp.path().join("parent");
+    fs::create_dir_all(&parent).unwrap();
+    fs::write(
+        parent.join("Cargo.toml"),
+        "[workspace]\nmembers=[]\nexclude=['nested']\nresolver='2'\n",
+    )
+    .unwrap();
+    let nested = package(
+        &parent.join("nested"),
+        "[package]\nname='nested'\nversion='0.1.0'\nedition='2021'\n",
+    );
+    let vendor = package(
+        &temp.path().join("vendor/vendor-snapshot"),
+        "[package]\nname='vendor-snapshot'\nversion='0.1.0'\nedition='2021'\n",
+    );
+
+    let probe = |manifest: &std::path::Path| {
+        let cwd = manifest.parent().unwrap();
+        let locate = Command::new(&cargo)
+            .args(["locate-project", "--workspace", "--manifest-path"])
+            .arg(manifest)
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        let metadata = if locate.status.success() {
+            Some(
+                Command::new(&cargo)
+                    .args([
+                        "metadata",
+                        "--offline",
+                        "--locked",
+                        "--no-deps",
+                        "--format-version",
+                        "1",
+                        "--manifest-path",
+                    ])
+                    .arg(manifest)
+                    .current_dir(cwd)
+                    .output()
+                    .unwrap(),
+            )
+        } else {
+            None
+        };
+        (locate, metadata)
+    };
+
+    let cases = [
+        ("standalone", standalone, true, true),
+        ("workspace inheritance", inherited, true, true),
+        (
+            "member absent from workspace.members",
+            unlisted_member,
+            false,
+            false,
+        ),
+        ("orphaned workspace member", orphan, false, false),
+        ("invalid TOML", invalid, false, false),
+        ("detached nested project", nested, true, true),
+        ("vendor snapshot", vendor, true, true),
+    ];
+    let mut summary = Vec::new();
+    for (name, manifest, locate_ok, metadata_ok) in cases {
+        let cwd = manifest.parent().unwrap();
+        let (locate, metadata) = probe(&manifest);
+        assert_eq!(
+            locate.status.success(),
+            locate_ok,
+            "{name}: {cargo_version}; cwd={}; argv=locate-project --workspace --manifest-path {}; stderr={}",
+            cwd.display(),
+            manifest.display(),
+            String::from_utf8_lossy(&locate.stderr)
+        );
+        assert_eq!(metadata.is_some(), locate_ok, "{name}: locate stage");
+        if let Some(metadata) = metadata {
+            assert_eq!(
+                metadata.status.success(),
+                metadata_ok,
+                "{name}: {cargo_version}; cwd={}; stderr={}",
+                cwd.display(),
+                String::from_utf8_lossy(&metadata.stderr)
+            );
+        }
+        summary.push(format!(
+            "{name}: locate={} metadata={}",
+            locate.status,
+            if metadata_ok { "success" } else { "not-run" }
+        ));
+    }
+    assert_eq!(summary.len(), 7, "{cargo_version}: {summary:?}");
+}
+
+/// The real process boundary reports an unavailable Cargo executable as an
+/// unresolved locate failure and keeps a read-only scan partial-result tolerant.
+#[cfg(unix)]
+#[test]
+fn unavailable_cargo_executable_is_reported_as_a_locate_spawn_failure() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname='spawn-failure-fixture'\nversion='0.1.0'\nedition='2021'\n",
+    )
+    .unwrap();
+    fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    let empty_path = temp.path().join("empty-path");
+    fs::create_dir(&empty_path).unwrap();
+    let config = temp.path().join("config.toml");
+    fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--no-progress",
+            "--stats",
+            "--format",
+            "json",
+            "scan",
+            root.to_str().unwrap(),
+        ])
+        .env("PATH", empty_path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "read-only scan retains partial results: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cargo locate-project could not start:"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("locate=1"), "{stderr}");
+    assert!(stderr.contains("metadata=0"), "{stderr}");
+    assert!(stderr.contains("failures=1"), "{stderr}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["result"]["diagnostics"].as_array().unwrap().len(), 1);
+    assert_eq!(json["result"]["summary"]["diagnostic_count"], 1);
+}
+
+/// Distinct causes behind Cargo's identical generic first line must remain in
+/// separate human groups, with the group cap preserving only bounded output.
+/// This POSIX-only Cargo fixture makes the commands
+/// fail for controlled, different second-line causes; its callers are gated
+/// with `cfg(unix)` because `/bin/sh` is the executable under test.
+#[cfg(unix)]
+#[test]
+fn cargo_failures_with_shared_generic_line_keep_distinct_cause_groups() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("projects");
+    let names = [
+        "alpha", "beta", "cause-2", "cause-3", "cause-4", "cause-5", "cause-6", "cause-7",
+        "cause-8", "cause-9",
+    ];
+    for name in names {
+        fs::create_dir_all(root.join(name).join("src")).unwrap();
+        fs::write(
+            root.join(name).join("Cargo.toml"),
+            format!("[package]\nname='{name}'\nversion='0.1.0'\nedition='2021'\n"),
+        )
+        .unwrap();
+        fs::write(root.join(name).join("src/main.rs"), "fn main() {}\n").unwrap();
+    }
+    let bin = dir.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let fake_cargo = bin.join("cargo");
+    // Deliberate POSIX-only executable fixture. Product code still crosses its
+    // normal CargoRunner process boundary; only Cargo's stderr is controlled.
+    let mut fake_cargo_script = String::from("#!/bin/sh\ncase \"$*\" in\n");
+    for name in names {
+        fake_cargo_script.push_str(&format!(
+            "  *{name}/Cargo.toml*) cause='Caused by: workspace root {name} is absent' ;;\n"
+        ));
+    }
+    fake_cargo_script.push_str(
+        "  *) cause='Caused by: unexpected manifest' ;;\nesac\nprintf '%s\\n%s\\n' 'error: failed searching for potential workspace' \"$cause\" >&2\nexit 101\n",
+    );
+    fs::write(&fake_cargo, fake_cargo_script).unwrap();
+    let mut permissions = fs::metadata(&fake_cargo).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_cargo, permissions).unwrap();
+    let config = dir.path().join("config.toml");
+    fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
+    let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "json",
+            "scan",
+            root.to_str().unwrap(),
+        ])
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "read-only scan retains partial results: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("1 Cargo locate failure(s): Caused by: workspace root alpha is absent"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("1 Cargo locate failure(s): Caused by: workspace root beta is absent"),
+        "{stderr}"
+    );
+    assert_eq!(
+        stderr.matches(" Cargo locate failure(s):").count(),
+        8,
+        "human presentation shows at most eight distinct causes: {stderr}"
+    );
+    assert!(
+        stderr.contains("2 additional Cargo failure cause(s)"),
+        "{stderr}"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["result"]["diagnostics"].as_array().unwrap().len(), 10);
+    assert_eq!(json["result"]["summary"]["diagnostic_count"], 10);
+
+    let log = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "log",
+            "scan",
+            root.to_str().unwrap(),
+        ])
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert!(log.status.success());
+    assert!(
+        log.stderr.is_empty(),
+        "Cargo stderr must not enter log mode"
+    );
+    let log_line = String::from_utf8(log.stdout).unwrap();
+    assert!(log_line.is_ascii());
+    assert!(log_line.len() <= cargo_cleanme::output::log::MAX_BYTES);
+    assert_eq!(log_line.matches('\n').count(), 1);
+    assert!(!log_line.contains("workspace root alpha"));
+    assert!(!log_line.contains("workspace root beta"));
+}
+
 /// M012A §7: incompatible scan scope selectors are rejected by the parser, so
 /// they cannot reach traversal at all.
 ///
@@ -805,6 +1203,10 @@ impl MaintenanceFixture {
 
     /// Run cargo-cleanme with the stub on PATH and return its output.
     fn run(&self, args: &[&str]) -> std::process::Output {
+        self.run_with_locate_failure(args, false)
+    }
+
+    fn run_with_locate_failure(&self, args: &[&str], fail_locate: bool) -> std::process::Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
         command.args([
             "--config",
@@ -820,6 +1222,7 @@ impl MaintenanceFixture {
             .env("FIXTURE_TARGET", &self.target)
             .env("CARGO_LOG", &self.log)
             .env("CARGO_ARGS_LOG", &self.args_log)
+            .env("CARGO_FAIL_LOCATE", if fail_locate { "1" } else { "" })
             .output()
             .unwrap()
     }
@@ -963,6 +1366,188 @@ fn bare_dry_run_simulates_with_zero_cargo_clean_processes() {
     assert!(common::cargo_calls(&fixture.log, "metadata") >= 1);
 }
 
+/// C034 positive control: resolve the default Routine seed under an isolated
+/// HOME, then let the real Cargo executable build and clean a disposable crate.
+/// The shell wrapper records Cargo invocations while forwarding every command
+/// to the real toolchain; the staged plugin proves `cargo cleanme` resolves to
+/// this test binary. This is Unix-scoped because the wrapper is a POSIX script.
+#[cfg(unix)]
+#[test]
+fn routine_bare_dry_run_and_execute_use_real_cargo_on_default_seed() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let projects = home.join("projects");
+    let project = projects.join("routine-real-cargo");
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::write(
+        project.join("Cargo.toml"),
+        "[package]\nname='routine-real-cargo'\nversion='0.1.0'\nedition='2021'\n",
+    )
+    .unwrap();
+    fs::write(
+        project.join("src/main.rs"),
+        "fn main() { println!(\"fixture\"); }\n",
+    )
+    .unwrap();
+
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let cargo_home = home.join(".cargo");
+    fs::create_dir_all(&cargo_home).unwrap();
+    let build = Command::new(&cargo)
+        .args(["build", "--offline", "--manifest-path"])
+        .arg(project.join("Cargo.toml"))
+        .env("HOME", &home)
+        .env("CARGO_HOME", &cargo_home)
+        .output()
+        .expect("run real Cargo build");
+    assert!(
+        build.status.success(),
+        "real Cargo fixture build failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let target = project.join("target");
+    let before = directory_bytes(&target);
+    assert!(before > 0, "real Cargo must create non-empty target output");
+
+    // Make the source workspace inactive after the actual build.
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    backdate_tree(&project, old);
+
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let staged = bin.join(format!("cargo-cleanme{}", std::env::consts::EXE_SUFFIX));
+    fs::copy(env!("CARGO_BIN_EXE_cargo-cleanme"), &staged).unwrap();
+    let mut permissions = fs::metadata(&staged).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&staged, permissions).unwrap();
+
+    let real_path = std::env::var_os("PATH").unwrap_or_default();
+    let path =
+        std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(&real_path)))
+            .unwrap();
+    assert_staged_is_resolved(&path, &staged);
+    let wrapper = bin.join("cargo");
+    let calls = temp.path().join("cargo-calls.log");
+    let real_cargo = cargo.to_string_lossy();
+    // Deliberate POSIX wrapper: log exact argv, then delegate all behavior to
+    // the real Cargo binary. The checker sees this only in a cfg(unix) test.
+    fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec '{}' \"$@\"\n",
+            calls.display(),
+            real_cargo.replace('\'', "'\\''")
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&wrapper, permissions).unwrap();
+
+    let config = temp.path().join("config.toml");
+    fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
+    let run = |extra: &[&str]| {
+        Command::new(&wrapper)
+            .args(["cleanme", "--config"])
+            .arg(&config)
+            .args(["--no-progress", "--format", "json"])
+            .args(extra)
+            .env("HOME", &home)
+            .env("CARGO_HOME", &cargo_home)
+            .env("PATH", &path)
+            .output()
+            .expect("run staged cargo cleanme")
+    };
+
+    let simulation = run(&["--dry-run"]);
+    assert!(
+        simulation.status.success(),
+        "simulation stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&simulation.stdout),
+        String::from_utf8_lossy(&simulation.stderr)
+    );
+    let simulated: serde_json::Value = serde_json::from_slice(&simulation.stdout).unwrap();
+    assert_eq!(simulated["operation"], "clean");
+    assert_eq!(simulated["scope"], "routine", "{simulated}");
+    assert_eq!(simulated["mode"], "simulate");
+    assert_eq!(
+        simulated["result"]["summary"]["simulated"], 1,
+        "{simulated}"
+    );
+    assert_eq!(
+        directory_bytes(&target),
+        before,
+        "simulation mutated target"
+    );
+    assert!(
+        !fs::read_to_string(&calls)
+            .unwrap_or_default()
+            .lines()
+            .any(|line| line.split_whitespace().next() == Some("clean")),
+        "simulation must not spawn cargo clean"
+    );
+
+    let execution = run(&[]);
+    assert!(
+        execution.status.success(),
+        "execute stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&execution.stdout),
+        String::from_utf8_lossy(&execution.stderr)
+    );
+    let executed: serde_json::Value = serde_json::from_slice(&execution.stdout).unwrap();
+    assert_eq!(executed["operation"], "clean");
+    assert_eq!(executed["scope"], "routine", "{executed}");
+    assert_eq!(executed["mode"], "execute");
+    assert_eq!(executed["result"]["summary"]["cleaned"], 1, "{executed}");
+    let logged = fs::read_to_string(&calls).unwrap();
+    assert_eq!(
+        logged
+            .lines()
+            .filter(|line| line.split_whitespace().next() == Some("clean"))
+            .count(),
+        1,
+        "{logged}"
+    );
+    assert!(
+        directory_bytes(&target) < before,
+        "real cargo clean reclaimed no bytes"
+    );
+}
+
+#[cfg(unix)]
+fn directory_bytes(path: &std::path::Path) -> u64 {
+    if !path.exists() {
+        return 0;
+    }
+    let mut total = 0;
+    for entry in fs::read_dir(path).unwrap() {
+        let entry = entry.unwrap();
+        let metadata = entry.metadata().unwrap();
+        if metadata.is_dir() {
+            total += directory_bytes(&entry.path());
+        } else {
+            total += metadata.len();
+        }
+    }
+    total
+}
+
+#[cfg(unix)]
+fn backdate_tree(path: &std::path::Path, old: std::time::SystemTime) {
+    for entry in fs::read_dir(path).unwrap() {
+        let entry = entry.unwrap();
+        let child = entry.path();
+        if entry.file_type().unwrap().is_dir() {
+            backdate_tree(&child, old);
+        } else {
+            common::backdate_file(&child, old);
+        }
+    }
+    common::backdate_file(path, old);
+}
+
 /// A bare maintenance run with no known roots is a successful no-op report,
 /// not an error: exit 0 with a complete envelope stating the resolved scope.
 ///
@@ -1008,32 +1593,37 @@ fn bare_cleanup_with_no_known_roots_is_a_successful_no_op() {
 #[cfg(unix)]
 #[test]
 fn bare_cleanup_with_unresolved_ownership_blocks_and_runs_no_cargo_clean() {
-    let fixture = MaintenanceFixture::new(true);
-    // A manifest that cannot resolve is the canonical incomplete-coverage
-    // shape: one unresolvable participant blocks the complete scope.
-    fs::write(
-        fixture.root.join("Cargo.toml"),
-        "this is not a valid cargo manifest [\n",
-    )
-    .unwrap();
-
-    let output = fixture.run(&[]);
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["operation"], "clean", "{json}");
-    assert_eq!(json["result"]["scope_blocked"], true, "{json}");
-    assert!(
-        json["result"]["scope_reason"]
-            .as_str()
-            .unwrap()
-            .contains("ownership could not be proven"),
-        "{json}"
-    );
-    assert_eq!(
-        fixture.clean_calls(),
-        0,
-        "a blocked scope must spawn no Cargo clean"
-    );
+    for mode in ["execute", "simulate", "preview"] {
+        let fixture = MaintenanceFixture::new(true);
+        // Inject a Cargo locate failure while keeping the real project
+        // manifest valid. This exercises unresolved Cargo coverage rather
+        // than a filesystem discovery or TOML parse failure.
+        let root = fixture.root.to_str().unwrap().to_owned();
+        let args = match mode {
+            "execute" => vec![],
+            "simulate" => vec!["--dry-run"],
+            "preview" => vec!["clean", root.as_str(), "--cargo-preview"],
+            _ => unreachable!(),
+        };
+        let output = fixture.run_with_locate_failure(&args, true);
+        assert_eq!(output.status.code(), Some(1), "mode={mode}: {output:?}");
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(json["operation"], "clean", "{json}");
+        assert_eq!(json["mode"], mode, "{json}");
+        assert_eq!(json["result"]["scope_blocked"], true, "{json}");
+        assert!(
+            json["result"]["scope_reason"]
+                .as_str()
+                .unwrap()
+                .contains("ownership could not be proven"),
+            "{json}"
+        );
+        assert_eq!(
+            fixture.clean_calls(),
+            0,
+            "blocked {mode} must spawn no Cargo clean"
+        );
+    }
 }
 
 /// Advanced cleanup defaults to Execute, and Cargo's own preview is reachable
@@ -2274,6 +2864,21 @@ impl StaleLearnedFixture {
         stale
     }
 
+    fn write_deleted_learned_roots(&self, count: usize) -> Vec<PathBuf> {
+        let stale: Vec<PathBuf> = (0..count)
+            .map(|index| self._temp.path().join(format!("deleted-worktree-{index}")))
+            .collect();
+        for path in &stale {
+            std::fs::create_dir(path).unwrap();
+        }
+        self.write_state(&stale);
+        for path in &stale {
+            std::fs::remove_dir(path).unwrap();
+            assert!(!path.exists());
+        }
+        stale
+    }
+
     fn run(&self, args: &[&str]) -> std::process::Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
         command.args([
@@ -2401,7 +3006,7 @@ fn stale_learned_root_is_omitted_and_bare_routine_execute_cleans_the_sibling() {
             "via_plugin={via_plugin}: the baseline fatal must be gone: {stderr}"
         );
         assert!(
-            stderr.contains("omitting unavailable"),
+            stderr.contains("omitting 1 unavailable learned root(s)"),
             "via_plugin={via_plugin}: the omission must be reported truthfully: {stderr}"
         );
         // Exactly one JSON envelope on stdout.
@@ -2462,6 +3067,45 @@ fn stale_learned_root_simulate_agrees_with_execute_and_spawns_no_cargo_clean() {
         "simulation must not remove anything"
     );
     assert!(fixture.cargo_calls("metadata") >= 1, "{json}");
+}
+
+#[cfg(unix)]
+#[test]
+fn repeated_routine_runs_bound_stale_root_noise_without_mutating_state() {
+    let fixture = StaleLearnedFixture::new();
+    let stale = fixture.write_deleted_learned_roots(100);
+    let state_path = fixture.state_file();
+    let state_before = fs::read(&state_path).unwrap();
+
+    for run_number in 1..=2 {
+        let output = fixture.run(&["--dry-run"]);
+        assert!(
+            output.status.success(),
+            "run {run_number}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("omitting 100 unavailable learned root(s)"),
+            "run {run_number}: expected a bounded summary for all stale hints: {stderr}"
+        );
+        assert!(
+            stderr.lines().count() <= 2,
+            "run {run_number}: stale paths must not fan out into one line each: {stderr}"
+        );
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(json["result"]["summary"]["simulated"], 1, "{json}");
+        assert!(
+            stale.iter().all(|path| !json["result"]["selected_roots"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|root| root.as_str() == path.to_str())),
+            "omitted hints must remain outside the selected universe: {json}"
+        );
+        assert_eq!(fixture.clean_calls(), 0, "simulation must spawn no clean");
+        assert_eq!(fs::read(&state_path).unwrap(), state_before);
+    }
 }
 
 /// Explicit roots stay authoritative: a missing configured `scan.root` and a
