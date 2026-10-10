@@ -24,7 +24,7 @@ were the premises, and is any of them unchecked?*
 | Layer | Location | Count | What it can catch | What it cannot catch |
 |---|---|---:|---|---|
 | Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 332 declared `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
-| Integration — CLI contract | `tests/cli_contract.rs` (2,807 lines) | 46 `#[test]` | The subprocess boundary end to end: argv normalization, exit codes, JSON shape, log-line shape, `--stats` stream discipline, selector behaviour, usage conflicts, stale-learned-root admission, repeated-root noise bounds, incomplete-discovery stage counts, real Cargo failure summaries | Internals of `run()`; anything on a real machine; platform-gated cases are excluded on other lanes |
+| Integration — CLI contract | `tests/cli_contract.rs` (2,997 lines) | 47 `#[test]` | The subprocess boundary end to end: argv normalization, exit codes, JSON shape, log-line shape, `--stats` stream discipline, selector behaviour, usage conflicts, stale-learned-root admission, repeated-root noise bounds, incomplete-discovery stage counts, real Cargo failure summaries, default Routine execution against real Cargo | Internals of `run()`; anything on a real machine; platform-gated cases are excluded on other lanes |
 | Integration — end to end | `tests/end_to_end.rs` (840 lines) | 4 `#[test]` | Full production-pipeline scans against synthetic trees with real mtimes, under both a filtered Routine scope and an explicit scope | Cleanup, update, config editing |
 | Shared harness | `tests/common/mod.rs` (240 lines) | 0 tests | `set_path_modified` / `backdate_file` (per-platform mtime control), `inactive_project` tree construction, `write_fake_cargo` / `cargo_calls` (unix only) | — |
 | Contract checkers | `scripts/` | **17** (see note) | Published-crate contents, fixture portability, installer/shape/smoke contracts, release identity, benchmark regression, and the completeness of this inventory | That a fixture case proves its intended branch (explicitly disclaimed) |
@@ -212,7 +212,7 @@ Two unix-only helpers joined the harness since: `write_fake_cargo` (`:167`) writ
 recorded in the doc comment at `:158`, which is exactly the discipline the fixture
 portability checker exists to enforce.
 
-### `tests/cli_contract.rs` — 46 declared cases
+### `tests/cli_contract.rs` — 47 declared cases
 
 Eleven run on every platform; eighteen are `#[cfg(unix)]` because they need the
 `write_fake_cargo` stub on `PATH`.
@@ -224,32 +224,33 @@ Eleven run on every platform; eighteen are `#[cfg(unix)]` because they need the
 | `cargo_external_config_edit_help_matches_direct` | 154 | Same for the subcommand form, which exercises a different clap path |
 | `json_scan_is_one_versioned_document_and_stats_stay_on_stderr` | 177 | The scan envelope, plus stream separation (`cli_contract.rs:198`, `:203`) and newline discipline |
 | `repeated_real_cargo_failures_are_grouped_without_losing_json_diagnostics` | 262 | Real Cargo reports one bounded human cause group for repeated orphan-workspace failures while JSON retains every per-manifest diagnostic |
-| `repeated_routine_runs_bound_stale_root_noise_without_mutating_state` | 2540 | Two Routine Simulate invocations over 100 missing hints retain one bounded summary, preserve state bytes and keep the healthy sibling selected |
+| `repeated_routine_runs_bound_stale_root_noise_without_mutating_state` | 2730 | Two Routine Simulate invocations over 100 missing hints retain one bounded summary, preserve state bytes and keep the healthy sibling selected |
 | `json_scope_label_follows_the_resolved_scope_not_the_cli_flags` | 219 | `--known` reports the Routine scope; an explicit `--scope` reports that scope; `scan.root` does not |
-| `scan_scope_conflicts_are_rejected_before_any_traversal` | 268 | Contradictory scope selectors exit 2 without walking anything — fail-closed at the boundary |
-| `json_cleanup_emits_the_requested_mode_and_machine_summary` | 300 | `clean --dry-run` envelope and summary |
-| `json_scope_block_is_emitted_with_nonzero_exit_status` | 339 | A blocked scope still emits parseable JSON *and* exits 1 (`cli_contract.rs:361`). That pairing is the automation contract |
-| `json_unattended_yes_executes_through_cargo_and_emits_typed_result` | 379 | `#[cfg(unix)]`. Unattended Execute reaches a real `cargo clean` through a fake, emitting `reason_code: "cleaned"` with selector fields and byte counts |
-| `config_edit_uses_fake_editor_process_and_keeps_invalid_edits` | 676 | `config edit` really execs a process (`$EDITOR`), and an invalid edit is rejected rather than written |
-| `bare_invocation_executes_routine_cleanup_and_is_not_a_scan` | 856 | M012A: bare `cargo cleanme` resolves to `CleanupScope::Maintenance` and runs cleanup, not a scan |
-| `bare_dry_run_simulates_with_zero_cargo_clean_processes` | 893 | `--dry-run` is application simulation: the same decision path, zero `cargo clean` processes |
-| `bare_cleanup_with_no_known_roots_is_a_successful_no_op` | 935 | The empty-roots short circuit exits 0 with the human notice, having spawned nothing |
-| `bare_cleanup_with_unresolved_ownership_blocks_and_runs_no_cargo_clean` | 969 | Unresolved ownership blocks the whole scope and runs no clean |
-| `advanced_cleanup_defaults_to_execute_and_cargo_preview_is_explicit` | 1002 | `clean` defaults to Execute; Cargo's own preview is `--cargo-preview`, not the default |
-| `hidden_compatibility_aliases_map_exactly_to_the_canonical_modes` | 1060 | `--dryrun`/`--yes` are hidden aliases resolving to the same modes as `--dry-run`/`--yes` |
-| `known_scan_resolves_routine_without_a_configured_root_and_explicit_with_one` | 1098 | Rootless `scan` is Full and ignores `scan.root`; `scan --known` is the Routine inventory |
-| `json_scan_within_an_empty_root_is_a_successful_zero_result_report` | 1155 | An empty root is a valid zero-group report, exit 0 — not an error |
-| `log_mode_routine_execute_is_one_bounded_line_and_a_silent_stderr` | 1258 | M012B: the shared `assert_bounded_log_line` contract (`cli_contract.rs:1218`) — ASCII, ≤ `MAX_BYTES`, exactly one newline, `cargo-cleanme op=` prefix, no control sequences — and nothing on stderr |
-| `log_mode_distinguishes_simulate_from_cargo_preview` | 1292 | `mode=simulate` and `mode=preview` are distinct on the wire, matching `CleanMode::as_str` |
-| `log_mode_scope_block_is_one_line_with_a_typed_reason_and_exit_one` | 1325 | Blocked scope → one line, typed `reason=`, exit 1 |
-| `log_mode_failed_cleanup_is_one_line_with_status_failed_and_exit_one` | 1353 | A failed unit degrades to `status=failed` without a scope reason |
-| `log_mode_zero_result_maintenance_is_status_ok` | 1392 | Zero groups is `status=ok`, not a special case |
-| `log_mode_scan_reports_the_resolved_scope` | 1418 | The scan log line carries the same resolved-scope label as the JSON envelope |
-| `log_mode_stats_is_opt_in_stderr_and_leaves_the_single_line_alone` | 1486 | `--stats` stays an explicit stderr override; stdout is byte-identical with and without it (`cli_contract.rs:1512-1514`) |
-| `log_mode_suppresses_normal_diagnostic_fan_out` | 1536 | The per-diagnostic stderr fan-out is gated off in log mode; the count rides in `diagnostics=N` |
-| `log_mode_fatal_error_is_one_bounded_stderr_line_and_no_stdout` | 1605 | A fatal error is a bounded stderr line; stdout stays empty, so a consumer reads one stream |
-| `json_and_human_output_are_unchanged_by_log_mode` | 1648 | Adding the third format did not perturb the two existing byte-for-byte outputs |
-| `log_is_an_explicit_value_and_invalid_formats_still_fail_closed` | 1693 | `log` is an accepted `--format` value; an unknown one still exits 2 (`cli_contract.rs:1709`) |
+| `scan_scope_conflicts_are_rejected_before_any_traversal` | 332 | Contradictory scope selectors exit 2 without walking anything — fail-closed at the boundary |
+| `json_cleanup_emits_the_requested_mode_and_machine_summary` | 364 | `clean --dry-run` envelope and summary |
+| `json_scope_block_is_emitted_with_nonzero_exit_status` | 403 | A blocked scope still emits parseable JSON *and* exits 1 (`cli_contract.rs:361`). That pairing is the automation contract |
+| `json_unattended_yes_executes_through_cargo_and_emits_typed_result` | 443 | `#[cfg(unix)]`. Unattended Execute reaches a real `cargo clean` through a fake, emitting `reason_code: "cleaned"` with selector fields and byte counts |
+| `config_edit_uses_fake_editor_process_and_keeps_invalid_edits` | 740 | `config edit` really execs a process (`$EDITOR`), and an invalid edit is rejected rather than written |
+| `bare_invocation_executes_routine_cleanup_and_is_not_a_scan` | 961 | M012A: bare `cargo cleanme` resolves to `CleanupScope::Maintenance` and runs cleanup, not a scan |
+| `bare_dry_run_simulates_with_zero_cargo_clean_processes` | 998 | `--dry-run` is application simulation: the same decision path, zero `cargo clean` processes |
+| `routine_bare_dry_run_and_execute_use_real_cargo_on_default_seed` | 1037 | `#[cfg(unix)]`. Isolated `$HOME/projects` is the Routine scope; real Cargo build/clean proves one clean reclaims bytes and simulation keeps the same unit without spawning clean |
+| `bare_cleanup_with_no_known_roots_is_a_successful_no_op` | 1222 | The empty-roots short circuit exits 0 with the human notice, having spawned nothing |
+| `bare_cleanup_with_unresolved_ownership_blocks_and_runs_no_cargo_clean` | 1256 | Unresolved ownership blocks the whole scope and runs no clean |
+| `advanced_cleanup_defaults_to_execute_and_cargo_preview_is_explicit` | 1289 | `clean` defaults to Execute; Cargo's own preview is `--cargo-preview`, not the default |
+| `hidden_compatibility_aliases_map_exactly_to_the_canonical_modes` | 1347 | `--dryrun`/`--yes` are hidden aliases resolving to the same modes as `--dry-run`/`--yes` |
+| `known_scan_resolves_routine_without_a_configured_root_and_explicit_with_one` | 1588 | Rootless `scan` is Full and ignores `scan.root`; `scan --known` is the Routine inventory |
+| `json_scan_within_an_empty_root_is_a_successful_zero_result_report` | 1645 | An empty root is a valid zero-group report, exit 0 — not an error |
+| `log_mode_routine_execute_is_one_bounded_line_and_a_silent_stderr` | 1748 | M012B: the shared `assert_bounded_log_line` contract (`cli_contract.rs:1218`) — ASCII, ≤ `MAX_BYTES`, exactly one newline, `cargo-cleanme op=` prefix, no control sequences — and nothing on stderr |
+| `log_mode_distinguishes_simulate_from_cargo_preview` | 1782 | `mode=simulate` and `mode=preview` are distinct on the wire, matching `CleanMode::as_str` |
+| `log_mode_scope_block_is_one_line_with_a_typed_reason_and_exit_one` | 1815 | Blocked scope → one line, typed `reason=`, exit 1 |
+| `log_mode_failed_cleanup_is_one_line_with_status_failed_and_exit_one` | 1843 | A failed unit degrades to `status=failed` without a scope reason |
+| `log_mode_zero_result_maintenance_is_status_ok` | 1882 | Zero groups is `status=ok`, not a special case |
+| `log_mode_scan_reports_the_resolved_scope` | 1908 | The scan log line carries the same resolved-scope label as the JSON envelope |
+| `log_mode_stats_is_opt_in_stderr_and_leaves_the_single_line_alone` | 1976 | `--stats` stays an explicit stderr override; stdout is byte-identical with and without it (`cli_contract.rs:1512-1514`) |
+| `log_mode_suppresses_normal_diagnostic_fan_out` | 2026 | The per-diagnostic stderr fan-out is gated off in log mode; the count rides in `diagnostics=N` |
+| `log_mode_fatal_error_is_one_bounded_stderr_line_and_no_stdout` | 2095 | A fatal error is a bounded stderr line; stdout stays empty, so a consumer reads one stream |
+| `json_and_human_output_are_unchanged_by_log_mode` | 2138 | Adding the third format did not perturb the two existing byte-for-byte outputs |
+| `log_is_an_explicit_value_and_invalid_formats_still_fail_closed` | 2183 | `log` is an accepted `--format` value; an unknown one still exits 2 (`cli_contract.rs:1709`) |
 
 The discovery unit suite also has a Unix permission-premise fixture in
 `discovery.rs::unreadable_child_keeps_accessible_inventory_and_unknown_coverage_bounded`.

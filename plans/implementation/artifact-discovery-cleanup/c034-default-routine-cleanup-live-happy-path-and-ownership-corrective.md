@@ -1,6 +1,6 @@
 # C034 — Default Routine Cleanup Live Happy-Path and Ownership Corrective
 
-Status: **ready** for baseline, operator contract, end-to-end fixtures, and safe existing-scope improvements. **Blocked** for independent partial-scope destructive execution unless proposed ADR 004 is accepted with a concrete safety proof.
+Status: **active** — a disposable Unix real-Cargo default-Routine positive control now proves dry-run parity and real byte reclamation. Remaining heterogeneous Full→Routine qualification, blocked-scope controls, installed v0.2.5 stage capture, cross-platform/MSRV hosted evidence, and closure are outstanding. **Blocked** for independent partial-scope destructive execution unless proposed ADR 004 is accepted with a concrete safety proof.
 Planning-only branch: `plans/c032-c034-routine-cleanup-reliability`.
 Baseline: `7c874ab7998bdac28a6236ec21ae59ec24b915f8` (`main`, v0.2.5, 2026-10-09).
 Roadmap: `plans/subsystems/artifact-discovery-cleanup-roadmap.md`.

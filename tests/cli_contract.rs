@@ -264,7 +264,7 @@ fn repeated_real_cargo_failures_are_grouped_without_losing_json_diagnostics() {
     let root = dir.path().join("projects");
     fs::create_dir_all(&root).unwrap();
     let shared_missing_workspace = root.join("missing-workspace");
-    for index in 0..32 {
+    for index in 0..1_000 {
         let package = root.join(format!("orphan-{index}"));
         fs::create_dir_all(package.join("src")).unwrap();
         fs::write(package.join("src/main.rs"), "fn main() {}\n").unwrap();
@@ -287,6 +287,7 @@ fn repeated_real_cargo_failures_are_grouped_without_losing_json_diagnostics() {
             "--config",
             config.to_str().unwrap(),
             "--no-progress",
+            "--stats",
             "--format",
             "json",
             "scan",
@@ -302,7 +303,7 @@ fn repeated_real_cargo_failures_are_grouped_without_losing_json_diagnostics() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("32 Cargo workspace lookup failure(s)"),
+        stderr.contains("1000 Cargo workspace lookup failure(s)"),
         "identical Cargo causes should be summarized with their count: {stderr}"
     );
     assert!(
@@ -310,8 +311,15 @@ fn repeated_real_cargo_failures_are_grouped_without_losing_json_diagnostics() {
         "repeated failures should not produce one stderr line per manifest: {stderr}"
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["result"]["diagnostics"].as_array().unwrap().len(), 32);
-    assert_eq!(json["result"]["summary"]["diagnostic_count"], 32);
+    assert_eq!(
+        json["result"]["diagnostics"].as_array().unwrap().len(),
+        1_000
+    );
+    assert_eq!(json["result"]["summary"]["diagnostic_count"], 1_000);
+    assert!(
+        stderr.contains("locate=1000"),
+        "observed locate count: {stderr}"
+    );
 }
 
 /// M012A §7: incompatible scan scope selectors are rejected by the parser, so
@@ -1017,6 +1025,188 @@ fn bare_dry_run_simulates_with_zero_cargo_clean_processes() {
     // Cargo *was* used for workspace resolution, which is what makes this a
     // simulation rather than a skip.
     assert!(common::cargo_calls(&fixture.log, "metadata") >= 1);
+}
+
+/// C034 positive control: resolve the default Routine seed under an isolated
+/// HOME, then let the real Cargo executable build and clean a disposable crate.
+/// The shell wrapper records Cargo invocations while forwarding every command
+/// to the real toolchain; the staged plugin proves `cargo cleanme` resolves to
+/// this test binary. This is Unix-scoped because the wrapper is a POSIX script.
+#[cfg(unix)]
+#[test]
+fn routine_bare_dry_run_and_execute_use_real_cargo_on_default_seed() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let projects = home.join("projects");
+    let project = projects.join("routine-real-cargo");
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::write(
+        project.join("Cargo.toml"),
+        "[package]\nname='routine-real-cargo'\nversion='0.1.0'\nedition='2021'\n",
+    )
+    .unwrap();
+    fs::write(
+        project.join("src/main.rs"),
+        "fn main() { println!(\"fixture\"); }\n",
+    )
+    .unwrap();
+
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let cargo_home = home.join(".cargo");
+    fs::create_dir_all(&cargo_home).unwrap();
+    let build = Command::new(&cargo)
+        .args(["build", "--offline", "--manifest-path"])
+        .arg(project.join("Cargo.toml"))
+        .env("HOME", &home)
+        .env("CARGO_HOME", &cargo_home)
+        .output()
+        .expect("run real Cargo build");
+    assert!(
+        build.status.success(),
+        "real Cargo fixture build failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let target = project.join("target");
+    let before = directory_bytes(&target);
+    assert!(before > 0, "real Cargo must create non-empty target output");
+
+    // Make the source workspace inactive after the actual build.
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    backdate_tree(&project, old);
+
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let staged = bin.join(format!("cargo-cleanme{}", std::env::consts::EXE_SUFFIX));
+    fs::copy(env!("CARGO_BIN_EXE_cargo-cleanme"), &staged).unwrap();
+    let mut permissions = fs::metadata(&staged).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&staged, permissions).unwrap();
+
+    let real_path = std::env::var_os("PATH").unwrap_or_default();
+    let path =
+        std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(&real_path)))
+            .unwrap();
+    assert_staged_is_resolved(&path, &staged);
+    let wrapper = bin.join("cargo");
+    let calls = temp.path().join("cargo-calls.log");
+    let real_cargo = cargo.to_string_lossy();
+    // Deliberate POSIX wrapper: log exact argv, then delegate all behavior to
+    // the real Cargo binary. The checker sees this only in a cfg(unix) test.
+    fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec '{}' \"$@\"\n",
+            calls.display(),
+            real_cargo.replace('\'', "'\\''")
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&wrapper, permissions).unwrap();
+
+    let config = temp.path().join("config.toml");
+    fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
+    let run = |extra: &[&str]| {
+        Command::new(&wrapper)
+            .args(["cleanme", "--config"])
+            .arg(&config)
+            .args(["--no-progress", "--format", "json"])
+            .args(extra)
+            .env("HOME", &home)
+            .env("CARGO_HOME", &cargo_home)
+            .env("PATH", &path)
+            .output()
+            .expect("run staged cargo cleanme")
+    };
+
+    let simulation = run(&["--dry-run"]);
+    assert!(
+        simulation.status.success(),
+        "simulation stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&simulation.stdout),
+        String::from_utf8_lossy(&simulation.stderr)
+    );
+    let simulated: serde_json::Value = serde_json::from_slice(&simulation.stdout).unwrap();
+    assert_eq!(simulated["operation"], "clean");
+    assert_eq!(simulated["scope"], "routine", "{simulated}");
+    assert_eq!(simulated["mode"], "simulate");
+    assert_eq!(
+        simulated["result"]["summary"]["simulated"], 1,
+        "{simulated}"
+    );
+    assert_eq!(
+        directory_bytes(&target),
+        before,
+        "simulation mutated target"
+    );
+    assert!(
+        !fs::read_to_string(&calls)
+            .unwrap_or_default()
+            .lines()
+            .any(|line| line.split_whitespace().next() == Some("clean")),
+        "simulation must not spawn cargo clean"
+    );
+
+    let execution = run(&[]);
+    assert!(
+        execution.status.success(),
+        "execute stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&execution.stdout),
+        String::from_utf8_lossy(&execution.stderr)
+    );
+    let executed: serde_json::Value = serde_json::from_slice(&execution.stdout).unwrap();
+    assert_eq!(executed["operation"], "clean");
+    assert_eq!(executed["scope"], "routine", "{executed}");
+    assert_eq!(executed["mode"], "execute");
+    assert_eq!(executed["result"]["summary"]["cleaned"], 1, "{executed}");
+    let logged = fs::read_to_string(&calls).unwrap();
+    assert_eq!(
+        logged
+            .lines()
+            .filter(|line| line.split_whitespace().next() == Some("clean"))
+            .count(),
+        1,
+        "{logged}"
+    );
+    assert!(
+        directory_bytes(&target) < before,
+        "real cargo clean reclaimed no bytes"
+    );
+}
+
+#[cfg(unix)]
+fn directory_bytes(path: &std::path::Path) -> u64 {
+    if !path.exists() {
+        return 0;
+    }
+    let mut total = 0;
+    for entry in fs::read_dir(path).unwrap() {
+        let entry = entry.unwrap();
+        let metadata = entry.metadata().unwrap();
+        if metadata.is_dir() {
+            total += directory_bytes(&entry.path());
+        } else {
+            total += metadata.len();
+        }
+    }
+    total
+}
+
+#[cfg(unix)]
+fn backdate_tree(path: &std::path::Path, old: std::time::SystemTime) {
+    for entry in fs::read_dir(path).unwrap() {
+        let entry = entry.unwrap();
+        let child = entry.path();
+        if entry.file_type().unwrap().is_dir() {
+            backdate_tree(&child, old);
+        } else {
+            common::backdate_file(&child, old);
+        }
+    }
+    common::backdate_file(path, old);
 }
 
 /// A bare maintenance run with no known roots is a successful no-op report,
