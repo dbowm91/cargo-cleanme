@@ -542,7 +542,8 @@ fn unavailable_cargo_executable_is_reported_as_a_locate_spawn_failure() {
 }
 
 /// Distinct causes behind Cargo's identical generic first line must remain in
-/// separate human groups. This POSIX-only Cargo fixture makes both commands
+/// separate human groups, with the group cap preserving only bounded output.
+/// This POSIX-only Cargo fixture makes the commands
 /// fail for controlled, different second-line causes; its callers are gated
 /// with `cfg(unix)` because `/bin/sh` is the executable under test.
 #[cfg(unix)]
@@ -552,7 +553,11 @@ fn cargo_failures_with_shared_generic_line_keep_distinct_cause_groups() {
 
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("projects");
-    for name in ["alpha", "beta"] {
+    let names = [
+        "alpha", "beta", "cause-2", "cause-3", "cause-4", "cause-5", "cause-6", "cause-7",
+        "cause-8", "cause-9",
+    ];
+    for name in names {
         fs::create_dir_all(root.join(name).join("src")).unwrap();
         fs::write(
             root.join(name).join("Cargo.toml"),
@@ -566,19 +571,16 @@ fn cargo_failures_with_shared_generic_line_keep_distinct_cause_groups() {
     let fake_cargo = bin.join("cargo");
     // Deliberate POSIX-only executable fixture. Product code still crosses its
     // normal CargoRunner process boundary; only Cargo's stderr is controlled.
-    fs::write(
-        &fake_cargo,
-        r##"#!/bin/sh
-case "$*" in
-  *alpha/Cargo.toml*) cause='Caused by: workspace root alpha is absent' ;;
-  *beta/Cargo.toml*) cause='Caused by: workspace root beta is absent' ;;
-  *) cause='Caused by: unexpected manifest' ;;
-esac
-printf '%s\n%s\n' 'error: failed searching for potential workspace' "$cause" >&2
-exit 101
-"##,
-    )
-    .unwrap();
+    let mut fake_cargo_script = String::from("#!/bin/sh\ncase \"$*\" in\n");
+    for name in names {
+        fake_cargo_script.push_str(&format!(
+            "  *{name}/Cargo.toml*) cause='Caused by: workspace root {name} is absent' ;;\n"
+        ));
+    }
+    fake_cargo_script.push_str(
+        "  *) cause='Caused by: unexpected manifest' ;;\nesac\nprintf '%s\\n%s\\n' 'error: failed searching for potential workspace' \"$cause\" >&2\nexit 101\n",
+    );
+    fs::write(&fake_cargo, fake_cargo_script).unwrap();
     let mut permissions = fs::metadata(&fake_cargo).unwrap().permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(&fake_cargo, permissions).unwrap();
@@ -615,9 +617,18 @@ exit 101
         stderr.contains("1 Cargo locate failure(s): Caused by: workspace root beta is absent"),
         "{stderr}"
     );
+    assert_eq!(
+        stderr.matches(" Cargo locate failure(s):").count(),
+        8,
+        "human presentation shows at most eight distinct causes: {stderr}"
+    );
+    assert!(
+        stderr.contains("2 additional Cargo failure cause(s)"),
+        "{stderr}"
+    );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["result"]["diagnostics"].as_array().unwrap().len(), 2);
-    assert_eq!(json["result"]["summary"]["diagnostic_count"], 2);
+    assert_eq!(json["result"]["diagnostics"].as_array().unwrap().len(), 10);
+    assert_eq!(json["result"]["summary"]["diagnostic_count"], 10);
 
     let log = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
         .args([
