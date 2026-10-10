@@ -490,6 +490,57 @@ fn real_cargo_workspace_failure_matrix_records_stage_and_context() {
     assert_eq!(summary.len(), 7, "{cargo_version}: {summary:?}");
 }
 
+/// The real process boundary reports an unavailable Cargo executable as an
+/// unresolved locate failure and keeps a read-only scan partial-result tolerant.
+#[cfg(unix)]
+#[test]
+fn unavailable_cargo_executable_is_reported_as_a_locate_spawn_failure() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname='spawn-failure-fixture'\nversion='0.1.0'\nedition='2021'\n",
+    )
+    .unwrap();
+    fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    let empty_path = temp.path().join("empty-path");
+    fs::create_dir(&empty_path).unwrap();
+    let config = temp.path().join("config.toml");
+    fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--no-progress",
+            "--stats",
+            "--format",
+            "json",
+            "scan",
+            root.to_str().unwrap(),
+        ])
+        .env("PATH", empty_path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "read-only scan retains partial results: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cargo locate-project could not start:"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("locate=1"), "{stderr}");
+    assert!(stderr.contains("metadata=0"), "{stderr}");
+    assert!(stderr.contains("failures=1"), "{stderr}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["result"]["diagnostics"].as_array().unwrap().len(), 1);
+    assert_eq!(json["result"]["summary"]["diagnostic_count"], 1);
+}
+
 /// Distinct causes behind Cargo's identical generic first line must remain in
 /// separate human groups. This POSIX-only Cargo fixture makes both commands
 /// fail for controlled, different second-line causes; its callers are gated
