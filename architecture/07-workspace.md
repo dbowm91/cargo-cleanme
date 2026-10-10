@@ -297,11 +297,11 @@ fail-closed decision keys on `unresolved.is_empty()`, not on `stage`.
 ### Progress
 
 Resolution reports through the observer only, and only sparsely:
-`observer.workspaces_resolved(1)` per unique workspace (`:425`) and
-`observer.cargo_failure()` on every failure (`:360`, `:376`, `:388`, `:526`,
-`:542`, `:556`). `main.rs:344` sets the phase to `ScanPhase::Resolution` before
-the call. There is no `units_total` for the resolution phase — only analysis
-announces a determinate total (`:932`).
+`observer.workspaces_resolved(1)` per unique workspace and
+`observer.cargo_failure()` for every failed Cargo command. The TTY renderer
+keeps this failure total separate from filesystem discovery diagnostics; it
+does not display diagnostic text or paths. There is no `units_total` for the
+resolution phase — only analysis announces a determinate total.
 
 ---
 

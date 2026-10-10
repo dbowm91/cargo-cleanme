@@ -778,6 +778,7 @@ fn run_scan(
         observer,
         options.stats,
     )?;
+    observer.discovery_issues(discovered.diagnostics.len() as u64);
     let discovery_elapsed = discovery_start.elapsed();
     let full_traversal_complete = discovered.coverage_complete
         && !discovered.diagnostics.iter().any(|d| {
@@ -1026,7 +1027,11 @@ fn run_scan(
             }
         }
         for (cause, (count, paths)) in cargo_groups.iter().take(8) {
-            eprintln!("  {count} Cargo workspace lookup failure(s): {cause}");
+            if let Some((stage, reason)) = cause.split_once(": ") {
+                eprintln!("  {count} Cargo {stage} failure(s): {reason}");
+            } else {
+                eprintln!("  {count} Cargo resolution failure(s): {cause}");
+            }
             if !paths.is_empty() {
                 eprintln!("    examples: {}", paths.join(", "));
             }

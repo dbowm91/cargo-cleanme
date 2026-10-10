@@ -116,7 +116,7 @@ not as a claim that the ordering is verified.
 
 | Module | Lines | Role | Deep dive |
 |---|---:|---|---|
-| [`main.rs`](13-orchestration.md) | 1099 | Binary entry: argv → resolved invocation → dispatch → exit code. The only place the scan and cleanup pipelines are stitched together. | [Orchestration](13-orchestration.md) |
+| [`main.rs`](13-orchestration.md) | 1104 | Binary entry: argv → resolved invocation → dispatch → exit code. The only place the scan and cleanup pipelines are stitched together. | [Orchestration](13-orchestration.md) |
 | [`cli.rs`](02-cli.md) | 1025 / 398 | Clap surface, resolved-invocation model, `cargo`-subcommand argv normalization, scan-root absolutization. | [CLI](02-cli.md) |
 | [`config.rs`](03-config-and-editor.md) | 1443 / 576 | Load/create/validate `config.toml`; embedded template; path resolution. | [Config & editor](03-config-and-editor.md) |
 | [`policy.rs`](04-policy-and-scope.md) | 1066 / 662 | Turns a `ScanRequest` + config into an `EffectiveScanPolicy` — the Routine/Full scope decision — plus C028 provenance admission, C030 maintenance-root hygiene, and bounded C033 omission summaries. | [Policy & scope](04-policy-and-scope.md) |
@@ -127,7 +127,7 @@ not as a claim that the ordering is verified.
 | [`cleanup.rs`](09-cleanup.md) | 6575 / 2481 | Authorization, ownership proof, pre-spawn decision, three clean modes, the admission-premise late recheck. The heart of the safety story. | [Cleanup](09-cleanup.md) |
 | [`report.rs`](10-reporting.md) | 195 / 71 | Human-readable rendering of a `ScanReport`; byte formatting. | [Reporting](10-reporting.md) |
 | [`output.rs`](10-reporting.md) | 941 | Versioned machine-readable DTOs (`EnvelopeV1`); the stable JSON contract, including the non-envelope `update` document and its stdout stream; the bounded `--format log` line renderer. | [Reporting](10-reporting.md) |
-| [`progress.rs`](11-progress.md) | 840 / 508 | `ProgressObserver` trait + indicatif renderer; terminal capability detection. | [Progress](11-progress.md) |
+| [`progress.rs`](11-progress.md) | 861 / 524 | `ProgressObserver` trait + indicatif renderer; terminal capability detection. | [Progress](11-progress.md) |
 | [`update.rs`](12-self-update.md) | 2773 / 1234 | Eggup-based self-update: provenance classification, version authority, staged replace. | [Self-update](12-self-update.md) |
 | [`domain.rs`](01-domain-and-errors.md) | 411 | The shared vocabulary: reports, ownership classes, counters, diagnostics. Pure data. | [Domain & errors](01-domain-and-errors.md) |
 | [`error.rs`](01-domain-and-errors.md) | 16 | `AppError` — the six variants the binary can fail with. | [Domain & errors](01-domain-and-errors.md) |

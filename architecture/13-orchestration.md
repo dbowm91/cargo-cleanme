@@ -10,7 +10,7 @@
 > the `scope`-label fix and the state-publish exit-code fix is preserved by the
 > findings themselves (§7, §8), not by a banner claiming them.
 
-`src/main.rs`, 1046 lines, zero inline tests. The only module that reaches every
+`src/main.rs`, 1104 lines, zero inline tests. The only module that reaches every
 other one, and the only place the two pipelines are stitched together.
 
 ## 1. Responsibility
@@ -312,6 +312,11 @@ sanitized representative paths per cause and at most eight causes; the exact
 unresolved participant ledger and counters are not compressed. Other human
 diagnostics retain their own ten-item display cap. This is presentation only and
 does not alter scan coverage or cleanup eligibility.
+
+The TTY progress renderer also reports filesystem discovery diagnostics and
+Cargo workspace-resolution failures as separate totals. It does not render the
+diagnostic text or paths; the counts are populated at the discovery and resolver
+boundaries (`main.rs:778`, `workspace.rs:400-433`, `:575-614`).
 
 **Step 2 deserves the emphasis.** Before M012A a rootless `scan` resolved through
 `policy::resolve` with `full: false`, which meant a configured `scan.root` could

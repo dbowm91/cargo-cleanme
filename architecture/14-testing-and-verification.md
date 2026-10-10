@@ -24,9 +24,9 @@ were the premises, and is any of them unchecked?*
 | Layer | Location | Count | What it can catch | What it cannot catch |
 |---|---|---:|---|---|
 | Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 332 declared `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
-| Integration — CLI contract | `tests/cli_contract.rs` (2,997 lines) | 47 `#[test]` | The subprocess boundary end to end: argv normalization, exit codes, JSON shape, log-line shape, `--stats` stream discipline, selector behaviour, usage conflicts, stale-learned-root admission, repeated-root noise bounds, incomplete-discovery stage counts, real Cargo failure summaries, default Routine execution against real Cargo | Internals of `run()`; anything on a real machine; platform-gated cases are excluded on other lanes |
+| Integration — CLI contract | `tests/cli_contract.rs` (3,280 lines) | 49 `#[test]` | The subprocess boundary end to end: argv normalization, exit codes, JSON shape, log-line shape, `--stats` stream discipline, selector behaviour, usage conflicts, stale-learned-root admission, repeated-root noise bounds, incomplete-discovery stage counts, real Cargo failure summaries, default Routine execution against real Cargo | Internals of `run()`; anything on a real machine; platform-gated cases are excluded on other lanes |
 | Integration — end to end | `tests/end_to_end.rs` (840 lines) | 4 `#[test]` | Full production-pipeline scans against synthetic trees with real mtimes, under both a filtered Routine scope and an explicit scope | Cleanup, update, config editing |
-| Shared harness | `tests/common/mod.rs` (240 lines) | 0 tests | `set_path_modified` / `backdate_file` (per-platform mtime control), `inactive_project` tree construction, `write_fake_cargo` / `cargo_calls` (unix only) | — |
+| Shared harness | `tests/common/mod.rs` (244 lines) | 0 tests | `set_path_modified` / `backdate_file` (per-platform mtime control), `inactive_project` tree construction, `write_fake_cargo` / `cargo_calls` (unix only) | — |
 | Contract checkers | `scripts/` | **17** (see note) | Published-crate contents, fixture portability, installer/shape/smoke contracts, release identity, benchmark regression, and the completeness of this inventory | That a fixture case proves its intended branch (explicitly disclaimed) |
 | CI | `.github/workflows/` | 6 | Cross-platform, cross-toolchain, MSRV, generated-doc freshness, release drift | Doctests (`cargo test --all-targets` skips them) |
 
@@ -51,7 +51,7 @@ from `src/`, never copied between documents.
 | `src/cli.rs` | 27 | 400 | 1025 | 627 |
 | `src/config.rs` | 19 | 577 | 1443 | 867 |
 | `src/output.rs` | 17 | 462 and 822 | 941 | 481 |
-| `src/progress.rs` | 13 | 509 | 840 | 332 |
+| `src/progress.rs` | 13 | 525 | 861 | 524 |
 | `src/discovery_state.rs` | 14 | 491 | 918 | 428 |
 | `src/policy.rs` | 14 | 663 | 1066 | 404 |
 | `src/report.rs` | 7 | 73 | 195 | 124 |
@@ -60,12 +60,11 @@ from `src/`, never copied between documents.
 | `src/domain.rs` | 1 | 383 | 411 | 29 |
 | `src/error.rs` | 0 | — | 16 | — |
 | `src/lib.rs` | 0 | — | 15 | — |
-| `src/main.rs` | 0 | — | 1099 | — |
+| `src/main.rs` | 0 | — | 1104 | — |
 | **Total** | **332** | | | |
 
 **The count is declared, not executed.** 332 `#[test]` functions exist in `src/`;
-**330 compile and run on Linux** (verified: `cargo test --lib -- --list`
-reports 330), because two are gated to the other platforms
+**330 compile and run on Linux** (verified by the previous recorded run), because two are gated to the other platforms
 (`config.rs:958`, `#[cfg(windows)]`, and `discovery.rs:1394`,
 `#[cfg(any(target_os = "macos", windows))]`). Platform-gated tests mean the
 hosted Linux, macOS and Windows lanes do not compile identical sets. A green
@@ -157,7 +156,7 @@ returns `0` for all four. They split into two very different groups.
 
 **Not defensible, and significant.**
 
-- **`src/main.rs` (1099 lines, 0 tests).** The composition root. It *is* covered — `cli_contract.rs` runs the binary as a subprocess, so `main()` and `run()` execute in all 45 cases. The new Cargo-failure case checks the real process boundary, bounded human grouping, and unchanged JSON diagnostic coverage. This remains black-box coverage of an opaque process: nothing asserts on `run()`'s structure, and the exit-code table is only as complete as the cases someone remembered to write.
+- **`src/main.rs` (1104 lines, 0 tests).** The composition root. It *is* covered — `cli_contract.rs` runs the binary as a subprocess, so `main()` and `run()` execute in 49 cases. The Cargo-failure cases check real process behavior, bounded human grouping, and unchanged JSON diagnostic coverage. This remains black-box coverage of an opaque process: nothing asserts on `run()`'s structure, and the exit-code table is only as complete as the cases someone remembered to write.
 - **`update_json` (`output.rs:689-717`)** *was* the sharpest single gap, and C022 closed the test half of it. The only machine-readable output path that does **not** go through `EnvelopeV1`; it hand-builds a `serde_json::Map` with its own `json!(1)` at `output.rs:691` and a bespoke `result` object at `output.rs:698-714`. It now has four contract cases at `output.rs:732` and a failure-shape integration case in `cli_contract.rs`. What is still open is the schema half: it shares `schema_version: 1` with the envelope while being a different document, and reconciling that needs a plan and a version bump.
 
 ### The module that left the list: `output.rs`
@@ -224,6 +223,8 @@ Eleven run on every platform; eighteen are `#[cfg(unix)]` because they need the
 | `cargo_external_config_edit_help_matches_direct` | 154 | Same for the subcommand form, which exercises a different clap path |
 | `json_scan_is_one_versioned_document_and_stats_stay_on_stderr` | 177 | The scan envelope, plus stream separation (`cli_contract.rs:198`, `:203`) and newline discipline |
 | `repeated_real_cargo_failures_are_grouped_without_losing_json_diagnostics` | 262 | Real Cargo reports one bounded human cause group for repeated orphan-workspace failures while JSON retains every per-manifest diagnostic |
+| `real_cargo_workspace_failure_matrix_records_stage_and_context` | 361 | Seven manifest shapes are probed with actual Cargo; locate/metadata outcomes are asserted with tool version, cwd and argv context |
+| `cargo_failures_with_shared_generic_line_keep_distinct_cause_groups` | 499 | Two controlled distinct causes sharing Cargo's generic first line stay separate, while `--format log` excludes Cargo stderr |
 | `repeated_routine_runs_bound_stale_root_noise_without_mutating_state` | 2730 | Two Routine Simulate invocations over 100 missing hints retain one bounded summary, preserve state bytes and keep the healthy sibling selected |
 | `json_scope_label_follows_the_resolved_scope_not_the_cli_flags` | 219 | `--known` reports the Routine scope; an explicit `--scope` reports that scope; `scan.root` does not |
 | `scan_scope_conflicts_are_rejected_before_any_traversal` | 332 | Contradictory scope selectors exit 2 without walking anything — fail-closed at the boundary |
@@ -556,7 +557,7 @@ testing can see, because the subject is bytes on a registry and a CDN.
 | `discovery.rs` | 2187 | 36 | 36 / 950 | Permission traversal has a premise-checked Unix fixture; 1,001 synthetic errors prove per-root aggregation stays bounded |
 | `cli.rs` | 1025 | 27 | 27 / 398 | Good |
 | `config.rs` | 1443 | 19 | 19 / 576 | Good for its surface |
-| `progress.rs` | 840 | 13 | 13 / 508 | Thin relative to size. Terminal-capability detection is mostly untested, and integration tests force `--no-progress` (`cli_contract.rs:183`), excluding the renderer from end-to-end coverage by construction |
+| `progress.rs` | 861 | 13 | 13 / 524 | Thin relative to size. Terminal-capability detection is mostly untested, and integration tests force `--no-progress` (`cli_contract.rs:183`), excluding the renderer from end-to-end coverage by construction |
 | `discovery_state.rs` | 918 | 14 | 14 / 490 | Candidate provenance and cache/runtime exclusion are pinned alongside C028 absence handling |
 | `output.rs` | 941 | 17 | 17 / 425 | **Split verdict, and the split is the finding.** The in-file tests cover bounded log output and update JSON; the scan/cleanup envelope layer still has **zero** direct in-file tests |
 | `report.rs` | 195 | 7 | 7 / 71 | **Unusually good for its size.** Covers control-character and non-UTF-8 path escaping, zero-state wording, the full `format_bytes` ladder including `u64::MAX`, group ordering with the path tie-break, and total de-duplication across equal physical roots. Two are `#[cfg(unix)]` (`report.rs:88`, `:101`) because they use `OsString::from_vec` |
@@ -566,7 +567,7 @@ testing can see, because the subject is bytes on a registry and a CDN.
 | `domain.rs` | 411 | 1 | 1 / 382 | Defensible. Pure data, exercised transitively. Semantic *rules* live in the modules that interpret the types |
 | `error.rs` | 16 | 0 | — | Defensible |
 | `lib.rs` | 15 | 0 | — | Defensible |
-| `main.rs` | 1046 | 0 | 0 / 1046 | **Zero inline tests for the composition root.** Partly mitigated — `cli_contract.rs` runs the binary as a subprocess and pins several non-zero exit paths, but `run()`'s structure remains opaque |
+| `main.rs` | 1104 | 0 | 0 / 1104 | **Zero inline tests for the composition root.** Partly mitigated — `cli_contract.rs` runs the binary as a subprocess and pins several non-zero exit paths, but `run()`'s structure remains opaque |
 
 The contrast in the last three rows is the finding. The *human* renderer beside the
 *machine* DTO layer has 7 unusually strong tests, while the envelope layer below the log
