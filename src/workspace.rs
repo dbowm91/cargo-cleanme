@@ -185,7 +185,7 @@ fn canonical_or_absolute(path: &Path) -> Result<PathBuf, String> {
     }
 }
 
-/// Bounded first meaningful line of a failed Cargo invocation's stderr.
+/// Bounded causal excerpt from a failed Cargo invocation's stderr.
 ///
 /// The other failure modes in this module carry their cause — "could not start:
 /// {e}", "cannot parse … output: {e}" — so a bare "cargo metadata failed" is the
@@ -193,29 +193,38 @@ fn canonical_or_absolute(path: &Path) -> Result<PathBuf, String> {
 /// no way to learn why. Cargo already names the offending manifest on stderr,
 /// and the remedy is "fix the manifest", which is not guessable from a label.
 ///
-/// Only the length is bounded: a diagnostic message is serialized verbatim into
-/// JSON, the log line, and the human report, and Cargo's stderr is unbounded.
-/// Content is left intact — it is Cargo talking about the user's own paths,
-/// which that user invoked the command to find out about.
+/// Keep a few non-empty lines because Cargo commonly puts the useful cause
+/// after a generic `failed searching` summary. Collapse line breaks and remove
+/// terminal control characters before this reaches human or JSON output.
 fn cargo_failure_reason(stderr: &[u8]) -> String {
-    const MAX_REASON_BYTES: usize = 200;
+    const MAX_REASON_BYTES: usize = 480;
+    const MAX_REASON_LINES: usize = 3;
     let text = String::from_utf8_lossy(stderr);
-    let first = text
+    let lines: Vec<String> = text
         .lines()
         .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or("");
-    if first.is_empty() {
+        .filter(|line| !line.is_empty())
+        .take(MAX_REASON_LINES)
+        .map(|line| {
+            line.chars()
+                .filter(|ch| !ch.is_control())
+                .collect::<String>()
+        })
+        .filter(|line| !line.is_empty())
+        .collect();
+    if lines.is_empty() {
         return "cargo wrote nothing to stderr".into();
     }
-    let mut end = MAX_REASON_BYTES.min(first.len());
-    while end > 0 && !first.is_char_boundary(end) {
-        end -= 1;
+    let mut reason = lines.join(" | ");
+    if reason.len() > MAX_REASON_BYTES {
+        let mut end = MAX_REASON_BYTES;
+        while end > 0 && !reason.is_char_boundary(end) {
+            end -= 1;
+        }
+        reason.truncate(end);
+        reason.push_str("… (truncated)");
     }
-    if end == first.len() {
-        return first.to_owned();
-    }
-    format!("{}… (truncated)", &first[..end])
+    reason
 }
 
 /// Probe one declared output root.
@@ -1717,11 +1726,11 @@ mod tests {
             (
                 b"\n  error: no matching package named 'x'\n  Caused by: registry is offline\n"
                     .to_vec(),
-                "error: no matching package named 'x'".to_owned(),
+                "error: no matching package named 'x' | Caused by: registry is offline".to_owned(),
             ),
             (
                 vec![b'e'; 10_000],
-                format!("{}… (truncated)", "e".repeat(200)),
+                format!("{}… (truncated)", "e".repeat(480)),
             ),
         ]
     }
@@ -1755,17 +1764,17 @@ mod tests {
         let reason = cargo_failure_reason(&vec![b'x'; 10_000]);
         assert_eq!(
             reason,
-            format!("{}… (truncated)", "x".repeat(200)),
-            "the reason is 200 bytes of Cargo's own text plus the marker"
+            format!("{}… (truncated)", "x".repeat(480)),
+            "the reason is 480 bytes of Cargo's own text plus the marker"
         );
         assert!(
             reason.len() < 10_000,
             "10_000 bytes of stderr must not be embedded whole"
         );
 
-        // A first line that is exactly the bound is complete, not truncated:
+        // A line that is exactly the bound is complete, not truncated:
         // marking it would claim Cargo said less than it did.
-        let at_bound = "y".repeat(200);
+        let at_bound = "y".repeat(480);
         assert_eq!(
             cargo_failure_reason(at_bound.as_bytes()),
             at_bound,
@@ -1786,47 +1795,52 @@ mod tests {
             .unwrap_or_else(|| panic!("a truncated reason must be marked: {reason}"));
         assert_eq!(
             kept,
-            "誤".repeat(66),
-            "66 characters is the longest whole-character prefix within 200 bytes"
+            "誤".repeat(160),
+            "160 characters is the longest whole-character prefix within 480 bytes"
         );
         assert!(
             kept.chars().all(|c| c == '誤'),
             "the kept text is whole characters, not a partial one"
         );
 
-        // Two-byte characters: 200 is itself a character boundary, so the
-        // walk must stop there -- shaving to 199 bytes would be the same class
-        // of bug as stopping at 200 in the other direction.
+        // A multi-byte reason below the bound is preserved in full.
         let two_byte = "é".repeat(200);
         assert_eq!(two_byte.len(), 400);
         assert_eq!(
             cargo_failure_reason(two_byte.as_bytes()),
-            format!("{}… (truncated)", "é".repeat(100)),
-            "an exact boundary is kept whole, not walked past"
+            two_byte,
+            "valid UTF-8 is retained when the bounded excerpt fits"
         );
     }
 
     #[test]
-    fn cargo_reason_is_the_first_meaningful_line_of_a_noisy_stderr() {
+    fn cargo_reason_keeps_a_bounded_cause_chain_on_one_safe_line() {
         // Cargo indents and prefixes its real complaint, and follows it with a
-        // cause chain. A reason carrying the whole stream would put a multi-line
-        // blob into a one-line diagnostic field.
+        // cause chain. Preserve the useful cause while keeping the field one
+        // line and bounded.
         assert_eq!(
             cargo_failure_reason(
                 b"\n\n   \n  error: failed to parse manifest\n  Caused by: a much longer second line\n"
             ),
-            "error: failed to parse manifest",
-            "leading blank lines and indentation are not part of the reason"
+            "error: failed to parse manifest | Caused by: a much longer second line",
+            "the cause chain is retained and leading whitespace is normalized"
         );
 
         // Only the first line is bounded, so a huge *later* line must not leak
         // into the reason at all.
-        let noisy = format!("\nreal cause\n{}", "noise ".repeat(5_000));
-        assert_eq!(cargo_failure_reason(noisy.as_bytes()), "real cause");
+        let noisy = format!("\nreal cause\nsecond cause\n{}", "noise ".repeat(5_000));
+        let noisy_reason = cargo_failure_reason(noisy.as_bytes());
+        assert!(noisy_reason.starts_with("real cause | second cause | noise"));
+        assert!(noisy_reason.len() < 500);
         assert!(
             !cargo_failure_reason(noisy.as_bytes()).contains('\n'),
             "the reason occupies one line"
         );
+
+        let controls = b"error: bad\x1b[31m\nCaused by: \x07path\n";
+        let sanitized = cargo_failure_reason(controls);
+        assert!(!sanitized.chars().any(char::is_control));
+        assert_eq!(sanitized, "error: bad[31m | Caused by: path");
     }
 
     #[test]
@@ -2373,6 +2387,43 @@ mod tests {
         assert_eq!(coverage.unresolved.len(), 1);
         assert_eq!(coverage.unresolved[0].manifest, root);
         assert_eq!(coverage.unresolved[0].stage, "locate");
+    }
+
+    #[test]
+    fn thousand_failed_lookups_keep_every_unresolved_manifest() {
+        let d = tempfile::tempdir().unwrap();
+        let manifests: Vec<PathBuf> = (0..1_000)
+            .map(|index| {
+                let manifest = d.path().join(format!("broken-{index}/Cargo.toml"));
+                std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+                std::fs::write(&manifest, "").unwrap();
+                manifest
+            })
+            .collect();
+        let runner = FakeCargo {
+            locate_root: manifests[0].clone(),
+            target: d.path().join("target"),
+            build: None,
+            members: 1,
+            fail_locate: true,
+            fail_metadata: false,
+            malformed: false,
+        };
+        let mut counters = ScanCounters::default();
+        let mut diagnostics = Vec::new();
+        let coverage = resolve_workspaces_with_coverage(
+            &manifests,
+            &runner,
+            &mut counters,
+            &mut diagnostics,
+            &NoopObserver,
+        );
+
+        assert_eq!(counters.cargo_locate_calls, 1_000);
+        assert_eq!(counters.cargo_failures, 1_000);
+        assert_eq!(diagnostics.len(), 1_000);
+        assert_eq!(coverage.unresolved.len(), 1_000);
+        assert!(coverage.workspaces.is_empty());
     }
 
     #[test]

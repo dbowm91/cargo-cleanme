@@ -1,6 +1,6 @@
 # C032 — Cargo Workspace Resolution Diagnostics and Failure-Noise Corrective
 
-Status: **ready** — planning handoff, no production changes yet.
+Status: **active** — bounded stderr cause extraction and resolver-ledger regression coverage are in progress; real-Cargo taxonomy, human aggregation, hosted qualification, and closure remain outstanding.
 Baseline: `7c874ab7998bdac28a6236ec21ae59ec24b915f8` (`main`, v0.2.5, 2026-10-09).
 Handoff branch: `plans/c032-c034-routine-cleanup-reliability`.
 Source roadmap: `plans/subsystems/artifact-discovery-cleanup-roadmap.md`.

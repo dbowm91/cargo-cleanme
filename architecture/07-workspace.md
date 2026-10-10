@@ -62,7 +62,7 @@ Twenty-two public items. Nothing else in the file is reachable from outside.
 
 | Item | Signature | Contract |
 |---|---|---|
-| `ProcessOutput` | `struct { success: bool, code: Option<i32>, stdout: Vec<u8>, stderr: Vec<u8> }` (`:21-27`) | A cargo subprocess result. Raw `Vec<u8>` on both streams, so a non-UTF-8 filename in cargo's output cannot break the decoder. `stderr` is carried but **never read** by the production half — see §9. |
+| `ProcessOutput` | `struct { success: bool, code: Option<i32>, stdout: Vec<u8>, stderr: Vec<u8> }` (`:21-27`) | A cargo subprocess result. Raw `Vec<u8>` on both streams, so a non-UTF-8 filename in cargo's output cannot break the decoder. Failed locate/metadata stderr is converted to a bounded causal excerpt (`:199-235`). |
 | `CargoRunner` | `trait { fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput> }` (`:29-31`) | The project's only external-process boundary. No supertraits, no associated types. |
 | `SystemCargoRunner` | `struct SystemCargoRunner;` (`:78-93`) | The real implementation. Zero-sized. |
 | `refresh_workspace_from_root_manifest` | `(root_manifest: &Path, runner: &dyn CargoRunner, counters, diagnostics, observer) -> Option<ResolvedWorkspace>` (`:59-76`) | Re-resolve one *known* root directly through `cargo metadata`: one process, no `locate-project`. Never discovers anything. Used by the cleanup final proof (`cleanup.rs:1526`). |
@@ -253,6 +253,13 @@ Metadata-parse failures mirror the locate ones (`:539-565`). Two further
 cannot be established (`:587-604`) — the latter drops the *whole workspace*, not
 just the member, because a member without a source root would make the
 `PrivateBounded` source-disjointness test meaningless.
+
+For non-zero Cargo exits, `cargo_failure_reason` (`:199-235`) keeps up to three
+non-empty stderr lines in a 480-byte UTF-8-safe excerpt. Line breaks are
+collapsed, terminal controls are removed, and truncation is marked. This keeps
+the useful `Caused by:` context Cargo often places after its generic first line
+without embedding unbounded stderr in diagnostics. Failure presentation never
+changes the exact unresolved-manifest set.
 
 ### `ResolutionCoverage` and `UnresolvedOwnershipParticipant`
 
@@ -839,12 +846,9 @@ shape the module's own comments at `:33-45` and `:3265-3268` guard against.
 condition, `cleanup.rs:2205-2207`.)
 
 **Warnings on stderr with a successful exit?** Ignored. `ProcessOutput.stderr`
-is written by `SystemCargoRunner` (`:90`) and never read anywhere in the
-production half — verified: the only two `stderr` occurrences in lines 1-1446 are
-the field declaration and the assignment. A successful parse wins; cargo's
-warning text cannot affect resolution. The `ProcessOutput` field is still carried
-because the fakes populate it and `CleanupRunner` shares the type
-(`cleanup.rs:375`).
+is inspected only after a non-zero locate/metadata exit; successful stdout remains
+authoritative and warning text cannot affect resolution. The same process-output
+type is shared with `CleanupRunner` (`cleanup.rs:375`).
 
 **Malformed or unexpected metadata JSON?** A warning diagnostic, the workspace is
 dropped, resolution continues (`:552-565`). Same for unparseable `locate-project`

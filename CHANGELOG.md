@@ -8,6 +8,13 @@ command-line, JSON, and release-asset contracts are the stable surface.
 
 ## [Unreleased]
 
+### Fixed
+
+- Failed Cargo workspace lookups now retain a bounded, sanitized excerpt of
+  several stderr lines, so causes commonly printed after Cargo's generic first
+  line are visible. The unresolved-manifest ledger and cleanup blocking behavior
+  are unchanged.
+
 ## [0.2.5] - 2026-10-09
 
 ### Fixed — discovery and maintenance scope

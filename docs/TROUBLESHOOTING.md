@@ -71,6 +71,28 @@ Cargo-resolved workspace in a durable developer location can create a new
 automatic Routine root. Existing cache/runtime roots are filtered during
 Routine admission; explicitly named roots retain their strict semantics.
 
+## A manifest is found but its Cargo workspace cannot be resolved
+
+Full discovery walks for `Cargo.toml` files before asking Cargo to resolve
+workspaces. It can therefore find orphaned workspace members, invalid manifests,
+or dependency snapshots that Cargo cannot treat as a workspace. The report keeps
+these manifests unresolved, but does not learn them as Routine roots. Cleanup
+blocks the selected scope if any discovered manifest remains unresolved: its
+Cargo output configuration could still overlap another workspace.
+
+Reproduce the exact lookup with the same Cargo executable used by the scan:
+
+```sh
+cd /path/to/manifest-parent
+cargo locate-project --workspace --manifest-path /path/to/Cargo.toml
+```
+
+The scan diagnostic retains a bounded, sanitized excerpt of Cargo's stderr.
+Error wording varies by Cargo version; the command above is the authoritative
+detail for that manifest. A valid sibling workspace may still appear in a
+read-only partial scan, while cleanup remains fail-closed for the full selected
+scope.
+
 ### If you are on 0.2.0: two things it could do that it should never have done
 
 Both were found by the project's own post-release interrogation and confirmed by
