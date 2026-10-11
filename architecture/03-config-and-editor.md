@@ -383,9 +383,10 @@ reported as `AppError::Config("cannot launch editor …")` (`:53-58`).
 
 Then three post-edit checks, in this order, each catching a different failure:
 
-**(a) Non-zero editor exit → warn, propagate the editor's code** (`:59-65`). The
-message says the config "was not reverted"; the arm returns
-`Ok(status.code().unwrap_or(1))`, so the process exit code is the editor's. An
+**(a) Non-zero editor exit → warn, exit 1** (`:59-65`). The
+message says the config "was not reverted" and names the editor's status; the
+arm returns `Ok(1)`, so the exit contract stays `0/1/2` and the editor's
+arbitrary code never becomes ours. An
 editor that fails mid-session (bad swap file, crash, `:`-command error) may have
 left the config untouched, half-written, or syntactically invalid, and the exit
 code must not be flattened to 0 or 2 because the requested interactive operation

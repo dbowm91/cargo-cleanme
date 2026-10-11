@@ -70,7 +70,8 @@ test reference, not a production call.
 | `CleanupReasonCode` | 19-variant `enum` `:96` | The machine-facing reason vocabulary, tabled below. |
 | `CleanupReasonCode::as_str` | `-> &'static str` `:140` | Stable snake_case, consumed at `output.rs:173`. |
 | `ProofFailure` | `struct { code, detail }` `:122` | A failed final proof. |
-| `From<String>` / `From<&str>` | `:127` / `:133` | Both derive `code` by string-matching the detail through `proof_skip_code` (`:1218`). |
+| `ProofFailure::new` | constructor | Proof gates assign an explicit code at the failure site; new gates must use this. |
+| `From<String>` / `From<&str>` | `:127` / `:133` | Legacy fallback for the Cargo-refresh boundary only, which passes through Cargo/discovery strings with no typed site; it derives `code` via `proof_skip_code`. Proof gates must not rely on it. |
 | `PolicyDisposition` | 6-variant `enum` `:167` | `#[serde(rename_all="snake_case")]`; mapped at `output.rs:243-254`. |
 
 Every `CleanupReasonCode` variant and wire name (`:140-162`):
@@ -87,7 +88,7 @@ Every `CleanupReasonCode` variant and wire name (`:140-162`):
 | `SkippedActive` | `skipped_active` | Source or output became/recent active. |
 | `SkippedShared` | `skipped_shared` | A group in the unit is `Shared`. |
 | `SkippedUncertain` | `skipped_uncertain` | `Uncertain` group, or an output root with unprovable physical identity (`:1188-1190`). |
-| `SkippedUnauthorized` | `skipped_unauthorized` | `ExternalUnproven` group, or the gate fell through with no specific cause (`:1215`). |
+| `SkippedUnauthorized` | `skipped_unauthorized` | Private unit outside the authorized boundary, or the gate fell through with no specific cause (`:1215`). An `ExternalUnproven` group reports `SkippedOwnershipUnproven`, not this. |
 | `SkippedMarkerInvalid` | `skipped_marker_invalid` | Missing/malformed/unsigned `CACHEDIR.TAG`. |
 | `SkippedChangedBeforeCleanup` | `skipped_changed_before_cleanup` | The workspace demonstrably changed between scan and delete. |
 | `SkippedOwnershipUnproven` | `skipped_ownership_unproven` | Ownership could not be re-proven *at all* — Cargo refused, discovery incomplete, manifest did not re-resolve. Doc comment `:110-112` and the L9 test `:5773` both insist this is distinct from a real change. |
@@ -560,15 +561,16 @@ becomes a `Skipped` row via `failure.code` and the loop `continue`s.
 
 `ProofFailure { code, detail }` → the `skipped` closure `:863-880` → a
 `CleanResult { outcome: Skipped, reason_code: failure.code, before_bytes:
-Some(unit.bytes), detail: failure.detail }`. `code` comes from
-`proof_skip_code(&detail)` (`:1218-1244`), a **substring matcher on the detail
-text**. Load-bearing and fragile: the mapping is ordered `contains` tests —
-active → marker → uncertain → changed → unproven → `SkippedSafety`. The comment
-`:1231-1233` records the L9 correction: "changed identity", "vanished",
-"disappeared" classify as *change*, while a genuine Cargo/discovery failure
-classifies as *unproven*. The test `:5773-5799` pins those five mappings. Any
-rewording of an error string can silently reclassify a machine-facing reason
-code; nothing type-checks this.
+Some(unit.bytes), detail: failure.detail }`. `code` is assigned explicitly at
+each proof gate via `ProofFailure::new`, so rewording an error string cannot
+reclassify a machine-facing reason code; the unit-wide gate derives its code
+from the unit itself (`unit_skip_code`). Only the Cargo-refresh boundary still
+derives `code` from text through `proof_skip_code` (`:1218-1244`), a substring
+matcher kept as a fallback for pass-through Cargo/discovery strings with no
+typed site. The comment `:1231-1233` records the L9 correction: "changed
+identity", "vanished", "disappeared" classify as *change*, while a genuine
+Cargo/discovery failure classifies as *unproven*. The test `:5773-5799` pins
+those five mappings.
 
 ---
 
@@ -1114,11 +1116,13 @@ failed. Does that risk exist here? **Partly, in a narrower form.**
 3. **The `ownership != PrivateBounded` returns at `:618` and `:1940` must stay
    ahead of their `covering_is_authorized_roots` calls** (`:628` is a per-group
    call that assumes private). This is the C003 unit invariant.
-4. **Error strings feed the machine contract.** `proof_skip_code` (`:1218`) and
-   `unit_skip_code` (`:1187`) classify by substring. Rewording a `format!` in
-   `final_cleanup_proof_roots` or `refresh_combined_universe` can silently
-   reclassify a `CleanupReasonCode`. Check `:1231-1233` when touching the
-   "changed identity"/"vanished" cases.
+4. **Error strings feed the machine contract only at the refresh boundary.**
+   `proof_skip_code` (`:1218`) classifies pass-through Cargo/discovery strings
+   by substring; proof gates themselves carry explicit codes
+   (`ProofFailure::new`), so rewording a `format!` in
+   `final_cleanup_proof_roots` cannot reclassify a `CleanupReasonCode`. When
+   touching the refresh boundary or the "changed identity"/"vanished" cases,
+   check `:1231-1233`.
 5. **A new `CleanupReasonCode` or `PolicyDisposition` variant must be added to
    its contract test** (`:2575`, `:2555`) *and* to `output.rs:173` / `:243-254`.
    Three reason codes and one disposition are currently missing from their tests.

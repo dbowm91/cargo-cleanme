@@ -181,7 +181,13 @@ pub fn cleanup(
             } else {
                 r.before_bytes
             },
-            output_union_before_bytes: r.before_bytes,
+            // A selector run cannot attribute bytes to the selector, so the
+            // union carries the same unknown as every other byte field.
+            output_union_before_bytes: if report.selector.is_some() {
+                None
+            } else {
+                r.before_bytes
+            },
             after_bytes: r.after_bytes,
             observed_decrease_bytes: r.observed_decrease,
             detail: r.detail.clone(),

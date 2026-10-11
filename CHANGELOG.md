@@ -10,6 +10,34 @@ command-line, JSON, and release-asset contracts are the stable surface.
 
 ### Fixed
 
+- Symlink checks no longer miss the trailing-slash spelling. `symlink_metadata`
+  follows the final component when a path ends in `/`, so `clean` roots,
+  scan roots, authorization roots, and declared output roots with a trailing
+  slash are now judged as symlinks exactly like without one.
+- An output directory that cannot be inspected (permission, I/O) is no longer
+  folded into "does not exist". It reports as existing with no provable
+  physical identity, so grouping marks the workspace uncertain instead of
+  letting a sibling claim exclusive ownership over bytes it may share.
+- The affected covering roots are re-proven immediately before every
+  `cargo clean` spawn with the same gate the final proof uses; a symlink swap
+  in that window now skips instead of spawning.
+- Cleanup change detection no longer falls back to a lexical compare when an
+  identity cannot be resolved. Unresolvable member, target, or build-dir
+  identities fail closed as ownership-unproven, and roots that stop resolving
+  between validation and collapse are an error rather than a silent narrowing.
+- Proof skip codes are assigned at the proof site instead of parsed out of the
+  prose, so message edits cannot silently change the machine contract. The
+  unit gate and the proof now agree, and external-ownership failures report
+  `skipped_ownership_unproven` instead of `skipped_unauthorized`.
+- `config edit` maps an editor failure to exit `1` under the documented
+  `0/1/2` contract; the editor's own status stays visible in the diagnostic
+  prose instead of becoming our exit code.
+- Selector runs null `output_union_before_bytes` like every other unattributable
+  byte field, instead of reporting the same bytes as both unknown and measured.
+- Removed a stale duplicate `## [Unreleased]` section that repeated the
+  already-released `0.1.3` notes, and added the missing per-version release
+  links.
+
 - Failed Cargo workspace lookups now retain a bounded, sanitized excerpt of
   several stderr lines, so causes commonly printed after Cargo's generic first
   line are visible. The unresolved-manifest ledger and cleanup blocking behavior
@@ -595,32 +623,6 @@ cargo install cargo-cleanme --locked --force
 
 or download the `0.1.3` asset for your platform from the release page.
 
-## [Unreleased]
-
-- **`cargo cleanme update` could never complete a real commit.** The identity
-  check ran the downloaded candidate with no arguments, so it compared the
-  binary's default routine-scan report against a version string that can never
-  match. The check therefore always failed — and, before failing, performed a
-  filesystem scan of the whole machine. The transaction aborted safely every
-  time: the live binary was left untouched and the error named the reason, so
-  nothing was ever corrupted. But the feature had never worked in any published
-  version, including `0.1.2`.
-
-  Fixed by invoking the candidate with `--version`, which is bounded and
-  produces exactly the identity the validator requires.
-
-  The commit-path test fixture could not detect this, and the reason is worth
-  recording: its candidate stub printed the identity for *any* invocation, so it
-  could not tell a correct `--version` call from the argv-less one production
-  actually made. The stub now answers only for `--version` and writes to stderr
-  otherwise, exactly as the real binary does, so dropping the argument again
-  turns the commit-path tests red. A fixture that accepts every input asserts
-  nothing about the input.
-
-  Tracked as C016. The live rehearsal that proves the fix requires a published
-  release carrying it; see §8 of that plan for why a `0.1.2` -> `0.1.3`
-  rehearsal is expected to fail by design.
-
 ## [0.1.2] - 2026-10-04
 
 This is a deliberately small qualification release. It changes no product
@@ -857,5 +859,16 @@ published yet.
 - No runtime release-artifact qualification has run; the exact release bytes
   are qualified when the first release workflow is dispatched.
 
+[0.2.5]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.5
+[0.2.4]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.4
+[0.2.3]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.3
+[0.2.2]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.2
+[0.2.1]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.1
 [0.2.0]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.0
+[0.1.6]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.1.6
+[0.1.5]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.1.5
+[0.1.4]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.1.4
+[0.1.3]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.1.3
+[0.1.2]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.1.2
+[0.1.1]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.1.1
 [0.1.0]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.1.0

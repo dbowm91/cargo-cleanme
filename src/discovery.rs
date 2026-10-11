@@ -471,13 +471,32 @@ fn canonical_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
     roots
 }
 
+/// `symlink_metadata("link/")` follows the final component on POSIX, so a
+/// trailing slash hides a symlink from the `is_symlink` check. Judge the
+/// path with its trailing separators stripped as well.
+fn path_is_symlink(path: &Path) -> bool {
+    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return true;
+    }
+    let spelling = path.as_os_str().to_string_lossy();
+    if spelling.ends_with('/') || spelling.ends_with('\\') {
+        let trimmed = spelling.trim_end_matches(['/', '\\']);
+        if !trimmed.is_empty()
+            && fs::symlink_metadata(trimmed).is_ok_and(|m| m.file_type().is_symlink())
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// A scan root must be an existing, real directory.
 ///
 /// `Path::exists` and `Path::is_dir` follow symlinks, but the walker never does,
 /// so a symlinked root has to be refused explicitly: it would otherwise report a
 /// successful *empty* scan for a directory the user asked for (L7).
 fn root_is_usable(root: &Path, diagnostics: &mut Vec<ScanDiagnostic>) -> bool {
-    let problem = if fs::symlink_metadata(root).is_ok_and(|m| m.file_type().is_symlink()) {
+    let problem = if path_is_symlink(root) {
         Some("scan root is a symlink; pass the real directory instead")
     } else if !root.is_dir() {
         Some("scan root is unavailable")
@@ -1591,6 +1610,29 @@ mod tests {
             diagnostics
                 .iter()
                 .any(|d| d.message.contains("symlink") && d.severity == DiagnosticSeverity::Error),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_scan_root_with_trailing_slash_is_refused() {
+        // B1: `symlink_metadata("link/")` follows the link on POSIX, so the
+        // trailing-slash spelling must refuse exactly like without one.
+        use std::os::unix::fs::symlink;
+        let d = tempdir().unwrap();
+        let real = d.path().join("real");
+        fs::create_dir_all(&real).unwrap();
+        let link = d.path().join("link");
+        symlink(&real, &link).unwrap();
+        let slashed = PathBuf::from(format!("{}/", link.display()));
+        let mut diagnostics = Vec::new();
+        assert!(
+            !root_is_usable(&slashed, &mut diagnostics),
+            "a symlinked scan root with a trailing slash must be refused"
+        );
+        assert!(
+            diagnostics.iter().any(|d| d.message.contains("symlink")),
             "{diagnostics:?}"
         );
     }

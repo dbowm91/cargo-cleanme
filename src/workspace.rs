@@ -227,6 +227,25 @@ fn cargo_failure_reason(stderr: &[u8]) -> String {
     reason
 }
 
+/// `symlink_metadata("link/")` follows the final component on POSIX, so a
+/// trailing slash hides a symlink from the `is_symlink` check. Judge the
+/// path with its trailing separators stripped as well.
+fn path_is_symlink(path: &Path) -> bool {
+    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return true;
+    }
+    let spelling = path.as_os_str().to_string_lossy();
+    if spelling.ends_with('/') || spelling.ends_with('\\') {
+        let trimmed = spelling.trim_end_matches(['/', '\\']);
+        if !trimmed.is_empty()
+            && fs::symlink_metadata(trimmed).is_ok_and(|m| m.file_type().is_symlink())
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Probe one declared output root.
 ///
 /// The path comes from untrusted `cargo metadata`, so a probe can fail for
@@ -268,8 +287,22 @@ fn output_root(
             exists: false,
             is_symlink: false,
         },
+        // A trailing slash (`link/`) makes `symlink_metadata` follow the
+        // link, so check the stripped spelling too before trusting `Ok`.
+        Ok(meta) if meta.file_type().is_symlink() || path_is_symlink(&logical) => OutputRoot {
+            kind,
+            logical_path: logical,
+            physical_path: None,
+            exists: true,
+            is_symlink: true,
+        },
         Err(e) => {
             // Unreadable is not absent: say so, and keep the root unusable.
+            // The root reports `exists: true` with no physical identity so
+            // `build_groups` marks the workspace uncertain instead of
+            // silently dropping the root from the exclusivity check, which
+            // would let a sibling claim `PrivateBounded` over bytes this
+            // root may share.
             diagnostics.push(ScanDiagnostic {
                 severity: DiagnosticSeverity::Warning,
                 category: DiagnosticCategory::CandidateUncertain,
@@ -287,17 +320,10 @@ fn output_root(
                 kind,
                 logical_path: logical,
                 physical_path: None,
-                exists: false,
+                exists: true,
                 is_symlink: false,
             }
         }
-        Ok(meta) if meta.file_type().is_symlink() => OutputRoot {
-            kind,
-            logical_path: logical,
-            physical_path: None,
-            exists: true,
-            is_symlink: true,
-        },
         Ok(meta) if !meta.is_dir() => OutputRoot {
             kind,
             logical_path: logical,
@@ -5141,6 +5167,78 @@ mod tests {
         assert!(
             units.is_empty(),
             "an unprovable output root can never produce a cleanup unit"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn output_root_symlink_with_trailing_slash_is_still_a_symlink() {
+        // B1: `symlink_metadata("link/")` follows the link on POSIX, so the
+        // trailing-slash spelling must still probe as a symlink, never as a
+        // real directory with a physical identity.
+        use std::os::unix::fs::symlink;
+        let d = tempfile::tempdir().unwrap();
+        let real = d.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = d.path().join("link");
+        symlink(&real, &link).unwrap();
+        let mut diagnostics = Vec::new();
+        let probed = output_root(
+            OutputRootKind::Target,
+            PathBuf::from(format!("{}/", link.display())),
+            &mut diagnostics,
+        );
+        assert!(
+            probed.is_symlink,
+            "a symlinked output root with a trailing slash must probe as a symlink"
+        );
+        assert!(
+            probed.physical_path.is_none(),
+            "a symlinked output root must never gain a physical identity"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unreadable_output_root_is_uncertain_never_absent() {
+        // B2: an output root that cannot be inspected (EACCES here) must
+        // report `exists: true` with no physical identity, so `build_groups`
+        // marks the workspace uncertain instead of silently dropping the
+        // root from the exclusivity check.
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let parent = d.path().join("parent");
+        let child = parent.join("target");
+        std::fs::create_dir_all(&child).unwrap();
+        let mut perms = std::fs::metadata(&parent).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&parent, perms).unwrap();
+        // Premise probe: a privileged run (root) still inspects through
+        // 0o000, so the fixture cannot produce the failure it tests and the
+        // case exits instead of reporting green for nothing. Permissions are
+        // restored before asserting so TempDir cleanup can run.
+        let producible = std::fs::symlink_metadata(&child).is_err();
+        let (probed, diagnostics) = if producible {
+            let mut diagnostics = Vec::new();
+            let probed = output_root(OutputRootKind::Target, child, &mut diagnostics);
+            (Some(probed), Some(diagnostics))
+        } else {
+            (None, None)
+        };
+        let mut perms = std::fs::metadata(&parent).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&parent, perms).unwrap();
+        let (Some(probed), Some(diagnostics)) = (probed, diagnostics) else {
+            return;
+        };
+        assert!(probed.exists, "an unreadable output root is not absent");
+        assert!(
+            probed.physical_path.is_none(),
+            "an unreadable output root has no provable identity"
+        );
+        assert!(
+            !diagnostics.is_empty(),
+            "an unreadable output root must leave a diagnostic"
         );
     }
 }

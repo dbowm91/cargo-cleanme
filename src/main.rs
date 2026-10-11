@@ -164,7 +164,9 @@ fn run_config(
                     "cargo-cleanme: editor exited with {status}; config was not reverted: {}",
                     path.display()
                 );
-                return Ok(status.code().unwrap_or(1));
+                // The exit contract is 0/1/2: an editor's arbitrary status
+                // is reported in prose above, never propagated as our code.
+                return Ok(1);
             }
             if !path.exists() {
                 // `load` treats an absent file as "all defaults", so a

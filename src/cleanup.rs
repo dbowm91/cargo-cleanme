@@ -129,7 +129,23 @@ pub struct ProofFailure {
     pub detail: String,
 }
 
+impl ProofFailure {
+    /// Explicit constructor for proof sites. New proof failures must use
+    /// this with an explicit code: deriving the code from the message text
+    /// (`proof_skip_code`) lets any edit to the prose silently change the
+    /// machine contract with no compiler error.
+    pub fn new(code: CleanupReasonCode, detail: impl Into<String>) -> Self {
+        Self {
+            code,
+            detail: detail.into(),
+        }
+    }
+}
+
 impl From<String> for ProofFailure {
+    // Legacy fallback for the Cargo-refresh boundary (`ProofUniverse`), whose
+    // failures are pass-through Cargo/discovery strings with no typed site.
+    // Proof gates with a known site must use `ProofFailure::new` instead.
     fn from(detail: String) -> Self {
         let code = proof_skip_code(&detail);
         Self { code, detail }
@@ -565,7 +581,7 @@ pub fn covering_is_authorized_roots(
                     root.display()
                 ));
             }
-            Ok(m) if m.file_type().is_symlink() => {
+            Ok(m) if m.file_type().is_symlink() || path_is_symlink(root) => {
                 return Err(format!(
                     "cleanup authorization root must not be a symlink: {}",
                     root.display()
@@ -576,9 +592,18 @@ pub fn covering_is_authorized_roots(
             }
             Ok(_) => {}
         }
-        // Canonicalize existing roots for containment checks.
-        if let Ok(canonical) = fs::canonicalize(root) {
-            canonical_allowed.push(canonical);
+        // Canonicalize existing roots for containment checks. An allowed root
+        // that exists but cannot be resolved is a hard error, not a silent
+        // skip: reporting it as "unauthorized" would mask the filesystem
+        // failure with the wrong reason code.
+        match fs::canonicalize(root) {
+            Ok(canonical) => canonical_allowed.push(canonical),
+            Err(e) => {
+                return Err(format!(
+                    "cannot resolve cleanup authorization root {}: {e}",
+                    root.display()
+                ));
+            }
         }
     }
     let canonical_clean: Vec<PathBuf> = clean_roots
@@ -845,7 +870,7 @@ pub fn clean_with_roots_policy_selector_guarded(
     for root in roots {
         validate_cleanup_root(root)?;
     }
-    let roots = collapse_roots(roots.to_vec());
+    let roots = collapse_roots(roots.to_vec())?;
     if roots.is_empty() {
         return Err(AppError::InvalidRoot {
             path: "<empty>".into(),
@@ -1199,6 +1224,16 @@ pub fn clean_with_roots_policy_selector_guarded(
                     return Ok(report);
                 }
                 let frozen = proof.frozen_env.clone();
+                // Last-moment covering-root recheck: the proof's step-9 check
+                // is a moment old by the time we spawn. A symlink swap of a
+                // covering root in that window would redirect `cargo clean`
+                // outside the proven boundary, so re-prove here with the
+                // same gate and skip instead of spawning on any failure.
+                if let Err(failure) = prove_covering_roots(&proof.covering) {
+                    skipped(&mut report, failure.detail, None, failure.code);
+                    observer.unit_completed(cleanup_phase);
+                    continue;
+                }
                 let args = clean_args(&proof, mode, selector.as_ref());
                 let cwd = proof.workspace_root.clone();
                 let spawned = if frozen.is_empty() {
@@ -1332,8 +1367,12 @@ fn unit_skip_code(unit: &workspace::CleanupUnit) -> CleanupReasonCode {
         match group.ownership {
             OutputOwnershipClass::Shared => return CleanupReasonCode::SkippedShared,
             OutputOwnershipClass::Uncertain => return CleanupReasonCode::SkippedUncertain,
+            // ExternalUnproven is an ownership failure, not an authorization
+            // one: the prose (`ownership_skip_detail`) already says so, and
+            // the JSON code must agree so operators get the right response
+            // ("understand it before proceeding", not "add an allow-entry").
             OutputOwnershipClass::ExternalUnproven => {
-                return CleanupReasonCode::SkippedUnauthorized;
+                return CleanupReasonCode::SkippedOwnershipUnproven;
             }
             OutputOwnershipClass::PrivateBounded => {}
         }
@@ -1527,6 +1566,42 @@ fn canon(path: &Path) -> PathBuf {
     fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+fn canon_strict(path: &Path) -> Option<PathBuf> {
+    fs::canonicalize(path).ok()
+}
+
+/// Physical identity for change detection: the proven physical path when
+/// present, else a strict canonicalization. `None` means the identity
+/// cannot be established and the proof must fail closed: falling back to
+/// the lexical path would let a deleted/unreadable member compare equal
+/// and pass change detection.
+fn output_identity_strict(physical: &Option<PathBuf>, logical: &Path) -> Option<PathBuf> {
+    match physical {
+        Some(p) => Some(p.clone()),
+        None => canon_strict(logical),
+    }
+}
+
+/// `symlink_metadata("link/")` follows the final component on POSIX, so a
+/// trailing slash hides a symlink from the `is_symlink` check. Judge the
+/// path with its trailing separators stripped as well; either spelling
+/// proving a symlink refuses the root.
+fn path_is_symlink(path: &Path) -> bool {
+    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return true;
+    }
+    let spelling = path.as_os_str().to_string_lossy();
+    if spelling.ends_with('/') || spelling.ends_with('\\') {
+        let trimmed = spelling.trim_end_matches(['/', '\\']);
+        if !trimmed.is_empty()
+            && fs::symlink_metadata(trimmed).is_ok_and(|m| m.file_type().is_symlink())
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// One bounded cleanup root must be an existing, real (non-symlink) directory.
 fn validate_cleanup_root(root: &Path) -> Result<(), AppError> {
     if !root.is_absolute() {
@@ -1539,7 +1614,7 @@ fn validate_cleanup_root(root: &Path) -> Result<(), AppError> {
         path: root.display().to_string(),
         reason: e.to_string(),
     })?;
-    if !meta.is_dir() || meta.file_type().is_symlink() {
+    if !meta.is_dir() || meta.file_type().is_symlink() || path_is_symlink(root) {
         return Err(AppError::InvalidRoot {
             path: root.display().to_string(),
             reason: "expected a real directory".into(),
@@ -1548,11 +1623,23 @@ fn validate_cleanup_root(root: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-fn collapse_roots(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
-    roots = roots
-        .into_iter()
-        .map(|p| fs::canonicalize(&p).unwrap_or(p))
-        .collect();
+fn collapse_roots(roots: Vec<PathBuf>) -> Result<Vec<PathBuf>, AppError> {
+    let mut canonical = Vec::with_capacity(roots.len());
+    for p in roots {
+        // A root that passed validation but no longer resolves fails closed
+        // here instead of silently degrading to a lexical compare, which
+        // could duplicate one physical root or equate a stale one.
+        match fs::canonicalize(&p) {
+            Ok(c) => canonical.push(c),
+            Err(e) => {
+                return Err(AppError::InvalidRoot {
+                    path: p.display().to_string(),
+                    reason: format!("cleanup root changed before collapse: {e}"),
+                });
+            }
+        }
+    }
+    let mut roots = canonical;
     roots.sort();
     roots.dedup();
     let mut out: Vec<PathBuf> = Vec::new();
@@ -1561,7 +1648,7 @@ fn collapse_roots(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
             out.push(root);
         }
     }
-    out
+    Ok(out)
 }
 
 /// Resolve a path as far as the filesystem allows.
@@ -1945,7 +2032,12 @@ fn final_cleanup_proof_roots(
 ) -> Result<ExecutionProof, ProofFailure> {
     // 1. Unit-wide gate (defensive: the caller gates before dispatch, and the
     // final proof must be the single authority consumed by any spawn).
-    unit_block_reason_roots(unit, clean_roots, allowed_output_roots)?;
+    // The skip code is derived from the unit itself (`unit_skip_code`), not
+    // from the message text: parsing the detail would let a prose edit
+    // silently change the machine contract.
+    if let Err(detail) = unit_block_reason_roots(unit, clean_roots, allowed_output_roots) {
+        return Err(ProofFailure::new(unit_skip_code(unit), detail));
+    }
     // 2. Fresh Cargo resolution for the complete bounded ownership universe,
     // re-proven once per run (see `ProofUniverse`) rather than once per
     // candidate. Comparisons are canonicalized so `/tmp` vs `/private/tmp`
@@ -1959,10 +2051,10 @@ fn final_cleanup_proof_roots(
         // Look the candidate up by identity in the *refreshed* universe: the
         // refresh preserves order only because the proof requires it elsewhere.
         let Some(index) = fresh_universe.iter().position(|w| w.id == unit.id) else {
-            return Err(
-                "ownership could not be re-proven: workspace is outside the cleanup universe"
-                    .into(),
-            );
+            return Err(ProofFailure::new(
+                CleanupReasonCode::SkippedOwnershipUnproven,
+                "ownership could not be re-proven: workspace is outside the cleanup universe",
+            ));
         };
         let (candidate_counters, fresh_candidate) =
             refresh_one_proof_workspace(&fresh_universe[index], runner);
@@ -1973,18 +2065,22 @@ fn final_cleanup_proof_roots(
                 fresh_universe[index] = fresh;
             }
             Some(_) => {
-                return Err(format!(
-                    "ownership could not be re-proven: workspace {} changed identity",
-                    unit.root.display()
-                )
-                .into());
+                return Err(ProofFailure::new(
+                    CleanupReasonCode::SkippedChangedBeforeCleanup,
+                    format!(
+                        "ownership could not be re-proven: workspace {} changed identity",
+                        unit.root.display()
+                    ),
+                ));
             }
             None => {
-                return Err(format!(
-                    "ownership could not be re-proven: workspace {} did not re-resolve",
-                    unit.root.display()
-                )
-                .into());
+                return Err(ProofFailure::new(
+                    CleanupReasonCode::SkippedOwnershipUnproven,
+                    format!(
+                        "ownership could not be re-proven: workspace {} did not re-resolve",
+                        unit.root.display()
+                    ),
+                ));
             }
         }
     }
@@ -1995,104 +2091,168 @@ fn final_cleanup_proof_roots(
         .iter()
         .find(|w| w.id == unit.id)
         .ok_or_else(|| {
-            format!(
-                "ownership could not be re-proven: workspace {} vanished",
-                unit.root.display()
+            ProofFailure::new(
+                CleanupReasonCode::SkippedChangedBeforeCleanup,
+                format!(
+                    "ownership could not be re-proven: workspace {} vanished",
+                    unit.root.display()
+                ),
             )
         })?;
     let candidate = universe.iter().find(|w| w.id == unit.id).ok_or_else(|| {
-        format!(
-            "ownership could not be re-proven: workspace {} is outside the cleanup universe",
-            unit.root.display()
+        ProofFailure::new(
+            CleanupReasonCode::SkippedOwnershipUnproven,
+            format!(
+                "ownership could not be re-proven: workspace {} is outside the cleanup universe",
+                unit.root.display()
+            ),
         )
     })?;
-    let mut old_members: Vec<PathBuf> = candidate
-        .members
-        .iter()
-        .map(|m| canon(&m.source_root))
-        .collect();
-    let mut new_members: Vec<PathBuf> = fresh_ws
-        .members
-        .iter()
-        .map(|m| canon(&m.source_root))
-        .collect();
+    let mut old_members: Vec<PathBuf> = Vec::with_capacity(candidate.members.len());
+    for m in &candidate.members {
+        let Some(c) = canon_strict(&m.source_root) else {
+            return Err(ProofFailure::new(
+                CleanupReasonCode::SkippedOwnershipUnproven,
+                format!(
+                    "ownership could not be re-proven: member source {} of workspace {} cannot be resolved",
+                    m.source_root.display(),
+                    unit.root.display()
+                ),
+            ));
+        };
+        old_members.push(c);
+    }
+    let mut new_members: Vec<PathBuf> = Vec::with_capacity(fresh_ws.members.len());
+    for m in &fresh_ws.members {
+        let Some(c) = canon_strict(&m.source_root) else {
+            return Err(ProofFailure::new(
+                CleanupReasonCode::SkippedOwnershipUnproven,
+                format!(
+                    "ownership could not be re-proven: member source {} of workspace {} cannot be resolved",
+                    m.source_root.display(),
+                    unit.root.display()
+                ),
+            ));
+        };
+        new_members.push(c);
+    }
     old_members.sort();
     new_members.sort();
     if old_members != new_members {
-        return Err("workspace changed before cleanup; skipped: member set changed".into());
+        return Err(ProofFailure::new(
+            CleanupReasonCode::SkippedChangedBeforeCleanup,
+            "workspace changed before cleanup; skipped: member set changed",
+        ));
     }
     if candidate.packages != fresh_ws.packages {
-        return Err(
-            "workspace changed before cleanup; skipped: Cargo package identity set changed".into(),
-        );
+        return Err(ProofFailure::new(
+            CleanupReasonCode::SkippedChangedBeforeCleanup,
+            "workspace changed before cleanup; skipped: Cargo package identity set changed",
+        ));
     }
-    let old_target_canon = candidate
-        .output
-        .target
-        .physical_path
-        .clone()
-        .unwrap_or_else(|| canon(&candidate.output.target.logical_path));
-    let new_target_canon = fresh_ws
-        .output
-        .target
-        .physical_path
-        .clone()
-        .unwrap_or_else(|| canon(&fresh_ws.output.target.logical_path));
-    let old_build_canon = candidate
-        .output
-        .build
-        .physical_path
-        .clone()
-        .unwrap_or_else(|| canon(&candidate.output.build.logical_path));
-    let new_build_canon = fresh_ws
-        .output
-        .build
-        .physical_path
-        .clone()
-        .unwrap_or_else(|| canon(&fresh_ws.output.build.logical_path));
-    if old_target_canon != new_target_canon {
-        return Err(format!(
-            "workspace changed before cleanup; skipped: target changed (was {}, now {})",
-            old_target_canon.display(),
-            new_target_canon.display()
+    let old_target_canon = output_identity_strict(
+        &candidate.output.target.physical_path,
+        &candidate.output.target.logical_path,
+    )
+    .ok_or_else(|| {
+        ProofFailure::new(
+            CleanupReasonCode::SkippedOwnershipUnproven,
+            format!(
+                "ownership could not be re-proven: target of workspace {} cannot be resolved",
+                unit.root.display()
+            ),
         )
-        .into());
+    })?;
+    let new_target_canon = output_identity_strict(
+        &fresh_ws.output.target.physical_path,
+        &fresh_ws.output.target.logical_path,
+    )
+    .ok_or_else(|| {
+        ProofFailure::new(
+            CleanupReasonCode::SkippedOwnershipUnproven,
+            format!(
+                "ownership could not be re-proven: target of workspace {} cannot be resolved",
+                unit.root.display()
+            ),
+        )
+    })?;
+    let old_build_canon = output_identity_strict(
+        &candidate.output.build.physical_path,
+        &candidate.output.build.logical_path,
+    )
+    .ok_or_else(|| {
+        ProofFailure::new(
+            CleanupReasonCode::SkippedOwnershipUnproven,
+            format!(
+                "ownership could not be re-proven: build-dir of workspace {} cannot be resolved",
+                unit.root.display()
+            ),
+        )
+    })?;
+    let new_build_canon = output_identity_strict(
+        &fresh_ws.output.build.physical_path,
+        &fresh_ws.output.build.logical_path,
+    )
+    .ok_or_else(|| {
+        ProofFailure::new(
+            CleanupReasonCode::SkippedOwnershipUnproven,
+            format!(
+                "ownership could not be re-proven: build-dir of workspace {} cannot be resolved",
+                unit.root.display()
+            ),
+        )
+    })?;
+    if old_target_canon != new_target_canon {
+        return Err(ProofFailure::new(
+            CleanupReasonCode::SkippedChangedBeforeCleanup,
+            format!(
+                "workspace changed before cleanup; skipped: target changed (was {}, now {})",
+                old_target_canon.display(),
+                new_target_canon.display()
+            ),
+        ));
     }
     if old_build_canon != new_build_canon {
-        return Err(format!(
-            "workspace changed before cleanup; skipped: build-dir changed (was {}, now {})",
-            old_build_canon.display(),
-            new_build_canon.display()
-        )
-        .into());
+        return Err(ProofFailure::new(
+            CleanupReasonCode::SkippedChangedBeforeCleanup,
+            format!(
+                "workspace changed before cleanup; skipped: build-dir changed (was {}, now {})",
+                old_build_canon.display(),
+                new_build_canon.display()
+            ),
+        ));
     }
     // 6/7. Remap the complete fresh candidate OutputSet onto the complete fresh
     // physical graph and require the same expected shape and ownership.
     let fresh_affected = workspace::map_workspace_groups(fresh_ws, &fresh_groups);
     if fresh_affected.len() != unit.groups.len() {
-        return Err(
-            "workspace changed before cleanup; skipped: physical output group set changed".into(),
-        );
+        return Err(ProofFailure::new(
+            CleanupReasonCode::SkippedChangedBeforeCleanup,
+            "workspace changed before cleanup; skipped: physical output group set changed",
+        ));
     }
     let mut fresh_covering: Vec<PathBuf> = Vec::new();
     for gi in &fresh_affected {
         let g = &fresh_groups[*gi];
         if g.ownership != OutputOwnershipClass::PrivateBounded {
-            return Err(format!(
-                "ownership changed before cleanup; skipped: output {} is now {}; {}",
-                g.display.display(),
-                g.ownership.label(),
-                ownership_skip_detail(g.ownership)
-            )
-            .into());
+            return Err(ProofFailure::new(
+                CleanupReasonCode::SkippedChangedBeforeCleanup,
+                format!(
+                    "ownership changed before cleanup; skipped: output {} is now {}; {}",
+                    g.display.display(),
+                    g.ownership.label(),
+                    ownership_skip_detail(g.ownership)
+                ),
+            ));
         }
         fresh_covering.extend(g.covering.iter().cloned());
     }
     fresh_covering = workspace::outermost(&fresh_covering);
     if !sorted_same(&fresh_covering, &unit.covering) {
-        return Err(
-            "workspace changed before cleanup; skipped: physical output shape changed".into(),
-        );
+        return Err(ProofFailure::new(
+            CleanupReasonCode::SkippedChangedBeforeCleanup,
+            "workspace changed before cleanup; skipped: physical output shape changed",
+        ));
     }
     // 8. No other discovered workspace may now overlap the candidate's affected
     // output, nor have its source tree inside it. The fresh graph catches proven
@@ -2108,11 +2268,14 @@ fn final_cleanup_proof_roots(
                 if unit.covering.iter().any(|c| {
                     other_path == *c || other_path.starts_with(c) || c.starts_with(&other_path)
                 }) {
-                    return Err(format!(
-                        "ownership changed before cleanup; skipped: another discovered workspace ({}) now overlaps cleaned output {}",
-                        other.root.display(),
-                        other_path.display()
-                    ).into());
+                    return Err(ProofFailure::new(
+                        CleanupReasonCode::SkippedChangedBeforeCleanup,
+                        format!(
+                            "ownership changed before cleanup; skipped: another discovered workspace ({}) now overlaps cleaned output {}",
+                            other.root.display(),
+                            other_path.display()
+                        ),
+                    ));
                 }
             }
         }
@@ -2126,40 +2289,32 @@ fn final_cleanup_proof_roots(
                 .iter()
                 .find(|c| member.source_root == **c || member.source_root.starts_with(c))
             {
-                return Err(format!(
-                    "ownership changed before cleanup; skipped: source tree {} of another discovered workspace ({}) lies inside cleaned output {}",
-                    member.source_root.display(),
-                    other.root.display(),
-                    c.display()
-                ).into());
+                return Err(ProofFailure::new(
+                    CleanupReasonCode::SkippedChangedBeforeCleanup,
+                    format!(
+                        "ownership changed before cleanup; skipped: source tree {} of another discovered workspace ({}) lies inside cleaned output {}",
+                        member.source_root.display(),
+                        other.root.display(),
+                        c.display()
+                    ),
+                ));
             }
         }
     }
     // 9. Covering-root physical proof: every affected covering root must exist,
     // be a real directory, and not be a symlink.
-    for covering in &unit.covering {
-        match fs::symlink_metadata(covering) {
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                return Err("preflight changed: covering root disappeared".into());
-            }
-            Err(e) => {
-                return Err(format!("preflight changed: cannot inspect covering root: {e}").into());
-            }
-            Ok(m) if m.file_type().is_symlink() => {
-                return Err("preflight changed: covering root became symlink".into());
-            }
-            Ok(m) if !m.is_dir() => {
-                return Err("preflight changed: covering root changed type".into());
-            }
-            Ok(_) => {}
-        }
-    }
+    prove_covering_roots(&unit.covering)?;
     // 10. Fresh source + output activity with fresh timestamps, bounded by the
     // complete fresh universe's output set (same exclusion rule as analysis).
     let start = SystemTime::now();
     let cutoff = start
         .checked_sub(Duration::from_secs(recency_seconds))
-        .ok_or_else(|| "recency window exceeds system time range".to_owned())?;
+        .ok_or_else(|| {
+            ProofFailure::new(
+                CleanupReasonCode::SkippedSafety,
+                "recency window exceeds system time range",
+            )
+        })?;
     let mut all_outputs: Vec<PathBuf> = Vec::new();
     for other in &fresh_universe {
         for root in [&other.output.target, &other.output.build] {
@@ -2174,16 +2329,22 @@ fn final_cleanup_proof_roots(
     for member_root in workspace::workspace_member_roots(fresh_ws) {
         match traverse::workspace_member_activity(&member_root, &all_outputs, start, cutoff) {
             Ok(traverse::SourceActivity::Recent(_)) => {
-                return Err(
-                    "workspace changed before cleanup; skipped: source became active".into(),
-                );
+                return Err(ProofFailure::new(
+                    CleanupReasonCode::SkippedActive,
+                    "workspace changed before cleanup; skipped: source became active",
+                ));
             }
             Ok(traverse::SourceActivity::Quiet(t)) => {
                 if let Some(t) = t {
                     newest_activity = Some(newest_activity.map_or(t, |old| old.max(t)));
                 }
             }
-            Err(()) => return Err("revalidation source activity uncertain".into()),
+            Err(()) => {
+                return Err(ProofFailure::new(
+                    CleanupReasonCode::SkippedUncertain,
+                    "revalidation source activity uncertain",
+                ));
+            }
         }
     }
     counters.proof_source_activity_nanos = counters
@@ -2194,10 +2355,16 @@ fn final_cleanup_proof_roots(
     for covering in &unit.covering {
         let stats = traverse::measure_single_target(covering);
         if stats.uncertain {
-            return Err("revalidation output measurement uncertain".into());
+            return Err(ProofFailure::new(
+                CleanupReasonCode::SkippedUncertain,
+                "revalidation output measurement uncertain",
+            ));
         }
         if stats.newest.is_some_and(|t| t >= cutoff || t > start) {
-            return Err("workspace changed before cleanup; skipped: output became active".into());
+            return Err(ProofFailure::new(
+                CleanupReasonCode::SkippedActive,
+                "workspace changed before cleanup; skipped: output became active",
+            ));
         }
         fresh_bytes = fresh_bytes.saturating_add(stats.bytes);
         if let Some(t) = stats.newest {
@@ -2259,6 +2426,45 @@ fn final_cleanup_proof_roots(
     })
 }
 
+/// Covering-root physical proof: every affected covering root must exist,
+/// be a real directory, and not be a symlink.
+///
+/// Shared by the final proof (step 9) and the last-moment recheck
+/// immediately before spawn, so both gates refuse the same states with the
+/// same code. A trailing-slash spelling is judged as a symlink too.
+fn prove_covering_roots(covering: &[PathBuf]) -> Result<(), ProofFailure> {
+    for root in covering {
+        match fs::symlink_metadata(root) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return Err(ProofFailure::new(
+                    CleanupReasonCode::SkippedChangedBeforeCleanup,
+                    "preflight changed: covering root disappeared",
+                ));
+            }
+            Err(e) => {
+                return Err(ProofFailure::new(
+                    CleanupReasonCode::SkippedChangedBeforeCleanup,
+                    format!("preflight changed: cannot inspect covering root: {e}"),
+                ));
+            }
+            Ok(m) if m.file_type().is_symlink() || path_is_symlink(root) => {
+                return Err(ProofFailure::new(
+                    CleanupReasonCode::SkippedChangedBeforeCleanup,
+                    "preflight changed: covering root became symlink",
+                ));
+            }
+            Ok(m) if !m.is_dir() => {
+                return Err(ProofFailure::new(
+                    CleanupReasonCode::SkippedChangedBeforeCleanup,
+                    "preflight changed: covering root changed type",
+                ));
+            }
+            Ok(_) => {}
+        }
+    }
+    Ok(())
+}
+
 /// Dry pre-spawn decision for Execute without mutating the fixture.
 ///
 /// Exposes the same non-mutating gate set Execute runs before spawn so tests
@@ -2284,7 +2490,7 @@ pub fn execute_pre_spawn_decision(
     )
 }
 
-fn frozen_env(ctx: &RevalidatedContext) -> Result<Vec<(OsString, OsString)>, String> {
+fn frozen_env(ctx: &RevalidatedContext) -> Result<Vec<(OsString, OsString)>, ProofFailure> {
     // Freeze Cargo output context so the child sees exactly the world this
     // proof validated, whatever the user's shell exported:
     // - CARGO_TARGET_DIR is always pinned to the resolved target.
@@ -2298,10 +2504,10 @@ fn frozen_env(ctx: &RevalidatedContext) -> Result<Vec<(OsString, OsString)>, Str
     if ctx.capability.env_build_dir_set
         && ctx.capability.build_dir == CargoBuildDirCapability::Unavailable
     {
-        return Err(
-            "CARGO_BUILD_BUILD_DIR is set but runtime Cargo cannot prove separate build-dir; cleanup deferred"
-                .into(),
-        );
+        return Err(ProofFailure::new(
+            CleanupReasonCode::SkippedSafety,
+            "CARGO_BUILD_BUILD_DIR is set but runtime Cargo cannot prove separate build-dir; cleanup deferred",
+        ));
     }
     let mut env = vec![(
         OsString::from("CARGO_TARGET_DIR"),
@@ -2314,10 +2520,10 @@ fn frozen_env(ctx: &RevalidatedContext) -> Result<Vec<(OsString, OsString)>, Str
                 build.as_os_str().to_owned(),
             )),
             CargoBuildDirCapability::Unavailable | CargoBuildDirCapability::Unknown => {
-                return Err(
-                    "Cargo reports a separate build directory without stable support; cleanup deferred"
-                        .into(),
-                );
+                return Err(ProofFailure::new(
+                    CleanupReasonCode::SkippedSafety,
+                    "Cargo reports a separate build directory without stable support; cleanup deferred",
+                ));
             }
         },
         // No separate build directory was reported. Pinning the variable to the
@@ -2436,20 +2642,32 @@ fn semver_spec_matches(actual: &str, requested: &str) -> bool {
             .all(|(actual, requested)| actual == &requested)
 }
 
-fn require_cargo_markers(covering: &[PathBuf]) -> Result<(), String> {
+fn require_cargo_markers(covering: &[PathBuf]) -> Result<(), ProofFailure> {
     for root in covering {
         let tag = root.join("CACHEDIR.TAG");
-        let meta = fs::symlink_metadata(&tag)
-            .map_err(|_| "Cargo CACHEDIR.TAG marker is missing; cleanup deferred".to_owned())?;
+        let meta = fs::symlink_metadata(&tag).map_err(|_| {
+            ProofFailure::new(
+                CleanupReasonCode::SkippedMarkerInvalid,
+                "Cargo CACHEDIR.TAG marker is missing; cleanup deferred",
+            )
+        })?;
         if !meta.is_file() || meta.file_type().is_symlink() {
-            return Err("Cargo CACHEDIR.TAG is not a regular file; cleanup deferred".into());
+            return Err(ProofFailure::new(
+                CleanupReasonCode::SkippedMarkerInvalid,
+                "Cargo CACHEDIR.TAG is not a regular file; cleanup deferred",
+            ));
         }
-        let bytes = fs::read(&tag).map_err(|e| format!("cannot read Cargo cache marker: {e}"))?;
+        let bytes = fs::read(&tag).map_err(|e| {
+            ProofFailure::new(
+                CleanupReasonCode::SkippedMarkerInvalid,
+                format!("cannot read Cargo cache marker: {e}"),
+            )
+        })?;
         if !bytes.starts_with(b"Signature: 8a477f597d28d172789f06886806bc55") {
-            return Err(
-                "target directory does not have Cargo's cache marker signature; cleanup deferred"
-                    .into(),
-            );
+            return Err(ProofFailure::new(
+                CleanupReasonCode::SkippedMarkerInvalid,
+                "target directory does not have Cargo's cache marker signature; cleanup deferred",
+            ));
         }
     }
     Ok(())
@@ -3336,6 +3554,167 @@ mod tests {
         .unwrap_err();
         assert!(err.to_string().contains("absolute sandbox root"));
         assert!(runner.calls().is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cleanup_root_symlink_with_trailing_slash_is_refused() {
+        // B1: `symlink_metadata("link/")` follows the link on POSIX, so the
+        // trailing-slash spelling must be judged as a symlink too. Either
+        // input spelling `link` or `link/` proving a symlink refuses the root.
+        use std::os::unix::fs::symlink;
+        let d = tempfile::tempdir().unwrap();
+        let real = d.path().join("real");
+        fs::create_dir(&real).unwrap();
+        let link = d.path().join("link");
+        symlink(&real, &link).unwrap();
+        assert!(validate_cleanup_root(&link).is_err());
+        let with_slash = PathBuf::from(format!("{}/", link.display()));
+        assert!(
+            validate_cleanup_root(&with_slash).is_err(),
+            "a symlinked root with a trailing slash must be refused exactly like without one"
+        );
+        assert!(validate_cleanup_root(&real).is_ok());
+    }
+
+    #[test]
+    fn collapse_roots_fails_closed_when_a_root_no_longer_resolves() {
+        // B4: a root that passed validation but no longer canonicalizes is an
+        // error, not a silent lexical compare that could duplicate one
+        // physical root or equate a stale one.
+        let d = tempfile::tempdir().unwrap();
+        let gone = d.path().join("gone");
+        assert!(collapse_roots(vec![gone]).is_err());
+        let real = d.path().join("real");
+        fs::create_dir(&real).unwrap();
+        assert_eq!(
+            collapse_roots(vec![real.clone()]).unwrap(),
+            vec![fs::canonicalize(&real).unwrap()]
+        );
+    }
+
+    #[test]
+    fn external_unproven_skip_code_names_ownership_not_authorization() {
+        // B9: the JSON code for an ownership failure must say
+        // ownership-unproven, matching the prose (`ownership_skip_detail`)
+        // and the operator response it warrants.
+        let d = tempfile::tempdir().unwrap();
+        let base = fs::canonicalize(d.path()).unwrap();
+        for (class, expected) in [
+            (
+                OutputOwnershipClass::Shared,
+                CleanupReasonCode::SkippedShared,
+            ),
+            (
+                OutputOwnershipClass::Uncertain,
+                CleanupReasonCode::SkippedUncertain,
+            ),
+            (
+                OutputOwnershipClass::ExternalUnproven,
+                CleanupReasonCode::SkippedOwnershipUnproven,
+            ),
+        ] {
+            let unit = synthetic_mixed_unit(&base, OutputOwnershipClass::PrivateBounded, class);
+            assert_eq!(unit_skip_code(&unit), expected, "{class:?}");
+        }
+    }
+
+    #[test]
+    fn prove_covering_roots_refuses_symlink_swap_with_change_code() {
+        // B3: the gate shared by the final proof and the pre-spawn recheck
+        // refuses a swapped covering root with the change code.
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("target");
+        fs::create_dir(&target).unwrap();
+        assert!(prove_covering_roots(std::slice::from_ref(&target)).is_ok());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let other = d.path().join("other");
+            fs::create_dir(&other).unwrap();
+            fs::remove_dir(&target).unwrap();
+            symlink(&other, &target).unwrap();
+            let failure = prove_covering_roots(std::slice::from_ref(&target)).unwrap_err();
+            assert_eq!(failure.code, CleanupReasonCode::SkippedChangedBeforeCleanup);
+            assert!(failure.detail.contains("symlink"), "{}", failure.detail);
+        }
+        let missing = d.path().join("missing");
+        let failure = prove_covering_roots(std::slice::from_ref(&missing)).unwrap_err();
+        assert_eq!(failure.code, CleanupReasonCode::SkippedChangedBeforeCleanup);
+    }
+
+    #[test]
+    fn proof_fails_closed_when_a_member_source_no_longer_resolves() {
+        // B6: an unresolvable member identity is ownership-unproven, never a
+        // lexical-equal pass of change detection.
+        let (_d, root, target) = valid_fixture(1);
+        let runner = FakeCleanupRunner::new(&root, &target, 1);
+        let noop = NoopObserver;
+        let mut counters = ScanCounters::default();
+        let mut diags = Vec::new();
+        let scope = resolve_cleanup_scope(
+            &[root.join("Cargo.toml")],
+            SystemTime::now(),
+            Duration::from_secs(0),
+            &runner,
+            &mut counters,
+            &mut diags,
+            &noop,
+        )
+        .unwrap();
+        assert_eq!(scope.units.len(), 1);
+        let mut workspaces = scope.workspaces;
+        workspaces[0].members[0].source_root = workspaces[0].root.join("vanished-member");
+        let failure = final_cleanup_proof(
+            &scope.units[0],
+            &workspaces,
+            &root,
+            &[],
+            &runner,
+            0,
+            &mut counters,
+        )
+        .unwrap_err();
+        assert_eq!(
+            failure.code,
+            CleanupReasonCode::SkippedOwnershipUnproven,
+            "{}",
+            failure.detail
+        );
+    }
+
+    #[test]
+    fn missing_and_file_allowed_roots_authorize_nothing_but_are_not_fatal() {
+        // B5 Deliberate skips, pinned: a missing or non-directory allowed
+        // root authorizes nothing and stays non-fatal, while an existing but
+        // unresolvable one is a hard error (see `covering_is_authorized_roots`).
+        let d = tempfile::tempdir().unwrap();
+        let base = fs::canonicalize(d.path()).unwrap();
+        let clean = base.join("clean");
+        fs::create_dir(&clean).unwrap();
+        let outside = base.join("outside");
+        fs::create_dir(&outside).unwrap();
+        let missing = base.join("missing");
+        assert!(
+            !covering_is_authorized_roots(
+                OutputOwnershipClass::PrivateBounded,
+                std::slice::from_ref(&outside),
+                std::slice::from_ref(&clean),
+                std::slice::from_ref(&missing),
+            )
+            .unwrap()
+        );
+        let file = base.join("file");
+        fs::write(&file, b"x").unwrap();
+        assert!(
+            !covering_is_authorized_roots(
+                OutputOwnershipClass::PrivateBounded,
+                std::slice::from_ref(&outside),
+                std::slice::from_ref(&clean),
+                std::slice::from_ref(&file),
+            )
+            .unwrap()
+        );
     }
 
     struct ChangingTargetRunner {

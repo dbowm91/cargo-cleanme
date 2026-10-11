@@ -33,7 +33,7 @@ pub fn resolve(request: ScanRequest, config: &ScanConfig) -> Result<EffectiveSca
             path: root.display().to_string(),
             reason: e.to_string(),
         })?;
-        if !m.is_dir() || m.file_type().is_symlink() {
+        if !m.is_dir() || m.file_type().is_symlink() || path_is_symlink(&root) {
             return Err(AppError::InvalidRoot {
                 path: root.display().to_string(),
                 reason: "expected a real directory".into(),
@@ -181,6 +181,25 @@ pub fn classify_cleanup_roots(entries: CleanupCandidates) -> Result<ClassifiedRo
     classify_cleanup_roots_with_home(entries, home.as_deref())
 }
 
+/// `symlink_metadata("link/")` follows the final component on POSIX, so a
+/// trailing slash hides a symlink from the `is_symlink` check. Judge the
+/// path with its trailing separators stripped as well.
+fn path_is_symlink(path: &Path) -> bool {
+    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return true;
+    }
+    let spelling = path.as_os_str().to_string_lossy();
+    if spelling.ends_with('/') || spelling.ends_with('\\') {
+        let trimmed = spelling.trim_end_matches(['/', '\\']);
+        if !trimmed.is_empty()
+            && fs::symlink_metadata(trimmed).is_ok_and(|m| m.file_type().is_symlink())
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn classify_cleanup_roots_with_home(
     entries: CleanupCandidates,
     home: Option<&Path>,
@@ -189,7 +208,7 @@ fn classify_cleanup_roots_with_home(
     for (path, provenance) in entries {
         match (fs::symlink_metadata(&path), provenance) {
             (Ok(meta), RootProvenance::Explicit) => {
-                if !meta.is_dir() || meta.file_type().is_symlink() {
+                if !meta.is_dir() || meta.file_type().is_symlink() || path_is_symlink(&path) {
                     return Err(AppError::InvalidRoot {
                         path: path.display().to_string(),
                         reason: "expected a real directory".into(),
@@ -198,7 +217,9 @@ fn classify_cleanup_roots_with_home(
                 out.admitted.push(path);
             }
             (Ok(meta), RootProvenance::Automatic) => {
-                if meta.file_type().is_symlink() {
+                // A trailing slash (`link/`) makes `symlink_metadata` follow
+                // the link, so the stripped spelling is judged too.
+                if meta.file_type().is_symlink() || path_is_symlink(&path) {
                     out.blocked.push(AutomaticBlock {
                         path: path.clone(),
                         reason: format!(
@@ -937,6 +958,31 @@ mod tests {
         else {
             panic!("explicit symlink must be fatal");
         };
+    }
+
+    /// B1: a symlinked root with a trailing slash (`link/`) must classify
+    /// exactly like without one: fatal for explicit roots, blocking for
+    /// automatic roots. `symlink_metadata` follows the link when the slash
+    /// is present, so the stripped spelling is judged too.
+    #[test]
+    #[cfg(unix)]
+    fn trailing_slash_symlink_roots_classify_like_plain_symlinks() {
+        let d = tempdir().unwrap();
+        let target = d.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let link = d.path().join("link-to-dir");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let slashed = PathBuf::from(format!("{}/", link.display()));
+        let Err(crate::error::AppError::InvalidRoot { .. }) =
+            classify_cleanup_roots(vec![(slashed.clone(), RootProvenance::Explicit)])
+        else {
+            panic!("explicit symlink with trailing slash must be fatal");
+        };
+        let classified =
+            classify_cleanup_roots(vec![(slashed, RootProvenance::Automatic)]).unwrap();
+        assert!(classified.admitted.is_empty());
+        assert!(classified.omitted.is_empty());
+        assert_eq!(classified.blocked.len(), 1);
     }
 
     /// C028 late premise recheck: a skipped root that reappears (or becomes

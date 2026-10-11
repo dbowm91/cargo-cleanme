@@ -7,7 +7,7 @@ the one architecture deep dive your change touches.
 
 A single Rust crate that finds Cargo build output and cleans it **through
 Cargo**, never by deleting directories. One binary over one library of 15
-modules, 17 source files, 23,468 lines in `src/`. No async runtime of its own.
+modules, 17 source files, 26,315 lines in `src/`. No async runtime of its own.
 `cargo metadata` is the only binary dependency that matters for safety.
 
 Thirteen releases are published (v0.1.0 through v0.1.6, then 0.2.0, 0.2.1, 0.2.2,
@@ -177,7 +177,7 @@ closure records.
 | Path | Contents |
 |---|---|
 | `src/` | the crate — 17 files; `main.rs` is the binary, `lib.rs` declares the 15 library modules |
-| `tests/` | `cli_contract.rs` (36 tests), `end_to_end.rs` (4), `common/` |
+| `tests/` | `cli_contract.rs` (50 tests), `end_to_end.rs` (4), `common/` |
 | `architecture/` | `overview.md` + 15 deep dives |
 | `docs/` | `RELEASING.md` (operator checklist), `TROUBLESHOOTING.md` (includes known defects by version) |
 | `plans/` | decision records — see §6 |

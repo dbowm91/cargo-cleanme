@@ -759,6 +759,13 @@ fn json_scope_block_is_emitted_with_nonzero_exit_status() {
     assert_eq!(output.status.code(), Some(1));
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["result"]["scope_blocked"], true);
+    assert!(
+        json["result"]["scope_reason"]
+            .as_str()
+            .unwrap()
+            .contains("could not be proven"),
+        "the block must carry its typed prose reason: {json}"
+    );
 }
 
 // Platform scope: this case substitutes a POSIX `/bin/sh` Cargo stub, which is
@@ -879,11 +886,11 @@ esac
         json["result"]["units"][0]["selector_estimate_bytes"],
         serde_json::Value::Null
     );
-    assert!(
-        json["result"]["units"][0]["output_union_before_bytes"]
-            .as_u64()
-            .unwrap()
-            >= 4096
+    // A selector run cannot attribute bytes to the selector, so the union
+    // carries the same unknown as every other byte field.
+    assert_eq!(
+        json["result"]["units"][0]["output_union_before_bytes"],
+        serde_json::Value::Null
     );
     assert!(!artifact.exists());
     let calls = fs::read_to_string(&log).unwrap();
@@ -915,6 +922,11 @@ esac
         .output()
         .unwrap();
     let simulate_json: serde_json::Value = serde_json::from_slice(&simulate_output.stdout).unwrap();
+    assert!(
+        simulate_output.status.success(),
+        "a simulate report is still a successful run: {}",
+        String::from_utf8_lossy(&simulate_output.stderr)
+    );
     assert_eq!(simulate_json["result"]["units"][0]["outcome"], "simulated");
     assert_eq!(
         fs::read_to_string(&log)
@@ -947,6 +959,11 @@ esac
         .output()
         .unwrap();
     let policy_json: serde_json::Value = serde_json::from_slice(&policy_output.stdout).unwrap();
+    assert!(
+        policy_output.status.success(),
+        "a policy-skipped report is still a successful run: {}",
+        String::from_utf8_lossy(&policy_output.stderr)
+    );
     assert_eq!(
         policy_json["result"]["units"][0]["reason_code"],
         "selector_unsupported"
@@ -985,6 +1002,11 @@ esac
         .output()
         .unwrap();
     let invalid_json: serde_json::Value = serde_json::from_slice(&invalid_package.stdout).unwrap();
+    assert!(
+        invalid_package.status.success(),
+        "an invalid-selector report is still a successful run: {}",
+        String::from_utf8_lossy(&invalid_package.stderr)
+    );
     assert_eq!(
         invalid_json["result"]["units"][0]["reason_code"],
         "selector_invalid"
@@ -1020,6 +1042,11 @@ esac
         .unwrap();
     let unsupported_json: serde_json::Value =
         serde_json::from_slice(&unsupported_package.stdout).unwrap();
+    assert!(
+        unsupported_package.status.success(),
+        "an unsupported-selector report is still a successful run: {}",
+        String::from_utf8_lossy(&unsupported_package.stderr)
+    );
     assert_eq!(
         unsupported_json["result"]["units"][0]["reason_code"],
         "selector_unsupported"
@@ -1054,6 +1081,12 @@ esac
         .output()
         .unwrap();
     let package_json: serde_json::Value = serde_json::from_slice(&package_output.stdout).unwrap();
+    assert!(
+        package_output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&package_output.stdout),
+        String::from_utf8_lossy(&package_output.stderr)
+    );
     assert_eq!(package_json["result"]["units"][0]["reason_code"], "cleaned");
     assert_eq!(package_json["result"]["selector_kind"], "package");
     assert_eq!(package_json["result"]["selector_value"], "fixture@0.1.0");
@@ -1119,7 +1152,14 @@ exit 0
             .unwrap()
     };
     let failed = run("fail");
-    assert_eq!(failed.status.code(), Some(17));
+    // The exit contract is 0/1/2: the editor's arbitrary status is reported
+    // in prose, never propagated as our exit code.
+    assert_eq!(failed.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&failed.stderr).contains("exit status: 17"),
+        "the editor's status must stay visible in prose: {}",
+        String::from_utf8_lossy(&failed.stderr)
+    );
     let invalid = run("invalid");
     assert!(!invalid.status.success());
     assert!(String::from_utf8_lossy(&invalid.stderr).contains("is invalid"));
@@ -1878,6 +1918,12 @@ fn clean_rejects_simulate_and_cargo_preview_together_at_parse_time() {
     let root = fixture.root.to_str().unwrap().to_string();
 
     let output = fixture.run(&["clean", "--dry-run", "--cargo-preview", &root]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a clap usage conflict exits 2: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
     assert!(
         !output.status.success(),
         "two exclusive modes must not resolve to a successful run: {}",
@@ -2693,6 +2739,12 @@ fn json_update_refusal_emits_no_document_and_exits_non_zero() {
         .output()
         .unwrap();
 
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a forbidden-provenance update is a usage-shaped refusal; stdout was {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
     assert!(
         !output.status.success(),
         "a forbidden-provenance update must fail; stdout was {}",
