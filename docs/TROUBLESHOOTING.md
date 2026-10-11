@@ -99,6 +99,42 @@ detail for that manifest. A valid sibling workspace may still appear in a
 read-only partial scan, while cleanup remains fail-closed for the full selected
 scope.
 
+## Bare cleanup reports 0 CleanupUnits with hundreds of unresolved manifests
+
+A bare `cargo cleanme` that ends with `0 CleanupUnit(s)` and `cleanup
+ownership could not be proven: N discovered Cargo manifests did not resolve`
+did not measure zero workspaces. The `0` means resolution never got as far as
+building cleanup units: one manifest anywhere in the admitted Routine scope
+that Cargo cannot resolve blocks every `cargo clean` in that scope, because an
+unresolved manifest's output configuration is unknown and could overlap a
+healthy workspace's output. This is most often vendored or misconfigured
+trees *inside* an otherwise healthy root — for example tree-sitter grammar
+crates that believe they belong to a parent workspace that does not list them
+(`current package believes it's in a workspace when it's not`), `fuzz/`
+crates in the same state, or toolchain sources requiring nightly Cargo —
+rather than a permissions problem.
+
+First check which admitted roots are actually yours: cache, download, temp,
+and system-software locations (`~/Library/Caches`, `~/Downloads`,
+`/private/tmp`, `/usr/local`, …) are already omitted from Routine admission,
+so a remaining block comes from inside a real developer root. Options that
+keep the happy path (`scan`, then bare `cargo cleanme`) intact:
+
+- Fix the upstream workspace configuration (usually adding the stray crate to
+  `workspace.exclude` or giving it an empty `[workspace]` table), then rerun
+  `cargo cleanme scan` so the next Full reconciliation observes a resolving
+  tree.
+- Or set a one-time default scope in `config.toml` (`scan.root`) to the
+  subtree you maintain; bare invocations then use that default and never
+  consult learned state. Per-invocation `clean ROOT` remains available for
+  one-off work.
+
+What the tool will not do is clean the healthy-looking workspaces while
+silently ignoring the unresolved ones: filesystem disjointness between roots
+is not proof that outputs do not overlap (a workspace can redirect
+`target-dir` anywhere through Cargo configuration), so partial-scope cleaning
+needs an explicit safety decision first.
+
 ### If you are on 0.2.0: two things it could do that it should never have done
 
 Both were found by the project's own post-release interrogation and confirmed by

@@ -72,10 +72,10 @@ pub struct DiscoveryState {
 
 | Field | Type | Meaning | When written |
 |---|---|---|---|
-| `schema_version` | `u32` | Format generation. `0` is treated as invalid on read (`:324-326`). | Every `reconcile_full` publish (`:127`); normalized in memory on every successful load (`:328`); passthrough on a Routine touch. |
-| `last_full_at` | `Option<u64>` | The generation stamp: wall-clock seconds of the newest **complete** Full reconciliation that published. `None` = never reconciled. | `reconcile_full` only (`:126-128`). Never written by the Routine/Explicit touch branch. |
-| `projects` | `Vec<ProjectRecord>` | Exact project inventory from the last complete Full scan. Fully replaced, never merged. | `reconcile_full` only (`:129-144`). |
-| `learned_roots` | `Vec<LearnedRoot>` | Containers the Routine scan should search, each with a positive-observation stamp. | `reconcile_full` (`:145-216`), and `last_project_seen_at` only via the Routine touch in `main.rs:440-447`. |
+| `schema_version` | `u32` | Format generation. `0` is treated as invalid on read (`:460-461`). | Every `reconcile_full` publish (`:225`); normalized in memory on every successful load (`:463-464`); passthrough on a Routine touch. |
+| `last_full_at` | `Option<u64>` | The generation stamp: wall-clock seconds of the newest **complete** Full reconciliation that published. `None` = never reconciled. | `reconcile_full` only (`:226`). Never written by the Routine/Explicit touch branch. |
+| `projects` | `Vec<ProjectRecord>` | Exact project inventory from the last complete Full scan. Fully replaced, never merged. | `reconcile_full` only (`:227-241`). |
+| `learned_roots` | `Vec<LearnedRoot>` | Containers the Routine scan should search, each with a positive-observation stamp. | `reconcile_full` (`:243-351`), and `last_project_seen_at` only via the Routine touch in `main.rs:440-447`. |
 
 `#[serde(default)]` sits on the **struct** (`:64`), so all four fields may be
 absent from the JSON and decode to `Default`. That is what lets a v1 file with
@@ -86,10 +86,10 @@ load at all.
 
 | Field | Type | Meaning | When written |
 |---|---|---|---|
-| `workspace` | `PathBuf` | Workspace identity when Cargo resolution succeeded, otherwise the manifest's parent directory (doc comment `:73`). **Required** — no `#[serde(default)]`. | `reconcile_full` (`:132-135`) |
-| `manifest` | `Option<PathBuf>` | The observed `Cargo.toml` path. `#[serde(default)]` (`:75-76`). | `reconcile_full`, always `Some` (`:136`) |
-| `resolution` | `ResolutionStatus` | Whether Cargo answered. `#[serde(default)]` (`:77-78`). | `reconcile_full` (`:137-141`) |
-| `observed_at` | `u64` | The generation stamp of the scan that produced this record. `#[serde(default)]` (`:79-80`), so v1 records decode as `0`. | `reconcile_full` (`:142`) |
+| `workspace` | `PathBuf` | Workspace identity when Cargo resolution succeeded, otherwise the manifest's parent directory (doc comment `:73`). **Required** — no `#[serde(default)]`. | `reconcile_full` (`:230`) |
+| `manifest` | `Option<PathBuf>` | The observed `Cargo.toml` path. `#[serde(default)]` (`:75-76`). | `reconcile_full`, always `Some` (`:234`) |
+| `resolution` | `ResolutionStatus` | Whether Cargo answered. `#[serde(default)]` (`:77-78`). | `reconcile_full` (`:235`) |
+| `observed_at` | `u64` | The generation stamp of the scan that produced this record. `#[serde(default)]` (`:79-80`), so v1 records decode as `0`. | `reconcile_full` (`:240`) |
 
 Note that the `projects` array is written but **never read back by any consumer
 in the crate**. Grepping `last_full_at` and `learned_roots` across `src/` shows
@@ -106,16 +106,21 @@ variants are `"resolved"` and `"manifest_observed_unresolved"`.
 
 | Field | Type | Meaning | When written |
 |---|---|---|---|
-| `path` | `PathBuf` | Canonicalized search container. **Required.** | `reconcile_full` (`:153-155`) |
-| `last_project_seen_at` | `u64` | Positive-observation stamp, seconds. **Required.** | `reconcile_full` (`:156`); advanced by the Routine touch |
+| `path` | `PathBuf` | Canonicalized search container. **Required.** | `reconcile_full` (`:257-258`) |
+| `last_project_seen_at` | `u64` | Positive-observation stamp, seconds. **Required.** | `reconcile_full` (`:260`); advanced by the Routine touch |
 
 Since C030, only observations with a successfully resolved Cargo workspace can
 create a new `LearnedRoot`. The exact manifest inventory still records
 unresolved manifests. Before parent promotion, the resolved project path and
 candidate are checked by `automatic_root_is_maintainable`; recognizable package
-caches, Trash, temporary locations, `node_modules`, and transient Codex
-worktrees are not promoted into Routine scope. The same check filters legacy
-learned roots from automatic Routine use and removes known-disallowed roots on
+caches (including macOS `~/Library/Caches` and pnpm stores), Trash, temporary
+locations (platform temp root plus the `/tmp`, `/private/tmp`, `/var/tmp`
+aliases), system software locations (`/usr/local`, `/opt`), the `~/Downloads`
+drop zone, `node_modules`, and transient Codex worktrees are not promoted into
+Routine scope. Entries are compared by both canonical and raw spelling, so a
+missing candidate spelled through a symlink (e.g. `/tmp` → `/private/tmp` on
+macOS) is still recognised. The same check filters legacy learned roots from
+automatic Routine use and removes known-disallowed roots on
 a complete certain Full reconciliation. Unknown coverage still prevents
 publication, and an uncertainty intersecting a legacy root preserves it.
 
@@ -162,8 +167,8 @@ typed decode, which fails, and the resulting message is serde's, **not**
 
 `StateProblem` (`:13-17`) is the payload pair `Invalid` / `Unavailable`, and the
 pairing with `StateLoad` variants is exact by construction: `RecoverableInvalid`
-only ever carries `Invalid` (`:314-319`), `Unavailable` only ever carries
-`Unavailable` (`:291-296`).
+only ever carries `Invalid` (`:449-455`), `Unavailable` only ever carries
+`Unavailable` (`:427-431`).
 
 ### The load-bearing distinction
 
@@ -192,29 +197,29 @@ the design: an unreadable file and a future-schema file are both treated as
 **unknown**, and unknown is never a licence to write. `main.rs:417-422` turns
 that `None` into a stderr warning and a skipped reconciliation.
 
-### `load_default` (`:281-286`)
+### `load_default` (`:416-421`)
 
 `state_path()?` → if `None`, return `StateLoad::Missing`. Note this collapses
 "the OS gave us no home directory" into `Missing`, i.e. fail-soft first-run
 behaviour, not `Unavailable`. Everything else delegates to `load_at`.
 
-### `load_at` (`:287-330`) — parse order
+### `load_at` (`:422-465`) — parse order
 
-1. `fs::read`. `NotFound` → `Missing` (`:290`). Any other error → `Unavailable`
-   with the OS message (`:291-296`).
-2. **Version pre-check before typed decode** (`:301-313`). The bytes are parsed
+1. `fs::read`. `NotFound` → `Missing` (`:425`). Any other error → `Unavailable`
+   with the OS message (`:427-431`).
+2. **Version pre-check before typed decode** (`:436-447`). The bytes are parsed
    as `serde_json::Value`; only if the top level is an `Object` with a numeric
    `schema_version > 2` does it return `UnsupportedNewer`. The comment at
-   `:298-300` states the intent: a newer writer "may have added fields or
+   `:433-435` states the intent: a newer writer "may have added fields or
    changed record structure that this binary must leave untouched." Checking
    before decoding is what makes that promise meaningful — a v3 file whose
    `LearnedRoot` shape this binary cannot parse is still recognised and
    preserved rather than mangled into `RecoverableInvalid` and then replaced.
 3. Typed decode into `DiscoveryState`; failure → `RecoverableInvalid` with
-   serde's message (`:320-323`).
-4. `schema_version == 0` → `RecoverableInvalid("invalid schema 0")` (`:324-326`).
+   serde's message (`:456-459`).
+4. `schema_version == 0` → `RecoverableInvalid("invalid schema 0")` (`:460-461`).
 5. Normalize `schema_version` to `CURRENT_SCHEMA` in memory; return `Loaded`
-   (`:328-329`).
+   (`:463-464`).
 
 ### serde strictness — what is actually there
 
@@ -223,8 +228,8 @@ by grep over the whole module). Unknown fields are tolerated and silently
 dropped.
 
 That is a deliberate and *sufficient* design here, but only because step 2
-carries the forward-compatibility load. The v1→v2 test at `:409` and the
-structural test at `:452` both rely on tolerance: `{"schema_version":2,
+carries the forward-compatibility load. The v1→v2 test at `:688` and the
+structural test at `:729` both rely on tolerance: `{"schema_version":2,
 "projects":[{"not_workspace":"/work"}]}` is invalid not because `not_workspace`
 is unknown, but because the **required** `workspace` field is missing
 (`:74` has no `#[serde(default)]`).
@@ -234,7 +239,7 @@ changed `LearnedRoot`'s shape would be silently accepted by this binary. The
 version number is the only forward-compat mechanism; strictness is not a
 backstop.
 
-### `state_path` (`:270-277`) and what `None` means
+### `state_path` (`:405-412`) and what `None` means
 
 ```rust
 let dirs = ProjectDirs::from("", "", "cargo-cleanme")?;
@@ -668,10 +673,10 @@ it. Persistent targeted retirement remains decision-gated by proposed ADR 005.
 
 | Consumer | Call site | Reads | Notes |
 |---|---|---|---|
-| `policy::routine_roots` | `policy.rs:397` | `load_default()` | Routine scan root set. |
-| `policy::routine_roots_from_state` | `policy.rs:410-439` | `StateLoad`, `learned_roots`, `last_project_seen_at`, `now_seconds()` | Re-implements the retention filter independently at `policy.rs:427-430` (same three clauses as `discovery_state.rs:198-201`, plus its own `now < r.last_project_seen_at` future-timestamp clause). Seeds are always unioned in first (`policy.rs:415-418`); a non-`Loaded` load falls back to seeds + one warning (`policy.rs:436-438`). |
-| `policy::routine_cleanup_candidates` | `policy.rs:363` | `StateLoad`, `learned_roots`, `last_project_seen_at`, `now_seconds()` | C028: the cleanup-only variant. Same age filter, but raw paths with provenance and no canonicalization, so classification (`policy.rs:156`) sees a symlink before any collapse could resolve it. |
-| `clean --full` roots | `policy.rs:328`, `main.rs:598` | `learned_roots[].path` of the in-memory generation | C028: `full_cleanup_roots` consumes the generation the just-finished reconciliation proved — never a disk reload — then `admit_automatic` classifies before collapsing. A missing generation or non-zero reconciliation refuses cleanup. |
+| `policy::routine_roots` | `policy.rs:469` | `load_default()` | Routine scan root set. |
+| `policy::routine_roots_from_state` | `policy.rs:484-514` | `StateLoad`, `learned_roots`, `last_project_seen_at`, `now_seconds()` | Re-implements the retention filter independently at `policy.rs:502-504` (same three clauses as `discovery_state.rs:312-314`, plus its own `now < r.last_project_seen_at` future-timestamp clause). Seeds are always unioned in first (`policy.rs:489-491`); a non-`Loaded` load falls back to seeds + one warning (`policy.rs:510-511`). |
+| `policy::routine_cleanup_candidates` | `policy.rs:437` | `StateLoad`, `learned_roots`, `last_project_seen_at`, `now_seconds()` | C028: the cleanup-only variant. Same age filter, but raw paths with provenance and no canonicalization, so classification (`policy.rs:184`) sees a symlink before any collapse could resolve it. |
+| `clean --full` roots | `policy.rs:402`, `main.rs:598` | `learned_roots[].path` of the in-memory generation | C028: `full_cleanup_roots` consumes the generation the just-finished reconciliation proved — never a disk reload — then `admit_automatic` classifies before collapsing. A missing generation or non-zero reconciliation refuses cleanup. |
 | `clean --full` / maintenance generation | `main.rs:330` | `last_full_at` | `Option<u64>` → `state_generation`. |
 | `run_scan`, Full branch | `main.rs:818-888` | everything | `load_default`, `full_reconciliation_prior`, `now_seconds`, `ProjectObservation`, `reconcile_full`, `publish`. Returns the proven generation in `ScanOutcome::full_state` (`main.rs:727`) even when the save fails, so `clean --full` never falls back to a stale disk generation. |
 | `run_scan`, Routine/Explicit branch | `main.rs:889-905` | `learned_roots[].last_project_seen_at` | The touch branch. Mutates only timestamps; never adds roots, never removes them, never touches `projects` or `last_full_at`. Advances a root when `project.starts_with(&root.path)` (`main.rs:895`) for an observed workspace root. |
@@ -966,40 +971,42 @@ against the code, not against its test count.
 ## 10. Review checklist
 
 1. **Does anything still return `NoPublication` for a reason other than
-   `!complete`?** `reconcile_full`'s only refusal site is `:122-124`. A new
+   `!complete`?** `reconcile_full`'s only refusal site is `:220-221`. A new
    refusal reason must be added to `Reconciliation` (`:101-105`) and will need
    a matching `main.rs:413-415` message.
 2. **Is the three-rule order intact — `covered`, then absence, then the
-   uncertainty-gated retention?** `discovery_state.rs:175-177` must precede the
-   absence probe (`:178-194`), which must precede the retention rule
-   (`:195-204`). Coverage short-circuits before either drop/retain decision;
+   uncertainty-gated retention?** `discovery_state.rs:279` must precede the
+   absence probes (`:292` for disallowed provenance, `:304-308` for positive
+   `ENOENT`), which must precede the retention rule
+   (`:312-314`). Coverage short-circuits before either drop/retain decision;
    the absence probe carries its own no-intersecting-uncertainty precondition
-   (`:185-187`) and `ENOENT`-only positive absence (`:188-191`). Hoisting the
+   (`:304`) and `ENOENT`-only positive absence (`:306`). Hoisting the
    retention rule ahead of the probe reintroduces age-based retention for
    physically absent roots — the C028 defect.
 3. **Does `full_reconciliation_prior` still return `None` for
    `UnsupportedNewer` and `Unavailable`?** `discovery_state.rs:54-61`. This is
-   the whole overwrite-safety gate; `full_reconciliation_never_selects_newer_or_unavailable_state_for_publication` (`:508`) is the only test.
+   the whole overwrite-safety gate; `full_reconciliation_never_selects_newer_or_unavailable_state_for_publication` (`:769`) is the only test.
 4. **Is the version pre-check still before the typed decode?**
-   `discovery_state.rs:319-334` must stay ahead of `:341`. Reversed, a v3 file
+   `discovery_state.rs:436-447` must stay ahead of `:456`. Reversed, a v3 file
    that this binary cannot parse becomes `RecoverableInvalid` and is then
    overwritten.
 5. **Does the publish still go through temp + rename, and still remove its temp
-   on failure?** `discovery_state.rs:360-375` and `replace_file` at `:398-421`.
+   on failure?** `discovery_state.rs:474-509` and `replace_file` at `:512-524`.
    The success-path test is `unique_temp_attempts_replace_existing_state`
-   (`:554`); its failure twin is
+   (`:815`); its failure twin is
    `failed_replacement_preserves_existing_destination_and_cleans_temp`
-   (`:732`). A truncate-in-place regression would leave `last_full_at`
+   (`:994`). A truncate-in-place regression would leave `last_full_at`
    corruptible.
 6. **Has anything besides the module's own temp file become deletable?**
-   `discovery_state.rs:351` is the only `remove_file` in the file, and
+   `discovery_state.rs:486` is the only production `remove_file` in the file (a
+   test helper at `:796` also removes its own scratch file), and
    `discovery_state.rs:1-9` is the only import block. Both are one-line
    invariants that a careless refactor breaks silently.
 7. **Is `observed_at` still `now.max(prior.last_full_at.unwrap_or(0))`?**
-   `discovery_state.rs:126`. Removing the `max` reintroduces a regressing
-   generation stamp and makes the future-timestamp guard at `:198` the only
+   `discovery_state.rs:224`. Removing the `max` reintroduces a regressing
+   generation stamp and makes the future-timestamp guard at `:312` the only
    remaining defence.
-8. **Do `policy.rs:427-430` and `discovery_state.rs:198-201` still agree?** The
+8. **Do `policy.rs:502-504` and `discovery_state.rs:312-314` still agree?** The
    retention predicate is duplicated across the module boundary. Any change to
    one must be made to the other, and the fact that Routine applies it at read
    time while Full applies it at write time is easy to miss.
@@ -1013,5 +1020,5 @@ against the code, not against its test count.
     structurally absent: the exit decision reads only `full_incomplete`
     (`main.rs:590-592`) and there is no flag to set. The regression to watch
     for is someone reintroducing a save-result branch into that `if` — the
-    module's own `publish` unavailability error at `discovery_state.rs:355` is the authority to
+    module's own `publish` unavailability error at `discovery_state.rs:467-471` is the authority to
     cite when arguing against it.

@@ -128,6 +128,16 @@ pub fn automatic_root_is_maintainable(path: &Path, home: Option<&Path>) -> bool 
             home.join(".cache"),
             home.join("go/pkg/mod"),
             home.join(".local/share/pnpm/store"),
+            // macOS platform cache and package-store locations observed as
+            // admitted Routine roots on a real developer machine
+            // (Homebrew cargo/git checkouts and registry sources, Homebrew
+            // Go module cache, pnpm content-addressed store).
+            home.join("Library/Caches"),
+            home.join("Library/pnpm"),
+            // A download drop zone is transient by definition: vendored
+            // snapshots and one-off archives land here, never durable
+            // developer working sets.
+            home.join("Downloads"),
         ]);
     }
     if let Some(cargo_home) = crate::discovery::effective_cargo_home() {
@@ -140,21 +150,50 @@ pub fn automatic_root_is_maintainable(path: &Path, home: Option<&Path>) -> bool 
         forbidden.push(go_cache);
     }
     // Test harnesses commonly place a synthetic home below the system temp
-    // directory; allow that home namespace while continuing to exclude the
-    // platform temp root itself (which can sit inside a real Windows home).
+    // directory; the whole temp tree is then fixture namespace, so none of
+    // the temp-family entries apply there. In real usage the home is never
+    // under the temp root. (`inside_synthetic_home` previously also required
+    // the candidate to sit under the home; sibling fixture paths outside the
+    // home but inside the temp tree need the same exemption.)
     let temp_root = std::env::temp_dir();
     let canonical_temp_root = fs::canonicalize(&temp_root).unwrap_or(temp_root);
     let canonical_home =
         home.map(|home| fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf()));
-    let inside_synthetic_home = canonical_home
+    let home_is_synthetic = canonical_home
         .as_ref()
-        .is_some_and(|home| home.starts_with(&canonical_temp_root) && canonical.starts_with(home));
-    if !inside_synthetic_home {
-        forbidden.push(canonical_temp_root);
+        .is_some_and(|home| home.starts_with(&canonical_temp_root));
+    if !home_is_synthetic {
+        forbidden.push(canonical_temp_root.clone());
+        if !canonical.starts_with(&canonical_temp_root) {
+            // Conventional shared-temp aliases the platform temp root does
+            // not cover (`/tmp` vs `$TMPDIR=/var/folders/...` on macOS).
+            // A candidate already under the temp root is governed by the
+            // entry above; this adds only genuinely distinct locations.
+            forbidden.extend([
+                PathBuf::from("/tmp"),
+                PathBuf::from("/private/tmp"),
+                PathBuf::from("/var/tmp"),
+            ]);
+        }
     }
+    // System software locations are never durable developer working sets:
+    // Homebrew cellar/taps and toolchain sources observed as admitted
+    // Routine roots (119 unresolvable rust-src manifests from one such
+    // root alone). Harmless on platforms where they do not exist, and no
+    // fixture stages paths here.
+    forbidden.extend([PathBuf::from("/usr/local"), PathBuf::from("/opt")]);
     if forbidden.iter().any(|root| {
-        let root = fs::canonicalize(root).unwrap_or_else(|_| root.clone());
-        canonical == root || canonical.starts_with(root)
+        // Compare both spellings: a missing candidate cannot be
+        // canonicalized, so its raw spelling must match the raw entry
+        // (`/tmp/app` vs canonicalized `/private/tmp`), while an existing
+        // candidate's canonical spelling must match the canonical entry.
+        // Either direction only ever withholds a cleanup, never authorizes
+        // one, so the wider comparison is the fail-safe one.
+        let canonical_root = fs::canonicalize(root).unwrap_or_else(|_| root.clone());
+        canonical == canonical_root
+            || canonical.starts_with(&canonical_root)
+            || canonical == *root
+            || canonical.starts_with(root)
     }) {
         return false;
     }
@@ -553,6 +592,97 @@ mod tests {
                 && !r.path.starts_with(home.path().join(".codex"))
                 && r.path != home.path().join("vendor")
         }));
+    }
+
+    /// Happy-path hygiene: platform caches, the download drop zone, and
+    /// system software locations observed as admitted Routine roots on a
+    /// real macOS machine must never become learned roots, while a durable
+    /// developer location still does. Full inventory keeps every manifest;
+    /// only learning is narrowed, which is fail-safe.
+    #[test]
+    fn system_and_transient_locations_never_create_routine_roots() {
+        let home = tempfile::tempdir().unwrap();
+        let durable = home.path().join("projects/app");
+        let platform_cache = home.path().join(
+            "Library/Caches/Homebrew/cargo_cache/registry/src/index.crates.io-abc123/adr-0.1.0",
+        );
+        let pnpm_store = home.path().join("Library/pnpm/store/v11/pkg");
+        let downloads = home.path().join("Downloads/app");
+        for path in [&durable, &platform_cache, &pnpm_store, &downloads] {
+            fs::create_dir_all(path).unwrap();
+        }
+        let observations = [
+            ProjectObservation {
+                manifest: durable.join("Cargo.toml"),
+                workspace: Some(durable.clone()),
+            },
+            ProjectObservation {
+                manifest: platform_cache.join("Cargo.toml"),
+                workspace: Some(platform_cache.clone()),
+            },
+            ProjectObservation {
+                manifest: pnpm_store.join("Cargo.toml"),
+                workspace: Some(pnpm_store.clone()),
+            },
+            ProjectObservation {
+                manifest: downloads.join("Cargo.toml"),
+                workspace: Some(downloads.clone()),
+            },
+            // Absolute system locations need no fixture directories:
+            // canonicalization falls back to the raw path, which is what
+            // the prefix check compares.
+            ProjectObservation {
+                manifest: PathBuf::from(
+                    "/usr/local/Cellar/rust/1.98.1/lib/rustlib/src/rust/app/Cargo.toml",
+                ),
+                workspace: Some(PathBuf::from(
+                    "/usr/local/Cellar/rust/1.98.1/lib/rustlib/src/rust/app",
+                )),
+            },
+            ProjectObservation {
+                manifest: PathBuf::from("/opt/homebrew/Library/Taps/user/app/Cargo.toml"),
+                workspace: Some(PathBuf::from("/opt/homebrew/Library/Taps/user/app")),
+            },
+        ];
+        let Reconciliation::Publish(state) = reconcile_full(
+            &DiscoveryState::default(),
+            &observations,
+            &[],
+            true,
+            100,
+            30,
+            Some(home.path()),
+        ) else {
+            panic!("complete Full reconciliation should publish")
+        };
+        assert_eq!(
+            state.projects.len(),
+            6,
+            "Full inventory keeps every manifest"
+        );
+        assert_eq!(
+            state.learned_roots.len(),
+            1,
+            "only the durable location is learned: {:?}",
+            state.learned_roots
+        );
+        assert_eq!(
+            state.learned_roots[0].path,
+            fs::canonicalize(home.path().join("projects")).unwrap()
+        );
+    }
+
+    /// Absolute temp aliases are non-maintainable outside fixture namespace.
+    /// `home=None` disables the synthetic-home exemption so the predicate
+    /// can be pinned without staging paths under the system temp root.
+    #[test]
+    fn shared_temp_aliases_are_non_maintainable() {
+        for raw in ["/private/tmp/app", "/tmp/app", "/var/tmp/app"] {
+            assert!(
+                !automatic_root_is_maintainable(Path::new(raw), None),
+                "{raw} must not be a maintenance root"
+            );
+        }
     }
     #[test]
     fn v1_migrates_in_memory_and_newer_schema_is_rejected() {

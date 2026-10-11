@@ -269,7 +269,7 @@ deleted, not a report. If that is ever contentious it is a one-line change at
 
 ## 4. The scan pipeline
 
-`run_scan` — `src/main.rs:733-1046`, **four** parameters: `intent: ScanIntent`,
+`run_scan` — `src/main.rs:734-1134`, **four** parameters: `intent: ScanIntent`,
 `config_path`, `options: RunOptions`, `emit_report: EmitReport`. Since C028 it
 returns `ScanOutcome` (`:727`) — the exit code plus the proven Full generation
 (§7). In order:
@@ -286,25 +286,29 @@ returns `ScanOutcome` (`:727`) — the exit code plus the proven Full generation
 4. `IndicatifRenderer::new(!show)` (`:767`) where `show` = `format == Human`
    **and** `should_show_progress(no_progress)`; `observer.phase(Discovery)`
    (`:771`).
-5. `discovery::discover_manifests_with_attribution(&policy, observer, stats)?`
-   (`:775-781`); `discovery_nanos += elapsed` saturating (`:782-785`);
-   `_resolution_elapsed` is measured at `:812` and **discarded**.
+5. `discovery::discover_manifests_with_attribution(&policy, observer, stats)`
+   (`:780-790`); a discovery error clears the bars before escaping, otherwise
+   the drop would finish them into retained lines. `discovery_nanos += elapsed`
+   saturating (`:799-801`); `_resolution_elapsed` is measured at `:829` and
+   **discarded**.
 6. `uncertainty` extracted by filtering `PermissionDenied | Metadata |
-   Vanished` (`:785-799`); `manifests_found` set (`:800`).
-7. `observer.phase(Resolution)` (`:802`) and
-   `workspace::resolve_workspaces(…)` with `SystemCargoRunner` (`:805-813`),
+   Vanished` (`:802-814`); `manifests_found` set (`:817`).
+7. `observer.phase(Resolution)` (`:819`) and
+   `workspace::resolve_workspaces(…)` with `SystemCargoRunner` (`:822-828`),
    mutating `counters` and `diagnostics`.
-8. State reconciliation (`:815-906`) — §7.
-9. `build_groups(&workspaces)` (`:912`), `phase(Analysis)` (`:913`),
-   `units_total(Analysis, groups.len())` (`:914`).
-10. `clock_cutoff = scan_start.checked_sub(recency)` (`:916-918`).
+8. State reconciliation (`:831-926`) — §7.
+9. `build_groups(&workspaces)` (`:932`), `phase(Analysis)` (`:933`),
+   `units_total(Analysis, groups.len())` (`:934`).
+10. `clock_cutoff` via `checked_sub(recency)` (`:936-946`); a clock-overflow
+    error clears the bars before escaping, like the discovery error in step 5.
 11. `analyze_groups(&workspaces, groups, scan_start, clock_cutoff, recency, …)`
-     (`:920-930`), mutating `counters` and `diagnostics`.
-12. `full_incomplete` (`:931-935`); `domain::ScanReport` built (`:937-956`),
+     (`:948-957`), mutating `counters` and `diagnostics`.
+12. `full_incomplete` (`:959`); `domain::ScanReport` built (`:961-979`),
     carrying `visited_entries` through.
-13. `phase(Reporting)` (`:957`), `finish_and_clear()` (`:958`), **output always
-    emitted** (`:961-983`), then diagnostics to stderr (`:984-1037`) and `--stats`
-    to stderr (`:1041-1058`).
+13. `phase(Reporting)` (`:981`), `finish_and_clear()` (`:982`), deferred state
+    notices (`:984-988`), **output always
+    emitted** (`:990-1010`), then diagnostics to stderr (`:1014-1093`) and `--stats`
+    to stderr (`:1097-1114`).
 
 Cargo locate/metadata failures remain one diagnostic per manifest in the report
 and JSON. Human stderr groups identical bounded Cargo causes, shows at most three
@@ -316,7 +320,7 @@ does not alter scan coverage or cleanup eligibility.
 The TTY progress renderer also reports filesystem discovery diagnostics and
 Cargo workspace-resolution failures as separate totals. It does not render the
 diagnostic text or paths; the counts are populated at the discovery and resolver
-boundaries (`main.rs:778`, `workspace.rs:400-433`, `:575-614`).
+boundaries (`main.rs:791`, `workspace.rs:400-433`, `:575-614`).
 
 **Step 2 deserves the emphasis.** Before M012A a rootless `scan` resolved through
 `policy::resolve` with `full: false`, which meant a configured `scan.root` could
@@ -579,11 +583,11 @@ itself is pinned by
 
 ## 7. State reconciliation
 
-`src/main.rs:818-905` — the only genuinely intricate block, and where a
+`src/main.rs:831-926` — the only genuinely intricate block, and where a
 reviewer should spend the most time.
 
 ```rust
-let loaded_state = discovery_state::load_default();            // :815
+let loaded_state = discovery_state::load_default();            // :832
 if full { … } else if let StateLoad::Loaded(prior) = loaded_state { … }  // :818, :889
 ```
 
@@ -601,39 +605,41 @@ the traversal proved even when the save fails.
 `RecoverableInvalid(_)` → `Some((default, true))` where the `bool` is
 `replacing_invalid`; `UnsupportedNewer` and `Unavailable` → `None`. The `None`
 case is the important safety choice: **state written by a newer binary, or
-simply unreadable, is never overwritten.** The `else` at `:883-887` prints
-`cargo-cleanme: {message}; Full state reconciliation was skipped`, where
+simply unreadable, is never overwritten.** The `else` at `:902-908` records
+a `{message}; Full state reconciliation was skipped` notice (fanned out to
+stderr after the progress clear), where
 `message` is `loaded_state.diagnostic()` (`src/discovery_state.rs:33-49`) with a
 generic fallback.
 
-**The join** (`:822-831`) maps canonicalized member manifest → workspace root;
-**observations** (`:832-841`) apply the same canonicalize-or-raw rule to each
+**The join** (`:844-853`) maps canonicalized member manifest → workspace root;
+**observations** (`:854-863`) apply the same canonicalize-or-raw rule to each
 discovered manifest, so the join succeeds whenever both sides are
 canonicalizable. `cargo metadata` reports absolute real paths and discovery
 manifests come from the walk, so both canonicalize to the same bytes in
 practice. When they do not, the failure is a **safe degradation, not a wrong
 answer**: `workspace: None` → `ResolutionStatus::ManifestObservedUnresolved` and
 the learned-root candidate falls back to `manifest.parent()`
-(`src/discovery_state.rs:129-144`) — a *broader* root, not a narrower one.
+(`src/discovery_state.rs:250-253`) — a *broader* root, not a narrower one.
 
-**`complete`** (`:842-845`) is true unless some diagnostic is `PlatformRoot` +
+**`complete`** (`:864`) is true unless some diagnostic is `PlatformRoot` +
 `Error`, and it gates everything: `reconcile_full` returns
 `NoPublication("Full traversal was incomplete")` before touching anything
-(`src/discovery_state.rs:122-124`). That is the counterpart of `full_incomplete`
-at `:931-935`, which recomputes the *same predicate* for the exit code. Two
+(`src/discovery_state.rs:220-221`). That is the counterpart of `full_incomplete`
+at `:959`, which recomputes the *same predicate* for the exit code. Two
 identical expressions in one file; they could share a helper.
 
-**Publish** (`:857-881`): on `Reconciliation::Publish(next)`, the proven
-generation is stored into `ScanOutcome::full_state` first (`:858-862`), then
-`publish(&next)` succeeding may print a "replaced unusable discovery state"
-notice if `replacing_invalid` (`:863-869`); failing prints
-`cargo-cleanme: discovery state was not saved: {error}` (`:870-874`) and
-**changes nothing else**. `NoPublication(reason)` prints
-`… was not reconciled: {reason}` (`:877-881`).
+**Publish** (`:876-896`): on `Reconciliation::Publish(next)`, the proven
+generation is stored into `ScanOutcome::full_state` first (`:881`), then
+`publish(&next)` succeeding may record a "replaced unusable discovery state"
+notice if `replacing_invalid` (`:884-889`); failing records
+`cargo-cleanme: discovery state was not saved: {error}` (`:891-894`) and
+**changes nothing else**. `NoPublication(reason)` records
+`… was not reconciled: {reason}` (`:897-900`). All three notices wait for the
+progress clear before reaching stderr, so they cannot orphan bar rows.
 
 ### A failed publish no longer changes the exit code
 
-`src/main.rs:1036-1046` is the whole exit decision:
+`src/main.rs:1122-1132` is the whole exit decision:
 
 ```rust
 if full_incomplete {
@@ -646,7 +652,7 @@ Ok(ScanOutcome { code: 0, full_state, publish_ok })
 `if full_incomplete || (full && !state_reconciled) { return Ok(1); }`, so a
 failed state publish returned `Ok(1)`: a good scan report on stdout, one stderr
 line explaining the state was not saved, and a non-zero exit. That contradicted
-`src/discovery_state.rs:338`, directly above the publish implementation, which
+`src/discovery_state.rs:473`, directly above the publish implementation, which
 states the module's own position: *"State is an optimization only: concurrent
 publishers use atomic last-writer-wins replacement."* A read-only or full state
 directory — plausible on a locked-down machine, in a container with a read-only
@@ -655,12 +661,12 @@ non-zero exit for a reason unrelated to what the scan found, and scripts gating
 on status reported a scan failure that did not happen.
 
 The `state_reconciled` flag is gone, so the two branches no longer disagree:
-the Routine branch's byte-identical "state was not saved" warning (`:900-904`)
-and the Full branch's (`:870-874`) now both leave the exit code alone. A genuinely
+the Routine branch's byte-identical "state was not saved" notice (`:920-924`)
+and the Full branch's (`:891-894`) now both leave the exit code alone. A genuinely
 incomplete Full scan still exits `1`, via `full_incomplete`. Since C028 the
 in-memory generation travels with the outcome either way, so `clean --full`
 consumes exactly what the traversal proved (`policy::full_cleanup_roots`,
-`src/policy.rs:330`) instead of re-reading the disk into a possibly older
+`src/policy.rs:402`) instead of re-reading the disk into a possibly older
 generation.
 
 **M012A widened what `full` means, so this fix now protects more.** Rootless

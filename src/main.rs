@@ -771,13 +771,23 @@ fn run_scan(
     let observer: &dyn progress::ProgressObserver = &renderer;
     observer.phase(progress::ScanPhase::Discovery);
 
-    // Manifest-first discovery (no sibling target required).
+    // Manifest-first discovery (no sibling target required). A discovery
+    // failure returns through `?`, which would drop the renderer with live
+    // bars — and `BarState::drop` *finishes* a live bar into a retained line
+    // instead of clearing it — so the bars come down first. (Hidden renderer:
+    // no-op.)
     let discovery_start = std::time::Instant::now();
-    let discovered = cargo_cleanme::discovery::discover_manifests_with_attribution(
+    let discovered = match cargo_cleanme::discovery::discover_manifests_with_attribution(
         &policy,
         observer,
         options.stats,
-    )?;
+    ) {
+        Ok(discovered) => discovered,
+        Err(error) => {
+            renderer.finish_and_clear();
+            return Err(error);
+        }
+    };
     observer.discovery_issues(discovered.diagnostics.len() as u64);
     let discovery_elapsed = discovery_start.elapsed();
     let full_traversal_complete = discovered.coverage_complete
@@ -822,6 +832,11 @@ fn run_scan(
     let loaded_state = cargo_cleanme::discovery_state::load_default();
     let mut full_state: Option<cargo_cleanme::discovery_state::DiscoveryState> = None;
     let mut publish_ok = true;
+    // State notices are collected here and fanned out to stderr only after
+    // `finish_and_clear`: a raw `eprintln!` while the bars are live bypasses
+    // the coordinated draw target and corrupts the frame, orphaning bar lines
+    // that survive the clear as stray terminal rows.
+    let mut pending_notices: Vec<String> = Vec::new();
     if full {
         let selected = cargo_cleanme::discovery_state::full_reconciliation_prior(&loaded_state);
         if let Some((prior, replacing_invalid)) = selected {
@@ -867,20 +882,21 @@ fn run_scan(
                     match cargo_cleanme::discovery_state::publish(&next) {
                         Ok(()) => {
                             if replacing_invalid {
-                                eprintln!(
-                                    "cargo-cleanme: replaced unusable discovery state after successful Full reconciliation"
+                                pending_notices.push(
+                                    "replaced unusable discovery state after successful Full reconciliation"
+                                        .into(),
                                 );
                             }
                         }
                         Err(error) => {
                             publish_ok = false;
-                            eprintln!("cargo-cleanme: discovery state was not saved: {error}")
+                            pending_notices.push(format!("discovery state was not saved: {error}"));
                         }
                     }
                 }
                 cargo_cleanme::discovery_state::Reconciliation::NoPublication(reason) => {
                     publish_ok = false;
-                    eprintln!("cargo-cleanme: discovery state was not reconciled: {reason}")
+                    pending_notices.push(format!("discovery state was not reconciled: {reason}"));
                 }
             }
         } else {
@@ -888,7 +904,7 @@ fn run_scan(
             let message = loaded_state
                 .diagnostic()
                 .unwrap_or_else(|| "discovery state cannot be safely read".into());
-            eprintln!("cargo-cleanme: {message}; Full state reconciliation was skipped");
+            pending_notices.push(format!("{message}; Full state reconciliation was skipped"));
         }
     } else if let StateLoad::Loaded(prior) = loaded_state {
         let now = cargo_cleanme::discovery_state::now_seconds();
@@ -904,7 +920,7 @@ fn run_scan(
         if !observed.is_empty()
             && let Err(error) = cargo_cleanme::discovery_state::publish(&next)
         {
-            eprintln!("cargo-cleanme: discovery state was not saved: {error}");
+            pending_notices.push(format!("discovery state was not saved: {error}"));
         }
     }
 
@@ -917,9 +933,17 @@ fn run_scan(
     observer.phase(progress::ScanPhase::Analysis);
     observer.units_total(progress::ScanPhase::Analysis, groups.len() as u64);
 
-    let clock_cutoff = scan_start
-        .checked_sub(recency)
-        .ok_or_else(|| AppError::Config("recency window exceeds system time range".into()))?;
+    let clock_cutoff = match scan_start.checked_sub(recency) {
+        Some(cutoff) => cutoff,
+        // Same drop-finishes-bar hazard as the discovery error above: the
+        // bars come down before the error escapes.
+        None => {
+            renderer.finish_and_clear();
+            return Err(AppError::Config(
+                "recency window exceeds system time range".into(),
+            ));
+        }
+    };
 
     let physical = cargo_cleanme::workspace::analyze_groups(
         &workspaces,
@@ -956,6 +980,12 @@ fn run_scan(
 
     observer.phase(progress::ScanPhase::Reporting);
     renderer.finish_and_clear();
+
+    // Deferred state notices: same stderr lines as before, but emitted only
+    // once the coordinated frame is down, so they cannot orphan bar rows.
+    for notice in &pending_notices {
+        eprintln!("cargo-cleanme: {notice}");
+    }
 
     // M005A total is an inventory estimate, never recovered bytes.
     if emit_report == EmitReport::No {

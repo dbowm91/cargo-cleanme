@@ -26,7 +26,7 @@ pub struct ProcessOutput {
     pub stderr: Vec<u8>,
 }
 
-pub trait CargoRunner {
+pub trait CargoRunner: Sync {
     fn run(&self, cwd: &Path, args: &[std::ffi::OsString]) -> io::Result<ProcessOutput>;
 }
 
@@ -333,13 +333,20 @@ fn canonical_manifest_key(path: &Path) -> PathBuf {
 /// Returns workspaces in deterministic order plus diagnostics. Cache key is the
 /// canonical workspace root manifest from locate-project.
 ///
-/// C002 §7.6: after the first successful metadata resolution for a workspace,
-/// every member manifest path returned by that authoritative metadata is
-/// registered as mapping to the workspace. Later discovered manifests known
-/// from that metadata require neither another locate nor another metadata
-/// process. For an N-member workspace discovered in arbitrary order, expected
-/// successful Cargo calls are one locate and one metadata. Membership is never
-/// inferred from path ancestry or hand-parsed TOML.
+/// Resolution runs in bulk phases: every manifest is located (bounded
+/// parallelism), manifests are grouped by located root in first-seen order,
+/// then one metadata runs per group (bounded parallelism), and a sequential
+/// emulation pass replays manifest order over the precomputed results. The
+/// emulation keeps the historical per-manifest semantics exactly: a manifest
+/// already listed by earlier metadata is a dedup hit with no new metadata, a
+/// repeat trigger of a failed root re-accounts metadata like a fresh spawn,
+/// and diagnostics, coverage, workspace order, and the unresolved ledger are
+/// identical to sequential evaluation. Only `cargo_locate_calls` /
+/// `cargo_locate_nanos` grow (one locate per manifest instead of one per
+/// unresolved-unknown manifest), because the sequential fast path that
+/// skipped locates serializes the whole phase on member order. Metadata stays
+/// one spawn per unique root; failed roots re-account without re-spawning.
+/// Membership is never inferred from path ancestry or hand-parsed TOML.
 pub fn resolve_workspaces(
     manifests: &[PathBuf],
     runner: &dyn CargoRunner,
@@ -350,10 +357,199 @@ pub fn resolve_workspaces(
     resolve_workspaces_with_coverage(manifests, runner, counters, diagnostics, observer).workspaces
 }
 
+/// Bound on concurrent Cargo resolution spawns. Cargo invocations are
+/// read-only here (`locate-project`, `metadata --offline --locked --no-deps`)
+/// and share no mutable state, but each spawn pays process-startup I/O, so
+/// the pool stays small. Same bound as the proof-refresh pool
+/// (`PROOF_REFRESH_CONCURRENCY_CAP` in `cleanup.rs`); keep the two aligned.
+const RESOLUTION_CONCURRENCY_CAP: usize = 4;
+
+fn resolution_concurrency() -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, usize::from)
+        .clamp(1, RESOLUTION_CONCURRENCY_CAP)
+}
+
+/// Bounded parallel map preserving input order.
+///
+/// Work items run in input-order chunks of [`resolution_concurrency`];
+/// single-item chunks skip thread spawning. A panicking worker degrades its
+/// slot to `None` and the caller fails that item closed — never a panic, a
+/// lost item, or an out-of-order result.
+fn parallel_map<T: Send>(len: usize, work: &(dyn Fn(usize) -> T + Sync)) -> Vec<Option<T>> {
+    let concurrency = resolution_concurrency();
+    let mut ordered = Vec::with_capacity(len);
+    for batch_start in (0..len).step_by(concurrency) {
+        let batch_end = (batch_start + concurrency).min(len);
+        if batch_end - batch_start == 1 {
+            ordered.push(Some(work(batch_start)));
+        } else {
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = (batch_start..batch_end)
+                    .map(|index| scope.spawn(move || work(index)))
+                    .collect();
+                for handle in handles {
+                    ordered.push(handle.join().ok());
+                }
+            });
+        }
+    }
+    ordered
+}
+
+/// One `cargo locate-project` spawn, classified without touching shared
+/// resolution state. Workers are total: every transport, Cargo-reported, and
+/// parse outcome maps to a variant the sequential emulation fails closed on.
+enum LocateOutcome {
+    Transport {
+        error: String,
+        nanos: u64,
+    },
+    Failed {
+        reason: String,
+        nanos: u64,
+    },
+    Unparseable {
+        error: String,
+        nanos: u64,
+    },
+    Located {
+        root_manifest: PathBuf,
+        canonical_key: PathBuf,
+        nanos: u64,
+    },
+    /// A parallel worker slot was lost; fail-closed as a spawn failure with
+    /// a deterministic message rather than a panic or a lost manifest.
+    WorkerFailed,
+}
+
+/// Measured wall time of one classified locate outcome, if it consumed a
+/// subprocess. A lost worker slot has no timing to report.
+fn locate_nanos(outcome: &LocateOutcome) -> Option<u64> {
+    match outcome {
+        LocateOutcome::Transport { nanos, .. }
+        | LocateOutcome::Failed { nanos, .. }
+        | LocateOutcome::Unparseable { nanos, .. }
+        | LocateOutcome::Located { nanos, .. } => Some(*nanos),
+        LocateOutcome::WorkerFailed => None,
+    }
+}
+
+fn locate_one(manifest: &Path, runner: &dyn CargoRunner) -> LocateOutcome {
+    let locate_args: Vec<std::ffi::OsString> = ["locate-project", "--workspace", "--manifest-path"]
+        .into_iter()
+        .map(Into::into)
+        // Anchored for Cargo, not for the diagnostic below: the recorded
+        // path keeps the spelling the user gave.
+        .chain(std::iter::once(
+            manifest_path_for_cargo(manifest).into_os_string(),
+        ))
+        .collect();
+    let cwd = manifest.parent().unwrap_or(Path::new("/"));
+    let locate_start = std::time::Instant::now();
+    let elapsed = || crate::domain::elapsed_nanos(locate_start.elapsed());
+    let locate_out = match runner.run(cwd, &locate_args) {
+        Ok(output) => output,
+        Err(e) => {
+            return LocateOutcome::Transport {
+                error: e.to_string(),
+                nanos: elapsed(),
+            };
+        }
+    };
+    let nanos = elapsed();
+    if !locate_out.success {
+        return LocateOutcome::Failed {
+            reason: cargo_failure_reason(&locate_out.stderr),
+            nanos,
+        };
+    }
+    match serde_json::from_slice::<LocateOutput>(&locate_out.stdout) {
+        Ok(locate) => {
+            let root_manifest = PathBuf::from(&locate.root);
+            let canonical_key =
+                canonical_or_absolute(&root_manifest).unwrap_or(root_manifest.clone());
+            LocateOutcome::Located {
+                root_manifest,
+                canonical_key,
+                nanos,
+            }
+        }
+        Err(e) => LocateOutcome::Unparseable {
+            error: e.to_string(),
+            nanos,
+        },
+    }
+}
+
+/// One `cargo metadata` spawn for a located group. The worker only spawns;
+/// parsing, member validation, diagnostics, and counters stay in the
+/// sequential emulation so their order matches sequential evaluation.
+struct MetadataSpawn {
+    result: Result<ProcessOutput, String>,
+    nanos: u64,
+}
+
+fn metadata_one(root_manifest: &Path, runner: &dyn CargoRunner) -> MetadataSpawn {
+    let meta_args: Vec<std::ffi::OsString> = [
+        "metadata",
+        "--offline",
+        "--locked",
+        "--no-deps",
+        "--format-version",
+        "1",
+        "--manifest-path",
+    ]
+    .into_iter()
+    .map(Into::into)
+    .chain(std::iter::once(root_manifest.as_os_str().to_owned()))
+    .collect();
+    let cwd = root_manifest.parent().unwrap_or(Path::new("/"));
+    let meta_start = std::time::Instant::now();
+    let elapsed = || crate::domain::elapsed_nanos(meta_start.elapsed());
+    match runner.run(cwd, &meta_args) {
+        Ok(output) => MetadataSpawn {
+            result: Ok(output),
+            nanos: elapsed(),
+        },
+        Err(e) => MetadataSpawn {
+            result: Err(e.to_string()),
+            nanos: elapsed(),
+        },
+    }
+}
+
+/// A metadata outcome a repeat trigger re-accounts without re-spawning.
+///
+/// The sequential loop re-ran metadata for every manifest locating to a root
+/// whose metadata had failed (a failed root never enters the caches). The
+/// message here is path-independent — the manifest path travels in the
+/// diagnostic's `path` field, never in the text — so one recorded outcome
+/// replays for every later trigger with identical accounting. Whether the
+/// outcome counts as a Cargo failure is part of the template: transport,
+/// Cargo-reported, and parse failures do, while member-identity and
+/// relative-root diagnostics do not (matching the sequential branches).
+struct MetadataFailure {
+    message: String,
+    counts_as_failure: bool,
+}
+
+/// Manifests locating to one workspace root, in input order. One metadata
+/// spawn per group is the same spawn set the sequential loop issued (every
+/// trigger ran metadata), only issued up front instead of interleaved.
+struct ResolutionGroup {
+    root_manifest: PathBuf,
+}
+
 /// Resolve discovered manifests while retaining proof of which manifests were
 /// authoritatively represented by successful Cargo workspace metadata.
 /// Read-only scan callers can continue using [`resolve_workspaces`], whose
 /// partial-result behavior is intentionally unchanged.
+///
+/// The implementation is bulk-parallel but sequentially faithful (see
+/// [`resolve_workspaces`]): locate runs bounded-parallel over all manifests,
+/// metadata runs bounded-parallel over located groups, and a manifest-order
+/// emulation replays per-manifest decisions over the precomputed results.
 pub fn resolve_workspaces_with_coverage(
     manifests: &[PathBuf],
     runner: &dyn CargoRunner,
@@ -367,10 +563,86 @@ pub fn resolve_workspaces_with_coverage(
     // Authoritative member -> root mapping seeded from Cargo metadata.
     let mut member_to_root: HashMap<PathBuf, PathBuf> = HashMap::new();
     let mut authoritative_coverage: HashSet<PathBuf> = HashSet::new();
-    for manifest in manifests {
+    // Bulk phase 1 (parallel): locate every manifest. Each spawn is
+    // independent — a locate result never depends on another manifest's —
+    // so the whole phase runs in input-order chunks of worker threads and
+    // joins in order. A lost worker slot degrades to a spawn failure.
+    let locate_spawns = parallel_map(manifests.len(), &|index| {
+        locate_one(&manifests[index], runner)
+    });
+    // Bulk phase 2 (sequential, no subprocess): collect locate outcomes in
+    // input order and group manifests by located workspace root, first-seen
+    // first. Group order is the order the old sequential loop would have
+    // discovered workspaces in.
+    let mut locate_outcomes: Vec<LocateOutcome> = Vec::with_capacity(manifests.len());
+    let mut group_index: HashMap<PathBuf, usize> = HashMap::new();
+    let mut groups: Vec<ResolutionGroup> = Vec::new();
+    let mut group_of: Vec<Option<usize>> = vec![None; manifests.len()];
+    for (index, spawn) in locate_spawns.into_iter().enumerate() {
+        let outcome = spawn.unwrap_or(LocateOutcome::WorkerFailed);
+        if let LocateOutcome::Located {
+            root_manifest,
+            canonical_key,
+            ..
+        } = &outcome
+        {
+            let group = match group_index.get(canonical_key) {
+                Some(&group) => group,
+                None => {
+                    let group = groups.len();
+                    group_index.insert(canonical_key.clone(), group);
+                    groups.push(ResolutionGroup {
+                        root_manifest: root_manifest.clone(),
+                    });
+                    group
+                }
+            };
+            group_of[index] = Some(group);
+        }
+        locate_outcomes.push(outcome);
+    }
+    // Bulk phase 3 (parallel): one metadata spawn per located group. Every
+    // group has a trigger (the first manifest locating to it), and the old
+    // loop ran metadata for every trigger, so this is the same spawn set —
+    // issued up front instead of interleaved with locates.
+    let metadata_spawns = parallel_map(groups.len(), &|group| {
+        metadata_one(&groups[group].root_manifest, runner)
+    });
+    let metadata_spawns: Vec<MetadataSpawn> = metadata_spawns
+        .into_iter()
+        .map(|spawn| {
+            spawn.unwrap_or(MetadataSpawn {
+                result: Err("parallel metadata worker failed".into()),
+                nanos: 0,
+            })
+        })
+        .collect();
+    // Bulk phase 4 (sequential emulation): replay the manifest loop over the
+    // precomputed results. Every branch below matches the old sequential
+    // loop decision-for-decision — same diagnostics in the same order, same
+    // coverage sets, same workspace order — except that locates were already
+    // issued for all manifests, so the fast path saves metadata but not the
+    // locate itself (see [`resolve_workspaces`]).
+    //
+    // Repeat triggers of a failed root reuse the recorded outcome: the old
+    // loop re-spawned metadata here (a failed root never enters the caches),
+    // so accounting matches a fresh spawn while one pass cannot fork the
+    // ledger on concurrent mutation. Repeat triggers of a successful root
+    // never reach the metadata code — the caches below divert them first.
+    let mut failed_templates: HashMap<PathBuf, (MetadataFailure, u64)> = HashMap::new();
+    for (index, manifest) in manifests.iter().enumerate() {
+        // Every manifest located exactly once up front, so the spawn is
+        // accounted here — before any fast path. A fast-pathed manifest
+        // still ran its locate (its outcome is simply unneeded); only
+        // failures observed by the old loop are reported.
+        counters.cargo_locate_calls += 1;
+        if let Some(nanos) = locate_nanos(&locate_outcomes[index]) {
+            counters.cargo_locate_nanos = counters.cargo_locate_nanos.saturating_add(nanos);
+        }
         // C002 fast path: if this manifest was listed as a member (or root)
         // by an earlier successful metadata response, reuse that workspace
-        // without any Cargo subprocess.
+        // without another metadata process. (The locate above already ran;
+        // only the metadata is still saved.)
         let manifest_key = canonical_manifest_key(manifest);
         if let Some(root_key) = member_to_root.get(&manifest_key)
             && cache.contains_key(root_key)
@@ -379,95 +651,106 @@ pub fn resolve_workspaces_with_coverage(
             authoritative_coverage.insert(manifest_key);
             continue;
         }
-        let locate_args: Vec<std::ffi::OsString> =
-            ["locate-project", "--workspace", "--manifest-path"]
-                .into_iter()
-                .map(Into::into)
-                // Anchored for Cargo, not for the diagnostic below: the recorded
-                // path keeps the spelling the user gave.
-                .chain(std::iter::once(
-                    manifest_path_for_cargo(manifest).into_os_string(),
-                ))
-                .collect();
-        counters.cargo_locate_calls += 1;
-        let locate_start = std::time::Instant::now();
-        let cwd = manifest.parent().unwrap_or(Path::new("/"));
-        let locate_out = match runner.run(cwd, &locate_args) {
-            Ok(o) => o,
-            Err(e) => {
-                counters.cargo_locate_nanos = counters
-                    .cargo_locate_nanos
-                    .saturating_add(crate::domain::elapsed_nanos(locate_start.elapsed()));
+        let outcome = &locate_outcomes[index];
+        let (root_manifest, canonical_key) = match outcome {
+            LocateOutcome::Transport { error, .. } => {
                 counters.cargo_failures += 1;
                 observer.cargo_failure();
                 diagnostics.push(ScanDiagnostic {
                     severity: DiagnosticSeverity::Warning,
                     category: DiagnosticCategory::CandidateUncertain,
                     path: Some(manifest.clone()),
-                    message: format!("cargo locate-project could not start: {e}"),
+                    message: format!("cargo locate-project could not start: {error}"),
                 });
                 continue;
             }
-        };
-        counters.cargo_locate_nanos = counters
-            .cargo_locate_nanos
-            .saturating_add(crate::domain::elapsed_nanos(locate_start.elapsed()));
-        if !locate_out.success {
-            counters.cargo_failures += 1;
-            observer.cargo_failure();
-            diagnostics.push(ScanDiagnostic {
-                severity: DiagnosticSeverity::Warning,
-                category: DiagnosticCategory::CandidateUncertain,
-                path: Some(manifest.clone()),
-                message: format!(
-                    "cargo locate-project failed: {}",
-                    cargo_failure_reason(&locate_out.stderr)
-                ),
-            });
-            continue;
-        }
-        let locate: LocateOutput = match serde_json::from_slice(&locate_out.stdout) {
-            Ok(v) => v,
-            Err(e) => {
+            LocateOutcome::Failed { reason, .. } => {
                 counters.cargo_failures += 1;
                 observer.cargo_failure();
                 diagnostics.push(ScanDiagnostic {
                     severity: DiagnosticSeverity::Warning,
                     category: DiagnosticCategory::CandidateUncertain,
                     path: Some(manifest.clone()),
-                    message: format!("cannot parse cargo locate-project output: {e}"),
+                    message: format!("cargo locate-project failed: {reason}"),
                 });
                 continue;
             }
+            LocateOutcome::Unparseable { error, .. } => {
+                counters.cargo_failures += 1;
+                observer.cargo_failure();
+                diagnostics.push(ScanDiagnostic {
+                    severity: DiagnosticSeverity::Warning,
+                    category: DiagnosticCategory::CandidateUncertain,
+                    path: Some(manifest.clone()),
+                    message: format!("cannot parse cargo locate-project output: {error}"),
+                });
+                continue;
+            }
+            LocateOutcome::WorkerFailed => {
+                counters.cargo_failures += 1;
+                observer.cargo_failure();
+                diagnostics.push(ScanDiagnostic {
+                    severity: DiagnosticSeverity::Warning,
+                    category: DiagnosticCategory::CandidateUncertain,
+                    path: Some(manifest.clone()),
+                    message: "cargo locate-project could not start: parallel locate worker failed"
+                        .into(),
+                });
+                continue;
+            }
+            LocateOutcome::Located {
+                root_manifest,
+                canonical_key,
+                ..
+            } => (root_manifest, canonical_key),
         };
-        let root_manifest = PathBuf::from(&locate.root);
-        let canonical_key = canonical_or_absolute(&root_manifest).unwrap_or(root_manifest.clone());
-        if locate_cache.contains_key(&canonical_key) {
+        if locate_cache.contains_key(canonical_key) {
             counters.deduped_workspace_hits += 1;
             // Seed this manifest as a known member for future lookups.
             // `manifest_key` *is* `canonical_manifest_key(manifest)`, already
             // computed above; re-canonicalizing it is a syscall for nothing.
             authoritative_coverage.insert(manifest_key.clone());
-            member_to_root.insert(manifest_key, canonical_key);
+            member_to_root.insert(manifest_key, canonical_key.clone());
             continue;
         }
-        if cache.contains_key(&canonical_key) {
+        if cache.contains_key(canonical_key) {
             counters.deduped_workspace_hits += 1;
-            locate_cache.insert(canonical_key.clone(), root_manifest);
+            locate_cache.insert(canonical_key.clone(), root_manifest.clone());
             authoritative_coverage.insert(manifest_key.clone());
-            member_to_root.insert(manifest_key, canonical_key);
+            member_to_root.insert(manifest_key, canonical_key.clone());
             continue;
         }
-        // Metadata once per workspace.
-        if let Some(ws) = resolve_one_workspace_cached(
-            &root_manifest,
-            &canonical_key,
-            runner,
+        // Metadata once per workspace root; repeats re-account from the memo.
+        let group_idx = group_of[index].expect("located manifest belongs to exactly one group");
+        if let Some((template, memo_nanos)) = failed_templates.get(canonical_key) {
+            counters.cargo_metadata_calls += 1;
+            counters.cargo_metadata_nanos =
+                counters.cargo_metadata_nanos.saturating_add(*memo_nanos);
+            if template.counts_as_failure {
+                counters.cargo_failures += 1;
+                observer.cargo_failure();
+            }
+            diagnostics.push(ScanDiagnostic {
+                severity: DiagnosticSeverity::Warning,
+                category: DiagnosticCategory::CandidateUncertain,
+                path: Some(manifest.clone()),
+                message: template.message.clone(),
+            });
+            continue;
+        }
+        counters.cargo_metadata_calls += 1;
+        counters.cargo_metadata_nanos = counters
+            .cargo_metadata_nanos
+            .saturating_add(metadata_spawns[group_idx].nanos);
+        let (workspace, failure) = complete_workspace_from_metadata(
+            &metadata_spawns[group_idx].result,
+            canonical_key,
+            manifest,
             counters,
             diagnostics,
             observer,
-            manifest,
-        ) {
+        );
+        if let Some(ws) = workspace {
             counters.unique_workspaces += 1;
             observer.workspaces_resolved(1);
             ordered_keys.push(canonical_key.clone());
@@ -486,7 +769,12 @@ pub fn resolve_workspaces_with_coverage(
                 .entry(root_key)
                 .or_insert(canonical_key.clone());
             cache.insert(canonical_key.clone(), ws);
-            locate_cache.insert(canonical_key, root_manifest);
+            locate_cache.insert(canonical_key.clone(), root_manifest.clone());
+        } else if let Some(template) = failure {
+            failed_templates.insert(
+                canonical_key.clone(),
+                (template, metadata_spawns[group_idx].nanos),
+            );
         }
     }
     let workspaces: Vec<_> = ordered_keys
@@ -545,75 +833,102 @@ fn resolve_one_workspace_cached(
     observer: &dyn ProgressObserver,
     original_manifest: &Path,
 ) -> Option<ResolvedWorkspace> {
-    let meta_args: Vec<std::ffi::OsString> = [
-        "metadata",
-        "--offline",
-        "--locked",
-        "--no-deps",
-        "--format-version",
-        "1",
-        "--manifest-path",
-    ]
-    .into_iter()
-    .map(Into::into)
-    .chain(std::iter::once(root_manifest.as_os_str().to_owned()))
-    .collect();
-    let cwd = root_manifest.parent().unwrap_or(Path::new("/"));
+    let spawn = metadata_one(root_manifest, runner);
     counters.cargo_metadata_calls += 1;
-    let meta_start = std::time::Instant::now();
-    let meta_out = match runner.run(cwd, &meta_args) {
-        Ok(o) => {
-            counters.cargo_metadata_nanos = counters
-                .cargo_metadata_nanos
-                .saturating_add(crate::domain::elapsed_nanos(meta_start.elapsed()));
-            o
-        }
-        Err(e) => {
-            counters.cargo_metadata_nanos = counters
-                .cargo_metadata_nanos
-                .saturating_add(crate::domain::elapsed_nanos(meta_start.elapsed()));
+    counters.cargo_metadata_nanos = counters.cargo_metadata_nanos.saturating_add(spawn.nanos);
+    let (workspace, _) = complete_workspace_from_metadata(
+        &spawn.result,
+        canonical_key,
+        original_manifest,
+        counters,
+        diagnostics,
+        observer,
+    );
+    workspace
+}
+
+/// Finish one workspace resolution from an already-spawned `cargo metadata`
+/// result.
+///
+/// This is the post-spawn half of [`resolve_one_workspace_cached`], shared by
+/// the single-workspace refresh path and the bulk emulation: identical
+/// parsing, member validation, diagnostics, and failure accounting for the
+/// same output. Returns the workspace and, on failure, the path-independent
+/// failure record a repeat trigger re-accounts (see [`MetadataFailure`]).
+/// Diagnostic paths name `original_manifest`, so the same record replays for
+/// any later trigger of the same root.
+#[allow(clippy::too_many_arguments)]
+fn complete_workspace_from_metadata(
+    result: &Result<ProcessOutput, String>,
+    canonical_key: &Path,
+    original_manifest: &Path,
+    counters: &mut ScanCounters,
+    diagnostics: &mut Vec<ScanDiagnostic>,
+    observer: &dyn ProgressObserver,
+) -> (Option<ResolvedWorkspace>, Option<MetadataFailure>) {
+    let meta_out = match result {
+        Ok(output) => output,
+        Err(error) => {
+            let message = format!("cargo metadata could not start: {error}");
             counters.cargo_failures += 1;
             observer.cargo_failure();
             diagnostics.push(ScanDiagnostic {
                 severity: DiagnosticSeverity::Warning,
                 category: DiagnosticCategory::CandidateUncertain,
                 path: Some(original_manifest.to_path_buf()),
-                message: format!("cargo metadata could not start: {e}"),
+                message: message.clone(),
             });
-            return None;
+            return (
+                None,
+                Some(MetadataFailure {
+                    message,
+                    counts_as_failure: true,
+                }),
+            );
         }
     };
-    // Count wall time for failed metadata responses as well.
-    // Success path already accumulated above; failure `success == false`
-    // still consumed a subprocess, so timing is already recorded.
     if !meta_out.success {
+        let message = format!(
+            "cargo metadata failed: {}",
+            cargo_failure_reason(&meta_out.stderr)
+        );
         counters.cargo_failures += 1;
         observer.cargo_failure();
         diagnostics.push(ScanDiagnostic {
             severity: DiagnosticSeverity::Warning,
             category: DiagnosticCategory::CandidateUncertain,
             path: Some(original_manifest.to_path_buf()),
-            message: format!(
-                "cargo metadata failed: {}",
-                cargo_failure_reason(&meta_out.stderr)
-            ),
+            message: message.clone(),
         });
-        return None;
+        return (
+            None,
+            Some(MetadataFailure {
+                message,
+                counts_as_failure: true,
+            }),
+        );
     }
     let stdout_str = String::from_utf8_lossy(&meta_out.stdout);
     let had_build = stdout_str.contains("build_directory");
     let raw: RawMetadata = match serde_json::from_slice(&meta_out.stdout) {
         Ok(v) => v,
         Err(e) => {
+            let message = format!("cannot parse cargo metadata output: {e}");
             counters.cargo_failures += 1;
             observer.cargo_failure();
             diagnostics.push(ScanDiagnostic {
                 severity: DiagnosticSeverity::Warning,
                 category: DiagnosticCategory::CandidateUncertain,
                 path: Some(original_manifest.to_path_buf()),
-                message: format!("cannot parse cargo metadata output: {e}"),
+                message: message.clone(),
             });
-            return None;
+            return (
+                None,
+                Some(MetadataFailure {
+                    message,
+                    counts_as_failure: true,
+                }),
+            );
         }
     };
     let build_opt = raw.build_directory.as_deref();
@@ -625,14 +940,20 @@ fn resolve_one_workspace_cached(
     );
     let workspace_root = match canonical_or_absolute(Path::new(&raw.workspace_root)) {
         Ok(p) => p,
-        Err(msg) => {
+        Err(message) => {
             diagnostics.push(ScanDiagnostic {
                 severity: DiagnosticSeverity::Warning,
                 category: DiagnosticCategory::CandidateUncertain,
                 path: Some(original_manifest.to_path_buf()),
-                message: msg,
+                message: message.clone(),
             });
-            return None;
+            return (
+                None,
+                Some(MetadataFailure {
+                    message,
+                    counts_as_failure: false,
+                }),
+            );
         }
     };
     let root_manifest_canonical = canonical_key.to_path_buf();
@@ -644,16 +965,23 @@ fn resolve_one_workspace_cached(
             .and_then(|p| fs::canonicalize(p).ok())
             .unwrap_or_else(|| mp.clone());
         if !source_root.is_absolute() || !source_root.is_dir() {
+            let message = format!(
+                "cannot establish physical workspace member source root for {}",
+                mp.display()
+            );
             diagnostics.push(ScanDiagnostic {
                 severity: DiagnosticSeverity::Warning,
                 category: DiagnosticCategory::CandidateUncertain,
                 path: Some(original_manifest.to_path_buf()),
-                message: format!(
-                    "cannot establish physical workspace member source root for {}",
-                    mp.display()
-                ),
+                message: message.clone(),
             });
-            return None;
+            return (
+                None,
+                Some(MetadataFailure {
+                    message,
+                    counts_as_failure: false,
+                }),
+            );
         }
         members.push(WorkspaceMember {
             manifest_path: mp,
@@ -693,18 +1021,21 @@ fn resolve_one_workspace_cached(
     packages.sort();
     packages.dedup();
 
-    Some(ResolvedWorkspace {
-        id: WorkspaceId(workspace_root.clone()),
-        root: workspace_root,
-        root_manifest: root_manifest_canonical,
-        members,
-        packages,
-        output: OutputSet {
-            target: target_root,
-            build: build_root,
-        },
-        capability,
-    })
+    (
+        Some(ResolvedWorkspace {
+            id: WorkspaceId(workspace_root.clone()),
+            root: workspace_root,
+            root_manifest: root_manifest_canonical,
+            members,
+            packages,
+            output: OutputSet {
+                target: target_root,
+                build: build_root,
+            },
+            capability,
+        }),
+        None,
+    )
 }
 
 // Silence dead-code for the single-workspace helper used by tests/future reuse.
@@ -2076,12 +2407,14 @@ mod tests {
                 .load(std::sync::atomic::Ordering::Relaxed),
             1
         );
-        // C002 §7.6: N-member workspace requires exactly one locate + one
-        // metadata after first authoritative resolution.
+        // Bulk resolution issues one locate per manifest up front (the
+        // sequential fast path that skipped locates serialized the whole
+        // phase), but metadata stays one call per workspace root and the
+        // member cache still records the dedup hit without new metadata.
         assert_eq!(counters.cargo_metadata_calls, 1);
         assert_eq!(
-            counters.cargo_locate_calls, 1,
-            "member cache must eliminate redundant locates"
+            counters.cargo_locate_calls, 2,
+            "every manifest locates once; members share one metadata"
         );
         assert_eq!(counters.deduped_workspace_hits, 1);
     }
@@ -2595,9 +2928,9 @@ mod tests {
     }
 
     #[test]
-    fn n_member_workspace_requires_one_locate_one_metadata_regardless_of_order() {
-        // Discovery order with a member before the root still => one locate +
-        // one metadata (C002 §9).
+    fn n_member_workspace_requires_one_metadata_regardless_of_order() {
+        // Discovery order with a member before the root still => one metadata
+        // for the shared root (bulk resolution locates every manifest).
         for order in [false, true] {
             let d = tempfile::tempdir().unwrap();
             let ws_root = d.path().join("ws");
@@ -2635,8 +2968,253 @@ mod tests {
             let ws = resolve_workspaces(&manifests, &runner, &mut counters, &mut diags, &noop);
             assert_eq!(ws.len(), 1, "order={order}");
             assert_eq!(counters.cargo_metadata_calls, 1, "order={order}");
-            assert_eq!(counters.cargo_locate_calls, 1, "order={order}");
+            // Bulk resolution locates every manifest (4) while metadata stays
+            // one call for the shared root, in either discovery order.
+            assert_eq!(counters.cargo_locate_calls, 4, "order={order}");
         }
+    }
+
+    /// A root whose metadata fails keeps sequential accounting without
+    /// sequential spawns: every manifest locating to it re-accounts one
+    /// metadata call, one failure, and its own diagnostic, while Cargo runs
+    /// only once. Bulk issue must not collapse distinct participants into one
+    /// ledger row, and must not re-spawn per participant either.
+    #[test]
+    fn shared_failing_root_reaccounts_metadata_per_manifest_from_one_spawn() {
+        let d = tempfile::tempdir().unwrap();
+        let fail_root = d.path().join("failing");
+        std::fs::create_dir_all(&fail_root).unwrap();
+        let m1 = fail_root.join("member-a/Cargo.toml");
+        let m2 = fail_root.join("member-b/Cargo.toml");
+        for m in [&m1, &m2] {
+            std::fs::create_dir_all(m.parent().unwrap()).unwrap();
+            std::fs::write(m, "").unwrap();
+        }
+        struct CountingFailRunner {
+            root: PathBuf,
+            metadata_runs: std::sync::atomic::AtomicU64,
+        }
+        impl CargoRunner for CountingFailRunner {
+            fn run(&self, _cwd: &Path, args: &[std::ffi::OsString]) -> io::Result<ProcessOutput> {
+                if args.first().is_some_and(|a| a == "locate-project") {
+                    let json = serde_json::json!({"root": self.root.join("Cargo.toml")});
+                    return Ok(ProcessOutput {
+                        success: true,
+                        code: Some(0),
+                        stdout: serde_json::to_vec(&json).unwrap(),
+                        stderr: Vec::new(),
+                    });
+                }
+                self.metadata_runs
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(ProcessOutput {
+                    success: false,
+                    code: Some(1),
+                    stdout: Vec::new(),
+                    stderr: b"metadata failed".to_vec(),
+                })
+            }
+        }
+        let runner = CountingFailRunner {
+            root: fail_root,
+            metadata_runs: std::sync::atomic::AtomicU64::new(0),
+        };
+        let mut counters = ScanCounters::default();
+        let mut diags = Vec::new();
+        let coverage = resolve_workspaces_with_coverage(
+            &[m1.clone(), m2.clone()],
+            &runner,
+            &mut counters,
+            &mut diags,
+            &NoopObserver,
+        );
+        assert!(coverage.workspaces.is_empty());
+        // Accounting matches two sequential metadata spawns ...
+        assert_eq!(counters.cargo_metadata_calls, 2);
+        assert_eq!(counters.cargo_failures, 2);
+        // ... while Cargo ran only once.
+        assert_eq!(
+            runner
+                .metadata_runs
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        // Each participant keeps its own diagnostic and ledger row.
+        assert_eq!(diags.len(), 2);
+        assert_eq!(coverage.unresolved.len(), 2);
+        for ((manifest, diagnostic), participant) in [&m1, &m2]
+            .into_iter()
+            .zip(diags.iter())
+            .zip(coverage.unresolved.iter())
+        {
+            assert_eq!(diagnostic.path.as_ref(), Some(manifest));
+            assert!(diagnostic.message.contains("metadata failed"));
+            assert_eq!(&participant.manifest, manifest);
+            assert_eq!(participant.stage, "metadata");
+        }
+    }
+
+    /// Locate spawns actually overlap: with several manifests and a sleeping
+    /// runner, peak concurrency must exceed one. Gated on real parallelism —
+    /// a single-core host resolves sequentially by design.
+    #[test]
+    fn resolution_overlaps_locate_spawns() {
+        struct SleepRunner {
+            active: std::sync::atomic::AtomicUsize,
+            peak: std::sync::atomic::AtomicUsize,
+        }
+        impl CargoRunner for SleepRunner {
+            fn run(&self, _cwd: &Path, args: &[std::ffi::OsString]) -> io::Result<ProcessOutput> {
+                let active = self
+                    .active
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    + 1;
+                self.peak
+                    .fetch_max(active, std::sync::atomic::Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                self.active
+                    .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                if args.first().is_some_and(|a| a == "locate-project") {
+                    return Ok(ProcessOutput {
+                        success: false,
+                        code: Some(1),
+                        stdout: Vec::new(),
+                        stderr: b"locate failed".to_vec(),
+                    });
+                }
+                Ok(ProcessOutput {
+                    success: false,
+                    code: Some(1),
+                    stdout: Vec::new(),
+                    stderr: b"metadata failed".to_vec(),
+                })
+            }
+        }
+        let d = tempfile::tempdir().unwrap();
+        let manifests: Vec<PathBuf> = (0..8)
+            .map(|i| {
+                let m = d.path().join(format!("ws{i}/Cargo.toml"));
+                std::fs::create_dir_all(m.parent().unwrap()).unwrap();
+                std::fs::write(&m, "").unwrap();
+                m
+            })
+            .collect();
+        let runner = SleepRunner {
+            active: std::sync::atomic::AtomicUsize::new(0),
+            peak: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let mut counters = ScanCounters::default();
+        let mut diags = Vec::new();
+        resolve_workspaces_with_coverage(
+            &manifests,
+            &runner,
+            &mut counters,
+            &mut diags,
+            &NoopObserver,
+        );
+        assert_eq!(counters.cargo_locate_calls, 8);
+        assert_eq!(diags.len(), 8);
+        if std::thread::available_parallelism().map_or(1, usize::from) > 1 {
+            assert!(
+                runner.peak.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+                "locate spawns must overlap on a multi-core host"
+            );
+        }
+    }
+
+    /// Mixed locate and metadata failures keep manifest input order in the
+    /// diagnostic stream: a locate failure for an earlier manifest precedes
+    /// the metadata failure its later neighbour triggers.
+    #[test]
+    fn mixed_locate_and_metadata_failures_keep_manifest_order() {
+        let d = tempfile::tempdir().unwrap();
+        let bad_locate = d.path().join("bad-locate/Cargo.toml");
+        let bad_meta = d.path().join("bad-meta/Cargo.toml");
+        let ok_manifest = d.path().join("ok/Cargo.toml");
+        for m in [&bad_locate, &bad_meta, &ok_manifest] {
+            std::fs::create_dir_all(m.parent().unwrap()).unwrap();
+            std::fs::write(m, "").unwrap();
+        }
+        struct OrderRunner {
+            fail_root: PathBuf,
+            ok_root: PathBuf,
+            ok_target: PathBuf,
+        }
+        impl CargoRunner for OrderRunner {
+            fn run(&self, _cwd: &Path, args: &[std::ffi::OsString]) -> io::Result<ProcessOutput> {
+                let manifest = args.last().unwrap().to_string_lossy().into_owned();
+                if args.first().is_some_and(|a| a == "locate-project") {
+                    if manifest.contains("bad-locate") {
+                        return Ok(ProcessOutput {
+                            success: false,
+                            code: Some(1),
+                            stdout: Vec::new(),
+                            stderr: b"locate failed".to_vec(),
+                        });
+                    }
+                    let root = if manifest.contains("bad-meta") {
+                        self.fail_root.join("Cargo.toml")
+                    } else {
+                        self.ok_root.join("Cargo.toml")
+                    };
+                    let json = serde_json::json!({"root": root});
+                    return Ok(ProcessOutput {
+                        success: true,
+                        code: Some(0),
+                        stdout: serde_json::to_vec(&json).unwrap(),
+                        stderr: Vec::new(),
+                    });
+                }
+                if manifest.contains("fail_root") {
+                    return Ok(ProcessOutput {
+                        success: false,
+                        code: Some(1),
+                        stdout: Vec::new(),
+                        stderr: b"metadata failed".to_vec(),
+                    });
+                }
+                let json = serde_json::json!({
+                    "packages": [{"id": "m", "name": "m", "manifest_path": self.ok_root.join("Cargo.toml")}],
+                    "workspace_members": ["m"],
+                    "workspace_root": self.ok_root,
+                    "target_directory": self.ok_target,
+                });
+                Ok(ProcessOutput {
+                    success: true,
+                    code: Some(0),
+                    stdout: serde_json::to_vec(&json).unwrap(),
+                    stderr: Vec::new(),
+                })
+            }
+        }
+        let fail_root = d.path().join("fail_root");
+        let ok_root = d.path().join("ok");
+        std::fs::create_dir_all(ok_root.join("target")).unwrap();
+        let runner = OrderRunner {
+            fail_root,
+            ok_root: ok_root.clone(),
+            ok_target: ok_root.join("target"),
+        };
+        let mut counters = ScanCounters::default();
+        let mut diags = Vec::new();
+        let coverage = resolve_workspaces_with_coverage(
+            &[bad_locate.clone(), bad_meta.clone(), ok_manifest.clone()],
+            &runner,
+            &mut counters,
+            &mut diags,
+            &NoopObserver,
+        );
+        assert_eq!(coverage.workspaces.len(), 1);
+        assert_eq!(
+            diags.iter().map(|d| d.message.clone()).collect::<Vec<_>>(),
+            vec![
+                "cargo locate-project failed: locate failed",
+                "cargo metadata failed: metadata failed",
+            ]
+        );
+        assert_eq!(coverage.unresolved.len(), 2);
+        assert_eq!(coverage.unresolved[0].stage, "locate");
+        assert_eq!(coverage.unresolved[1].stage, "metadata");
     }
 
     #[test]
