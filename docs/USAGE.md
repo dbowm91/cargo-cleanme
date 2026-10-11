@@ -153,11 +153,13 @@ requiring a sibling `target/`, then asks Cargo itself to resolve the facts.
 
 Cargo is invoked with `locate-project --workspace` and
 `metadata --offline --locked --no-deps` — never for ignored or pruned paths.
-After the first successful metadata resolution for a workspace, every member
-manifest that authoritative metadata returned is registered, so later manifests
-from the same workspace need no further processes. An N-member workspace costs
-exactly one locate and one metadata. Membership is never guessed from path
-ancestry or TOML.
+Resolution runs in bounded-parallel bulk phases: every manifest is located
+once, manifests group by located workspace root, and one metadata runs per
+group. After the first successful metadata resolution for a workspace, every
+member manifest that authoritative metadata returned is registered, so later
+manifests from the same workspace need no further metadata processes. An
+N-member workspace costs one locate per manifest and one metadata. Membership
+is never guessed from path ancestry or TOML.
 
 Full discovery can find manifests Cargo cannot resolve as workspaces, such as
 an orphaned member or a broken manifest. Such a manifest stays in the

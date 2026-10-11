@@ -231,8 +231,20 @@ fn classify_cleanup_roots_with_home(
                 });
             }
             (Err(e), RootProvenance::Automatic) => {
-                if e.kind() == std::io::ErrorKind::NotFound {
+                if e.kind() == std::io::ErrorKind::NotFound
+                    && crate::discovery_state::automatic_root_is_maintainable(&path, home)
+                {
                     out.omitted.push(AutomaticOmission::NotFound(path));
+                } else if e.kind() == std::io::ErrorKind::NotFound {
+                    // C033: typed provenance before availability. A missing
+                    // path at a known-transient origin (deleted Codex
+                    // worktree, emptied cache, removed node_modules subtree)
+                    // is reported as what it is, not as merely
+                    // "unavailable". Durable locations keep `NotFound`;
+                    // symlinks never reach this arm (`symlink_metadata`
+                    // succeeds for them, including broken links), and every
+                    // other failure still blocks below.
+                    out.omitted.push(AutomaticOmission::NotMaintainable(path));
                 } else if e.kind() == std::io::ErrorKind::PermissionDenied {
                     out.blocked.push(AutomaticBlock {
                         path: path.clone(),
@@ -1031,6 +1043,54 @@ mod tests {
         assert!(classified.admitted.is_empty());
         assert_eq!(classified.blocked.len(), 1);
         assert_eq!(classified.blocked[0].path, seed);
+    }
+
+    /// C033: typed provenance before availability. A missing path at a
+    /// known-transient origin is `NotMaintainable`, not `NotFound`; a
+    /// missing durable location stays `NotFound`. Neither blocks.
+    #[test]
+    fn missing_transient_roots_classify_as_non_maintainable_not_unavailable() {
+        let d = tempdir().unwrap();
+        let home = d.path();
+        let missing_transient = home.join(".codex/worktrees/dead-session-id");
+        let missing_cache = home.join("Library/Caches/Homebrew/cargo_cache");
+        let missing_durable = home.join("Developer/vanished-project");
+        for p in [&missing_transient, &missing_cache, &missing_durable] {
+            assert!(!p.exists(), "premise: nothing created");
+        }
+
+        let classified = classify_cleanup_roots_with_home(
+            vec![
+                (missing_transient.clone(), RootProvenance::Automatic),
+                (missing_cache.clone(), RootProvenance::Automatic),
+                (missing_durable.clone(), RootProvenance::Automatic),
+            ],
+            Some(home),
+        )
+        .unwrap();
+        assert!(classified.blocked.is_empty());
+        assert!(classified.admitted.is_empty());
+        assert!(
+            classified
+                .omitted
+                .contains(&AutomaticOmission::NotMaintainable(missing_transient)),
+            "deleted worktree must be non-maintainable: {:?}",
+            classified.omitted
+        );
+        assert!(
+            classified
+                .omitted
+                .contains(&AutomaticOmission::NotMaintainable(missing_cache)),
+            "emptied platform cache must be non-maintainable: {:?}",
+            classified.omitted
+        );
+        assert!(
+            classified
+                .omitted
+                .contains(&AutomaticOmission::NotFound(missing_durable)),
+            "deleted durable project stays unavailable: {:?}",
+            classified.omitted
+        );
     }
 
     #[test]

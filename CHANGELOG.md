@@ -14,6 +14,23 @@ command-line, JSON, and release-asset contracts are the stable surface.
   several stderr lines, so causes commonly printed after Cargo's generic first
   line are visible. The unresolved-manifest ledger and cleanup blocking behavior
   are unchanged.
+- Automatic Routine scope hygiene now also excludes macOS platform caches
+  (`~/Library/Caches`, `~/Library/pnpm`), the `~/Downloads` drop zone,
+  shared-temp aliases (`/tmp`, `/private/tmp`, `/var/tmp`), and system
+  software locations (`/usr/local`, `/opt`). Full discovery inventory is
+  unchanged; only Routine learning and admission narrow, which is fail-safe.
+  Missing automatic roots at known-transient origins are reported as
+  non-maintainable rather than merely unavailable; durable locations keep the
+  unavailable label. Symlink and unreadable roots still block.
+- Cargo workspace resolution now runs in bounded-parallel bulk phases (up to
+  4 concurrent read-only `locate-project` / `metadata` spawns): every manifest
+  is located once, one metadata runs per located workspace root, and
+  per-manifest decisions replay sequentially over the results. Coverage sets,
+  diagnostics, workspace order, and the unresolved ledger are unchanged; only
+  `cargo_locate_calls` grows (one locate per manifest instead of skipping
+  locates for already-listed members), since that skip serialized the whole
+  phase. Measured on a 1,151-manifest Routine scope: 37.5 s → 15.7 s with
+  identical resolved/unresolved counts.
 
 ## [0.2.5] - 2026-10-09
 
