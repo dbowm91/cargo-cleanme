@@ -122,7 +122,7 @@ incomplete).
 | `clean ROOT …` / `clean` / `clean --known` | 0, 1, 2 | `:347-351` |
 | `clean --full …` | 0, **2**, 1, 2 | `:481-518` then `:347-351` |
 | `config path` / `show` | 0, 2 | `:124` |
-| `config edit` | 0, **editor's code**, 2 | `:166`, `:124-196` |
+| `config edit` | 0, 1, 2 | `:251-289` |
 | `update [--dry-run]` | 0, 2 | `:87-122` |
 | any (clap usage error) | 0 (help/version), 2 | clap |
 
@@ -140,12 +140,14 @@ no indication that *no cleanup ran*; the new one says so. The trade-off is real:
 incompleteness was detected during scan (2) or during unit execution (1). Both are
 fail-closed.
 
-`update` can never return 1: `From<UpdateError> for AppError`
-(`src/update.rs:355-365`) maps everything to `AppError::Provenance` or
-`AppError::Update`, both exit 2 — **including the benign
-`UpdateError::AlreadyCurrent` (`src/update.rs:983-987`)**. So "already up to date"
-exits **2**, while `docs/TROUBLESHOOTING.md` calls that state success. Unchanged
-by M012A/M012B, and still wrong.
+`update` can never return 1. A benign no-op — `UpdateError::AlreadyCurrent`
+or `UpdateError::NewerThanPublished` — is reported in prose and exits **0**
+(`:88-180`), so schedulers do not alert on "already up to date", matching
+`docs/TROUBLESHOOTING.md` calling that state success. Every other
+`UpdateError` still converts via `From<UpdateError> for AppError`
+(`src/update.rs:355-365`) to `AppError::Provenance` or `AppError::Update`,
+both exit 2. Before the interrogation fixes the benign variants shared that
+exit-2 path, which is what the old "still wrong" note below described.
 
 ### Clap's errors bypass `AppError` entirely
 

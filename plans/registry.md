@@ -39,7 +39,7 @@ Immutability policy enabled: `2026-10-05T13:34:38Z` (repository-level, not owner
 | Subsystem | Status | Roadmap | Current milestone | Blocker |
 |---|---|---|---|---|
 | Artifact discovery and cleanup | **C032 conditionally closed (publication pending); C033 active (retirement gated); C034 active (partition blocked)** | `plans/subsystems/artifact-discovery-cleanup-roadmap.md` | C032→C033→C034 | C032's bounded cause extraction, taxonomy matrix, baseline-negative reproduction, group cap and 1,000-failure ledger are complete; implementation awaits a future release. Current-head hosted run `38021809640` passed Linux, macOS, Windows, MSRV 1.89, generated docs, benchmark and installers. C033 has grouped omission summaries and a 100-root two-invocation fixture; persistent retirement is gated by proposed ADR 005. C034 has a default Routine real-Cargo dry-run/Execute positive control; heterogeneous Full→Routine and blocked-stage qualification remain. Partial-scope destructive proof remains gated by proposed ADR 004. |
-| Distribution, release, and update | **published through 0.2.5; C027 closed** | `plans/subsystems/distribution-release-update-roadmap.md` | none open | v0.2.5 carries the closed C029–C031 discovery/cleanup reliability fixes (tag `v0.2.5` at `c4ec298`, immutable, crates.io sha256 `4466f063…`, automatic smoke `37988595432` green on five targets, v0.2.4 → v0.2.5). v0.2.4 carries the C028 stale-learned-root fix (tag `v0.2.4` at `24ec57a`, immutable, crates.io sha256 `61e97a6e…`, automatic smoke `37850582892` green on five targets, v0.2.3 → v0.2.4). C027 corrected the first-install UX — a default non-root install persists `$HOME/.local/bin` into a supported zsh/bash profile, while `--dir`, system installs, unsupported shells, unsafe targets, `--no-shell-profile`, and `--no-path` stay non-mutating — and **shipped in v0.2.3** (tag `v0.2.3` at `7b4c632`, immutable, crates.io sha256 `ec6206d57…`, automatic smoke `37652257315` green on five targets). 19 state-transition fixture cases, hosted Linux/macOS/Windows evidence, and the published-installer end-to-end check are all recorded in the closure record. |
+| Distribution, release, and update | **published through 0.2.6; C027 closed** | `plans/subsystems/distribution-release-update-roadmap.md` | none open | v0.2.6 carries the bugs.md interrogation fixes and the C032–C034 diagnostics/hygiene work (tag `v0.2.6` at `bfa976f`, immutable, crates.io sha256 `bcc4e42e…`, automatic smoke `38303253453` green on five targets, v0.2.5 → v0.2.6). v0.2.5 carries the closed C029–C031 discovery/cleanup reliability fixes (tag `v0.2.5` at `c4ec298`, immutable, crates.io sha256 `4466f063…`, automatic smoke `37988595432` green on five targets, v0.2.4 → v0.2.5). C027 corrected the first-install UX — a default non-root install persists `$HOME/.local/bin` into a supported zsh/bash profile, while `--dir`, system installs, unsupported shells, unsafe targets, `--no-shell-profile`, and `--no-path` stay non-mutating — and **shipped in v0.2.3** (tag `v0.2.3` at `7b4c632`, immutable, crates.io sha256 `ec6206d57…`, automatic smoke `37652257315` green on five targets). 19 state-transition fixture cases, hosted Linux/macOS/Windows evidence, and the published-installer end-to-end check are all recorded in the closure record. |
 
 ## Open work
 
@@ -68,7 +68,7 @@ new terminal could not find the binary. Plan:
 Closure record: `plans/closure/distribution-release-update/c027-status.md`.
 Release record: `plans/closure/distribution-release-update/r023-status.md`.
 
-The product/release line is published through **v0.2.5**, immutable and
+The product/release line is published through **v0.2.6**, immutable and
 attested, with its five-target automatic smoke green.
 
 Read `plans/closure/distribution-release-update/c027-status.md` §7 before
@@ -151,8 +151,8 @@ here that a future release must discharge to unblock anything.
 
 ## Published state
 
-**Thirteen** releases are published as GitHub releases and on crates.io.
-**v0.2.0 is yanked**; the other twelve are not.
+**Fourteen** releases are published as GitHub releases and on crates.io.
+**v0.2.0 is yanked**; the other thirteen are not.
 
 Rechecked live against the crates.io API on 2026-10-07, after publishing
 **v0.2.3**: `max_version: 0.2.3`, `total: 11`, and `yanked` is `true` for
@@ -164,15 +164,19 @@ crates.io confirmation (`0.2.4`, `yanked: false`) is recorded in
 **v0.2.5** was published after that; its crates.io confirmation (`0.2.5`,
 `yanked: false`, sha256 `4466f063…`) is recorded in
 [`r025-status.md`](closure/distribution-release-update/r025-status.md).
+Rechecked live on 2026-10-12, after publishing **v0.2.6**: `max_version:
+0.2.6`, fourteen versions total, `yanked` is `true` for `0.2.0` alone.
 
 | Release | crates.io sha256 | GitHub release | Automatic smoke |
 |---|---|---|---|
-| `v0.2.5` (current) | `4466f06336d81a24d256c7321139f686098ecc37facd38a9e191ad9631da30b9` | `immutable: true`, id `408326919` | `37988595432` — green on all five targets |
+| `v0.2.6` (current) | `bcc4e42e870b9653f178fca4950e34082a953158048ecd8937c15c49f2d60100` | `immutable: true`, id `410964339` | `38303253453` — green on all five targets |
+| `v0.2.5` | `4466f06336d81a24d256c7321139f686098ecc37facd38a9e191ad9631da30b9` | `immutable: true`, id `408326919` | `37988595432` — green on all five targets |
 | `v0.2.4` | `61e97a6e13dcbf364e15513971c1a973558431dca63b99637ed032465c8c02f7` | `immutable: true`, id `407294986` | `37850582892` — green on all five targets |
 | `v0.2.3` | `ec6206d578beee28bc82bb63b142a097d38e825b7aabe4c277dc5dc48be9bd4f` | `immutable: true`, id `405953835` | `37652257315` — green on all five targets |
 | `v0.2.2` | `acc488b5733a307408103d5207ac2c17b1a4b24099025617a2ea2dd780860050` | `immutable: true`, id `RE_kwDOU5PV0M4YKIbG` | `37561575727` — green on all five targets |
 
 Full evidence in
+[`r026-status.md`](closure/distribution-release-update/r026-status.md),
 [`r025-status.md`](closure/distribution-release-update/r025-status.md),
 [`r024-status.md`](closure/distribution-release-update/r024-status.md),
 [`r023-status.md`](closure/distribution-release-update/r023-status.md) and
