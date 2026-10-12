@@ -8,6 +8,8 @@ command-line, JSON, and release-asset contracts are the stable surface.
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-10-12
+
 ### Fixed
 
 - Symlink checks no longer miss the trailing-slash spelling. `symlink_metadata`
@@ -25,6 +27,9 @@ command-line, JSON, and release-asset contracts are the stable surface.
   identity cannot be resolved. Unresolvable member, target, or build-dir
   identities fail closed as ownership-unproven, and roots that stop resolving
   between validation and collapse are an error rather than a silent narrowing.
+  Two absent identities for the same logical output compare equal instead of
+  unproven; only a present-but-unresolvable side, or an existence flip between
+  validation and proof, fails closed.
 - Proof skip codes are assigned at the proof site instead of parsed out of the
   prose, so message edits cannot silently change the machine contract. The
   unit gate and the proof now agree, and external-ownership failures report
@@ -32,8 +37,23 @@ command-line, JSON, and release-asset contracts are the stable surface.
 - `config edit` maps an editor failure to exit `1` under the documented
   `0/1/2` contract; the editor's own status stays visible in the diagnostic
   prose instead of becoming our exit code.
-- Selector runs null `output_union_before_bytes` like every other unattributable
-  byte field, instead of reporting the same bytes as both unknown and measured.
+- Post-rewrite glob validation names the list that actually failed:
+  `scan.ignore` errors say `invalid scan ignore glob`, and only
+  `cleanup.policy` include/exclude errors say `invalid cleanup policy glob`.
+- `update --dry-run` reports an already-current binary and a newer local
+  build with distinct messages instead of sharing one branch, so "newer than
+  published" is never misread as "already at the latest stable version".
+- A cleanup blocked mid-run keeps its completed unit rows in human output
+  instead of printing only the block notice, and `--format log` counts
+  reclaimed bytes from executed units only.
+- Unresolved-manifest stages are recorded where the lookup fails instead of
+  inferred from message substrings, so the cleanup ledger stage cannot drift
+  when diagnostic prose changes.
+- Selector runs keep `output_union_before_bytes` populated with the measured
+  whole-output bytes in both JSON and the human "output-union before" line.
+  Only `before_bytes` and `selector_estimate_bytes` read `null` under a
+  selector, because selector-specific bytes are unknown; the union is whole-
+  output context, never the selector's reclaimable estimate.
 - Removed a stale duplicate `## [Unreleased]` section that repeated the
   already-released `0.1.3` notes, and added the missing per-version release
   links.
@@ -859,6 +879,7 @@ published yet.
 - No runtime release-artifact qualification has run; the exact release bytes
   are qualified when the first release workflow is dispatched.
 
+[0.2.6]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.6
 [0.2.5]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.5
 [0.2.4]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.4
 [0.2.3]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.3
