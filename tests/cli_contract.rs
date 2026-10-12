@@ -1156,10 +1156,13 @@ exit 0
     // The exit contract is 0/1/2: the editor's arbitrary status is reported
     // in prose, never propagated as our exit code.
     assert_eq!(failed.status.code(), Some(1));
+    // `ExitStatus`'s Display is platform-specific: "exit status: 17" on
+    // Unix, "exit code: 17" on Windows. Either spelling proves the editor's
+    // own status stayed visible in prose instead of becoming our exit code.
+    let prose = String::from_utf8_lossy(&failed.stderr);
     assert!(
-        String::from_utf8_lossy(&failed.stderr).contains("exit status: 17"),
-        "the editor's status must stay visible in prose: {}",
-        String::from_utf8_lossy(&failed.stderr)
+        prose.contains("exit status: 17") || prose.contains("exit code: 17"),
+        "the editor's status must stay visible in prose: {prose}"
     );
     let invalid = run("invalid");
     assert!(!invalid.status.success());
