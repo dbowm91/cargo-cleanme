@@ -191,15 +191,20 @@ pub fn load(path: &Path) -> Result<Config, AppError> {
     // turning a good pattern into an uncompilable one (or, worse, a different
     // one). No authorization depends on this list: `ignore`/`include`/`exclude`
     // filter discovery and policy, never ownership.
-    for pattern in c
-        .scan
-        .ignore
-        .iter()
-        .chain(&c.cleanup.policy.include)
-        .chain(&c.cleanup.policy.exclude)
-    {
+    for pattern in &c.scan.ignore {
         globset::Glob::new(pattern)
             .map_err(|e| AppError::Config(format!("invalid scan.ignore glob {pattern:?}: {e}")))?;
+    }
+    for pattern in c
+        .cleanup
+        .policy
+        .include
+        .iter()
+        .chain(&c.cleanup.policy.exclude)
+    {
+        globset::Glob::new(pattern).map_err(|e| {
+            AppError::Config(format!("invalid cleanup policy glob {pattern:?}: {e}"))
+        })?;
     }
     Ok(c)
 }

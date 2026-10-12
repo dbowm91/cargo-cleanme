@@ -182,12 +182,9 @@ pub fn cleanup(
                 r.before_bytes
             },
             // A selector run cannot attribute bytes to the selector, so the
-            // union carries the same unknown as every other byte field.
-            output_union_before_bytes: if report.selector.is_some() {
-                None
-            } else {
-                r.before_bytes
-            },
+            // estimate stays unknown. The output-union measurement is known
+            // in both modes, matching the human "output-union before" line.
+            output_union_before_bytes: r.before_bytes,
             after_bytes: r.after_bytes,
             observed_decrease_bytes: r.observed_decrease,
             detail: r.detail.clone(),
@@ -389,10 +386,13 @@ pub mod log {
         optional.push(("cleaned", executed.to_string()));
         optional.push(("skipped", skipped.to_string()));
         optional.push(("failed", failed.to_string()));
-        // Only an executed cleanup measured a decrease. A blocked scope cleaned
-        // nothing, and a Simulate or Cargo-preview run recovered nothing, so
-        // neither may print a reclaimed-bytes figure at all.
-        if report.mode == CleanMode::Execute && block.is_none() {
+        // Only an executed cleanup measured a decrease. A Simulate or
+        // Cargo-preview run recovered nothing, so neither may print a
+        // reclaimed-bytes figure at all. A blocked scope may still have
+        // cleaned earlier units before the block fired, so the figure is
+        // shown whenever the scope is unblocked (even when zero) or when at
+        // least one unit executed.
+        if report.mode == CleanMode::Execute && (block.is_none() || executed > 0) {
             optional.push(("reclaimed_bytes", reclaimed.to_string()));
         }
         optional.push((

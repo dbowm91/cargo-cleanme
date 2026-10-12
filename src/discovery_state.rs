@@ -480,6 +480,7 @@ pub fn publish(state: &DiscoveryState) -> Result<(), String> {
 fn publish_at(path: &Path, state: &DiscoveryState) -> Result<(), String> {
     let parent = path.parent().ok_or("state path has no parent")?;
     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    sweep_own_stale_temps(path);
     let bytes = serde_json::to_vec_pretty(state).map_err(|e| e.to_string())?;
     let (tmp, mut file) = create_unique_temp(path)?;
     let result = (|| {
@@ -493,6 +494,43 @@ fn publish_at(path: &Path, state: &DiscoveryState) -> Result<(), String> {
         return Err(e.to_string());
     }
     Ok(())
+}
+/// Best-effort removal of this process's stale temp files from a previous
+/// crashed publish. A crash between `create_new` and `rename` leaves a
+/// `.{name}.{pid}.{attempt}.tmp` file; only pid reuse could exhaust the
+/// 32-attempt space, so sweeping own-pid litter keeps the directory tidy
+/// without affecting other publishers. Failures are ignored: state is an
+/// optimization and must never fail the scan. Only files older than an hour
+/// are removed, so a concurrent in-process publisher's fresh temp (which the
+/// 32-attempt skip must preserve) is never deleted.
+fn sweep_own_stale_temps(path: &Path) {
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return;
+    };
+    let name = name.to_string_lossy();
+    let prefix = format!(".{name}.{}.", std::process::id());
+    let Ok(entries) = fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        if !(file_name.starts_with(&prefix) && file_name.ends_with(".tmp")) {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .map(|modified| {
+                modified
+                    .elapsed()
+                    .map(|age| age.as_secs() > 3600)
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if stale {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
 }
 fn create_unique_temp(path: &Path) -> Result<(PathBuf, fs::File), String> {
     let parent = path.parent().ok_or("state path has no parent")?;

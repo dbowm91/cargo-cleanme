@@ -303,8 +303,10 @@ impl CleanReport {
             ));
         }
         if let Some(block) = &self.scope_blocked {
+            // A mid-run block (H-2 rediscovery, per-spawn premise recheck) can
+            // fire after earlier units already ran: completed rows stay
+            // visible so the human surface matches the JSON `units` list.
             out.push_str(&format!("{}\n", block.message));
-            return out;
         }
         let mut previewed = 0usize;
         let mut simulated = 0usize;
@@ -535,6 +537,13 @@ pub fn is_authorized(
 /// Same rules as [`is_authorized`], but expressed over the ownership class and
 /// covering roots so a workspace CleanupUnit can gate every affected group
 /// independently (C003 §7.2).
+///
+/// Precondition: `covering`, `clean_root`, and `allowed_roots` entries are
+/// canonicalized (no `..`, no symlinked prefixes). `Path::starts_with` is
+/// component-lexical, so a non-canonical covering such as
+/// `/clean/../outside` would compare as inside `clean_root` while escaping
+/// it physically. Production callers pass canonical coverings from
+/// `build_groups`; external callers must canonicalize first.
 pub fn covering_is_authorized(
     ownership: OutputOwnershipClass,
     covering: &[PathBuf],
@@ -555,6 +564,9 @@ pub fn covering_is_authorized_roots(
     clean_roots: &[PathBuf],
     allowed_roots: &[PathBuf],
 ) -> Result<bool, String> {
+    // Precondition (see `covering_is_authorized`): covering and roots are
+    // canonicalized. `starts_with` below is component-lexical and unsound on
+    // non-canonical paths containing `..`.
     // C002-F1: ownership class is authoritative and checked first.
     // ExternalUnproven is inventory-only even inside clean ROOT or a
     // configured allowed root.
@@ -1737,22 +1749,93 @@ fn output_identity_strict(physical: &Option<PathBuf>, logical: &Path) -> Option<
     }
 }
 
+/// Target/build identity pair for the final proof.
+///
+/// A configured-but-never-built output dir reports `exists: false` with no
+/// physical identity on both the scan-time and fresh sides. The strict
+/// identity above maps that to `None` on both sides, which would fail the
+/// unit as `Unproven` forever even though the unit legitimately formed from
+/// the measured sibling group (scan-time missing roots are invisible to the
+/// graph and excluded from `unmapped`). Two missing sides with the same
+/// logical path compare equal here; an existence flip or a logical change
+/// is `Changed` (still fail-closed); only a present-but-unresolvable side
+/// is `Unproven`.
+fn output_identity_pair(
+    old: &OutputRoot,
+    new: &OutputRoot,
+    kind: &str,
+    unit_root: &Path,
+) -> Result<(PathBuf, PathBuf), ProofFailure> {
+    if !old.exists && !new.exists {
+        if old.logical_path == new.logical_path {
+            return Ok((old.logical_path.clone(), new.logical_path.clone()));
+        }
+        return Err(ProofFailure::new(
+            CleanupReasonCode::SkippedChangedBeforeCleanup,
+            format!(
+                "workspace changed before cleanup; skipped: {kind} changed (was {}, now {})",
+                old.logical_path.display(),
+                new.logical_path.display()
+            ),
+        ));
+    }
+    if old.exists != new.exists {
+        return Err(ProofFailure::new(
+            CleanupReasonCode::SkippedChangedBeforeCleanup,
+            format!(
+                "workspace changed before cleanup; skipped: {kind} appeared or disappeared (was {}, now {})",
+                old.logical_path.display(),
+                new.logical_path.display()
+            ),
+        ));
+    }
+    let old_canon =
+        output_identity_strict(&old.physical_path, &old.logical_path).ok_or_else(|| {
+            ProofFailure::new(
+                CleanupReasonCode::SkippedOwnershipUnproven,
+                format!(
+                    "ownership could not be re-proven: {kind} of workspace {} cannot be resolved",
+                    unit_root.display()
+                ),
+            )
+        })?;
+    let new_canon =
+        output_identity_strict(&new.physical_path, &new.logical_path).ok_or_else(|| {
+            ProofFailure::new(
+                CleanupReasonCode::SkippedOwnershipUnproven,
+                format!(
+                    "ownership could not be re-proven: {kind} of workspace {} cannot be resolved",
+                    unit_root.display()
+                ),
+            )
+        })?;
+    Ok((old_canon, new_canon))
+}
+
 /// `symlink_metadata("link/")` follows the final component on POSIX, so a
 /// trailing slash hides a symlink from the `is_symlink` check. Judge the
 /// path with its trailing separators stripped as well; either spelling
-/// proving a symlink refuses the root.
+/// proving a symlink refuses the root. A trailing `/.` spells the same
+/// bypass (`symlink_metadata("link/.")` stats through the link), so dot
+/// components are stripped too before the probe.
 fn path_is_symlink(path: &Path) -> bool {
     if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
         return true;
     }
-    let spelling = path.as_os_str().to_string_lossy();
-    if spelling.ends_with('/') || spelling.ends_with('\\') {
-        let trimmed = spelling.trim_end_matches(['/', '\\']);
-        if !trimmed.is_empty()
-            && fs::symlink_metadata(trimmed).is_ok_and(|m| m.file_type().is_symlink())
-        {
-            return true;
+    let mut spelling = path.as_os_str().to_string_lossy().into_owned();
+    loop {
+        let trimmed = spelling.trim_end_matches(['/', '\\']).to_owned();
+        if trimmed.ends_with("/.") || trimmed.ends_with("\\.") {
+            spelling = trimmed[..trimmed.len() - 1].to_owned();
+            continue;
         }
+        spelling = trimmed;
+        break;
+    }
+    if !spelling.is_empty()
+        && fs::symlink_metadata(&spelling).is_ok_and(|m| m.file_type().is_symlink())
+    {
+        return true;
     }
     false
 }
@@ -2335,58 +2418,18 @@ fn final_cleanup_proof_roots(
             "workspace changed before cleanup; skipped: Cargo package identity set changed",
         ));
     }
-    let old_target_canon = output_identity_strict(
-        &candidate.output.target.physical_path,
-        &candidate.output.target.logical_path,
-    )
-    .ok_or_else(|| {
-        ProofFailure::new(
-            CleanupReasonCode::SkippedOwnershipUnproven,
-            format!(
-                "ownership could not be re-proven: target of workspace {} cannot be resolved",
-                unit.root.display()
-            ),
-        )
-    })?;
-    let new_target_canon = output_identity_strict(
-        &fresh_ws.output.target.physical_path,
-        &fresh_ws.output.target.logical_path,
-    )
-    .ok_or_else(|| {
-        ProofFailure::new(
-            CleanupReasonCode::SkippedOwnershipUnproven,
-            format!(
-                "ownership could not be re-proven: target of workspace {} cannot be resolved",
-                unit.root.display()
-            ),
-        )
-    })?;
-    let old_build_canon = output_identity_strict(
-        &candidate.output.build.physical_path,
-        &candidate.output.build.logical_path,
-    )
-    .ok_or_else(|| {
-        ProofFailure::new(
-            CleanupReasonCode::SkippedOwnershipUnproven,
-            format!(
-                "ownership could not be re-proven: build-dir of workspace {} cannot be resolved",
-                unit.root.display()
-            ),
-        )
-    })?;
-    let new_build_canon = output_identity_strict(
-        &fresh_ws.output.build.physical_path,
-        &fresh_ws.output.build.logical_path,
-    )
-    .ok_or_else(|| {
-        ProofFailure::new(
-            CleanupReasonCode::SkippedOwnershipUnproven,
-            format!(
-                "ownership could not be re-proven: build-dir of workspace {} cannot be resolved",
-                unit.root.display()
-            ),
-        )
-    })?;
+    let (old_target_canon, new_target_canon) = output_identity_pair(
+        &candidate.output.target,
+        &fresh_ws.output.target,
+        "target",
+        &unit.root,
+    )?;
+    let (old_build_canon, new_build_canon) = output_identity_pair(
+        &candidate.output.build,
+        &fresh_ws.output.build,
+        "build-dir",
+        &unit.root,
+    )?;
     if old_target_canon != new_target_canon {
         return Err(ProofFailure::new(
             CleanupReasonCode::SkippedChangedBeforeCleanup,
@@ -2693,6 +2736,13 @@ fn frozen_env(ctx: &RevalidatedContext) -> Result<Vec<(OsString, OsString)>, Pro
     //   blanket refusal when the runtime cannot even report build directories
     //   (M5) - previously a safe, cleanable workspace was refused forever.
     // - Do not pass unsupported unstable flags.
+    //
+    // Defense-in-depth note: both refusal branches below are currently
+    // unreachable from production constructors (`capability_from_metadata`
+    // maps `env_set && !had_build_field` to `Unknown`, never `Unavailable`,
+    // and a surviving `Some(build)` implies `Distinct`), reachable only via
+    // hand-built contexts. They are retained so a future constructor change
+    // fails closed instead of silently redirecting the clean.
     if ctx.capability.env_build_dir_set
         && ctx.capability.build_dir == CargoBuildDirCapability::Unavailable
     {
@@ -2896,6 +2946,33 @@ mod tests {
     use std::ffi::OsStr;
     use std::sync::Mutex;
     use tempfile::TempDir;
+
+    #[test]
+    fn missing_output_identity_pair_compares_equal_not_unproven() {
+        use crate::domain::OutputRootKind;
+        let missing = |logical: PathBuf| OutputRoot {
+            kind: OutputRootKind::Build,
+            logical_path: logical,
+            physical_path: None,
+            exists: false,
+            is_symlink: false,
+        };
+        let unit_root = PathBuf::from("/ws");
+        let old = missing(PathBuf::from("/ws/build"));
+        let new = missing(PathBuf::from("/ws/build"));
+        let (a, b) = output_identity_pair(&old, &new, "build-dir", &unit_root).unwrap();
+        assert_eq!(a, b);
+        // An existence flip is a change (still fail-closed), not Unproven.
+        let present = OutputRoot {
+            kind: OutputRootKind::Build,
+            logical_path: PathBuf::from("/ws/build"),
+            physical_path: Some(PathBuf::from("/ws/build")),
+            exists: true,
+            is_symlink: false,
+        };
+        let err = output_identity_pair(&old, &present, "build-dir", &unit_root).unwrap_err();
+        assert_eq!(err.code, CleanupReasonCode::SkippedChangedBeforeCleanup);
+    }
 
     type RecordedCall = (PathBuf, Vec<OsString>, Vec<(OsString, OsString)>);
     // Fake cleanup runner with recording + configurable Cargo metadata.
@@ -3765,6 +3842,11 @@ mod tests {
         assert!(
             validate_cleanup_root(&with_slash).is_err(),
             "a symlinked root with a trailing slash must be refused exactly like without one"
+        );
+        let with_dot = PathBuf::from(format!("{}/.", link.display()));
+        assert!(
+            validate_cleanup_root(&with_dot).is_err(),
+            "a symlinked root with a trailing /. must be refused exactly like without one"
         );
         assert!(validate_cleanup_root(&real).is_ok());
     }

@@ -473,19 +473,26 @@ fn canonical_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
 
 /// `symlink_metadata("link/")` follows the final component on POSIX, so a
 /// trailing slash hides a symlink from the `is_symlink` check. Judge the
-/// path with its trailing separators stripped as well.
+/// path with its trailing separators stripped as well. A trailing `/.`
+/// spells the same bypass, so dot components are stripped too.
 fn path_is_symlink(path: &Path) -> bool {
     if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
         return true;
     }
-    let spelling = path.as_os_str().to_string_lossy();
-    if spelling.ends_with('/') || spelling.ends_with('\\') {
-        let trimmed = spelling.trim_end_matches(['/', '\\']);
-        if !trimmed.is_empty()
-            && fs::symlink_metadata(trimmed).is_ok_and(|m| m.file_type().is_symlink())
-        {
-            return true;
+    let mut spelling = path.as_os_str().to_string_lossy().into_owned();
+    loop {
+        let trimmed = spelling.trim_end_matches(['/', '\\']).to_owned();
+        if trimmed.ends_with("/.") || trimmed.ends_with("\\.") {
+            spelling = trimmed[..trimmed.len() - 1].to_owned();
+            continue;
         }
+        spelling = trimmed;
+        break;
+    }
+    if !spelling.is_empty()
+        && fs::symlink_metadata(&spelling).is_ok_and(|m| m.file_type().is_symlink())
+    {
+        return true;
     }
     false
 }
@@ -1658,6 +1665,12 @@ mod tests {
         assert!(
             diagnostics.iter().any(|d| d.message.contains("symlink")),
             "{diagnostics:?}"
+        );
+        let with_dot = PathBuf::from(format!("{}/.", link.display()));
+        let mut diagnostics = Vec::new();
+        assert!(
+            !root_is_usable(&with_dot, &mut diagnostics),
+            "a symlinked scan root with a trailing /. must be refused"
         );
     }
 

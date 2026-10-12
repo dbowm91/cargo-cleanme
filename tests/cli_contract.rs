@@ -886,11 +886,12 @@ esac
         json["result"]["units"][0]["selector_estimate_bytes"],
         serde_json::Value::Null
     );
-    // A selector run cannot attribute bytes to the selector, so the union
-    // carries the same unknown as every other byte field.
-    assert_eq!(
-        json["result"]["units"][0]["output_union_before_bytes"],
-        serde_json::Value::Null
+    // A selector run cannot attribute bytes to the selector, so the estimate
+    // stays unknown. The output-union measurement is known in both modes,
+    // matching the human "output-union before" line.
+    assert!(
+        json["result"]["units"][0]["output_union_before_bytes"].is_number(),
+        "{json}"
     );
     assert!(!artifact.exists());
     let calls = fs::read_to_string(&log).unwrap();

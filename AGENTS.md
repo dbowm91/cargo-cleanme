@@ -162,7 +162,7 @@ closure records.
 - `--dry-run` (hidden alias `--dryrun`) spawns nothing, not even a Cargo preview,
   and is otherwise as strict as `--yes`. Cargo's own `clean --dry-run` lives
   behind the separate `--cargo-preview` flag (`cli::clean_mode`).
-- `ignore.unignore` is a literal relative path, not a glob. It predates glob
+- `ignore.unignore` is a literal absolute path, not a glob. It predates glob
   support by design; changing it needs a plan.
 - Learned state is advisory, never authority, and a persistence failure never
   changes an exit code.

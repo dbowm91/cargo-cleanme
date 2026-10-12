@@ -91,10 +91,10 @@ fn run_update(dry_run: bool, format: OutputFormat) -> Result<i32, AppError> {
         // "Already at latest" is success with nothing to do (exit 0), not a
         // usage error (exit 2): schedulers must not alert on it. The JSON
         // branch still emits exactly one document with `changed:false`.
-        Err(
-            cargo_cleanme::update::UpdateError::AlreadyCurrent { current, published }
-            | cargo_cleanme::update::UpdateError::NewerThanPublished { current, published },
-        ) => {
+        // The two variants are matched separately (not by string equality on
+        // the versions) so `01.02.03`-style spellings still report the exact
+        // variant the version comparison produced.
+        Err(cargo_cleanme::update::UpdateError::AlreadyCurrent { current, published }) => {
             if format == OutputFormat::Json {
                 let target = cargo_cleanme::update::host_target().unwrap_or("unknown");
                 let asset = cargo_cleanme::update::asset_for_target(target).unwrap_or("");
@@ -128,9 +128,46 @@ fn run_update(dry_run: bool, format: OutputFormat) -> Result<i32, AppError> {
                         true,
                     )
                 );
-            } else if current == published {
+            } else {
                 println!(
                     "cargo-cleanme: already at the latest stable version ({current}; published is {published})"
+                );
+            }
+            return Ok(0);
+        }
+        Err(cargo_cleanme::update::UpdateError::NewerThanPublished { current, published }) => {
+            if format == OutputFormat::Json {
+                let target = cargo_cleanme::update::host_target().unwrap_or("unknown");
+                let asset = cargo_cleanme::update::asset_for_target(target).unwrap_or("");
+                let provenance = std::env::current_exe()
+                    .ok()
+                    .map(|exe| cargo_cleanme::update::classify_provenance(&exe).code())
+                    .unwrap_or("unprovable_ownership");
+                let document = serde_json::json!({
+                    "schema_version": 1,
+                    "cargo_cleanme_version": env!("CARGO_PKG_VERSION"),
+                    "operation": "update",
+                    "dry_run": dry_run,
+                    "result": {
+                        "from_version": current,
+                        "to_version": published,
+                        "target": target,
+                        "asset": asset,
+                        "tag": format!("v{published}"),
+                        "provenance": provenance,
+                        "changed": false,
+                    }
+                });
+                println!("{document}");
+            } else if format == OutputFormat::Log {
+                println!(
+                    "{}",
+                    cargo_cleanme::output::log::update(
+                        &current,
+                        &published,
+                        cargo_cleanme::update::host_target().unwrap_or("unknown"),
+                        true,
+                    )
                 );
             } else {
                 println!(
@@ -468,7 +505,7 @@ fn run_engine_guarded(
                         && reclassified
                             .omitted_paths()
                             .iter()
-                            .any(|p| p.display().to_string() == path) =>
+                            .any(|p| p == std::path::Path::new(&path)) =>
                 {
                     let omitted = reclassified.omitted.clone();
                     let admitted = collapse_roots(reclassified.admitted);

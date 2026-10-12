@@ -229,19 +229,26 @@ fn cargo_failure_reason(stderr: &[u8]) -> String {
 
 /// `symlink_metadata("link/")` follows the final component on POSIX, so a
 /// trailing slash hides a symlink from the `is_symlink` check. Judge the
-/// path with its trailing separators stripped as well.
+/// path with its trailing separators stripped as well. A trailing `/.`
+/// spells the same bypass, so dot components are stripped too.
 fn path_is_symlink(path: &Path) -> bool {
     if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
         return true;
     }
-    let spelling = path.as_os_str().to_string_lossy();
-    if spelling.ends_with('/') || spelling.ends_with('\\') {
-        let trimmed = spelling.trim_end_matches(['/', '\\']);
-        if !trimmed.is_empty()
-            && fs::symlink_metadata(trimmed).is_ok_and(|m| m.file_type().is_symlink())
-        {
-            return true;
+    let mut spelling = path.as_os_str().to_string_lossy().into_owned();
+    loop {
+        let trimmed = spelling.trim_end_matches(['/', '\\']).to_owned();
+        if trimmed.ends_with("/.") || trimmed.ends_with("\\.") {
+            spelling = trimmed[..trimmed.len() - 1].to_owned();
+            continue;
         }
+        spelling = trimmed;
+        break;
+    }
+    if !spelling.is_empty()
+        && fs::symlink_metadata(&spelling).is_ok_and(|m| m.file_type().is_symlink())
+    {
+        return true;
     }
     false
 }
@@ -665,6 +672,9 @@ pub fn resolve_workspaces_with_coverage(
     // ledger on concurrent mutation. Repeat triggers of a successful root
     // never reach the metadata code — the caches below divert them first.
     let mut failed_templates: HashMap<PathBuf, (MetadataFailure, u64)> = HashMap::new();
+    // Explicit failure stage per manifest, recorded where the diagnostic is
+    // pushed so `unresolved` labels do not depend on re-parsing message text.
+    let mut unresolved_stage: HashMap<PathBuf, &'static str> = HashMap::new();
     for (index, manifest) in manifests.iter().enumerate() {
         // Every manifest located exactly once up front, so the spawn is
         // accounted here — before any fast path. A fast-pathed manifest
@@ -697,6 +707,7 @@ pub fn resolve_workspaces_with_coverage(
                     path: Some(manifest.clone()),
                     message: format!("cargo locate-project could not start: {error}"),
                 });
+                unresolved_stage.insert(manifest.clone(), "locate");
                 continue;
             }
             LocateOutcome::Failed { reason, .. } => {
@@ -708,6 +719,7 @@ pub fn resolve_workspaces_with_coverage(
                     path: Some(manifest.clone()),
                     message: format!("cargo locate-project failed: {reason}"),
                 });
+                unresolved_stage.insert(manifest.clone(), "locate");
                 continue;
             }
             LocateOutcome::Unparseable { error, .. } => {
@@ -719,6 +731,7 @@ pub fn resolve_workspaces_with_coverage(
                     path: Some(manifest.clone()),
                     message: format!("cannot parse cargo locate-project output: {error}"),
                 });
+                unresolved_stage.insert(manifest.clone(), "locate");
                 continue;
             }
             LocateOutcome::WorkerFailed => {
@@ -731,6 +744,7 @@ pub fn resolve_workspaces_with_coverage(
                     message: "cargo locate-project could not start: parallel locate worker failed"
                         .into(),
                 });
+                unresolved_stage.insert(manifest.clone(), "locate");
                 continue;
             }
             LocateOutcome::Located {
@@ -768,6 +782,7 @@ pub fn resolve_workspaces_with_coverage(
                 path: Some(manifest.clone()),
                 message: "internal error: located manifest has no resolution group".into(),
             });
+            unresolved_stage.insert(manifest.clone(), "identity");
             continue;
         };
         if let Some((template, _)) = failed_templates.get(canonical_key) {
@@ -786,6 +801,7 @@ pub fn resolve_workspaces_with_coverage(
                 path: Some(manifest.clone()),
                 message: template.message.clone(),
             });
+            unresolved_stage.insert(manifest.clone(), "metadata");
             continue;
         }
         counters.cargo_metadata_calls += 1;
@@ -825,6 +841,7 @@ pub fn resolve_workspaces_with_coverage(
                 canonical_key.clone(),
                 (template, metadata_spawns[group_idx].nanos),
             );
+            unresolved_stage.insert(manifest.clone(), "metadata");
         }
     }
     let workspaces: Vec<_> = ordered_keys
@@ -846,13 +863,13 @@ pub fn resolve_workspaces_with_coverage(
                 .unwrap_or_else(|| {
                     "no successful Cargo workspace metadata covered this manifest".into()
                 });
-            let stage = if message.contains("locate-project") {
-                "locate"
-            } else if message.contains("metadata") {
-                "metadata"
-            } else {
-                "identity"
-            };
+            // Stage is recorded where the diagnostic is pushed, not re-parsed
+            // from message text: a copy-edit to a diagnostic must not
+            // silently reclassify the stage.
+            let stage = unresolved_stage
+                .get(manifest)
+                .copied()
+                .unwrap_or("identity");
             Some(UnresolvedOwnershipParticipant {
                 manifest: manifest.clone(),
                 stage,
@@ -2363,6 +2380,72 @@ mod tests {
                 coverage.unresolved[0].reason
             );
         }
+    }
+
+    #[test]
+    fn unresolved_stage_is_recorded_not_parsed_from_message() {
+        // Discriminating case: the member-source diagnostic contains neither
+        // "locate-project" nor "metadata", so message parsing would label it
+        // "identity". The stage is recorded at the failure site instead.
+        struct RelativeMemberRunner {
+            root_manifest: PathBuf,
+            target: PathBuf,
+        }
+        impl CargoRunner for RelativeMemberRunner {
+            fn run(&self, _cwd: &Path, args: &[std::ffi::OsString]) -> io::Result<ProcessOutput> {
+                if args.first().is_some_and(|a| a == "locate-project") {
+                    let json = serde_json::json!({"root": self.root_manifest});
+                    return Ok(ProcessOutput {
+                        success: true,
+                        code: Some(0),
+                        stdout: serde_json::to_vec(&json).unwrap(),
+                        stderr: Vec::new(),
+                    });
+                }
+                let json = serde_json::json!({
+                    "packages": [{
+                        "id": "m0",
+                        "name": "m0",
+                        "manifest_path": "relative/member/Cargo.toml",
+                    }],
+                    "workspace_members": ["m0"],
+                    "workspace_root": self.root_manifest.parent().unwrap(),
+                    "target_directory": self.target,
+                });
+                Ok(ProcessOutput {
+                    success: true,
+                    code: Some(0),
+                    stdout: serde_json::to_vec(&json).unwrap(),
+                    stderr: Vec::new(),
+                })
+            }
+        }
+        let d = tempfile::tempdir().unwrap();
+        let ws_root = d.path().join("ws");
+        std::fs::create_dir_all(&ws_root).unwrap();
+        let root_manifest = ws_root.join("Cargo.toml");
+        std::fs::write(&root_manifest, "").unwrap();
+        let target = ws_root.join("target");
+        let runner = RelativeMemberRunner {
+            root_manifest: root_manifest.clone(),
+            target,
+        };
+        let mut counters = ScanCounters::default();
+        let mut diagnostics = vec![];
+        let coverage = resolve_workspaces_with_coverage(
+            std::slice::from_ref(&root_manifest),
+            &runner,
+            &mut counters,
+            &mut diagnostics,
+            &NoopObserver,
+        );
+        assert_eq!(coverage.unresolved.len(), 1);
+        let reason = &coverage.unresolved[0].reason;
+        assert!(
+            !reason.contains("locate-project") && !reason.contains("metadata"),
+            "test premise holds: {reason:?}"
+        );
+        assert_eq!(coverage.unresolved[0].stage, "metadata");
     }
 
     struct FakeCargo {
@@ -5347,6 +5430,17 @@ mod tests {
             probed.physical_path.is_none(),
             "a symlinked output root must never gain a physical identity"
         );
+        let mut diagnostics = Vec::new();
+        let probed = output_root(
+            OutputRootKind::Target,
+            PathBuf::from(format!("{}/.", link.display())),
+            &mut diagnostics,
+        );
+        assert!(
+            probed.is_symlink,
+            "a symlinked output root with a trailing /. must probe as a symlink"
+        );
+        assert!(probed.physical_path.is_none());
     }
 
     #[test]

@@ -630,7 +630,7 @@ schema document constrains it.
 | `reason_code: CleanupReasonCode` | `reason_code: String` | `.as_str()` |
 | `before_bytes: Option<u64>` | `before_bytes` | **`None` if `report.selector.is_some()`** |
 | `before_bytes: Option<u64>` | `selector_estimate_bytes` | **`Some` iff `!report.selector.is_some()`** |
-| `before_bytes: Option<u64>` | `output_union_before_bytes` | **`None` if `report.selector.is_some()`** |
+| `before_bytes: Option<u64>` | `output_union_before_bytes` | **always `r.before_bytes`** |
 | `after_bytes: Option<u64>` | `after_bytes: Option<u64>` | direct |
 | `observed_decrease: Option<u64>` | `observed_decrease_bytes: Option<u64>` | renamed |
 | `detail: String` | `detail: String` | `.clone()` |
@@ -641,12 +641,14 @@ schema document constrains it.
 
 | Run shape | `before_bytes` | `selector_estimate_bytes` | `output_union_before_bytes` |
 |---|---|---|---|
-| Selector active | `null` | `null` | `null` |
+| Selector active | `null` | `null` | value |
 | No selector | value | **value** | value |
 
 Without a selector all three carry the identical `u64`; `selector_estimate_bytes`
 is then a "selector estimate" for a run that has no selector. A selector run
-cannot attribute bytes to the selector, so every byte field reads `null`.
+cannot attribute bytes to the selector, so the estimate reads `null`, while the
+output-union measurement is known in both modes (matching the human
+"output-union before" line).
 
 ### Dropped domain fields, and why that is correct
 
@@ -817,7 +819,7 @@ itemised below; the table is the coverage map.
 | Cleanup `state_generation_last_full_at` | yes | |
 | Cleanup `selector_kind` / `selector_value` | yes | |
 | `selector_estimate_bytes` nullity rule | **no** | **D1** — most significant divergence |
-| `output_union_before_bytes` semantics | yes | `null` under a selector, else `r.before_bytes` |
+| `output_union_before_bytes` semantics | yes | `r.before_bytes` in both modes |
 | `before_bytes` null for selector cleanup | yes | |
 | Cleanup `scope_blocked` / `scope_reason` / `unresolved_ownership` | yes | |
 | Cleanup `unresolved_participants` (3 keys) | yes | |
@@ -1208,7 +1210,7 @@ exist, which makes it a genuine contract:
 | 473 | `units[0].reason_code == "cleaned"` |
 | 474-475 | `selector_kind == "profile"`, `selector_value == "dev"` |
 | 476-483 | `before_bytes` and `selector_estimate_bytes` both `Null` under a selector |
-| 484-489 | `output_union_before_bytes` is `Null` under a selector |
+| 484-489 | `output_union_before_bytes` numeric under a selector |
 | 520 | `units[0].outcome == "simulated"` |
 | 552-559 | `reason_code == "selector_unsupported"`, `policy_disposition == "selector_estimate_unavailable"` |
 | 249-252 | configured `scan.root` resolves to `scope == "explicit"` under `scan --known` — the regression for the label bug, §3 of [13-orchestration](13-orchestration.md) |

@@ -87,7 +87,7 @@ impl TestObserver {
     pub fn total_for(&self, phase: ScanPhase) -> Option<u64> {
         self.totals
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .iter()
             .rev()
             .find(|(p, _)| *p == phase)
@@ -97,7 +97,7 @@ impl TestObserver {
     pub fn completed_count(&self, phase: ScanPhase) -> usize {
         self.completed
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .iter()
             .filter(|p| **p == phase)
             .count()
@@ -142,7 +142,7 @@ impl ProgressObserver for TestObserver {
     fn reportable_group(&self, path: &Path, bytes: u64) {
         self.reportable
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .push((path.to_path_buf(), bytes));
     }
     fn units_total(&self, phase: ScanPhase, total: u64) {
