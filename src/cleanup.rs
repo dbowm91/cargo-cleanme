@@ -143,8 +143,9 @@ impl ProofFailure {
 }
 
 impl From<String> for ProofFailure {
-    // Legacy fallback for the Cargo-refresh boundary (`ProofUniverse`), whose
-    // failures are pass-through Cargo/discovery strings with no typed site.
+    // Legacy fallback retained for external callers. Production universe
+    // refresh (L-2) now constructs `ProofFailure::new` with an explicit code
+    // at each site, so no production path derives the code from prose.
     // Proof gates with a known site must use `ProofFailure::new` instead.
     fn from(detail: String) -> Self {
         let code = proof_skip_code(&detail);
@@ -732,6 +733,49 @@ fn unit_block_reason_roots(
     Ok(())
 }
 
+/// True when a `unit_block_reason_roots` error reports authorization
+/// infrastructure failure (misconfigured/unreadable roots), not a plain
+/// "outside authorized boundary" verdict.
+///
+/// Ownership-first ordering is unchanged: `covering_is_authorized_roots`
+/// still returns `Ok(false)` for non-private classes before inspecting any
+/// path; only `Err` strings with these prefixes take the scope-block path,
+/// so authorization still cannot promote an ownership class.
+fn is_authorization_infrastructure_error(detail: &str) -> bool {
+    detail.contains("cleanup authorization root") || detail.contains("cannot resolve cleanup root")
+}
+
+/// Machine code for a fresh group whose ownership degraded during the proof.
+///
+/// Scan-time uses `unit_skip_code` for the same fact; the proof must agree
+/// instead of conflating every degradation to `Changed`.
+fn ownership_degraded_code(class: OutputOwnershipClass) -> CleanupReasonCode {
+    match class {
+        OutputOwnershipClass::Shared => CleanupReasonCode::SkippedShared,
+        OutputOwnershipClass::Uncertain => CleanupReasonCode::SkippedUncertain,
+        OutputOwnershipClass::ExternalUnproven => CleanupReasonCode::SkippedOwnershipUnproven,
+        OutputOwnershipClass::PrivateBounded => CleanupReasonCode::SkippedChangedBeforeCleanup,
+    }
+}
+
+/// Typed mapping for a covering-root inspect failure.
+///
+/// `NotFound` (disappeared) and type/symlink changes are evidence of change;
+/// an unreadable root (`PermissionDenied`) is uncertainty, not a change —
+/// the operator response differs (investigate/retry vs "something moved").
+fn covering_inspect_failure(err: io::Error) -> ProofFailure {
+    if err.kind() == io::ErrorKind::PermissionDenied {
+        return ProofFailure::new(
+            CleanupReasonCode::SkippedUncertain,
+            format!("preflight uncertain: cannot inspect covering root: {err}"),
+        );
+    }
+    ProofFailure::new(
+        CleanupReasonCode::SkippedChangedBeforeCleanup,
+        format!("preflight changed: cannot inspect covering root: {err}"),
+    )
+}
+
 pub fn clean(
     root: &Path,
     recency_seconds: u64,
@@ -910,6 +954,12 @@ pub fn clean_with_roots_policy_selector_guarded(
     let discovery_diagnostic_count = discovered.diagnostics.len();
     let mut diagnostics: Vec<ScanDiagnostic> = discovered.diagnostics;
     let manifests = discovered.manifests;
+    // H-2 snapshot: the manifest set the hoisted universe was built from.
+    // The last-moment gate before each spawn rediscovers and blocks on any
+    // growth, so a manifest created after hoisting cannot silently escape
+    // the overlap check. Sorted so the comparison is order-independent.
+    let mut initial_manifests = manifests.clone();
+    initial_manifests.sort();
 
     // Workspace resolution, physical grouping, fail-fast analysis, and
     // CleanupUnit construction share one clock.
@@ -1050,7 +1100,20 @@ pub fn clean_with_roots_policy_selector_guarded(
             continue;
         }
         if let Some(CleanupSelector::Package(spec)) = selector.as_ref() {
-            let ws = &workspaces[unit.workspace_idx];
+            // L-1: fail closed on a desynced index instead of panicking.
+            let Some(ws) = workspaces.get(unit.workspace_idx) else {
+                skipped(
+                    &mut report,
+                    format!(
+                        "workspace index {} is out of bounds; cleanup deferred",
+                        unit.workspace_idx
+                    ),
+                    None,
+                    CleanupReasonCode::SkippedSafety,
+                );
+                observer.unit_completed(cleanup_phase);
+                continue;
+            };
             if resolve_package_spec(&ws.packages, spec).is_err() {
                 skipped(
                     &mut report,
@@ -1088,7 +1151,22 @@ pub fn clean_with_roots_policy_selector_guarded(
         // C003 §7.2: unit-wide destructive gate. Every physical group the
         // invocation can affect must be private, authorized, and measured.
         // No Cargo process is spawned for any subset of a unit.
+        // H-3: authorization *infrastructure* failure (misconfigured or
+        // unreadable roots) is a scope-level block (exit 1), not N per-unit
+        // `SkippedUnauthorized` rows (exit 0). Only `Err` takes this path;
+        // `Ok(false)` (private but outside the boundary) stays a per-unit
+        // skip, so authorization still cannot promote.
         if let Err(msg) = unit_block_reason_roots(unit, &roots, allowed_output_roots) {
+            if is_authorization_infrastructure_error(&msg) {
+                report.scope_blocked = Some(ScopeBlock::new(
+                    ScopeBlockReason::OwnershipUnproven,
+                    format!(
+                        "cleanup authorization could not be proven: {msg}; no cleanup commands were run"
+                    ),
+                ));
+                report.counters = counters.clone();
+                return Ok(report);
+            }
             skipped(&mut report, msg, None, unit_skip_code(unit));
             observer.unit_completed(cleanup_phase);
             continue;
@@ -1123,6 +1201,18 @@ pub fn clean_with_roots_policy_selector_guarded(
         let hoisted = hoisted.get_or_insert_with(|| {
             ProofUniverse::refresh(&workspaces, &roots, runner, &mut counters)
         });
+        // M-2: a universe that could not be re-proven invalidates every
+        // candidate, like scan-time incompleteness (exit 1 via scope_blocked),
+        // not N per-unit skips (exit 0). Per-candidate refresh failures below
+        // stay per-unit skips.
+        if let Err(failure) = hoisted.get() {
+            report.scope_blocked = Some(ScopeBlock::new(
+                ScopeBlockReason::OwnershipUnproven,
+                format!("{}; no cleanup commands were run", failure.detail),
+            ));
+            report.counters = counters.clone();
+            return Ok(report);
+        }
         let proof = match final_cleanup_proof_roots(
             unit,
             &workspaces,
@@ -1136,6 +1226,20 @@ pub fn clean_with_roots_policy_selector_guarded(
         ) {
             Ok(p) => p,
             Err(failure) => {
+                // H-3 via the proof's defensive gate 1: an infrastructure
+                // error surfacing here (TOCTOU between the gate above and the
+                // proof) is still a scope block, not a per-unit skip.
+                if is_authorization_infrastructure_error(&failure.detail) {
+                    report.scope_blocked = Some(ScopeBlock::new(
+                        ScopeBlockReason::OwnershipUnproven,
+                        format!(
+                            "cleanup authorization could not be proven: {}; no cleanup commands were run",
+                            failure.detail
+                        ),
+                    ));
+                    report.counters = counters.clone();
+                    return Ok(report);
+                }
                 skipped(&mut report, failure.detail, None, failure.code);
                 observer.unit_completed(cleanup_phase);
                 continue;
@@ -1179,6 +1283,46 @@ pub fn clean_with_roots_policy_selector_guarded(
                 );
                 observer.unit_completed(cleanup_phase);
                 continue;
+            }
+        }
+
+        // H-2 residual window, narrowed fail-closed for all modes (parity):
+        // the hoisted universe is a snapshot, and the per-candidate refresh
+        // only re-resolves *self*, so a manifest created under an admitted
+        // root after hoisting is invisible to the overlap check. The premise
+        // recheck covers omitted/admitted roots only, not new manifests.
+        // Rediscover (manifest walk, no Cargo) after the proof; any growth,
+        // shrinkage, or diagnostic blocks the remaining scope instead of
+        // proceeding against a stale claimant set. Simulate runs it too so
+        // simulation predicts the spawn path instead of diverging from it.
+        {
+            let rediscovery_policy = crate::domain::EffectiveScanPolicy {
+                recency: Duration::ZERO,
+                scope: ScanScope::ExplicitRoots(roots.clone()),
+                discovery_filters: crate::domain::DiscoveryFilters::Bypassed,
+            };
+            match discovery::discover_manifests(&rediscovery_policy, &crate::progress::NoopObserver)
+            {
+                Ok(fresh) if fresh.diagnostics.is_empty() => {
+                    let mut now = fresh.manifests;
+                    now.sort();
+                    if now != initial_manifests {
+                        report.scope_blocked = Some(ScopeBlock::new(
+                            ScopeBlockReason::IncompleteDiscovery,
+                            "cleanup ownership universe changed: manifest set differs after proof; no further cleanup commands were run".into(),
+                        ));
+                        report.counters = counters.clone();
+                        return Ok(report);
+                    }
+                }
+                _ => {
+                    report.scope_blocked = Some(ScopeBlock::new(
+                        ScopeBlockReason::IncompleteDiscovery,
+                        "cleanup ownership universe could not be re-discovered after proof; no further cleanup commands were run".into(),
+                    ));
+                    report.counters = counters.clone();
+                    return Ok(report);
+                }
             }
         }
 
@@ -1229,7 +1373,18 @@ pub fn clean_with_roots_policy_selector_guarded(
                 // covering root in that window would redirect `cargo clean`
                 // outside the proven boundary, so re-prove here with the
                 // same gate and skip instead of spawning on any failure.
+                // M-4: `prove_covering_roots` maps unreadable roots to
+                // `SkippedUncertain` (via `covering_inspect_failure`), not
+                // `Changed`, so the code still distinguishes the response.
                 if let Err(failure) = prove_covering_roots(&proof.covering) {
+                    skipped(&mut report, failure.detail, None, failure.code);
+                    observer.unit_completed(cleanup_phase);
+                    continue;
+                }
+                // M-6: markers are part of the proof (step 11); re-prove at
+                // the last moment so a marker removed or replaced in the
+                // proof→spawn window skips instead of spawning.
+                if let Err(failure) = require_cargo_markers(&proof.covering) {
                     skipped(&mut report, failure.detail, None, failure.code);
                     observer.unit_completed(cleanup_phase);
                     continue;
@@ -1768,7 +1923,7 @@ fn refresh_proof_universe(
     universe: &[ResolvedWorkspace],
     runner: &dyn CleanupRunner,
     counters: &mut ScanCounters,
-) -> Result<Vec<ResolvedWorkspace>, String> {
+) -> Result<Vec<ResolvedWorkspace>, ProofFailure> {
     refresh_proof_universe_with_limit(
         universe,
         runner,
@@ -1790,7 +1945,7 @@ fn refresh_proof_universe(
 /// snapshot is still caught before anything is cleaned.
 struct ProofUniverse {
     fresh: Option<Vec<ResolvedWorkspace>>,
-    failure: Option<String>,
+    failure: Option<ProofFailure>,
 }
 
 impl ProofUniverse {
@@ -1811,12 +1966,20 @@ impl ProofUniverse {
             },
         }
     }
-    /// The refreshed universe, or the reason it could not be re-proven.
-    fn get(&self) -> Result<&[ResolvedWorkspace], &str> {
+    /// The refreshed universe, or the typed reason it could not be re-proven.
+    ///
+    /// L-2: the error is constructed with `ProofFailure::new` at the failure
+    /// site, never derived from message text via `proof_skip_code`, so prose
+    /// edits cannot silently reclassify the machine contract. The legacy
+    /// `From<String>` fallback remains for external callers only.
+    fn get(&self) -> Result<&[ResolvedWorkspace], ProofFailure> {
         match (&self.fresh, &self.failure) {
             (Some(fresh), _) => Ok(fresh),
-            (None, Some(reason)) => Err(reason.as_str()),
-            (None, None) => Err("ownership could not be re-proven: no refreshed universe"),
+            (None, Some(reason)) => Err(reason.clone()),
+            (None, None) => Err(ProofFailure::new(
+                CleanupReasonCode::SkippedOwnershipUnproven,
+                "ownership could not be re-proven: no refreshed universe",
+            )),
         }
     }
 }
@@ -1827,7 +1990,7 @@ fn refresh_combined_universe(
     roots: &[PathBuf],
     runner: &dyn CleanupRunner,
     counters: &mut ScanCounters,
-) -> Result<Vec<ResolvedWorkspace>, String> {
+) -> Result<Vec<ResolvedWorkspace>, ProofFailure> {
     let policy = crate::domain::EffectiveScanPolicy {
         recency: Duration::ZERO,
         scope: ScanScope::ExplicitRoots(roots.to_vec()),
@@ -1835,13 +1998,16 @@ fn refresh_combined_universe(
     };
     let discovered = discovery::discover_manifests(&policy, &crate::progress::NoopObserver)
         .map_err(|e| {
-            format!("ownership could not be re-proven: combined root discovery failed: {e}")
+            ProofFailure::new(
+                CleanupReasonCode::SkippedOwnershipUnproven,
+                format!("ownership could not be re-proven: combined root discovery failed: {e}"),
+            )
         })?;
     if !discovered.diagnostics.is_empty() {
-        return Err(
-            "ownership could not be re-proven: combined selected-root discovery is incomplete"
-                .into(),
-        );
+        return Err(ProofFailure::new(
+            CleanupReasonCode::SkippedOwnershipUnproven,
+            "ownership could not be re-proven: combined selected-root discovery is incomplete",
+        ));
     }
     let adapter = WorkspaceCleanupAdapter { runner };
     let mut diagnostics = Vec::new();
@@ -1866,15 +2032,21 @@ fn refresh_combined_universe(
         .proof_cargo_locate_nanos
         .saturating_add(refreshed_counters.cargo_locate_nanos);
     if !coverage.unresolved.is_empty() {
-        return Err(format!(
-            "ownership could not be re-proven: combined selected-root universe has {} unresolved manifest(s); a workspace did not re-resolve",
-            coverage.unresolved.len()
+        return Err(ProofFailure::new(
+            CleanupReasonCode::SkippedOwnershipUnproven,
+            format!(
+                "ownership could not be re-proven: combined selected-root universe has {} unresolved manifest(s); a workspace did not re-resolve",
+                coverage.unresolved.len()
+            ),
         ));
     }
     let fresh = coverage.workspaces;
     let ids: std::collections::HashSet<_> = fresh.iter().map(|w| w.id.clone()).collect();
     if initial.iter().any(|w| !ids.contains(&w.id)) {
-        return Err("ownership could not be re-proven: a workspace changed identity or disappeared from the initial combined universe".into());
+        return Err(ProofFailure::new(
+            CleanupReasonCode::SkippedChangedBeforeCleanup,
+            "ownership could not be re-proven: a workspace changed identity or disappeared from the initial combined universe",
+        ));
     }
     refresh_proof_universe(&fresh, runner, counters)
 }
@@ -1884,7 +2056,7 @@ fn refresh_proof_universe_with_limit(
     runner: &dyn CleanupRunner,
     counters: &mut ScanCounters,
     worker_limit: usize,
-) -> Result<Vec<ResolvedWorkspace>, String> {
+) -> Result<Vec<ResolvedWorkspace>, ProofFailure> {
     let concurrency = worker_limit.clamp(1, PROOF_REFRESH_CONCURRENCY_CAP);
     let mut refreshed_universe = Vec::with_capacity(universe.len());
     let mut peak_concurrency = 0usize;
@@ -1924,7 +2096,7 @@ fn refresh_proof_universe_with_limit(
         };
         peak_concurrency = peak_concurrency.max(peak.load(std::sync::atomic::Ordering::SeqCst));
 
-        let mut failure = None;
+        let mut failure: Option<ProofFailure> = None;
         for (workspace, (proof_counters, fresh)) in batch.iter().zip(outcomes) {
             counters.merge_proof(&proof_counters);
             counters.proof_workspaces_refreshed =
@@ -1935,17 +2107,23 @@ fn refresh_proof_universe_with_limit(
                 }
                 Some(_) => {
                     failure.get_or_insert_with(|| {
-                        format!(
-                            "ownership could not be re-proven: workspace {} changed identity",
-                            workspace.root.display()
+                        ProofFailure::new(
+                            CleanupReasonCode::SkippedChangedBeforeCleanup,
+                            format!(
+                                "ownership could not be re-proven: workspace {} changed identity",
+                                workspace.root.display()
+                            ),
                         )
                     });
                 }
                 None => {
                     failure.get_or_insert_with(|| {
-                        format!(
-                            "ownership could not be re-proven: workspace {} did not re-resolve",
-                            workspace.root.display()
+                        ProofFailure::new(
+                            CleanupReasonCode::SkippedOwnershipUnproven,
+                            format!(
+                                "ownership could not be re-proven: workspace {} did not re-resolve",
+                                workspace.root.display()
+                            ),
                         )
                     });
                 }
@@ -2034,9 +2212,16 @@ fn final_cleanup_proof_roots(
     // final proof must be the single authority consumed by any spawn).
     // The skip code is derived from the unit itself (`unit_skip_code`), not
     // from the message text: parsing the detail would let a prose edit
-    // silently change the machine contract.
+    // silently change the machine contract. H-3: infrastructure errors stay
+    // distinguishable here (`SkippedSafety`, never `SkippedUnauthorized`);
+    // the engine maps them to a scope block via `is_authorization_…`.
     if let Err(detail) = unit_block_reason_roots(unit, clean_roots, allowed_output_roots) {
-        return Err(ProofFailure::new(unit_skip_code(unit), detail));
+        let code = if is_authorization_infrastructure_error(&detail) {
+            CleanupReasonCode::SkippedSafety
+        } else {
+            unit_skip_code(unit)
+        };
+        return Err(ProofFailure::new(code, detail));
     }
     // 2. Fresh Cargo resolution for the complete bounded ownership universe,
     // re-proven once per run (see `ProofUniverse`) rather than once per
@@ -2233,10 +2418,19 @@ fn final_cleanup_proof_roots(
     }
     let mut fresh_covering: Vec<PathBuf> = Vec::new();
     for gi in &fresh_affected {
-        let g = &fresh_groups[*gi];
+        // L-1: fail closed on a desynced graph index instead of panicking.
+        let Some(g) = fresh_groups.get(*gi) else {
+            return Err(ProofFailure::new(
+                CleanupReasonCode::SkippedSafety,
+                "fresh output graph index is out of bounds; cleanup deferred",
+            ));
+        };
+        // M-5: report the fresh class specifically (Shared/Uncertain/
+        // OwnershipUnproven), like the scan-time `unit_skip_code` does,
+        // instead of conflating every degradation to `Changed`.
         if g.ownership != OutputOwnershipClass::PrivateBounded {
             return Err(ProofFailure::new(
-                CleanupReasonCode::SkippedChangedBeforeCleanup,
+                ownership_degraded_code(g.ownership),
                 format!(
                     "ownership changed before cleanup; skipped: output {} is now {}; {}",
                     g.display.display(),
@@ -2432,6 +2626,7 @@ fn final_cleanup_proof_roots(
 /// Shared by the final proof (step 9) and the last-moment recheck
 /// immediately before spawn, so both gates refuse the same states with the
 /// same code. A trailing-slash spelling is judged as a symlink too.
+/// M-4: an unreadable root maps to `SkippedUncertain`, not `Changed`.
 fn prove_covering_roots(covering: &[PathBuf]) -> Result<(), ProofFailure> {
     for root in covering {
         match fs::symlink_metadata(root) {
@@ -2442,10 +2637,7 @@ fn prove_covering_roots(covering: &[PathBuf]) -> Result<(), ProofFailure> {
                 ));
             }
             Err(e) => {
-                return Err(ProofFailure::new(
-                    CleanupReasonCode::SkippedChangedBeforeCleanup,
-                    format!("preflight changed: cannot inspect covering root: {e}"),
-                ));
+                return Err(covering_inspect_failure(e));
             }
             Ok(m) if m.file_type().is_symlink() || path_is_symlink(root) => {
                 return Err(ProofFailure::new(
@@ -4675,6 +4867,10 @@ mod tests {
 
     #[test]
     fn direct_metadata_refresh_detects_workspace_root_and_member_changes() {
+        // M-2: "root" and "malformed" break the hoisted universe itself, so
+        // they scope-block the whole run (exit 1) like scan-time
+        // incompleteness. "member" growth slips through the hoisted
+        // id+root check and is caught per-candidate as a member-set change.
         for mutation_kind in ["root", "member", "malformed"] {
             for mode in [
                 CleanMode::CargoPreview,
@@ -4700,31 +4896,61 @@ mod tests {
                     mutation,
                 };
                 let report = clean_with(&root, 0, &[], mode, &runner, &NoopObserver).unwrap();
-                assert_eq!(report.results.len(), 1, "{mutation_kind} {mode:?}");
-                assert_eq!(
-                    report.results[0].outcome,
-                    CleanOutcome::Skipped,
-                    "{mutation_kind} {mode:?}: {}",
-                    report.results[0].detail
-                );
-                if mutation_kind == "root" {
-                    assert!(
-                        report.results[0].detail.contains("changed identity"),
-                        "{}",
+                if mutation_kind == "member" {
+                    assert_eq!(report.results.len(), 1, "{mutation_kind} {mode:?}");
+                    assert_eq!(
+                        report.results[0].outcome,
+                        CleanOutcome::Skipped,
+                        "{mutation_kind} {mode:?}: {}",
                         report.results[0].detail
                     );
-                } else if mutation_kind == "member" {
                     assert!(
                         report.results[0].detail.contains("member set changed"),
                         "{}",
                         report.results[0].detail
                     );
+                    assert!(report.scope_blocked.is_none(), "{mutation_kind} {mode:?}");
                 } else {
                     assert!(
-                        report.results[0].detail.contains("did not re-resolve"),
-                        "{}",
-                        report.results[0].detail
+                        report.scope_blocked.is_some(),
+                        "{mutation_kind} {mode:?}: hoisted failure must scope-block: {report:?}"
                     );
+                    assert_eq!(
+                        report.scope_blocked.as_ref().map(|b| b.reason),
+                        Some(ScopeBlockReason::OwnershipUnproven),
+                        "{mutation_kind} {mode:?}"
+                    );
+                    assert!(
+                        report
+                            .scope_blocked
+                            .as_ref()
+                            .is_some_and(|b| b.message.contains("could not be re-proven")),
+                        "{mutation_kind} {mode:?}: {:?}",
+                        report.scope_blocked
+                    );
+                    assert!(
+                        report.results.is_empty(),
+                        "{mutation_kind} {mode:?}: blocked scope has no rows"
+                    );
+                    if mutation_kind == "root" {
+                        assert!(
+                            report
+                                .scope_blocked
+                                .as_ref()
+                                .is_some_and(|b| b.message.contains("changed identity")),
+                            "{:?}",
+                            report.scope_blocked
+                        );
+                    } else {
+                        assert!(
+                            report
+                                .scope_blocked
+                                .as_ref()
+                                .is_some_and(|b| b.message.contains("did not re-resolve")),
+                            "{:?}",
+                            report.scope_blocked
+                        );
+                    }
                 }
                 assert_eq!(report.counters.proof_cargo_locate_calls, 1);
                 // A universe that cannot be re-proven stops at the resolve
@@ -5651,6 +5877,7 @@ mod tests {
             assert_eq!(row.outcome, expected, "{mode:?}: {}", row.detail);
             assert_eq!(row.output_roots.len(), 2, "{mode:?}: both roots");
             assert_eq!(row.ownership, OutputOwnershipClass::PrivateBounded);
+
             match mode {
                 CleanMode::CargoPreview => {
                     assert_eq!(runner.dry_run_calls().len(), 1, "{mode:?}");
@@ -6235,8 +6462,11 @@ mod tests {
 
     #[test]
     fn universe_workspace_that_cannot_reresolve_fails_closed() {
-        // C003 §10: failure to re-resolve any workspace that could affect the
-        // bounded ownership graph makes the candidate non-cleanable.
+        // C003 §10 + M-2: failure to re-resolve any workspace that could
+        // affect the bounded ownership graph blocks the whole scope (exit 1
+        // via `scope_blocked`), like scan-time incompleteness, instead of
+        // per-unit skips (exit 0). Safety intact either way; the signal is
+        // now consistent.
         let d = tempfile::tempdir().unwrap();
         let root_a = ws_root(d.path(), "a");
         let root_b = ws_root(d.path(), "b");
@@ -6250,12 +6480,26 @@ mod tests {
         runner.fail_metadata_from(1, 2);
         let noop = NoopObserver;
         let report = clean_with(d.path(), 0, &[], CleanMode::Simulate, &runner, &noop).unwrap();
-        let row = row_for(&report, &root_a);
-        assert_eq!(row.outcome, CleanOutcome::Skipped, "{}", row.detail);
         assert!(
-            row.detail.contains("could not be re-proven"),
-            "{}",
-            row.detail
+            report.scope_blocked.is_some(),
+            "proof-time universe failure must scope-block: {report:?}"
+        );
+        assert_eq!(
+            report.scope_blocked.as_ref().map(|b| b.reason),
+            Some(ScopeBlockReason::OwnershipUnproven)
+        );
+        assert!(
+            report
+                .scope_blocked
+                .as_ref()
+                .is_some_and(|b| b.message.contains("could not be re-proven")
+                    && b.message.contains("no cleanup commands were run")),
+            "{:?}",
+            report.scope_blocked
+        );
+        assert!(
+            report.results.is_empty(),
+            "blocked scope reports no per-unit rows: {report:?}"
         );
         // The universe is re-proven once, so two workspaces cost two locates.
         assert_eq!(report.counters.proof_cargo_locate_calls, 2);
@@ -6950,5 +7194,234 @@ mod tests {
             &NoopObserver,
         );
         assert_eq!(sequential_disposition, parallel_disposition);
+    }
+
+    #[test]
+    fn authorization_infrastructure_failure_scope_blocks_instead_of_per_unit_skip() {
+        // H-3: a misconfigured/unreadable authorization root is a scope-level
+        // config error (exit 1 via `scope_blocked`), not N per-unit
+        // `SkippedUnauthorized` rows (exit 0). Only `Err` takes this path;
+        // `Ok(false)` stays a per-unit skip.
+        assert!(is_authorization_infrastructure_error(
+            "cleanup authorization root must be absolute: relative/path"
+        ));
+        assert!(is_authorization_infrastructure_error(
+            "cannot inspect cleanup authorization root /x: permission denied"
+        ));
+        assert!(is_authorization_infrastructure_error(
+            "cleanup authorization root must not be a symlink: /x"
+        ));
+        assert!(is_authorization_infrastructure_error(
+            "cannot resolve cleanup authorization root /x: foo"
+        ));
+        assert!(is_authorization_infrastructure_error(
+            "cannot resolve cleanup root /x: foo"
+        ));
+        assert!(!is_authorization_infrastructure_error(
+            "target output /x is private but outside the authorized cleanup boundary; add a `cleanup.allowed_output_roots` entry or use a clean ROOT that contains it"
+        ));
+
+        let (_d, root, target) = valid_fixture(1);
+        let runner = FakeCleanupRunner::new(&root, &target, 1);
+        // Non-absolute allowed root is an infrastructure `Err`, never `Ok(false)`.
+        let report = clean_with(
+            &root,
+            0,
+            &[PathBuf::from("relative/allowed-root")],
+            CleanMode::Simulate,
+            &runner,
+            &NoopObserver,
+        )
+        .unwrap();
+        assert!(
+            report.scope_blocked.is_some(),
+            "infrastructure failure must scope-block: {report:?}"
+        );
+        assert_eq!(
+            report.scope_blocked.as_ref().map(|b| b.reason),
+            Some(ScopeBlockReason::OwnershipUnproven)
+        );
+        assert!(
+            report
+                .scope_blocked
+                .as_ref()
+                .is_some_and(|b| b.message.contains("authorization could not be proven")
+                    && b.message.contains("no cleanup commands were run")),
+            "{:?}",
+            report.scope_blocked
+        );
+        assert!(
+            report.results.is_empty(),
+            "blocked scope reports no per-unit rows: {report:?}"
+        );
+        assert!(runner.clean_calls().is_empty());
+    }
+
+    #[test]
+    fn covering_inspect_failure_maps_permission_denied_to_uncertain() {
+        // M-4: an unreadable covering root is uncertainty (investigate/retry),
+        // not evidence of change. `NotFound`/type changes stay `Changed`.
+        let denied =
+            covering_inspect_failure(io::Error::new(io::ErrorKind::PermissionDenied, "denied"));
+        assert_eq!(denied.code, CleanupReasonCode::SkippedUncertain);
+        assert!(denied.detail.contains("uncertain"), "{}", denied.detail);
+        let other = covering_inspect_failure(io::Error::other("boom"));
+        assert_eq!(other.code, CleanupReasonCode::SkippedChangedBeforeCleanup);
+        // A disappeared root is still a change (existing gate, pinned).
+        let missing = PathBuf::from("/definitely/missing/cargo-cleanme-covering-root");
+        let failure = prove_covering_roots(std::slice::from_ref(&missing)).unwrap_err();
+        assert_eq!(failure.code, CleanupReasonCode::SkippedChangedBeforeCleanup);
+    }
+
+    #[test]
+    fn ownership_degraded_code_matches_scan_time_vocabulary() {
+        // M-5: the proof must report the fresh class specifically, like the
+        // scan-time `unit_skip_code` does, instead of conflating to `Changed`.
+        assert_eq!(
+            ownership_degraded_code(OutputOwnershipClass::Shared),
+            CleanupReasonCode::SkippedShared
+        );
+        assert_eq!(
+            ownership_degraded_code(OutputOwnershipClass::Uncertain),
+            CleanupReasonCode::SkippedUncertain
+        );
+        assert_eq!(
+            ownership_degraded_code(OutputOwnershipClass::ExternalUnproven),
+            CleanupReasonCode::SkippedOwnershipUnproven
+        );
+        // Spot-check agreement with the scan-time gate on synthetic units.
+        let d = tempfile::tempdir().unwrap();
+        let base = fs::canonicalize(d.path()).unwrap();
+        for (class, expected) in [
+            (
+                OutputOwnershipClass::Shared,
+                CleanupReasonCode::SkippedShared,
+            ),
+            (
+                OutputOwnershipClass::Uncertain,
+                CleanupReasonCode::SkippedUncertain,
+            ),
+            (
+                OutputOwnershipClass::ExternalUnproven,
+                CleanupReasonCode::SkippedOwnershipUnproven,
+            ),
+        ] {
+            assert_eq!(ownership_degraded_code(class), expected);
+            let unit = synthetic_mixed_unit(&base, OutputOwnershipClass::PrivateBounded, class);
+            assert_eq!(unit_skip_code(&unit), expected, "{class:?}");
+        }
+    }
+
+    #[test]
+    fn package_selector_with_valid_workspace_index_evaluates_spec() {
+        // L-1: the `workspace_idx` lookup is fail-closed (`.get()`); this
+        // exercises the path through the public entry without panicking.
+        // Host Cargo 1.89 lacks the package-selector capability, so the
+        // runtime gate reports `SelectorUnsupported` before spec resolution;
+        // on a runtime with package support the same call reports
+        // `SelectorInvalid`. Either way the unit skips and nothing spawns.
+        let (_d, root, target) = valid_fixture(1);
+        let runner = FakeCleanupRunner::new(&root, &target, 1);
+        let report = clean_with_roots_policy_selector(
+            std::slice::from_ref(&root),
+            0,
+            &[],
+            CleanMode::Simulate,
+            &runner,
+            &NoopObserver,
+            &CleanupPolicy::default(),
+            Some(CleanupSelector::Package("missing-package".into())),
+        )
+        .unwrap();
+        assert_eq!(report.results.len(), 1);
+        assert_eq!(report.results[0].outcome, CleanOutcome::Skipped);
+        assert!(
+            matches!(
+                report.results[0].reason_code,
+                CleanupReasonCode::SelectorInvalid | CleanupReasonCode::SelectorUnsupported
+            ),
+            "unexpected code: {:?}",
+            report.results[0].reason_code
+        );
+        assert!(runner.clean_calls().is_empty());
+    }
+
+    #[test]
+    fn new_manifest_after_proof_blocks_remaining_scope() {
+        // H-2: a manifest created under an admitted root after the hoisted
+        // universe was built is invisible to the overlap check. The post-proof
+        // rediscovery (all modes, for parity) must block instead of spawning.
+        struct PlantingRunner<'a> {
+            inner: FakeCleanupRunner,
+            planted: PathBuf,
+            metadata_calls: std::sync::atomic::AtomicUsize,
+            _marker: std::marker::PhantomData<&'a ()>,
+        }
+        impl CargoRunner for PlantingRunner<'_> {
+            fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput> {
+                if args.first().is_some_and(|a| a == "metadata") {
+                    let n = self
+                        .metadata_calls
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                        + 1;
+                    // Plant after the hoisted rediscovery walk (which runs
+                    // before the hoisted Cargo calls) but before the post-proof
+                    // rediscovery: the 4th metadata call is the per-candidate
+                    // refresh for a single-workspace run.
+                    if n == 4 {
+                        fs::create_dir_all(self.planted.parent().unwrap()).unwrap();
+                        fs::write(
+                            &self.planted,
+                            "[package]\nname='planted'\nversion='0.1.0'\n",
+                        )
+                        .unwrap();
+                    }
+                }
+                CargoRunner::run(&self.inner, cwd, args)
+            }
+        }
+        impl CleanupRunner for PlantingRunner<'_> {
+            fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput> {
+                CargoRunner::run(self, cwd, args)
+            }
+            fn run_with_env(
+                &self,
+                cwd: &Path,
+                args: &[OsString],
+                env: &[(OsString, OsString)],
+            ) -> io::Result<ProcessOutput> {
+                self.inner.run_with_env(cwd, args, env)
+            }
+        }
+        for mode in [CleanMode::Simulate, CleanMode::Execute] {
+            let (_d, root, target) = valid_fixture(1);
+            let planted = root.join("planted/Cargo.toml");
+            let inner = FakeCleanupRunner::new(&root, &target, 1);
+            let runner = PlantingRunner {
+                inner,
+                planted,
+                metadata_calls: std::sync::atomic::AtomicUsize::new(0),
+                _marker: std::marker::PhantomData,
+            };
+            let report = clean_with(&root, 0, &[], mode, &runner, &NoopObserver).unwrap();
+            assert!(
+                report.scope_blocked.is_some(),
+                "{mode:?}: planted manifest must block: {report:?}"
+            );
+            assert_eq!(
+                report.scope_blocked.as_ref().map(|b| b.reason),
+                Some(ScopeBlockReason::IncompleteDiscovery),
+                "{mode:?}"
+            );
+            assert!(
+                report
+                    .scope_blocked
+                    .as_ref()
+                    .is_some_and(|b| b.message.contains("manifest set differs")),
+                "{mode:?}: {:?}",
+                report.scope_blocked
+            );
+            assert!(runner.inner.clean_calls().is_empty(), "{mode:?}");
+        }
     }
 }

@@ -106,7 +106,10 @@ impl TestObserver {
 
 impl ProgressObserver for TestObserver {
     fn phase(&self, phase: ScanPhase) {
-        self.phases.lock().unwrap().push(phase);
+        self.phases
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(phase);
     }
     fn dirs_visited(&self, batch: u64) {
         self.visited.fetch_add(batch, Ordering::Relaxed);
@@ -143,10 +146,16 @@ impl ProgressObserver for TestObserver {
             .push((path.to_path_buf(), bytes));
     }
     fn units_total(&self, phase: ScanPhase, total: u64) {
-        self.totals.lock().unwrap().push((phase, total));
+        self.totals
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((phase, total));
     }
     fn unit_completed(&self, phase: ScanPhase) {
-        self.completed.lock().unwrap().push(phase);
+        self.completed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(phase);
     }
 }
 
@@ -325,7 +334,7 @@ impl IndicatifRenderer {
     }
 
     fn reset_totals_for_phase(&self, phase: ScanPhase) {
-        let mut current = self.current_phase.lock().unwrap();
+        let mut current = self.current_phase.lock().unwrap_or_else(|e| e.into_inner());
         if *current != Some(phase) {
             *current = Some(phase);
             self.determinate_total.store(0, Ordering::Relaxed);
@@ -362,7 +371,7 @@ impl IndicatifRenderer {
         if self.hidden {
             return;
         }
-        let mut last = self.last_draw.lock().unwrap();
+        let mut last = self.last_draw.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
         if let Some(prev) = *last
             && now.duration_since(prev) < Duration::from_millis(100)
@@ -398,7 +407,7 @@ impl IndicatifRenderer {
                 main.tick();
             }
         }
-        let top = self.top.lock().unwrap().clone();
+        let top = self.top.lock().unwrap_or_else(|e| e.into_inner()).clone();
         for (i, row) in self.rows.iter().enumerate() {
             if let Some((path, bytes)) = top.get(i) {
                 let text = format!("{}  {}", format_bytes(*bytes), path.to_string_lossy());
@@ -430,7 +439,7 @@ impl IndicatifRenderer {
     }
 
     pub fn top_groups(&self) -> Vec<(PathBuf, u64)> {
-        self.top.lock().unwrap().clone()
+        self.top.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn determinate_total_value(&self) -> u64 {
@@ -475,7 +484,7 @@ impl ProgressObserver for IndicatifRenderer {
         self.maybe_draw();
     }
     fn discovery_issues(&self, count: u64) {
-        self.discovery_issues.store(count, Ordering::Relaxed);
+        self.discovery_issues.fetch_add(count, Ordering::Relaxed);
         self.maybe_draw();
     }
     fn workspaces_resolved(&self, batch: u64) {
@@ -500,7 +509,7 @@ impl ProgressObserver for IndicatifRenderer {
     fn reportable_group(&self, path: &Path, bytes: u64) {
         self.eligible.fetch_add(1, Ordering::Relaxed);
         {
-            let mut top = self.top.lock().unwrap();
+            let mut top = self.top.lock().unwrap_or_else(|e| e.into_inner());
             top.push((path.to_path_buf(), bytes));
             top.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
             top.truncate(5);
@@ -615,7 +624,10 @@ mod tests {
         o.units_total(ScanPhase::Analysis, 4);
         o.unit_completed(ScanPhase::Analysis);
         assert_eq!(o.visited.load(Ordering::Relaxed), 3);
-        assert_eq!(o.reportable.lock().unwrap().len(), 1);
+        assert_eq!(
+            o.reportable.lock().unwrap_or_else(|e| e.into_inner()).len(),
+            1
+        );
         assert_eq!(o.total_for(ScanPhase::Analysis), Some(4));
         assert_eq!(o.completed_count(ScanPhase::Analysis), 1);
     }

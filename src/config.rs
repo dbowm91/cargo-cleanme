@@ -158,7 +158,7 @@ pub fn load(path: &Path) -> Result<Config, AppError> {
         .iter()
         .map(|p| canonical_pattern_prefix(p, PatternKind::Glob))
         .collect();
-    // `unignore` is a literal relative path, not a glob, so its canonical
+    // `unignore` is a literal absolute path, not a glob, so its canonical
     // spelling is spliced unescaped: escaping it would corrupt the path.
     c.scan.unignore = c
         .scan
@@ -211,7 +211,7 @@ enum PatternKind {
     /// Compiled by `globset`. A canonical directory name carrying a glob
     /// character would be read as a pattern, not as itself.
     Glob,
-    /// Compared as a literal path (`scan.unignore` is a literal relative path by
+    /// Compared as a literal path (`scan.unignore` is a literal absolute path by
     /// design, predating glob support).
     Literal,
 }
@@ -334,6 +334,17 @@ fn dangling_trailing_escape(prefix: &str, backslash_escapes: bool) -> bool {
     backslash_escapes && prefix.ends_with('\\')
 }
 
+/// A bare Windows drive root (`C:` left after trimming `C:\`).
+///
+/// `Path::is_absolute("C:")` is false: drive-relative, not rooted. For pattern
+/// canonicalization the trimmed spelling still names an absolute root, so it
+/// is treated as one here. The root is already canonical (canonicalize would
+/// only add a verbatim prefix glob cannot express), so callers return the
+/// pattern unchanged rather than rewriting it.
+fn is_windows_drive_root(bare: &str) -> bool {
+    bare.len() == 2 && bare.as_bytes()[1] == b':' && bare.as_bytes()[0].is_ascii_alphabetic()
+}
+
 fn canonical_pattern_prefix(pattern: &str, kind: PatternKind) -> String {
     let cut = pattern.find(['*', '?', '[', '{']).unwrap_or(pattern.len());
     let (prefix, tail) = pattern.split_at(cut);
@@ -345,7 +356,12 @@ fn canonical_pattern_prefix(pattern: &str, kind: PatternKind) -> String {
     // Trailing separators are structural (`…/x/*` means "children of x"), so
     // they are preserved around the canonicalized directory name.
     let bare = prefix.trim_end_matches(['/', '\\']);
-    if bare.is_empty() || !Path::new(bare).is_absolute() {
+    if bare.is_empty() || (!Path::new(bare).is_absolute() && !is_windows_drive_root(bare)) {
+        return pattern.to_owned();
+    }
+    // A drive root (`C:\*`) is already canonical; rewriting it would only add
+    // a verbatim prefix or a doubled separator, so it keeps its spelling.
+    if is_windows_drive_root(bare) {
         return pattern.to_owned();
     }
     let separators = &prefix[bare.len()..];
@@ -384,6 +400,15 @@ fn canonical_pattern_prefix(pattern: &str, kind: PatternKind) -> String {
 pub fn load_or_create(path: &Path) -> Result<Config, AppError> {
     if !path.exists() {
         create_initial(path)?;
+        // The file was just published; if it is gone now it was deleted in
+        // the race window. `load` reads absence as defaults, so return a
+        // fatal error rather than silent defaults on a config path.
+        if !path.exists() {
+            return Err(AppError::Config(format!(
+                "config file {} vanished after creation; refusing to use defaults",
+                path.display()
+            )));
+        }
     }
     load(path)
 }
@@ -530,7 +555,14 @@ fn create_initial(path: &Path) -> Result<(), AppError> {
                 }
                 Err(e) => return Err(step_error("publishing the config", e)),
             }
-            fs::remove_file(&temp).map_err(|e| step_error("removing the staging file", e))?;
+            // Staging cleanup failure must not become a masked success: the
+            // publish above already succeeded, so warn loudly and keep Ok.
+            if let Err(e) = fs::remove_file(&temp) {
+                eprintln!(
+                    "cargo-cleanme: could not remove staging file {}: {e}",
+                    temp.display()
+                );
+            }
             Ok(())
         })();
         if let Err(e) = write_result {
@@ -1041,6 +1073,25 @@ mod tests {
         assert!(unescaped.is_match(format!("{}/reala/proj", glob_spelling(&base))));
     }
 
+    #[test]
+    fn windows_drive_roots_are_recognised_as_absolute_prefixes() {
+        // L-13: `C:\` trims to `C:`, which `Path::is_absolute` reports as
+        // drive-relative. The canonicalizer must still treat it as a root
+        // (already canonical, kept as-is) rather than refusing the rewrite on
+        // exactly the platform it matters for. Portable: pure string logic.
+        assert!(is_windows_drive_root("C:"));
+        assert!(is_windows_drive_root("d:"));
+        assert!(!is_windows_drive_root("C:\\proj"));
+        assert!(!is_windows_drive_root("CC:"));
+        assert!(!is_windows_drive_root("C"));
+        assert!(!is_windows_drive_root(""));
+        assert!(!is_windows_drive_root("/tmp"));
+        // A drive-rooted pattern keeps its spelling (the root is canonical).
+        assert_eq!(
+            canonical_pattern_prefix("C:\\*", PatternKind::Glob),
+            "C:\\*"
+        );
+    }
     #[test]
     fn recency_seconds_of_zero_is_rejected() {
         // H5: 0 silently disabled the inactivity guard. The default is 300, so an

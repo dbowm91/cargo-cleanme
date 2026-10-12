@@ -142,7 +142,7 @@ pub fn host_target() -> Option<&'static str> {
 }
 
 /// The contracted asset name for a published triple.
-fn asset_for_target(triple: &str) -> Option<&'static str> {
+pub fn asset_for_target(triple: &str) -> Option<&'static str> {
     PUBLISHED_TARGETS
         .iter()
         .find(|(t, _)| *t == triple)
@@ -408,6 +408,31 @@ pub fn classify_provenance_in(current_exe: &Path, cargo_home: Option<PathBuf>) -
     };
     let _ = target;
 
+    // A non-UTF-8 file name becomes `""` in `binary_name` and can never match
+    // a UTF-8 `.crates.toml` record. Short-circuit here so the ancestor loop
+    // below cannot read the resulting non-match as "Cargo records nothing" and
+    // fall through to hashing (M-10).
+    if binary_name(current_exe).is_empty() {
+        return Provenance::UnprovableOwnership {
+            detail: format!(
+                "the running executable {} has a non-UTF-8 file name no Cargo record can name",
+                current_exe.display()
+            ),
+        };
+    }
+    // A symlinked executable hashes through the link but commit refuses it
+    // (`LiveDigestVerifier` maps symlink to `Foreign`). Classify upfront as
+    // unprovable rather than reporting a late `self_managed` that commit would
+    // refuse (L-23).
+    if std::fs::symlink_metadata(current_exe).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Provenance::UnprovableOwnership {
+            detail: format!(
+                "the running executable {} is a symlink, so its ownership cannot be proven",
+                current_exe.display()
+            ),
+        };
+    }
+
     // An explicitly supplied Cargo home is authoritative when the executable
     // really is inside it. Being in a Cargo root that records nothing about
     // this package is itself a reason to refuse, not a reason to adopt the
@@ -672,6 +697,11 @@ fn read_cargo_record(root: &Path, package: &str, binary: &str) -> CargoRecord {
         // contain spaces, so the parenthesised tail is removed from the right
         // before the leading two fields are split off.
         let Some((head, _source)) = spec.rsplit_once(')') else {
+            // A spec that cannot be parsed but names this package might still
+            // be the record claiming this binary: uncertainty, not absence.
+            if spec.split_whitespace().next() == Some(package) {
+                saw_malformed_matching_package = true;
+            }
             continue;
         };
         let mut fields = head.split_whitespace();
@@ -1090,15 +1120,26 @@ fn execute(
 
         // The sidecar must name the asset it is evidence for, so a sidecar
         // copied from another release cannot silently authorize these bytes.
-        if let Some(name) = manifest.filename()
-            && name != plan.asset
-        {
-            return Err(UpdateError::ReleaseEvidence {
-                detail: format!(
-                    "the sidecar names {name:?}, not the requested asset {:?}",
-                    plan.asset
-                ),
-            });
+        // A bare hash with no filename skips the binding entirely, so it is
+        // rejected just like a wrong name.
+        match manifest.filename() {
+            Some(name) if name == plan.asset => {}
+            Some(name) => {
+                return Err(UpdateError::ReleaseEvidence {
+                    detail: format!(
+                        "the sidecar names {name:?}, not the requested asset {:?}",
+                        plan.asset
+                    ),
+                });
+            }
+            None => {
+                return Err(UpdateError::ReleaseEvidence {
+                    detail: format!(
+                        "the sidecar does not name the requested asset {:?}",
+                        plan.asset
+                    ),
+                });
+            }
         }
 
         let install_root = current_exe
@@ -1203,7 +1244,20 @@ fn execute(
     // important fact and must not be masked by a leftover temp directory.
     let cleanup = environment.cleanup(&staging);
 
-    let receipt = outcome?;
+    let receipt = match outcome {
+        Ok(receipt) => receipt,
+        // Failure path: the transaction error is authoritative, but a failed
+        // staging cleanup must not be swallowed silently either.
+        Err(error) => {
+            if let Err(detail) = cleanup {
+                eprintln!(
+                    "cargo-cleanme: staging directory {} could not be removed after a failed update: {detail}",
+                    staging.display()
+                );
+            }
+            return Err(error);
+        }
+    };
     if let Err(detail) = cleanup {
         return Err(UpdateError::Transaction {
             detail: format!(
@@ -2031,6 +2085,65 @@ mod tests {
     }
 
     #[test]
+    fn a_non_utf8_executable_name_under_an_ancestor_cargo_root_is_unprovable() {
+        // M-10: the ancestor `--root` loop mapped `DoesNotClaim|Absent` to
+        // `continue` and fell through to hashing, while the explicit-home
+        // branch mapped the same `DoesNotClaim` to `Unprovable`. A non-UTF-8
+        // name (`""` in `binary_name`) can never match a record, so both
+        // paths must refuse.
+        //
+        // Linux only, like the explicit-home mirror: the premise is a
+        // raw-byte file name on disk.
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            let live = bin.join(std::ffi::OsStr::from_bytes(b"cargo-cleanme-\xff"));
+            std::fs::write(&live, live_stub()).unwrap();
+            std::fs::write(
+                dir.path().join(".crates.toml"),
+                real_crates_toml(PRODUCT, "0.1.3", &["cargo-cleanme"]),
+            )
+            .unwrap();
+            // No explicit home: the ancestor walk must find the record above.
+            let provenance = classify_provenance_in(&live, None);
+            assert_not_self_managed(
+                &provenance,
+                "a non-UTF-8 executable name under an ancestor Cargo root",
+            );
+            assert!(
+                matches!(provenance, Provenance::UnprovableOwnership { .. }),
+                "expected UnprovableOwnership, got {provenance:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_symlinked_executable_is_unprovable_not_self_managed() {
+        // L-23: hashing through a symlink reported `self_managed` for a file
+        // commit would refuse (`LiveDigestVerifier` maps symlink to `Foreign`).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("local/bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            let real = bin.join(PRODUCT);
+            std::fs::write(&real, live_stub()).unwrap();
+            let link = bin.join(format!("{PRODUCT}-link"));
+            symlink(&real, &link).unwrap();
+            let provenance = classify_provenance_in(&link, None);
+            assert_not_self_managed(&provenance, "a symlinked executable");
+            assert!(
+                matches!(provenance, Provenance::UnprovableOwnership { .. }),
+                "expected UnprovableOwnership, got {provenance:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_genuinely_self_managed_installer_layout_stays_self_managed() {
         // The invariant that stops C018 from over-correcting: an ordinary
         // installer-managed `.../bin/cargo-cleanme` with no Cargo evidence
@@ -2350,7 +2463,7 @@ mod tests {
             )
             .respond(
                 &FixtureEnvironment::asset_url(tag, &format!("{asset}.sha256")),
-                b"0000000000000000000000000000000000000000000000000000000000000000  ".to_vec(),
+                format!("{}  {asset}\n", "0".repeat(64)).into_bytes(),
             )
             .respond(
                 &FixtureEnvironment::asset_url(tag, asset),

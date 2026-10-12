@@ -639,19 +639,15 @@ fn discover_global_roots(
             }
         };
         *visited = visited.saturating_add(1);
-        if collect_attribution && let Some((_, root)) = roots.get(root_idx) {
+        if collect_attribution
+            && let Some((_, root)) = roots.get(root_idx)
+            && let (Some(root_counts), Some(all_counts)) =
+                (top_level_root_counts.as_mut(), top_level_counts.as_mut())
+        {
             if entry.depth == 0 {
-                *top_level_root_counts
-                    .as_mut()
-                    .unwrap()
-                    .entry(root_idx)
-                    .or_insert(0) += 1;
+                *root_counts.entry(root_idx).or_insert(0) += 1;
             } else if let Some(component) = top_level_component(&entry, root) {
-                let subtrees = top_level_counts
-                    .as_mut()
-                    .unwrap()
-                    .entry(root_idx)
-                    .or_default();
+                let subtrees = all_counts.entry(root_idx).or_default();
                 if let Some(count) = subtrees.get_mut(component) {
                     *count += 1;
                 } else {
@@ -716,6 +712,15 @@ fn discover_global_roots(
                 manifest_validation_time += started.elapsed();
             }
             if valid {
+                // H-1: a manifest directly under a `PassThrough` directory is
+                // still excluded; only `Included`/`ReIncluded` parents are in scope.
+                let dir: &Path = path.parent().unwrap_or(path.as_path());
+                if !matches!(
+                    filters.disposition(dir),
+                    Disposition::Included | Disposition::ReIncluded
+                ) {
+                    continue;
+                }
                 manifest_validated += 1;
                 manifests.push(path);
                 observer.manifests_found(1);
@@ -726,11 +731,13 @@ fn discover_global_roots(
             batch_pruned = 0;
         }
         if profile_subtrees && last_profile.elapsed() >= std::time::Duration::from_secs(5) {
-            let top_level_entries = top_level_entry_map(
-                &roots,
-                top_level_root_counts.as_ref().unwrap(),
-                top_level_counts.as_ref().unwrap(),
-            );
+            // L-9: avoid `unwrap` on coupled flag/maps; a desync yields an
+            // empty profile instead of a panic.
+            let top_level_entries =
+                match (top_level_root_counts.as_ref(), top_level_counts.as_ref()) {
+                    (Some(a), Some(b)) => top_level_entry_map(&roots, a, b),
+                    _ => std::collections::BTreeMap::new(),
+                };
             let profile = top_level_entries
                 .iter()
                 .map(|(path, count)| format!("{:?}={count}", path))
@@ -757,7 +764,15 @@ fn discover_global_roots(
     }
     let mut buffered: Vec<_> = walk_errors.into_iter().collect();
     buffered.sort_by_key(|(idx, _)| *idx);
-    for (_idx, (events, denied, vanished)) in buffered {
+    for (idx, (events, denied, vanished)) in buffered {
+        // M-11: dua-core's error event carries no child path, only the root
+        // index. Keep `path: None` (a root would falsely identify the entire
+        // root as unreadable) but name the root in the message so the failure
+        // is locatable. Fail-closed: `coverage_complete` stays false.
+        let root_hint = roots
+            .get(idx)
+            .map(|(_, r)| format!(" under {}", r.display()))
+            .unwrap_or_default();
         diagnostics.push(ScanDiagnostic {
             severity: DiagnosticSeverity::Warning,
             category: if denied > 0 {
@@ -767,11 +782,9 @@ fn discover_global_roots(
             } else {
                 DiagnosticCategory::Metadata
             },
-            // dua-core's error event has no child path. A root here would
-            // falsely identify the entire root as unreadable.
             path: None,
             message: format!(
-                "{events} traversal error(s): {denied} permission-denied, {vanished} vanished, {} other; skipped region location unknown",
+                "{events} traversal error(s){root_hint}: {denied} permission-denied, {vanished} vanished, {} other; skipped region location unknown",
                 events.saturating_sub(denied).saturating_sub(vanished)
             ),
         });
@@ -809,14 +822,11 @@ fn discover_global_roots(
         ..Default::default()
     };
     let attribution_started = collect_attribution.then(std::time::Instant::now);
-    let top_level_entries = if collect_attribution {
-        top_level_entry_map(
-            &roots,
-            top_level_root_counts.as_ref().unwrap(),
-            top_level_counts.as_ref().unwrap(),
-        )
-    } else {
-        std::collections::BTreeMap::new()
+    // L-9: avoid `unwrap` on coupled flag/maps; a desync yields empty
+    // attribution instead of a panic.
+    let top_level_entries = match (top_level_root_counts.as_ref(), top_level_counts.as_ref()) {
+        (Some(a), Some(b)) => top_level_entry_map(&roots, a, b),
+        _ => std::collections::BTreeMap::new(),
     };
     if profile_subtrees && let Some(started) = attribution_started {
         eprintln!(
@@ -933,6 +943,17 @@ fn discover_manifests_root(
                 && meta.is_file()
                 && !meta.file_type().is_symlink()
             {
+                // H-1: same `PassThrough` exclusion as the global walk. An
+                // explicit root bypasses ignore entirely.
+                if !explicit {
+                    let dir: &Path = path.parent().unwrap_or(path.as_path());
+                    if !matches!(
+                        filters.disposition(dir),
+                        Disposition::Included | Disposition::ReIncluded
+                    ) {
+                        continue;
+                    }
+                }
                 manifests.push(path.clone());
                 observer.manifests_found(1);
             }
@@ -945,6 +966,8 @@ fn discover_manifests_root(
         observer.dirs_pruned(batch_pruned);
     }
     if traversal_errors.0 > 0 {
+        // M-11: dua-core's error carries no child path; name the explicit root
+        // so the diagnostic is locatable. Keep `path: None` and fail-closed.
         diagnostics.push(ScanDiagnostic {
             severity: DiagnosticSeverity::Warning,
             category: if traversal_errors.1 > 0 {
@@ -956,8 +979,9 @@ fn discover_manifests_root(
             },
             path: None,
             message: format!(
-                "{} traversal error(s): {} permission-denied, {} vanished, {} other; skipped region location unknown",
+                "{} traversal error(s) under {}: {} permission-denied, {} vanished, {} other; skipped region location unknown",
                 traversal_errors.0,
+                root_path.display(),
                 traversal_errors.1,
                 traversal_errors.2,
                 traversal_errors.0.saturating_sub(traversal_errors.1).saturating_sub(traversal_errors.2)
@@ -1943,6 +1967,103 @@ mod tests {
         // the assertion above cannot be satisfied by ignoring the rules.
         let none = routine_manifests(vec![root], &[archive.to_string_lossy().into_owned()], &[]);
         assert!(none.manifests.is_empty());
+    }
+
+    #[test]
+    fn pass_through_directory_manifest_itself_stays_excluded() {
+        // H-1: the file-accept path must test disposition too. `/archive` is
+        // `PassThrough` (entered only to reach `keep`); a manifest directly
+        // under it is a sibling of the exception, not the exception, and must
+        // not be discovered. Fails without the parent-disposition check.
+        let d = tempdir().unwrap();
+        let root = fs::canonicalize(d.path()).unwrap();
+        let archive = root.join("archive");
+        project_fixtures(&archive, &["", "keep", "other"]);
+
+        let found = routine_manifests(
+            vec![root],
+            &[archive.to_string_lossy().into_owned()],
+            &[archive.join("keep")],
+        );
+        assert_eq!(
+            found.manifests,
+            vec![archive.join("keep/Cargo.toml")],
+            "only the unignored subtree is in scope; /archive/Cargo.toml is excluded"
+        );
+    }
+
+    #[test]
+    fn explicit_walk_respects_explicit_flag_for_pass_through_manifest() {
+        // H-1 explicit half: with `explicit=false` the same `PassThrough`
+        // exclusion applies; with `explicit=true` the root bypasses ignore.
+        let d = tempdir().unwrap();
+        let root = fs::canonicalize(d.path()).unwrap();
+        let archive = root.join("archive");
+        project_fixtures(&archive, &["", "keep", "other"]);
+        let filters = Filters::new(
+            &[archive.to_string_lossy().into_owned()],
+            &[archive.join("keep")],
+        )
+        .unwrap();
+
+        let mut manifests = Vec::new();
+        let mut diagnostics = Vec::new();
+        let mut visited = 0;
+        let mut visited_dirs = 0;
+        let mut pruned = 0;
+        let mut coverage_complete = true;
+        discover_manifests_root(
+            &archive,
+            &filters,
+            false,
+            &[],
+            &mut manifests,
+            &mut diagnostics,
+            &mut visited,
+            &mut visited_dirs,
+            &mut pruned,
+            &NoopObserver,
+            &mut coverage_complete,
+        )
+        .unwrap();
+        manifests.sort();
+        assert_eq!(
+            manifests,
+            vec![archive.join("keep/Cargo.toml")],
+            "non-explicit walk must exclude the PassThrough manifest"
+        );
+
+        let mut manifests = Vec::new();
+        let mut diagnostics = Vec::new();
+        let mut visited = 0;
+        let mut visited_dirs = 0;
+        let mut pruned = 0;
+        let mut coverage_complete = true;
+        discover_manifests_root(
+            &archive,
+            &filters,
+            true,
+            &[],
+            &mut manifests,
+            &mut diagnostics,
+            &mut visited,
+            &mut visited_dirs,
+            &mut pruned,
+            &NoopObserver,
+            &mut coverage_complete,
+        )
+        .unwrap();
+        manifests.sort();
+        let mut expected = vec![
+            archive.join("Cargo.toml"),
+            archive.join("keep/Cargo.toml"),
+            archive.join("other/Cargo.toml"),
+        ];
+        expected.sort();
+        assert_eq!(
+            manifests, expected,
+            "an explicit root bypasses ignore entirely"
+        );
     }
 
     #[test]

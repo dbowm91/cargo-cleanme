@@ -86,7 +86,61 @@ fn run(cli: Cli) -> Result<i32, AppError> {
 }
 
 fn run_update(dry_run: bool, format: OutputFormat) -> Result<i32, AppError> {
-    let plan = cargo_cleanme::update::update(dry_run)?;
+    let plan = match cargo_cleanme::update::update(dry_run) {
+        Ok(plan) => plan,
+        // "Already at latest" is success with nothing to do (exit 0), not a
+        // usage error (exit 2): schedulers must not alert on it. The JSON
+        // branch still emits exactly one document with `changed:false`.
+        Err(
+            cargo_cleanme::update::UpdateError::AlreadyCurrent { current, published }
+            | cargo_cleanme::update::UpdateError::NewerThanPublished { current, published },
+        ) => {
+            if format == OutputFormat::Json {
+                let target = cargo_cleanme::update::host_target().unwrap_or("unknown");
+                let asset = cargo_cleanme::update::asset_for_target(target).unwrap_or("");
+                let provenance = std::env::current_exe()
+                    .ok()
+                    .map(|exe| cargo_cleanme::update::classify_provenance(&exe).code())
+                    .unwrap_or("unprovable_ownership");
+                let document = serde_json::json!({
+                    "schema_version": 1,
+                    "cargo_cleanme_version": env!("CARGO_PKG_VERSION"),
+                    "operation": "update",
+                    "dry_run": dry_run,
+                    "result": {
+                        "from_version": current,
+                        "to_version": published,
+                        "target": target,
+                        "asset": asset,
+                        "tag": format!("v{published}"),
+                        "provenance": provenance,
+                        "changed": false,
+                    }
+                });
+                println!("{document}");
+            } else if format == OutputFormat::Log {
+                println!(
+                    "{}",
+                    cargo_cleanme::output::log::update(
+                        &current,
+                        &published,
+                        cargo_cleanme::update::host_target().unwrap_or("unknown"),
+                        true,
+                    )
+                );
+            } else if current == published {
+                println!(
+                    "cargo-cleanme: already at the latest stable version ({current}; published is {published})"
+                );
+            } else {
+                println!(
+                    "cargo-cleanme: this build ({current}) is newer than the published release ({published}); refusing to downgrade it"
+                );
+            }
+            return Ok(0);
+        }
+        Err(other) => return Err(other.into()),
+    };
     if format == OutputFormat::Json {
         // The stream, trailing newline included, comes from the library seam the
         // contract tests drive, so "one JSON document on stdout" is a property
@@ -127,10 +181,19 @@ fn run_config(
     path: &std::path::Path,
     format: OutputFormat,
 ) -> Result<i32, AppError> {
+    // `config` has no JSON envelope: `path`/`show` are a raw path and TOML
+    // text. Emitting those on a `--format json` stdout would break the
+    // one-JSON-document automation contract, so reject loudly (exit 2) rather
+    // than emitting non-JSON.
+    if format == OutputFormat::Json {
+        return Err(AppError::Config(
+            "config command does not support --format json; use human or log output".into(),
+        ));
+    }
     // `--format log` promises exactly one ASCII key=value line and no paths or
     // config text. `config path` and `config show` are nothing *but* a path and
     // config text, so in that format they report the action and leave their
-    // content to the human and JSON forms.
+    // content to the human output.
     let log = format == OutputFormat::Log;
     match command {
         ConfigCommand::Path => {
@@ -274,16 +337,18 @@ fn run_cleanup(
             effective_policy: Some(policy),
             selector,
         };
-        emit_cleanup(&report, &resolved, &resolved.roots, options, "");
+        emit_cleanup(&report, &resolved, &resolved.roots, options, "")?;
         return Ok(1);
     }
     if resolved.roots.is_empty() {
         // A successful no-op, not an error: there was simply nothing bounded
         // to clean. The report still states the resolved operation, scope, and
         // mode, so a machine consumer reads the same shape either way.
+        // `diagnostics` counts safely omitted automatic roots, consistent with
+        // the blocked scope above, so JSON agrees with stderr omissions.
         let empty = cargo_cleanme::cleanup::CleanReport {
             results: Vec::new(),
-            diagnostics: 0,
+            diagnostics: resolved.omitted.len(),
             failed: 0,
             mode,
             counters: Default::default(),
@@ -302,7 +367,7 @@ fn run_cleanup(
             &[],
             options,
             "no bounded cleanup roots are known; no cleanup commands were run",
-        );
+        )?;
         return Ok(0);
     }
     let show = options.format == OutputFormat::Human
@@ -332,7 +397,7 @@ fn run_cleanup(
     {
         println!("state generation last_full_at={generation} (Unix seconds)");
     }
-    emit_cleanup(&report, &resolved, &resolved.roots, options, "");
+    emit_cleanup(&report, &resolved, &resolved.roots, options, "")?;
     if options.stats {
         let elapsed = wall_start.elapsed();
         // C003 §7.6: cleanup --stats must account for the final
@@ -408,9 +473,10 @@ fn run_engine_guarded(
                     let omitted = reclassified.omitted.clone();
                     let admitted = collapse_roots(reclassified.admitted);
                     if admitted.is_empty() {
+                        let diagnostics = omitted.len();
                         return Ok(cargo_cleanme::cleanup::CleanReport {
                             results: Vec::new(),
-                            diagnostics: 0,
+                            diagnostics,
                             failed: 0,
                             mode,
                             counters: Default::default(),
@@ -468,7 +534,7 @@ fn resolve_cleanup_roots(
             // Explicit roots stay authoritative: no omission, no fallback to
             // a smaller implicit set. The engine's strict validation reports
             // the defect as a fatal usage error.
-            let absolute = cli::absolutize_root(root);
+            let absolute = cli::absolutize_root(root)?;
             let classified = cargo_cleanme::policy::classify_cleanup_roots(vec![(
                 absolute,
                 cargo_cleanme::policy::RootProvenance::Explicit,
@@ -503,7 +569,7 @@ fn resolve_cleanup_roots(
             }
             let (entries, generation) =
                 cargo_cleanme::policy::full_cleanup_roots(outcome.code, outcome.full_state)?;
-            Ok(admit_automatic(entries, "full", generation))
+            admit_automatic(entries, "full", generation)
         }
         // Bare maintenance and `clean` with no scope selector land here and use
         // exactly the same maintenance policy: a configured legacy
@@ -564,7 +630,7 @@ fn resolve_cleanup_roots(
                     // into its target and hidden the invalid identity.
                     let home = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf());
                     let Some(home) = home else {
-                        return Ok(admit_automatic(Vec::new(), "routine", None));
+                        return admit_automatic(Vec::new(), "routine", None);
                     };
                     let (entries, warning) = cargo_cleanme::policy::routine_cleanup_candidates(
                         &home,
@@ -580,7 +646,7 @@ fn resolve_cleanup_roots(
                         }
                         _ => None,
                     };
-                    Ok(admit_automatic(entries, "routine", generation))
+                    admit_automatic(entries, "routine", generation)
                 }
                 // A non-Full resolve never produces Global. Failing closed
                 // beats silently treating it as "nothing to do".
@@ -602,9 +668,12 @@ fn admit_automatic(
     entries: cargo_cleanme::policy::CleanupCandidates,
     scope_label: &'static str,
     state_generation: Option<u64>,
-) -> ResolvedCleanup {
+) -> Result<ResolvedCleanup, AppError> {
+    // Automatic entries never produce a fatal classification error (only
+    // Explicit does), but a panic would exit 101 outside the 0/1/2 contract.
+    // Propagate as a usage error instead.
     let classified = cargo_cleanme::policy::classify_cleanup_roots(entries)
-        .expect("automatic classification never returns a fatal error");
+        .map_err(|e| AppError::Config(format!("automatic cleanup classification failed: {e}")))?;
     let omitted = classified.omitted.clone();
     let omitted_diagnostics = classified.omission_diagnostics();
     let blocked = if classified.blocked.is_empty() {
@@ -624,7 +693,7 @@ fn admit_automatic(
             ),
         ))
     };
-    ResolvedCleanup {
+    Ok(ResolvedCleanup {
         roots: collapse_roots(classified.admitted),
         scope_label,
         state_generation,
@@ -632,7 +701,7 @@ fn admit_automatic(
         omitted,
         blocked,
         automatic: true,
-    }
+    })
 }
 
 /// Emit the resolved cleanup report in the selected format.
@@ -645,14 +714,16 @@ fn emit_cleanup(
     roots: &[std::path::PathBuf],
     options: RunOptions,
     empty_note: &str,
-) {
+) -> Result<(), AppError> {
     if options.format == OutputFormat::Json {
+        // Like scan: serialization failure is a usage error (exit 2), never a
+        // panic (exit 101).
         let document = serde_json::to_string(&cargo_cleanme::output::cleanup(
             report,
             resolved.scope_label,
             resolved.state_generation,
         ))
-        .expect("the cleanup envelope is built from owned strings and integers");
+        .map_err(|e| AppError::Config(format!("cannot serialize JSON report: {e}")))?;
         println!("{document}");
     } else if options.format == OutputFormat::Log {
         println!(
@@ -672,6 +743,7 @@ fn emit_cleanup(
     } else {
         println!("{empty_note}");
     }
+    Ok(())
 }
 
 fn collapse_roots(roots: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
@@ -1077,7 +1149,7 @@ fn run_scan(
         for diagnostic in other_diagnostics.iter().take(10) {
             eprintln!(
                 "  {}: {}{}",
-                format!("{:?}", diagnostic.severity).to_lowercase(),
+                diagnostic.severity.as_str(),
                 diagnostic.message,
                 diagnostic
                     .path

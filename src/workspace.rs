@@ -471,7 +471,12 @@ fn locate_one(manifest: &Path, runner: &dyn CargoRunner) -> LocateOutcome {
             manifest_path_for_cargo(manifest).into_os_string(),
         ))
         .collect();
-    let cwd = manifest.parent().unwrap_or(Path::new("/"));
+    // `"Cargo.toml".parent()` is `Some("")`, not `None`, so the empty parent
+    // must be filtered for the fallback to apply (L-4).
+    let cwd = manifest
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("/"));
     let locate_start = std::time::Instant::now();
     let elapsed = || crate::domain::elapsed_nanos(locate_start.elapsed());
     let locate_out = match runner.run(cwd, &locate_args) {
@@ -530,7 +535,11 @@ fn metadata_one(root_manifest: &Path, runner: &dyn CargoRunner) -> MetadataSpawn
     .map(Into::into)
     .chain(std::iter::once(root_manifest.as_os_str().to_owned()))
     .collect();
-    let cwd = root_manifest.parent().unwrap_or(Path::new("/"));
+    // As above: filter the empty parent (`Some("")`) so the fallback applies.
+    let cwd = root_manifest
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("/"));
     let meta_start = std::time::Instant::now();
     let elapsed = || crate::domain::elapsed_nanos(meta_start.elapsed());
     match runner.run(cwd, &meta_args) {
@@ -747,11 +756,26 @@ pub fn resolve_workspaces_with_coverage(
             continue;
         }
         // Metadata once per workspace root; repeats re-account from the memo.
-        let group_idx = group_of[index].expect("located manifest belongs to exactly one group");
-        if let Some((template, memo_nanos)) = failed_templates.get(canonical_key) {
+        // Phase 2 assigns a group to every located manifest, so `None` here
+        // is unreachable; fail closed with a diagnostic (never a panic) so a
+        // logic regression stays inside the 0/1/2 exit contract (M-8). The
+        // manifest keeps no coverage and lands in `unresolved`, blocking
+        // cleanup scope rather than attributing it to a wrong workspace.
+        let Some(group_idx) = group_of[index] else {
+            diagnostics.push(ScanDiagnostic {
+                severity: DiagnosticSeverity::Warning,
+                category: DiagnosticCategory::CandidateUncertain,
+                path: Some(manifest.clone()),
+                message: "internal error: located manifest has no resolution group".into(),
+            });
+            continue;
+        };
+        if let Some((template, _)) = failed_templates.get(canonical_key) {
+            // Repeat triggers re-account the call and the diagnostic like a
+            // fresh spawn, but wall time is added once per unique root:
+            // re-adding the memo nanos per manifest multiplied one bad root's
+            // timing by its manifest count (L-6).
             counters.cargo_metadata_calls += 1;
-            counters.cargo_metadata_nanos =
-                counters.cargo_metadata_nanos.saturating_add(*memo_nanos);
             if template.counts_as_failure {
                 counters.cargo_failures += 1;
                 observer.cargo_failure();
@@ -837,12 +861,17 @@ pub fn resolve_workspaces_with_coverage(
         })
         .collect();
     unresolved.sort_by(|a, b| a.manifest.cmp(&b.manifest));
-    // Sort by canonical identity first, then dedup on the plain spelling. The
-    // original compared `canonical_manifest_key` on both sides of `dedup_by`,
-    // which canonicalizes once per comparison — O(n log n) syscalls for a set
-    // that is almost always already unique.
+    // Sort by canonical identity first, then dedup on that same identity.
+    // Canonicalizing per comparison is O(n log n) syscalls, so the plain sort
+    // above orders the vector and `sort_by_cached_key` (stable) groups equal
+    // identities adjacently; `dedup_by` then folds each adjacent run once, for
+    // O(n) canonicalizations. Symlink/`..` spellings of one file are one
+    // participant; the observation count is preserved separately in
+    // `discovered_manifest_count` (L-7).
     unresolved.sort_by_cached_key(|p| canonical_manifest_key(&p.manifest));
-    unresolved.dedup_by(|a, b| a.manifest == b.manifest);
+    unresolved.dedup_by(|a, b| {
+        canonical_manifest_key(&a.manifest) == canonical_manifest_key(&b.manifest)
+    });
     ResolutionCoverage {
         workspaces,
         unresolved,
@@ -935,7 +964,9 @@ fn complete_workspace_from_metadata(
         );
     }
     let stdout_str = String::from_utf8_lossy(&meta_out.stdout);
-    let had_build = stdout_str.contains("build_directory");
+    // JSON field pattern, not a substring: a package name or path containing
+    // `build_directory` must not flip `Unavailable` to `Unknown` (L-5).
+    let had_build = stdout_str.contains("\"build_directory\":");
     let raw: RawMetadata = match serde_json::from_slice(&meta_out.stdout) {
         Ok(v) => v,
         Err(e) => {
@@ -1113,6 +1144,47 @@ pub fn outermost(roots: &[PathBuf]) -> Vec<PathBuf> {
     out
 }
 
+/// Best-effort physical aliases of an output root with no provable identity.
+///
+/// The declared logical spelling always names where the root was said to be. A
+/// symlink additionally contributes its link target when the link can be read
+/// and the target canonicalized, so a link *into* a group's covering still
+/// blocks that group (a purely logical check would miss it). When the target
+/// cannot be resolved only the logical spelling is known, which is still enough
+/// to block a group covering that spelling. This is scan-time grouping only;
+/// cleanup re-proves ownership immediately before each spawn.
+fn uncertain_root_aliases(root: &OutputRoot) -> Vec<PathBuf> {
+    let mut aliases = vec![root.logical_path.clone()];
+    let target = if root.is_symlink {
+        fs::read_link(&root.logical_path).ok().map(|t| {
+            if t.is_absolute() {
+                t
+            } else {
+                root.logical_path.parent().map(|p| p.join(&t)).unwrap_or(t)
+            }
+        })
+    } else {
+        Some(root.logical_path.clone())
+    };
+    if let Some(t) = target
+        && let Ok(canonical) = fs::canonicalize(&t)
+        && !aliases.contains(&canonical)
+    {
+        aliases.push(canonical);
+    }
+    aliases
+}
+
+/// True when an unrepresentable root may alias the group: any of its known
+/// aliases contains, or sits inside, a covering root. Either direction means
+/// `cargo clean` on the covering root could destroy the other workspace's
+/// bytes, so the group cannot claim exclusivity.
+fn group_overlaps_uncertain(covering: &[PathBuf], uncertain_aliases: &[PathBuf]) -> bool {
+    uncertain_aliases
+        .iter()
+        .any(|u| covering.iter().any(|c| contains(u, c) || contains(c, u)))
+}
+
 /// Build physical-output groups from resolved workspaces.
 ///
 /// Only existing non-symlink canonical roots participate. Symlink roots make
@@ -1122,11 +1194,12 @@ pub fn outermost(roots: &[PathBuf]) -> Vec<PathBuf> {
 ///   output root that is (or contains) any resolved workspace's member source
 ///   tree, or one of Cargo's conventional source directories (`src`, `tests`,
 ///   `benches`, `examples`).
-/// - Shared: multiple workspaces own overlapping physical output, or exclusivity
-///   cannot be proven because some root in the universe has no graph node.
+/// - Shared: multiple workspaces own overlapping physical output, or the group's
+///   covering overlaps an unrepresentable root's known aliases, so exclusivity
+///   is unprovable for that group.
 /// - PrivateBounded: single owner, every covering root strictly below the
-///   workspace root, disjoint from every resolved member source root, and every
-///   root in the universe represented in the graph.
+///   workspace root, disjoint from every resolved member source root, and
+///   disjoint from every unrepresentable root's known aliases.
 /// - ExternalUnproven: single owner, output outside workspace root.
 pub fn build_groups(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup> {
     // Collect (workspace_idx, physical_path) for existing non-symlink roots.
@@ -1137,10 +1210,28 @@ pub fn build_groups(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup> {
     }
     let mut nodes: Vec<Node> = Vec::new();
     let mut uncertain_ws: HashSet<usize> = HashSet::new();
+    // Known aliases of roots with no provable physical identity (M-1): always
+    // the declared logical spelling, plus a resolved link target when one can
+    // be read and canonicalized. A group disjoint from every alias cannot be
+    // the same bytes, so only an overlapping group loses its private claim.
+    let mut uncertain_aliases: Vec<PathBuf> = Vec::new();
     for (idx, ws) in workspaces.iter().enumerate() {
-        for root in [&ws.output.target, &ws.output.build] {
+        // Equal target/build share one physical identity; pushing it twice
+        // only doubles union-find work before the later dedup (L-8). Collapse
+        // only when both iterations would push the identical node, so no
+        // uncertainty marker is ever lost.
+        let build_duplicates_target = !ws.output.target.is_symlink
+            && !ws.output.build.is_symlink
+            && ws.output.target.exists
+            && ws.output.build.exists
+            && ws.output.target.physical_path.is_some()
+            && ws.output.target.physical_path == ws.output.build.physical_path;
+        for root in std::iter::once(&ws.output.target)
+            .chain((!build_duplicates_target).then_some(&ws.output.build))
+        {
             if root.is_symlink {
                 uncertain_ws.insert(idx);
+                uncertain_aliases.extend(uncertain_root_aliases(root));
                 continue;
             }
             if !root.exists {
@@ -1153,6 +1244,7 @@ pub fn build_groups(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup> {
                 });
             } else {
                 uncertain_ws.insert(idx);
+                uncertain_aliases.extend(uncertain_root_aliases(root));
             }
         }
     }
@@ -1188,10 +1280,9 @@ pub fn build_groups(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup> {
     }
     let mut groups = Vec::new();
     // A root that contributes no node (symlink, no physical identity) is
-    // invisible to the union-find below, yet it can still point into any group.
-    // Exclusivity is therefore only provable while every root in the universe
-    // is represented; otherwise no group may claim `PrivateBounded`.
-    let exclusivity_unproven = !uncertain_ws.is_empty();
+    // invisible to the union-find above, yet it can still point into a group.
+    // Exclusivity is therefore per group (M-1): only a group overlapped by an
+    // unrepresentable root's known aliases loses `PrivateBounded`.
     for (_, idxs) in groups_map {
         let mut physicals: Vec<PathBuf> = idxs.iter().map(|i| nodes[*i].physical.clone()).collect();
         physicals.sort();
@@ -1231,11 +1322,12 @@ pub fn build_groups(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup> {
                 // The owning workspace is uncertain, or its own source tree
                 // would be deleted. Never a private artifact.
                 OutputOwnershipClass::Uncertain
-            } else if inside_root && !exclusivity_unproven {
+            } else if inside_root && !group_overlaps_uncertain(&covering, &uncertain_aliases) {
                 OutputOwnershipClass::PrivateBounded
             } else if inside_root {
-                // Inside the workspace root but not provably exclusive: it may
-                // be the output of a workspace whose roots are unrepresentable.
+                // Inside the workspace root but overlapped by an
+                // unrepresentable root: exclusivity is unprovable for this
+                // group, while disjoint groups keep their private claim.
                 OutputOwnershipClass::Shared
             } else {
                 OutputOwnershipClass::ExternalUnproven
@@ -2885,14 +2977,13 @@ mod tests {
         }
     }
 
-    /// Deduplication is spelling-exact, deliberately. Canonical identity is the
-    /// sort key but not the equality: two spellings of one file are two
-    /// discoveries, and `unresolved_ownership` counts discoveries. Folding them
-    /// here would change that count for one project without saying so, so the
-    /// observable behaviour is pinned rather than left to whichever comparator
-    /// happens to be installed.
+    /// Deduplication is by canonical identity, the same key used for sorting.
+    /// Two spellings of one file are one participant: symlink/`..` aliases
+    /// must not inflate `unresolved_ownership`. The observation count is kept
+    /// separately in `discovered_manifest_count`, so folding participants
+    /// never rewrites how many discoveries were made.
     #[test]
-    fn two_spellings_of_one_unresolved_manifest_stay_separate_participants() {
+    fn two_spellings_of_one_unresolved_manifest_fold_to_one_participant() {
         let d = tempfile::tempdir().unwrap();
         let ws = d.path().join("ws");
         std::fs::create_dir_all(&ws).unwrap();
@@ -2931,26 +3022,22 @@ mod tests {
         );
         assert_eq!(
             coverage.unresolved.len(),
-            2,
-            "equal canonical keys are sorted together, not merged: {:?}",
+            1,
+            "equal canonical keys fold to one participant: {:?}",
             coverage.unresolved
         );
-        // Order-insensitive on purpose: discovery order fixes the order by plain
-        // manifest spelling, and only the merge decision is at stake here.
+        // Either spelling may survive the fold; only the merge is at stake.
         assert!(
-            coverage.unresolved.iter().any(|p| p.manifest == direct),
-            "{:?}",
-            coverage.unresolved
-        );
-        assert!(
-            coverage.unresolved.iter().any(|p| p.manifest == indirect),
+            coverage.unresolved[0].manifest == direct
+                || coverage.unresolved[0].manifest == indirect,
             "{:?}",
             coverage.unresolved
         );
         assert_eq!(
-            coverage.unresolved.len(),
-            coverage.discovered_manifest_count
+            coverage.discovered_manifest_count, 2,
+            "folding participants never rewrites the observation count"
         );
+        assert_eq!(coverage.unresolved[0].stage, "locate");
     }
 
     #[test]
@@ -3694,6 +3781,70 @@ mod tests {
         // Without B in the universe the claim is provable again.
         let alone = build_groups(std::slice::from_ref(&a));
         assert_eq!(alone[0].ownership, OutputOwnershipClass::PrivateBounded);
+    }
+
+    #[test]
+    fn disjoint_groups_stay_private_despite_a_far_away_unrepresentable_root() {
+        // M-1: one unrepresentable root anywhere used to demote every disjoint
+        // group to `Shared`. Exclusivity is per group: groups disjoint from
+        // every known alias of the unrepresentable root keep their claim,
+        // while the overlapping shape above still blocks. This fails on the
+        // old global flag (both groups `Shared`) and passes on per-group
+        // overlap.
+        let d = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(d.path()).unwrap();
+        let root_a = base.join("a");
+        let root_b = base.join("b");
+        let far = base.join("far");
+        let target_a = root_a.join("target");
+        let target_b = root_b.join("target");
+        std::fs::create_dir_all(&target_a).unwrap();
+        std::fs::create_dir_all(&target_b).unwrap();
+        std::fs::create_dir_all(&far).unwrap();
+        let a = workspace_with_output(&root_a, vec![root_a.clone()], Some(target_a), false);
+        let b = workspace_with_output(&root_b, vec![root_b.clone()], Some(target_b), false);
+        // Uncertain workspace far from both groups: a symlink-claimed target
+        // with nothing on disk (no resolvable link target, so only the
+        // logical spelling is known) plus an unresolvable build directory.
+        // Neither alias overlaps either covering root.
+        let c = ResolvedWorkspace {
+            id: WorkspaceId(far.clone()),
+            root: far.clone(),
+            root_manifest: far.join("Cargo.toml"),
+            members: vec![],
+            packages: vec![],
+            output: OutputSet {
+                target: OutputRoot {
+                    kind: OutputRootKind::Target,
+                    logical_path: far.join("target"),
+                    physical_path: None,
+                    exists: true,
+                    is_symlink: true,
+                },
+                build: OutputRoot {
+                    kind: OutputRootKind::Build,
+                    logical_path: far.join("build"),
+                    physical_path: None,
+                    exists: true,
+                    is_symlink: false,
+                },
+            },
+            capability: CargoCapabilities {
+                build_dir: CargoBuildDirCapability::Distinct,
+                metadata_had_build_directory: true,
+                env_build_dir_set: false,
+            },
+        };
+        let groups = build_groups(&[a, b, c]);
+        assert_eq!(groups.len(), 2, "the uncertain root contributes no node");
+        for g in &groups {
+            assert_eq!(
+                g.ownership,
+                OutputOwnershipClass::PrivateBounded,
+                "a group disjoint from every unrepresentable alias stays private: {}",
+                g.display.display()
+            );
+        }
     }
 
     #[test]

@@ -47,7 +47,9 @@ pub struct Cli {
     /// Simulate: run every decision, proof, and reporting step, but invoke no
     /// `cargo clean` process at all. Honoured wherever it appears, so the
     /// `cargo cleanme --dry-run clean ROOT` spelling cannot fall back to
-    /// Execute.
+    /// Execute. Only `clean` (and `update`'s own `--dry-run`) honour it:
+    /// `scan` and `config` ignore a global `--dry-run` (read-only / local-only,
+    /// no behaviour change).
     #[arg(long, conflicts_with = "dryrun_legacy")]
     pub dry_run: bool,
     /// Historical spelling of `--dry-run`; retained as a hidden alias.
@@ -223,7 +225,7 @@ pub enum Invocation {
 /// never introduce a fourth mode or a different safety path.
 pub fn clean_mode(dry_run: bool, cargo_preview: bool, dryrun_legacy: bool) -> CleanMode {
     debug_assert!(
-        !(dry_run && cargo_preview),
+        !((dry_run || dryrun_legacy) && cargo_preview),
         "clap rejects conflicting mode flags before this mapping runs"
     );
     if dry_run || dryrun_legacy {
@@ -349,12 +351,19 @@ pub fn normalize_cargo_argv(args: impl IntoIterator<Item = OsString>) -> Vec<OsS
 /// normalizes CLI ergonomics. Canonicalization is deliberately not required:
 /// the policy/cleanup layers still verify that the effective root exists, is
 /// a real directory, and is not a symlink.
-pub fn absolutize_root(root: &Path) -> PathBuf {
+///
+/// A relative root with an unresolvable current directory is an `InvalidRoot`
+/// usage error, never a silent fallback: hiding the IO error rewrote
+/// `clean ./p` to `/p`.
+pub fn absolutize_root(root: &Path) -> Result<PathBuf, crate::error::AppError> {
     if root.is_absolute() {
-        return root.to_path_buf();
+        return Ok(root.to_path_buf());
     }
-    let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-    absolutize_relative(&base, root)
+    let base = std::env::current_dir().map_err(|e| crate::error::AppError::InvalidRoot {
+        path: root.display().to_string(),
+        reason: format!("cannot resolve current directory: {e}"),
+    })?;
+    Ok(absolutize_relative(&base, root))
 }
 
 /// Deterministic absolutization against an explicit base directory.
@@ -952,13 +961,13 @@ mod tests {
         } else {
             PathBuf::from("/projects")
         };
-        assert_eq!(absolutize_root(&absolute), absolute);
+        assert_eq!(absolutize_root(&absolute).unwrap(), absolute);
     }
 
     #[test]
     fn relative_root_becomes_absolute() {
         let cwd = std::env::current_dir().unwrap();
-        let joined = absolutize_root(Path::new("./project"));
+        let joined = absolutize_root(Path::new("./project")).unwrap();
         assert!(joined.is_absolute());
         assert_eq!(joined, cwd.join("project"));
         let dotdot = absolutize_relative(Path::new("/a/b"), Path::new("c/../d"));

@@ -260,14 +260,43 @@ fn policy_code(code: crate::cleanup::PolicyDisposition) -> String {
 }
 
 fn path(p: &Path) -> String {
-    p.to_str()
-        .map(str::to_owned)
-        .unwrap_or_else(|| format!("{:?}", p.as_os_str()))
+    // JSON must be valid UTF-8: lossy `U+FFFD` like the human report, never
+    // Rust `Debug` quoting.
+    p.to_string_lossy().into_owned()
 }
 fn unix_seconds(t: std::time::SystemTime) -> Option<u64> {
     t.duration_since(std::time::UNIX_EPOCH)
         .ok()
         .map(|d| d.as_secs())
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::path;
+
+    /// M-12: non-UTF-8 paths use lossy `U+FFFD` like the human report, never
+    /// Rust `Debug` quoting (which embeds quotes and is Rust-specific).
+    /// JSON must be valid UTF-8, so lossy is the correct projection.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn non_utf8_paths_are_lossy_not_debug() {
+        use std::os::unix::ffi::OsStringExt;
+        let p = std::path::PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/bad-\xff".to_vec()));
+        let text = path(&p);
+        assert!(
+            text.contains('\u{fffd}'),
+            "lossy replacement char: {text:?}"
+        );
+        assert!(!text.contains('"'), "no Rust Debug quoting: {text:?}");
+        assert!(!text.contains("\\x"), "no Debug escape: {text:?}");
+        // And the projection is valid UTF-8 by construction.
+        assert!(text.is_ascii() || text.contains('\u{fffd}'));
+    }
+
+    #[test]
+    fn utf8_paths_pass_through_unchanged() {
+        assert_eq!(path(std::path::Path::new("/tmp/normal")), "/tmp/normal");
+    }
 }
 
 /// Bounded single-line summaries for unattended schedulers.
@@ -452,6 +481,13 @@ pub mod log {
         for (key, value) in structural {
             push(&mut out, key, value);
         }
+        // The bound is unconditional, not debug-only: an overlong structural
+        // head (a `pub` caller passing an unbounded `scope`) is truncated
+        // rather than emitted unbounded into a retained history tail.
+        if out.len() > MAX_BYTES {
+            out.truncate(MAX_BYTES);
+            return out;
+        }
         for (key, value) in optional {
             // " key=value" plus the byte already spent.
             let cost = 1 + key.len() + 1 + value.len();
@@ -459,6 +495,9 @@ pub mod log {
                 break;
             }
             push(&mut out, key, value);
+        }
+        if out.len() > MAX_BYTES {
+            out.truncate(MAX_BYTES);
         }
         debug_assert!(out.len() <= MAX_BYTES, "log line exceeded its bound");
         out

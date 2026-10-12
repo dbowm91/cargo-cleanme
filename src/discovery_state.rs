@@ -251,6 +251,12 @@ pub fn reconcile_full(
                 .parent()
                 .filter(|p| Some(*p) != home && !is_broad_root(p))
                 .unwrap_or(project);
+            // M-7: the `unwrap_or(project)` fallback can yield `/` itself
+            // (parent `None`); `is_broad_root("/")` is true but was never
+            // re-tested. Withhold broad roots from learning (fail-safe).
+            if is_broad_root(candidate) {
+                continue;
+            }
             if !automatic_root_is_maintainable(candidate, home) {
                 continue;
             }
@@ -1051,5 +1057,35 @@ mod tests {
             // a project record, so the fix cannot have cost a manifest.
             assert_eq!(state.projects.len(), members);
         }
+    }
+
+    #[test]
+    fn filesystem_root_workspace_is_never_a_learned_root() {
+        // M-7: `project.parent()` is `None` for `/`, so the
+        // `unwrap_or(project)` fallback yields `/` itself without an
+        // `is_broad_root` recheck. Fails without the post-fallback guard.
+        let observations = [ProjectObservation {
+            manifest: PathBuf::from("/Cargo.toml"),
+            workspace: Some(PathBuf::from("/")),
+        }];
+        let Reconciliation::Publish(state) = reconcile_full(
+            &DiscoveryState::default(),
+            &observations,
+            &[],
+            true,
+            100,
+            30,
+            None,
+        ) else {
+            panic!("complete Full reconciliation should publish")
+        };
+        // Inventory keeps the observation; learning withholds `/`.
+        assert_eq!(state.projects.len(), 1);
+        assert!(
+            !state.learned_roots.iter().any(|r| r.path == Path::new("/")),
+            "filesystem root must not be learned: {:?}",
+            state.learned_roots
+        );
+        assert!(state.learned_roots.is_empty());
     }
 }

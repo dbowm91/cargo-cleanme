@@ -3391,3 +3391,37 @@ fn stale_and_blocked_automatic_roots_keep_the_bounded_log_contract() {
         "no paths in log: {line}"
     );
 }
+
+/// M-9: `--format json config …` must not emit non-JSON on stdout.
+///
+/// `config path`/`show` are a raw path and TOML text with no `EnvelopeV1`, so
+/// emitting them under `--format json` breaks the one-JSON-document automation
+/// contract. The command rejects the combination loudly (exit 2) instead.
+#[test]
+fn json_format_config_is_rejected_not_emitted_as_non_json() {
+    for subcommand in ["path", "show"] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.toml");
+        let output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+            .args(["--config", config.to_str().unwrap(), "--no-progress"])
+            .args(["--format", "json", "config", subcommand])
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "--format json config {subcommand} must exit 2: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("does not support --format json"),
+            "the rejection must name the unsupported combination: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            serde_json::from_slice::<serde_json::Value>(&output.stdout).is_err(),
+            "no JSON document on stdout for a rejected combination: {:?}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+}
