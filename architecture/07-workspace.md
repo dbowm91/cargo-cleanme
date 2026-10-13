@@ -46,8 +46,8 @@ The production half of `workspace.rs` contains *zero* references to
 asserting that source-overlapping groups are refused even by the most
 permissive caller.
 So the dependency direction that [the overview](overview.md) calls out is
-`cleanup → workspace` in production (`cleanup.rs:1292`, `1292-1324`, `1526`,
-`1622`, `1852`, `1931`, `1951`) plus a test-only back-reference. There is no
+`cleanup → workspace` in production (`cleanup.rs:1483`, `1483-1515`, `1717`,
+`1813`, `2043`, `2122`, `2142`) plus a test-only back-reference. There is no
 cycle and no production import from `workspace` into `cleanup`.
 
 Call sites in the read-only scan: `main.rs:821` (runner), `main.rs:822`
@@ -67,7 +67,7 @@ Twenty-two public items. Nothing else in the file is reachable from outside.
 | `ProcessOutput` | `struct { success: bool, code: Option<i32>, stdout: Vec<u8>, stderr: Vec<u8> }` (`:21-27`) | A cargo subprocess result. Raw `Vec<u8>` on both streams, so a non-UTF-8 filename in cargo's output cannot break the decoder. Failed locate/metadata stderr is converted to a bounded causal excerpt (`:199-235`). |
 | `CargoRunner` | `trait { fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput> }` (`:29-31`) | The project's only external-process boundary. No supertraits, no associated types. |
 | `SystemCargoRunner` | `struct SystemCargoRunner;` (`:78-93`) | The real implementation. Zero-sized. |
-| `refresh_workspace_from_root_manifest` | `(root_manifest: &Path, runner: &dyn CargoRunner, counters, diagnostics, observer) -> Option<ResolvedWorkspace>` (`:59-76`) | Re-resolve one *known* root directly through `cargo metadata`: one process, no `locate-project`. Never discovers anything. Used by the cleanup final proof (`cleanup.rs:1526`). |
+| `refresh_workspace_from_root_manifest` | `(root_manifest: &Path, runner: &dyn CargoRunner, counters, diagnostics, observer) -> Option<ResolvedWorkspace>` (`:59-76`) | Re-resolve one *known* root directly through `cargo metadata`: one process, no `locate-project`. Never discovers anything. Used by the cleanup final proof (`cleanup.rs:1717`). |
 
 ### Resolution
 
@@ -318,6 +318,13 @@ the useful `Caused by:` context Cargo often places after its generic first line
 without embedding unbounded stderr in diagnostics. Failure presentation never
 changes the exact unresolved-manifest set.
 
+For non-zero Cargo exits, `cargo_failure_reason` (`:199-235`) keeps up to three
+non-empty stderr lines in a 480-byte UTF-8-safe excerpt. Line breaks are
+collapsed, terminal controls are removed, and truncation is marked. This keeps
+the useful `Caused by:` context Cargo often places after its generic first line
+without embedding unbounded stderr in diagnostics. Failure presentation never
+changes the exact unresolved-manifest set.
+
 ### `ResolutionCoverage` and `UnresolvedOwnershipParticipant`
 
 `ResolutionCoverage` (`domain.rs:177-183`) = `workspaces` + `unresolved` +
@@ -453,9 +460,9 @@ The asymmetry between the two selectors is the substantive part.
 bounds it to "exact tested releases where configured and explicit target
 dry-runs agree". `profile_selector` covers a wider, older set.
 
-Consequences, all verified in `cleanup.rs:2605-2617`: `1.96.0` → both false;
+Consequences, all verified in `cleanup.rs:2836-2849`: `1.96.0` → both false;
 `1.99.1` → both false; `1.99.0-nightly` → both false; `"unknown"` → both false.
-`runtime_clean_capabilities` (`cleanup.rs:2203-2215`) shells `cargo --version`,
+`runtime_clean_capabilities` (`cleanup.rs:2413-2425`) shells `cargo --version`,
 takes whitespace token 1, and **returns `CargoCleanCapabilities::default()` —
 all false — on any failure whatsoever**. So a user on an old, new, nightly, or
 absent Cargo gets the reduced behaviour: the clean still runs, just without
@@ -530,7 +537,7 @@ whose covering root lies *outside* the workspace root still gets
 `ExternalUnproven` even when `exclusivity_unproven` is set, because the third
 arm is guarded by `inside_root`. That is safe by construction —
 `ExternalUnproven` is inventory-only, and `covering_is_authorized_roots`
-(`cleanup.rs:493-495`) returns `Ok(false)` for anything that is not
+(`cleanup.rs:595-597`) returns `Ok(false)` for anything that is not
 `PrivateBounded`.
 
 `strictly_below` (`:1065-1067`) exists because `contains` is inclusive: grouping
@@ -638,7 +645,7 @@ surely as the owner's own; consulting only the owner's `members` ratified exactl
 the shape the check exists to refuse — an outer workspace whose output directory
 was not literally named `target`, containing a real nested project, lost four
 files with exit 0 and no diagnostic. The preflight proof closes the same gap
-independently at `cleanup.rs:2036-2050`.
+independently at `cleanup.rs:2153-2169`.
 
 **Stage 4 — deep sizing (`:1481-1498`).** One bounded pool, one call:
 `traverse::measure_many_targets` over `(survivor_position, covering_path)` pairs.
@@ -820,7 +827,7 @@ even reaches `unmapped`, because `affected` is empty first.
 (`domain.rs:185-202`), so a unit can carry any of the four classes across
 different groups. The safety property is not that a unit is uniformly
 `PrivateBounded`; it is that `cleanup.rs` re-checks each group independently
-through `covering_is_authorized_roots` (`cleanup.rs:484-495`), which returns
+through `covering_is_authorized_roots` (`cleanup.rs:586-597`), which returns
 `Ok(false)` for anything that is not `PrivateBounded` — `ExternalUnproven`,
 `Shared`, and `Uncertain` are all inventory-only, permanently
 (ADR §7, `plans/adr/001-...md:101-107`). And even a `PrivateBounded` group is
@@ -888,7 +895,7 @@ consumer depends on it. The *other* parallel resolution in the
 project lives in
 `cleanup.rs` (`refresh_proof_universe_with_limit`, `cleanup.rs:1660-1700`); it
 threads `batch` with `std::thread::scope`, zips outcomes back against the input
-batch in order (`:1700`), and `cleanup.rs:6110-6111` asserts sequential ==
+batch in order (`:1892`), and `cleanup.rs:6680` asserts sequential ==
 parallel. So the determinism claim survives the parallel path too.
 
 **`cargo` not on `PATH`?** A **diagnostic, not a hard error.** `Command::new("cargo")
@@ -903,7 +910,7 @@ trade-off this creates: "cargo is not installed" and "nothing to clean" are
 indistinguishable in a bare scan, which is precisely the C015-class silent-zero
 shape the module's own comments at `:33-45` and `:3265-3268` guard against.
 (`cleanup.rs`'s `runtime_clean_capabilities` returns all-false on the same
-condition, `cleanup.rs:2205-2207`.)
+condition, `cleanup.rs:2414-2416`.)
 
 **Warnings on stderr with a successful exit?** Ignored. `ProcessOutput.stderr`
 is inspected only after a non-zero locate/metadata exit; successful stdout remains
@@ -940,7 +947,7 @@ safety property still holds (the workspace is in `uncertain_ws`, so
 but the user gets no message. **This is a real gap between ADR wording and
 implementation**, and it is the one I would file. What the *spawned* `cargo
 clean` does with such a root is outside this module; `cleanup.rs`'s final proof
-(`cleanup.rs:1366-1381`) is the only thing that could catch a change between scan
+(`cleanup.rs:1986`) is the only thing that could catch a change between scan
 and clean, and I did not audit that path in full.
 
 **Can a member's manifest produce a disagreeing nested resolution?** Only by
@@ -964,7 +971,7 @@ matter, and asymptotically O(manifests) overall — with bounded parallelism.**
   is O(manifests): a machine of N unrelated single-crate projects costs N
   locate + N metadata.
 - `refresh_workspace_from_root_manifest` (`:59-76`) costs one metadata and zero
-  locate per call; `cleanup.rs:1526` calls it per candidate at the destructive
+  locate per call; `cleanup.rs:1717` calls it per candidate at the destructive
   boundary, tracked in the separate `proof_*` counters so `--stats` cannot hide
   it (`domain.rs:267-276`, `merge_proof` at `domain.rs:339-358`).
 
@@ -1097,7 +1104,7 @@ atomics on a `TestObserver` without exercising this module at all.
 11. **Version-gated capability changes are empirical, not documented.** The
     allowlist at `:147-163` may only gain a release after real `cargo clean`
     qualification with a *configured* `build.target`; unknown versions stay
-    `false` (tests `cleanup.rs:2605-2617`).
+    `false` (tests `cleanup.rs:2836-2849`).
 12. **New real-Cargo tests need a premise assertion, not a stub.** Follow
     `:4640-4643` (the case ran) and `:4669-4677` (cargo is present and
     responded) — and check the new file against

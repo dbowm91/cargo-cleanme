@@ -491,11 +491,11 @@ Human-only, so it cannot corrupt JSON *or* a log line.
 
 **Exit code** (`:347-351`): `1` if `report.failed > 0 || report.scope_blocked.is_some()`.
 `failed > 0` means at least one `CleanOutcome::Failed`, counted in
-`CleanReport::render`'s tally (`src/cleanup.rs:337-339`) — "ran; at least one
+`CleanReport::render`'s tally (`src/cleanup.rs:439-442`) — "ran; at least one
 workspace could not be cleaned". `scope_blocked.is_some()` means the scan
 boundary itself was refused and no work was attempted; the block is now a typed
 `ScopeBlock` (`src/cleanup.rs:211-220`) whose `message` is what renders
-(`src/cleanup.rs:288-291`). Pinned by `tests/cli_contract.rs:361-363`
+(`src/cleanup.rs:288-289`). Pinned by `tests/cli_contract.rs:361-363`
 (`Some(1)`, `scope_blocked == true`).
 
 **`--stats`** (`:333-346`) goes to **stderr** via `eprintln!`, consistent with
@@ -548,7 +548,7 @@ The absolute-root invariant the cleanup boundary depends on is established
 *earlier*, by `absolutize_root` (`src/cli.rs:334-340`), and only for the
 explicit-`ROOT` source. For the other two sources the roots were admitted as
 real directories by classification (`src/policy.rs:156`), so in practice they
-resolve; the engine's own strict validation (`src/cleanup.rs:845-859`) plus
+resolve; the engine's own strict validation (`src/cleanup.rs:893-910`) plus
 the admission→validation race defence (`run_engine_guarded`, `:365-455`)
 cover the residual window.
 
@@ -801,9 +801,9 @@ test (no module exists) and no integration test (nothing in `tests/` invokes
 
 **Confirmed.** `CleanReport::render` takes `&self` (`src/cleanup.rs:275`) and
 therefore **cannot** reorder its own data: it builds a local
-`ordered: Vec<&CleanResult>` (`src/cleanup.rs:303`), sorts by `before_bytes`
-descending with a `display_path` ascending tie-break (`src/cleanup.rs:304-309`),
-and iterates *that* (`:310`). `output::cleanup` takes `&CleanReport`
+`ordered: Vec<&CleanResult>` (`src/cleanup.rs:354`), sorts by `before_bytes`
+descending with a `display_path` ascending tie-break (`src/cleanup.rs:355-360`),
+and iterates *that* (`:361`). `output::cleanup` takes `&CleanReport`
 (`src/output.rs:158`) and iterates `report.results` in **original insertion order**
 (`src/output.rs:164-189`) with no sort at all.
 
@@ -1076,8 +1076,8 @@ to a module are the ones with no coverage.
    inconsistency left.
 9. **Redundant root echo.** `main.rs:373-379` and `src/cleanup.rs:277-287` print
    the same root list, in two formats, as the first two lines of a human `clean`
-   report (`selected_roots` is `roots.clone()`, `src/cleanup.rs:855`/`:896`).
-10. **Human/JSON cleanup ordering divergence.** `src/cleanup.rs:303-310` sorts a
+   report (`selected_roots` is `roots.clone()`, `src/cleanup.rs:963`).
+10. **Human/JSON cleanup ordering divergence.** `src/cleanup.rs:354-361` sorts a
     *local* vec that `output::cleanup` (`src/output.rs:164-189`) never sees, so
     JSON `units[]` is insertion-ordered while human rows are size-descending. The
     scan side is self-consistent (`src/report.rs:44-49` sorts in place). Confirm

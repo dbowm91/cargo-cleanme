@@ -307,6 +307,58 @@ impl CleanReport {
             // fire after earlier units already ran: completed rows stay
             // visible so the human surface matches the JSON `units` list.
             out.push_str(&format!("{}\n", block.message));
+            // A blocked scope with retained ownership participants names them
+            // here (bounded, human surface only): the block message alone
+            // carries a count, which never told the operator which manifest
+            // to fix or which healthy workspace to clean explicitly instead.
+            // JSON (`unresolved_participants`) and the log line (count only,
+            // no paths) are unchanged.
+            if block.reason == ScopeBlockReason::OwnershipUnproven
+                && !self.unresolved_ownership.is_empty()
+            {
+                const MAX_LISTED: usize = 5;
+                const MAX_FIELD_CHARS: usize = 200;
+                let mut listed = 0usize;
+                let mut workspace_hint = false;
+                for participant in self.unresolved_ownership.iter().take(MAX_LISTED) {
+                    let manifest = participant
+                        .manifest
+                        .display()
+                        .to_string()
+                        .chars()
+                        .filter(|ch| !ch.is_control())
+                        .take(MAX_FIELD_CHARS)
+                        .collect::<String>();
+                    let reason = participant
+                        .reason
+                        .replace('\n', " ")
+                        .chars()
+                        .filter(|ch| !ch.is_control())
+                        .take(MAX_FIELD_CHARS)
+                        .collect::<String>();
+                    out.push_str(&format!(
+                        "  unresolved [{}] {}: {}\n",
+                        participant.stage, manifest, reason
+                    ));
+                    listed += 1;
+                    if participant
+                        .reason
+                        .contains("believes it's in a workspace when it's not")
+                    {
+                        workspace_hint = true;
+                    }
+                }
+                let remaining = self.unresolved_ownership.len().saturating_sub(listed);
+                if remaining > 0 {
+                    out.push_str(&format!("  … {remaining} more unresolved participant(s)\n"));
+                }
+                if workspace_hint {
+                    out.push_str(
+                        "  hint: a nested crate that believes it is in a workspace needs an empty `[workspace]` table or a parent `workspace.exclude` entry; otherwise clean a healthy workspace explicitly, e.g. `cargo cleanme clean ROOT`\n",
+                    );
+                }
+            }
+            return out;
         }
         let mut previewed = 0usize;
         let mut simulated = 0usize;
@@ -3427,6 +3479,110 @@ mod tests {
             );
             assert!(report.render().contains("no cleanup commands were run"));
         }
+    }
+
+    /// A blocked human report names the blocking manifests instead of only
+    /// counting them. Fails against the old render, which emitted the block
+    /// message and returned: the count told the operator nothing fixable.
+    #[test]
+    fn blocked_scope_render_lists_unresolved_participants_with_workspace_hint() {
+        let report = CleanReport {
+            results: Vec::new(),
+            diagnostics: 2,
+            failed: 0,
+            mode: CleanMode::Simulate,
+            counters: ScanCounters::default(),
+            scope_blocked: Some(ScopeBlock::new(
+                ScopeBlockReason::OwnershipUnproven,
+                "cleanup ownership could not be proven: 2 discovered Cargo manifests did not resolve; no cleanup commands were run".into(),
+            )),
+            unresolved_ownership: vec![
+                UnresolvedOwnershipParticipant {
+                    manifest: PathBuf::from("/work/a/website/Cargo.toml"),
+                    stage: "locate",
+                    reason: "cargo locate-project failed: error: current package believes it's in a workspace when it's not: current: /work/a/website/Cargo.toml".into(),
+                },
+                UnresolvedOwnershipParticipant {
+                    manifest: PathBuf::from("/work/b/Cargo.toml"),
+                    stage: "metadata",
+                    reason: "cargo metadata failed: something else".into(),
+                },
+            ],
+            selected_roots: vec![PathBuf::from("/work")],
+            discovered_manifests: 3,
+            resolved_workspaces: 1,
+            units_considered: 0,
+            effective_policy: None,
+            selector: None,
+        };
+        let text = report.render();
+        assert!(
+            text.contains("cleanup ownership could not be proven"),
+            "block message retained: {text}"
+        );
+        assert_eq!(
+            text.matches("cleanup ownership could not be proven")
+                .count(),
+            1,
+            "hint text must not repeat the block phrase: {text}"
+        );
+        assert!(
+            text.contains("unresolved [locate] /work/a/website/Cargo.toml:"),
+            "first participant listed with stage: {text}"
+        );
+        assert!(
+            text.contains("unresolved [metadata] /work/b/Cargo.toml:"),
+            "second participant listed with stage: {text}"
+        );
+        assert!(
+            text.contains("empty `[workspace]` table"),
+            "workspace-detach hint for the believes-in-workspace class: {text}"
+        );
+    }
+
+    /// The participant listing is bounded: five rows plus an overflow line.
+    /// Seven participants must not produce seven rows.
+    #[test]
+    fn blocked_scope_render_bounds_unresolved_participant_listing() {
+        let unresolved_ownership: Vec<UnresolvedOwnershipParticipant> = (0..7)
+            .map(|i| UnresolvedOwnershipParticipant {
+                manifest: PathBuf::from(format!("/work/p{i}/Cargo.toml")),
+                stage: "locate",
+                reason: "cargo locate-project failed".into(),
+            })
+            .collect();
+        let report = CleanReport {
+            results: Vec::new(),
+            diagnostics: 7,
+            failed: 0,
+            mode: CleanMode::Simulate,
+            counters: ScanCounters::default(),
+            scope_blocked: Some(ScopeBlock::new(
+                ScopeBlockReason::OwnershipUnproven,
+                "cleanup ownership could not be proven: 7 discovered Cargo manifests did not resolve; no cleanup commands were run".into(),
+            )),
+            unresolved_ownership,
+            selected_roots: vec![PathBuf::from("/work")],
+            discovered_manifests: 8,
+            resolved_workspaces: 1,
+            units_considered: 0,
+            effective_policy: None,
+            selector: None,
+        };
+        let text = report.render();
+        assert_eq!(
+            text.matches("unresolved [locate]").count(),
+            5,
+            "exactly five participant rows: {text}"
+        );
+        assert!(
+            text.contains("… 2 more unresolved participant(s)"),
+            "bounded overflow line: {text}"
+        );
+        assert!(
+            !text.contains("empty `[workspace]` table"),
+            "no workspace hint without the workspace-belief reason: {text}"
+        );
     }
 
     #[test]

@@ -86,9 +86,9 @@ fake-Cargo runners and assertion bodies. `workspace.rs` is 4568 lines, 3034 of t
 so the rendering tests sit *above* most of the production code they exercise.
 
 The consequence for review is concrete. Opening `src/cleanup.rs` to understand the pre-spawn
-decision puts 3954 lines of `FakeCleanupRunner` variants (`cleanup.rs:2394`–`6347`) between
+decision puts 4197 lines of `FakeCleanupRunner` variants (`cleanup.rs:2534`–`6730`) between
 the reader and nearly all production code. Locate the boundary first — `mod tests {` at
-`cleanup.rs:2394` — and read upward. Do not infer "few tests" from a file's position in the
+`cleanup.rs:2534` — and read upward. Do not infer "few tests" from a file's position in the
 tree, and do not count `cleanup.rs` as production code when estimating where complexity
 lives.
 
@@ -111,9 +111,9 @@ Two further seams remove the remaining side effects:
 ### Catalogue of fakes
 
 Production impls, for contrast: `SystemCargoRunner` (`workspace.rs:78`),
-`SystemCleanupRunner` (`cleanup.rs:438`, impls `CargoRunner` at `:440`),
-`WorkspaceCleanupAdapter<'_>` (`cleanup.rs:1402`), `ProofRefreshMeter<'_>`
-(`cleanup.rs:1554`), `HttpEnvironment` (`update.rs:820`), `IndicatifRenderer`
+`SystemCleanupRunner` (`cleanup.rs:489`, impls `CargoRunner` at `:491`),
+`WorkspaceCleanupAdapter<'_>` (`cleanup.rs:1523`), `ProofRefreshMeter<'_>`
+(`cleanup.rs:1675`), `HttpEnvironment` (`update.rs:820`), `IndicatifRenderer`
 (`progress.rs:187`), `NoopObserver` (`progress.rs:56`).
 
 | Test fake | File:line | Failure mode simulated |
@@ -126,14 +126,14 @@ Production impls, for contrast: `SystemCargoRunner` (`workspace.rs:78`),
 | `RecordingRunner` | `workspace.rs:3371` (impl 3375) | Records `(cwd, args)` so a test asserts argument *construction*, not the fake's result |
 | `FixtureEnvironment` | `update.rs:1222` (impl 1357) | Replaces network, `curl` discovery, process globals; drives `staging` and a fixed `version`. Records **its own** staging paths (`created_staging`, `:1310`) so leak evidence is invocation-scoped rather than a scan of the temp directory — see [§7](#7-the-false-green-problem) |
 | `TestObserver` | `progress.rs:64` (impl 105) | Records semantic events (`phases`, `visited`, `pruned`, `manifests`, `workspaces`, `cargo_failures`) — deliberately not refresh counts, which are renderer-side |
-| `FakeCleanupRunner` | `cleanup.rs:2403` (impls 2436 / 2519) | The workhorse. Records every call; `remove_on_execute` and `unresolved_manifest` toggle Execute's delete and the unresolved-manifest block |
-| `ChangingTargetRunner` | `cleanup.rs:3252` (impls 3258/3278) | `target` changes between calls — the first-generation race |
-| `PerPathFailRunner` | `cleanup.rs:3314` (impls 3318/3361) | One manifest path fails to locate; proves the *entire* selected scope is blocked, not just the failing unit |
-| `RaceRunner` | `cleanup.rs:3989` (impls 4025/4088) | Mutates the filesystem on the *second* `metadata` call — between scan and final proof; `clean_calls` proves no clean was staged |
-| `BuildChangingRunner` | `cleanup.rs:4211` (impls 4217/4262) | Swaps `build/<hash>` between resolution passes; targets marker-qualification revalidation |
-| `StagedCargo` | `cleanup.rs:4689` (impls 4795/4882) | Returns `"mock cargo clean success"` — a clean that succeeds *without deleting*, so the test asserts the call, not the filesystem |
-| `ParallelProbeRunner` | `cleanup.rs:4900` (impls 4906/4927) | Tracks peak concurrent `metadata` calls; proves the parallel fan-out is real |
-| `MetadataMutationRunner` | `cleanup.rs:4948` (impls 4954/4999) | Wraps `StagedCargo`, mutating emitted metadata (`MetadataMutation` at `cleanup.rs:4942`: `WorkspaceRoot`, `AddMember`, `Malformed`) after the inner call |
+| `FakeCleanupRunner` | `cleanup.rs:2543` (impls 2576 / 2659) | The workhorse. Records every call; `remove_on_execute` and `unresolved_manifest` toggle Execute's delete and the unresolved-manifest block |
+| `ChangingTargetRunner` | `cleanup.rs:3496` (impls 3502/3522) | `target` changes between calls — the first-generation race |
+| `PerPathFailRunner` | `cleanup.rs:3637` (impls 3641/3684) | One manifest path fails to locate; proves the *entire* selected scope is blocked, not just the failing unit |
+| `RaceRunner` | `cleanup.rs:4312` (impls 4348/4411) | Mutates the filesystem on the *second* `metadata` call — between scan and final proof; `clean_calls` proves no clean was staged |
+| `BuildChangingRunner` | `cleanup.rs:4534` (impls 4540/4585) | Swaps `build/<hash>` between resolution passes; targets marker-qualification revalidation |
+| `StagedCargo` | `cleanup.rs:5012` (impls 5118/5205) | Returns `"mock cargo clean success"` — a clean that succeeds *without deleting*, so the test asserts the call, not the filesystem |
+| `ParallelProbeRunner` | `cleanup.rs:5223` (impls 5229/5250) | Tracks peak concurrent `metadata` calls; proves the parallel fan-out is real |
+| `MetadataMutationRunner` | `cleanup.rs:5271` (impls 5277/5322) | Wraps `StagedCargo`, mutating emitted metadata (`MetadataMutation` at `cleanup.rs:5265`: `WorkspaceRoot`, `AddMember`, `Malformed`) after the inner call |
 | `MetadataOnly` | `tests/end_to_end.rs:73` (impl 75) | Integration-suite Cargo stub — the only fake outside `src/` |
 
 Two deserve a note. `RecordingRunner` carries a comment (`workspace.rs:3361-3368`) stating
@@ -171,7 +171,7 @@ Its test module opens at line 470 and contains **6** `#[test]` functions. For th
 that walks the entire filesystem — parallel size and recency measurement, symlink and
 `CACHEDIR.TAG` handling, `ReadDir` error attribution, pruning — that is low. The
 parallel-probe machinery has a dedicated counting fake in `cleanup.rs`
-(`ParallelProbeRunner`, `cleanup.rs:4900`); `traverse.rs` has nothing comparable.
+(`ParallelProbeRunner`, `cleanup.rs:5223`); `traverse.rs` has nothing comparable.
 
 `source_activity` is declared at `src/traverse.rs:268` and has exactly one call site in the
 crate: `src/traverse.rs:594`, inside the test module opening at 470. **There is no

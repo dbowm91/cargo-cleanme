@@ -29,7 +29,7 @@ contains `use crate::` or `use super::` — this is a verifiable leaf, and the
 load-bearing structural claim in [the overview](overview.md) §2. The safety
 vocabulary has no compile-time dependency on the machinery that could be tempted
 to misuse it. Three absences are conspicuous: the cleanup-side report type
-`CleanReport` lives in `cleanup.rs:170+`, not here; Cargo version → capability
+`CleanReport` lives in `cleanup.rs:228`, not here; Cargo version → capability
 *derivation* lives in `workspace.rs:124-165` even though the capability *types*
 live here; and `Serialize` is derived on no domain type — the JSON contract
 belongs to `output.rs`, which maps domain structs to DTOs by hand.
@@ -50,7 +50,7 @@ belongs to `output.rs`, which maps domain structs to DTOs by hand.
 | Enum | Variant | Meaning |
 |---|---|---|
 | `ScanScope` | `Explicit(PathBuf)` | One user-named root; forces `DiscoveryFilters::Bypassed` (`policy.rs:42`). |
-| | `ExplicitRoots(Vec<PathBuf>)` | Several explicit roots forming one boundary; doc comment restricts it to *cleanup only* (`domain.rs:14`). Constructed only at `cleanup.rs:774` and `cleanup.rs:1606`. |
+| | `ExplicitRoots(Vec<PathBuf>)` | Several explicit roots forming one boundary; doc comment restricts it to *cleanup only* (`domain.rs:14`). Constructed only at `cleanup.rs:918` and `cleanup.rs:1797`. |
 | | `Global(Vec<PathBuf>)` | Machine-wide discovery roots (`policy.rs:23`). |
 | | `Routine(Vec<PathBuf>)` | The learned-root set from the state file (`policy.rs:46`). |
 | `DiscoveryFilters` | `Active { ignore, unignore }` | `Vec<String>` patterns and `Vec<PathBuf>` re-inclusions, handed to the walker (`discovery.rs:327`). |
@@ -130,7 +130,7 @@ unknown or env-only evidence, handled conservatively. Derivation:
 | Method | Signature | Notes |
 |---|---|---|
 | `DiagnosticSeverity::as_str` | `self -> &'static str` | `domain.rs:59`. Used at `output.rs:124`. |
-| `OutputOwnershipClass::label` | `self -> &'static str` | `domain.rs:194`: `private` / `external-unproven` / `shared` / `uncertain`. Used at `report.rs:60`, `cleanup.rs:294`, `cleanup.rs:623`, `cleanup.rs:1944`, `output.rs:117`, `output.rs:170`. |
+| `OutputOwnershipClass::label` | `self -> &'static str` | `domain.rs:194`: `private` / `external-unproven` / `shared` / `uncertain`. Used at `report.rs:60`, `cleanup.rs:396`, `cleanup.rs:725`, `cleanup.rs:2135`, `output.rs:117`, `output.rs:170`. |
 | `ScanCounters::stats_line` | `&self -> String` | `domain.rs:290`. The `key=value` scan line. It *fuses* two fields into one key: `empty_skipped` = `empty_no_output_skipped + missing_output_skipped` (`domain.rs:306`). |
 | `ScanCounters::timings_line` | `&self -> String` | `domain.rs:317`. Five phases as `ms`, 2 decimals. |
 | `ScanCounters::merge_proof` | `&mut self, proof: &ScanCounters` | `domain.rs:339`. Six `saturating_add`s into `proof_*` fields only. |
@@ -188,22 +188,22 @@ Fifteen `pub mod` declarations, one per line, alphabetical (`lib.rs:1-15`):
 | Variant | Label | Assigned when | Permitted at cleanup time |
 |---|---|---|---|
 | `PrivateBounded` | `private` | Single owner, every covering root strictly below the workspace root, no source overlap, and *no* unresolved workspace anywhere in the universe (`workspace.rs:816-818`) | **The only actionable class** — still subject to path authorization and a fresh ownership proof at the spawn boundary. |
-| `Shared` | `shared` | More than one owner maps to the group (`workspace.rs:801`), *or* it is inside the root but not provably exclusive because some root in the universe is unrepresentable (`workspace.rs:820-822`) | Inventory-only: `cleanup.rs:1193` returns `CleanupReasonCode::SkippedShared`. |
-| `ExternalUnproven` | `external-unproven` | Inside no single workspace root — e.g. a `CARGO_TARGET_DIR` outside the project (`workspace.rs:823-824`) | Inventory-only *even inside a clean ROOT or a configured `allowed_output_roots`*: `cleanup.rs:1195`, plus the gate at `cleanup.rs:493-494` which fires before any root validation. |
+| `Shared` | `shared` | More than one owner maps to the group (`workspace.rs:801`), *or* it is inside the root but not provably exclusive because some root in the universe is unrepresentable (`workspace.rs:820-822`) | Inventory-only: `cleanup.rs:1384` returns `CleanupReasonCode::SkippedShared`. |
+| `ExternalUnproven` | `external-unproven` | Inside no single workspace root — e.g. a `CARGO_TARGET_DIR` outside the project (`workspace.rs:823-824`) | Inventory-only *even inside a clean ROOT or a configured `allowed_output_roots`*: `cleanup.rs:1386`, plus the gate at `cleanup.rs:595-596` which fires before any root validation. |
 | `Uncertain` | `uncertain` | The owning workspace is itself uncertain, or a covering root *is or contains* a member source root — cleaning would delete the project (`workspace.rs:813-815`) | Never. Dropped before sizing with an explicit `CandidateUncertain` warning (`workspace.rs:1053-1071`). |
 
 The `Uncertain` source-overlap case deserves attention: a user who sets
 `target-dir` to their source tree would otherwise get silence, so the group is
 dropped with a warning explaining why nothing is reported or cleaned.
 
-The *order* of checks in `covering_is_authorized_roots` (`cleanup.rs:485-500`) is
+The *order* of checks in `covering_is_authorized_roots` (`cleanup.rs:586-597`) is
 load-bearing: ownership class is tested **first**, before allowed roots are
 validated as absolute and non-symlink. Its comment states the rule — ownership
 class is authoritative, and `ExternalUnproven` is inventory-only even inside a
 clean ROOT or a configured allowed root. That is what makes
 `allowed_output_roots` unable to upgrade an unproven class. Three more gates
-repeat the test: `cleanup.rs:618` (per group), `cleanup.rs:1940` (per unit), and
-`unit_blocking_class` (`cleanup.rs:1250-1256`), which reduces a workspace unit
+repeat the test: `cleanup.rs:720` (per group), `cleanup.rs:2131` (per unit), and
+`unit_blocking_class` (`cleanup.rs:1441-1448`), which reduces a workspace unit
 to its worst member's class.
 
 `OutputRootKind` (`domain.rs:138-141`) is the smaller, purely descriptive
@@ -211,7 +211,7 @@ sibling: `Target` and `Build`. Since Cargo 1.91 these can be distinct
 directories, and one `cargo clean` can affect both, so the kind is carried on
 every `OutputRoot` and ordered `Target` before `Build` in unit construction
 (`workspace.rs:1307-1308`). Four exhaustive matches over it live outside
-`domain.rs`: `workspace.rs:208`, `workspace.rs:238`, `cleanup.rs:610`, and the
+`domain.rs`: `workspace.rs:208`, `workspace.rs:238`, `cleanup.rs:711`, and the
 label builder at `workspace.rs:1313-1315` whose `[Target, Build]` arm renders
 `"target+build"`.
 
@@ -247,7 +247,7 @@ Two asymmetries are worth stating. First, `owners: Vec<WorkspaceId>` becomes
 `g.owners.iter().map(|w| w.0.clone())`, the only place `WorkspaceId`'s field is
 projected. Second, `covering_roots` and `uncertain` are **dropped**. Dropping
 `covering_roots` is consistent with keeping authorization a cleanup-side concern
-(`cleanup.rs:462`); dropping `uncertain` is sound only because a group is never
+(`cleanup.rs:586`); dropping `uncertain` is sound only because a group is never
 constructed as uncertain (§5.6).
 
 "Eligible" means *included in the inventory*, not eligible for deletion. An
@@ -265,7 +265,7 @@ rule is that *explicit scope bypasses filtering*: `policy.rs:42` pairs
 directory, cargo-cleanme does not second-guess them with ignore rules.
 
 `cleanup.rs` constructs `EffectiveScanPolicy` directly, twice
-(`cleanup.rs:772-776`, `cleanup.rs:1604-1608`), always as
+(`cleanup.rs:916-920`, `cleanup.rs:1795-1799`), always as
 `ScanScope::ExplicitRoots(roots)` with `DiscoveryFilters::Bypassed`. That is why
 `ExplicitRoots` is documented as cleanup-only: a scan is driven by
 `policy::resolve` and would never produce it. `Bypassed` is the safe default for
@@ -328,7 +328,7 @@ exhaustive in `main.rs` — is review item 1 in §7.
 
 The **`proof_*` fields are a separate accounting universe** — a deliberate
 decision, not duplication. The proof pass re-resolves the ownership universe at
-the destructive boundary (`cleanup.rs:1702` and `cleanup.rs:1829` call
+the destructive boundary (`cleanup.rs:1893` and `cleanup.rs:2020` call
 `merge_proof`), and that work is real cost. The `proof_*` doc comment gives the
 reason: proof work is kept separate from initial discovery counters "so
 `--stats` cannot hide it" (`domain.rs:267-268`). Accordingly `main.rs:250-255`
@@ -339,8 +339,8 @@ for a plain scan.
 `merge_proof` is one-directional: six specific fields are copied into `proof_*`
 and **no** base counter is ever touched. Two `proof_*` fields are not merged
 because they are not additive — `proof_workspaces_refreshed` is incremented at
-`cleanup.rs:1704` and `cleanup.rs:1830`, and `proof_metadata_peak_concurrency`
-is a `.max()` (`cleanup.rs:1730`, `cleanup.rs:1736`). `proof_workspaces_refreshed`
+`cleanup.rs:1894` and `cleanup.rs:2021`, and `proof_metadata_peak_concurrency`
+is a `.max()` (`cleanup.rs:1919`, `cleanup.rs:1925`). `proof_workspaces_refreshed`
 counts *workspaces*, not processes, because the universe is refreshed once per
 run and each candidate re-resolves its own workspace (`domain.rs:335-338`).
 
@@ -354,14 +354,14 @@ diagnostic message (`workspace.rs:465-469`) — brittle, and worth remembering
 when reviewing. `reason` is a copy of that message, or the literal
 `"no successful Cargo workspace metadata covered this manifest"`.
 
-They drive the most fail-closed behaviour in the crate. `cleanup.rs:1289-1309`
+They drive the most fail-closed behaviour in the crate. `cleanup.rs:1483-1499`
 calls `resolve_workspaces_with_coverage`, sets
 `counters.unresolved_ownership = unresolved.len() as u64`, and — crucially — if
 `unresolved` is non-empty returns a `CleanupScope` with **zero units**: a
 whole-scope safety block raised *before* any sizing or per-unit proof. One
 manifest Cargo could not account for stops the entire run. The structured
 participants are retained on `CleanReport.unresolved_ownership`
-(`cleanup.rs:186`) for audit and projected to JSON as `unresolved_participants`
+(`cleanup.rs:237`) for audit and projected to JSON as `unresolved_participants`
 (`output.rs:65-69`).
 
 ---
@@ -424,17 +424,17 @@ match sites outside `domain.rs`:
 | Adding a variant to | Consequence |
 |---|---|
 | `DiagnosticCategory` | `output.rs:126-131` has no `_` arm → **compile error** |
-| `OutputOwnershipClass` | `cleanup.rs:566-574` and `cleanup.rs:1192-1199` both list all four → **compile error** |
-| `OutputRootKind` | `workspace.rs:208-210`, `workspace.rs:238-240`, `workspace.rs:1313-1315`, `cleanup.rs:610-612` → **compile error** |
+| `OutputOwnershipClass` | `cleanup.rs:667-677` and `cleanup.rs:1383-1389` both list all four → **compile error** |
+| `OutputRootKind` | `workspace.rs:208-210`, `workspace.rs:238-240`, `workspace.rs:1313-1315`, `cleanup.rs:711-714` → **compile error** |
 | `SizeMetric` | `output.rs:112-115` → **compile error** |
 | `DiagnosticSeverity` | `as_str()` at `domain.rs:60-64` is exhaustive → **compile error** |
 | **`DiagnosticCategory` at `main.rs:333-336`** | **nothing — compiles silently.** A new uncertainty class would default to *not* feeding the `uncertainty` vector, so an incomplete scan would be treated as complete. The sharpest edge in this file. |
-| **`OutputOwnershipClass` at `cleanup.rs:493`, `cleanup.rs:618`, `cleanup.rs:1252`, `cleanup.rs:1940`** | **nothing — all are `==`/`!=` comparisons.** A new class falls through as "not private", i.e. fails closed. Safe direction, but safe by accident rather than by construction. |
+| **`OutputOwnershipClass` at `cleanup.rs:595`, `cleanup.rs:720`, `cleanup.rs:1443`, `cleanup.rs:2131`** | **nothing — all are `==`/`!=` comparisons.** A new class falls through as "not private", i.e. fails closed. Safe direction, but safe by accident rather than by construction. |
 
 **5.3 `ScanCounters` merge semantics.** `merge_proof` is additive, saturating,
 and one-directional into `proof_*`. It is called twice — once for the
-whole-universe refresh (`cleanup.rs:1702`), once per candidate
-(`cleanup.rs:1829`) — so repeated calls are expected, but it is *not* an
+whole-universe refresh (`cleanup.rs:1893`), once per candidate
+(`cleanup.rs:2020`) — so repeated calls are expected, but it is *not* an
 idempotent replace: calling it twice with the same proof double-counts. The doc
 claim that proof work "is merged into separate `proof_*` fields (never into the
 initial-scan counters)" (`domain.rs:331-333`) is accurate and is the property to
@@ -448,7 +448,7 @@ counter is "a silent-wrong-number bug waiting for a slow machine"
 (`domain.rs:278-284`).
 
 **That reasoning is now applied consistently.** Ten call sites use the helper
-(`main.rs:536`, `cleanup.rs:842`, `cleanup.rs:2121`, `cleanup.rs:2139`,
+(`main.rs:536`, `cleanup.rs:935`, `cleanup.rs:2242`, `cleanup.rs:2260`,
 `workspace.rs:391`, `workspace.rs:405`, `workspace.rs:559`, `workspace.rs:565`,
 `workspace.rs:1060`, `workspace.rs:1154`) and **no** site in `src/` writes
 `elapsed().as_nanos() as u64`. The four that did — the `cargo_locate_nanos` and
@@ -459,11 +459,11 @@ saturating-adds — were the last inconsistent ones and now call the helper.
 in `src/`, 6 of them in `merge_proof` (`domain.rs:339-357`).
 `saturating_sub` appears 3 times in production: `policy.rs:115` and
 `discovery_state.rs:183` (both `SystemTime`, where clamping to the epoch is
-intended) and `cleanup.rs:1198`, `proof.pre_bytes.saturating_sub(after)` —
+intended) and `cleanup.rs:1319`, `proof.pre_bytes.saturating_sub(after)` —
 clamping to `0` when
 output *grew* between proof and verification, the only safe reading.
 `checked_sub` appears 20 times but only **4** in production code (`main.rs:465`,
-`cleanup.rs:1022`, `cleanup.rs:1312`, `cleanup.rs:2002`); the other 16 are
+`cleanup.rs:1195`, `cleanup.rs:1503`, `cleanup.rs:2212`); the other 16 are
 `start.checked_sub(…).unwrap()` inside test modules. The production uses are all
 `SystemTime` cutoff computations mapping to `AppError::Config` — see
 `main.rs:464-466`, "recency window exceeds system time range". `checked_add`
@@ -509,7 +509,7 @@ the modules that consume it. That is the right place for them — a test of
 `format_bytes` belongs in `report.rs`, not in a data module. Concretely, the only
 domain-owned behaviour (`stats_line`, `timings_line`, `proof_stats_line`,
 `proof_timings_line`, `merge_proof`, `label`, `as_str`, `elapsed_nanos`) is
-asserted in `cleanup.rs:6048-6057`, three lines, one of which only checks that
+asserted in `cleanup.rs:6412-6421`, three lines, one of which only checks that
 `proof_timings_line()` contains `proof_metadata=`. That is thin. **Do not
 overstate the coverage:** there is no unit test pinning the full `stats_line` key
 list, none for `elapsed_nanos` saturation, and none for the
@@ -553,9 +553,9 @@ The integration surfaces that exercise this vocabulary:
    absent from the `main.rs` filter, an incomplete Full scan is treated as
    complete and may delete learned roots it never observed.
 2. **Adding an `OutputOwnershipClass` variant.** It needs a `label()` arm at
-   `domain.rs:194-201`, and the exhaustive matches at `cleanup.rs:566-574` and
-   `cleanup.rs:1192-1199` will fail to compile — but the four *inequality* gates
-   (`cleanup.rs:493`, `cleanup.rs:618`, `cleanup.rs:1252`, `cleanup.rs:1940`)
+   `domain.rs:194-201`, and the exhaustive matches at `cleanup.rs:667-677` and
+   `cleanup.rs:1383-1389` will fail to compile — but the four *inequality* gates
+   (`cleanup.rs:595`, `cleanup.rs:720`, `cleanup.rs:1443`, `cleanup.rs:2131`)
    will silently accept it as "not private". Confirm the new class fails closed
    in all four, and that `workspace::build_groups` (`workspace.rs:800-825`)
    cannot produce it.
@@ -564,7 +564,7 @@ The integration surfaces that exercise this vocabulary:
    `proof_*` field merged by `merge_proof` (`domain.rs:339-358`) so
    `cleanup --stats` (`main.rs:250-255`) cannot hide it. If it is a maximum
    rather than a sum (like `proof_metadata_peak_concurrency`, set by `.max()` at
-   `cleanup.rs:1730`), it must *not* be added to `merge_proof`.
+   `cleanup.rs:1919`), it must *not* be added to `merge_proof`.
 4. **Any change to `elapsed_nanos` usage.** The helper exists to avoid a silent
    truncation, and four sites still do it by hand (`workspace.rs:358`, `372`,
    `518`, `524`). Do not copy those; if you touch the helper, fix those four in
@@ -572,7 +572,7 @@ The integration surfaces that exercise this vocabulary:
 5. **Is `merge_proof` still one-directional and non-idempotent-safe?** Any edit
    that lets proof work land in a base counter silently re-breaks the property
    stated at `domain.rs:331-333`. Also confirm the repeated calls at
-   `cleanup.rs:1702` and `cleanup.rs:1829` remain intentional.
+   `cleanup.rs:1893` and `cleanup.rs:2020` remain intentional.
 6. **Does a change to `ScanReport` / `EligibleOutputGroup` reach the JSON
    contract?** Neither type is `Serialize`. A new field changes nothing on the
    wire until `output.rs` maps it (`output.rs:104-154`), and that mapping is the

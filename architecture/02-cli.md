@@ -213,7 +213,7 @@ the tree that maps a flag to a mode. `Cli::invocation` calls it for both the bar
 front door (`src/cli.rs:249`) and `clean` (`src/cli.rs:286`), and
 `cleanup.rs`'s inline test asserts the mapping against the stable labels rather
 than against a `Default` (`cli_modes_map_to_preview_simulate_execute`,
-`src/cleanup.rs:2566`).
+`src/cleanup.rs:2756`).
 
 Three properties are load-bearing:
 
@@ -233,7 +233,7 @@ Three properties are load-bearing:
    (`src/cli.rs:512`).
 
 `CleanMode` has **no `Default`** (`src/cleanup.rs:30-46`), and `CleanReport` does
-not derive one either (`src/cleanup.rs:180-199`). That is the structural guard
+not derive one either (`src/cleanup.rs:222-228`). That is the structural guard
 against a future call site inheriting the weaker mode by accident: every report
 states its mode in full.
 

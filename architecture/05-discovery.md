@@ -65,8 +65,8 @@ module for exactly one function.
 `discover_manifests` is a one-line delegation (`:238`); all logic is in
 `discover_manifests_with_attribution`, and `discover_manifests` exists so that
 callers who do not want the per-entry attribution map do not have to pass a
-`false`. Callers: `main.rs:321` (with `stats`), `cleanup.rs:786` and
-`cleanup.rs:1609` (the destructive path, without), `tests/end_to_end.rs:135`,
+`false`. Callers: `main.rs:321` (with `stats`), `cleanup.rs:930` and
+`cleanup.rs:1800` (the destructive path, without), `tests/end_to_end.rs:135`,
 `examples/traversal-qualification.rs:35`.
 
 **`impl Filters` is private API.** `struct Filters` at `:13` has no `pub`, so
@@ -382,7 +382,7 @@ with* the measurement traversal, capped at 8.
 **One pool for all roots, in the global path** (`:455`): N roots share ≤8
 workers. **One pool per root, in the sequential path** (`:734-760`): `walk` starts
 a fresh pool, and dropping the iterator stops and joins its workers
-(`dua-core lib.rs:10`). `ScanScope::ExplicitRoots` from `cleanup.rs:774` therefore
+(`dua-core lib.rs:10`). `ScanScope::ExplicitRoots` from `cleanup.rs:918` therefore
 pays one pool startup per selected root.
 
 **Result ordering, honestly.** Results are *not* merged from several threads —
@@ -507,7 +507,7 @@ or macOS run executes 17 and a Windows run 15.
    `PermissionDenied`/`Metadata` with the root's path, or that the walk survives
    it; the only diagnostic assertion in the module is the symlink-root message
    (`:1175-1180`). This is precisely the code `main.rs:327-339` and
-   `cleanup.rs:795-809` depend on.
+   `cleanup.rs:977-988` depend on.
 2. **`root_is_usable`'s "unavailable" branch is untested** (`:387-388`, the
    missing-or-not-a-directory case) — the branch that makes `scan --full` exit 1.
    Only the symlink sibling is covered.
@@ -544,8 +544,8 @@ or macOS run executes 17 and a Windows run 15.
    be added to `main.rs:331-336` *and*, if it should block Full reconciliation, to
    both `PlatformRoot && Error` checks (`main.rs:383-386`, `main.rs:479-483`).
    Missing the first silently converts a hole in the scan into certainty about
-   learned roots. Before adding anything at all, check `cleanup.rs:795-809` and
-   `cleanup.rs:1613-1618` — those treat *any* non-empty diagnostic vector as a hard
+   learned roots. Before adding anything at all, check `cleanup.rs:977-988` and
+   `cleanup.rs:1804-1808` — those treat *any* non-empty diagnostic vector as a hard
    block on cleanup.
 2. **Does a new prune reason have a `ScanCounters` field and a position in the
    `else if` chain at `:581-591`?** That chain's ordering plus

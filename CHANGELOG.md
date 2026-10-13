@@ -8,6 +8,13 @@ command-line, JSON, and release-asset contracts are the stable surface.
 
 ## [Unreleased]
 
+### Fixed
+
+- Failed Cargo workspace lookups now retain a bounded, sanitized excerpt of
+  several stderr lines, so causes commonly printed after Cargo's generic first
+  line are visible. The unresolved-manifest ledger and cleanup blocking behavior
+  are unchanged.
+
 ## [0.2.6] - 2026-10-12
 
 ### Fixed
@@ -57,11 +64,6 @@ command-line, JSON, and release-asset contracts are the stable surface.
 - Removed a stale duplicate `## [Unreleased]` section that repeated the
   already-released `0.1.3` notes, and added the missing per-version release
   links.
-
-- Failed Cargo workspace lookups now retain a bounded, sanitized excerpt of
-  several stderr lines, so causes commonly printed after Cargo's generic first
-  line are visible. The unresolved-manifest ledger and cleanup blocking behavior
-  are unchanged.
 - Automatic Routine scope hygiene now also excludes macOS platform caches
   (`~/Library/Caches`, `~/Library/pnpm`), the `~/Downloads` drop zone,
   shared-temp aliases (`/tmp`, `/private/tmp`, `/var/tmp`), and system

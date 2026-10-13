@@ -28,10 +28,10 @@
 - **Verdicts.** It emits `SourceActivity`, never an activity *state*. The
    domain's `ActivityState` (`domain.rs:40-44`) has **no construction site anywhere in `src/`** — a
     grep returns the definition and nothing else. Classification of evidence into a decision
-    happens in `workspace.rs:1004-1011` and `cleanup.rs:2017-2021`.
+    happens in `workspace.rs:1004-1011` and `cleanup.rs:2225-2237`.
 - **Sizing policy.** It reports bytes and an mtime; `workspace.rs:1164` applies
    the recency window, `:1152` the emptiness gate, `:1182-1191` the metric label. The window is
-    supplied by the caller (`main.rs:464-466`, `cleanup.rs:1311-1313`).
+    supplied by the caller (`main.rs:464-466`, `cleanup.rs:2211-2213`).
 - **Workspaces, manifests, ownership, authorization.** No knowledge of Cargo,
    `Cargo.toml`, or who owns what.
 - **Progress reporting.** It holds no observer. The `observer.group_measured` /
@@ -103,11 +103,11 @@ Derivation, in order: `std::thread::available_parallelism()`, `map_or(1, ..)` on
 
 | Variant | Payload | Caller should |
 |---|---|---|
-| `Recent(SystemTime)` | The **first** recent timestamp encountered, not the maximum (`:334`, `:437`) | Treat the candidate as active; do not size it. `workspace.rs:1438`, `cleanup.rs:2017`. |
-| `Quiet(Option<SystemTime>)` | Newest observed source timestamp, `None` if nothing could be stat'ed (`:337`, `:440`) | Not-active is *permitted*, not *required* — the timestamp is evidence for the caller's own bookkeeping. `cleanup.rs:2022-2025` folds it into `newest_activity`. |
+| `Recent(SystemTime)` | The **first** recent timestamp encountered, not the maximum (`:334`, `:437`) | Treat the candidate as active; do not size it. `workspace.rs:1438`, `cleanup.rs:2227`. |
+| `Quiet(Option<SystemTime>)` | Newest observed source timestamp, `None` if nothing could be stat'ed (`:337`, `:440`) | Not-active is *permitted*, not *required* — the timestamp is evidence for the caller's own bookkeeping. `cleanup.rs:2232-2235` folds it into `newest_activity`. |
 
 `Err(())` is a third, implicit outcome: any walk or metadata failure is conservative
-  (`traverse.rs:318`, `:425`). `cleanup.rs:2027` turns it into a hard block;
+  (`traverse.rs:318`, `:425`). `cleanup.rs:2237` turns it into a hard block;
   `workspace.rs:1049-1053` into `UncertainSource`.
 
 ### Private helpers worth explaining
@@ -295,9 +295,9 @@ This is a conceptually different question from §4. `TargetStats` answers "is th
 
 The recency rule is `time >= cutoff || time > start` (`:262`). Both clauses matter: `cutoff` is
   the inactivity window, and `time > start` catches **future-dated** timestamps (clock skew, a
-  restored backup, a deliberately touched file). Every caller constructs `start` as
-  `SystemTime::now() + 1s` (`traverse.rs:585-587`, `cleanup.rs:6133`) so the future test is live
-  rather than vacuous.
+  restored backup, a deliberately touched file). Production constructs `start` as
+  `SystemTime::now()` (`cleanup.rs:2210`); the `+1s` future-clock that keeps the future
+  test live exists only in test (`cleanup.rs:6702`) alongside `traverse.rs:585-587`.
 
 Evidence is the **maximum** mtime over *non-excluded* entries, with early exit at the first recent
   one (`:319-321`). Excluded from evidence, including their own boundary mtime (`:307-313` and
@@ -329,16 +329,16 @@ Structurally identical; the only differences are (a) one output root becomes N (
 **Why a member-aware version is required.** In a Cargo workspace the source activity of the
   *virtual* root is meaningless — the root typically has only `Cargo.toml` and member directories.
   Worse, all members may share one `target/`, so excluding only "the" output root is not
-  expressible. `workspace.rs:1435-1442` therefore loops over `workspace_member_roots(ws)` and ORs
-  the members: any one recent member protects the whole workspace. `cleanup.rs:2015` repeats the
+   expressible. `workspace.rs:1435-1442` therefore loops over `workspace_member_roots(ws)` and ORs
+   the members: any one recent member protects the whole workspace. `cleanup.rs:2225` repeats the
   loop during revalidation. The single-output `source_activity` is the one-project shape.
 
 ### Which function is actually live
 
 **`source_activity` has no production caller.** A repo-wide grep returns the definition
   (`traverse.rs:268`) and exactly one call site: the inline test at `:539`. Production reaches
-  source activity only through `workspace_member_activity`, via `workspace.rs:1437` and
-  `cleanup.rs:2016`. `measure_single_target` *is* live in production (`cleanup.rs:2036`, `:2310`).
+   source activity only through `workspace_member_activity`, via `workspace.rs:1437` and
+   `cleanup.rs:2226`. `measure_single_target` *is* live in production (`cleanup.rs:2246`, `:2520`).
   `source_activity` is `pub`, so nothing warns about it.
 
 ### Combining with a size measurement
@@ -370,9 +370,9 @@ Source activity is the **cheap gate that runs before the expensive one**: a rece
   source directory, one whose edits preserve mtimes, one edited while its member root was
   momentarily unreadable, and one whose only recent file sits inside a nested repo all report
   `Quiet`. A pruned subtree is invisible by construction (`:307-313`). The signal is a **one-sided
-  safety test**: `Recent` is authoritative, `Quiet` is merely permissive. Both production callers
-  treat it that way (`workspace.rs:1042-1048` skips only on `true`; `cleanup.rs:2017-2021` aborts
-  only on `true`).
+   safety test**: `Recent` is authoritative, `Quiet` is merely permissive. Both production callers
+   treat it that way (`workspace.rs:1042-1048` skips only on `true`; `cleanup.rs:2227-2230` aborts
+   only on `true`).
 
 ## 7. Dependencies and trade-offs
 
@@ -452,8 +452,8 @@ Hot spots for a whole-machine scan, in order: the double `stat` per entry; and �
 
 **The exception:** `SourceActivity::Recent(t)` carries the **first** recent timestamp found, not
   the maximum (`:320`, `:423`), so `t` depends on which worker reached the entry first. In
-  practice no production consumer reads the payload — `workspace.rs:1438` and `cleanup.rs:2017`
-  both match `Recent(_)`. `Quiet(Option<SystemTime>)` *is* read (`cleanup.rs:2022-2025`) and *is*
+   practice no production consumer reads the payload — `workspace.rs:1438` and `cleanup.rs:2227`
+   both match `Recent(_)`. `Quiet(Option<SystemTime>)` *is* read (`cleanup.rs:2232-2235`) and *is*
   deterministic, because it is the `max`. If a future caller starts reading the `Recent` payload,
   it inherits scheduling nondeterminism.
 
@@ -463,7 +463,7 @@ Hot spots for a whole-machine scan, in order: the double `stat` per entry; and �
   with candidate count, and `traverse.rs:481-502` asserts single/batch agreement — but neither
   runs the same measurement at two different thread counts. The
   `sequential_and_parallel_refreshes_produce_the_same_workspace_graph_and_disposition` test
-  (`cleanup.rs:6083-6160`) compares 1 vs 4 workers in `refresh_proof_universe_with_limit`, which
+   (`cleanup.rs:6652-6729`) compares 1 vs 4 workers in `refresh_proof_universe_with_limit`, which
   is a *different* concurrency knob; it proves parity for the workspace-graph refresh, not for
   `traverse`.
 
@@ -523,10 +523,10 @@ Otherwise: no `unwrap`, no `expect`, no slicing, and no integer casts in `traver
 
 **This is measurement, not authorization.** A measurement taken at scan time says nothing about
   the state at delete time — a build can start between the two. The architecture handles that one
-  layer up: `cleanup.rs:2013-2050` re-runs `workspace_member_activity` *and*
+  layer up: `cleanup.rs:2223-2257` re-runs `workspace_member_activity` *and*
   `measure_single_target` immediately before deletion and converts any `Recent` verdict, any fresh
   `newest`, and any `uncertain` into a hard `Err` that blocks the transaction
-  (`cleanup.rs:2017-2021`, `:2027`, `:2037-2042`). That is invariant 3 in [the
+  (`cleanup.rs:2227-2230`, `:2237`, `:2247-2255`). That is invariant 3 in [the
   overview](overview.md) implemented, and it is the reason this module can be as trusting as it
   is.
 
@@ -581,8 +581,8 @@ Filesystem measurement is the easiest thing in this project to test against a fi
 2. **The uncertainty paths are almost entirely untested.** No test in
    `traverse.rs` constructs a permission error, a mid-walk deletion, an EMFILE, or a vanished
      file; the batch-vs-single parity test (`:467-487`) runs on a healthy temp dir where every
-     `stat` succeeds. The *consequences* of uncertainty are well covered
-     (`workspace.rs:1136-1150`, `cleanup.rs:2037-2039`), but the module's ability to *produce*
+  `stat` succeeds. The *consequences* of uncertainty are well covered
+  (`workspace.rs:1136-1150`, `cleanup.rs:2247-2248`), but the module's ability to *produce*
      `uncertain` from each failure mode (walk error `:84`, `symlink_metadata` error `:95`,
      `modified()` error `:102`, `filesize` error `:125`, `entries` overflow `:111`, `bytes`
      overflow `:120`) is untested per mode. The two overflow branches are unreachable in practice
@@ -597,8 +597,8 @@ Filesystem measurement is the easiest thing in this project to test against a fi
 
 1. **`traverse.rs:130-131` / `:230-233`** — the two exits. Any change that can
    return a `TargetStats` without `uncertain` being set is a safety regression:
-     `traverse.rs:13-14` promises no partial scan is presented as complete, and `cleanup.rs:2037`
-     turns `uncertain` into a block.
+    `traverse.rs:13-14` promises no partial scan is presented as complete, and `cleanup.rs:2247`
+      turns `uncertain` into a block.
 2. **`traverse.rs:150` + `:177`** vs `dua-core lib.rs:659` — the batch API
    forwards caller indices into an engine that *asserts* they are unique. If you add a second
      producer of indices, dedup first.
@@ -629,5 +629,5 @@ Filesystem measurement is the easiest thing in this project to test against a fi
      `canonicalize` in ways nothing in the suite would catch.
 10. **`traverse.rs:334` / `:437`** — `Recent(t)` carries the first recent
    timestamp, not the max. Every current caller discards it (`workspace.rs:1438`,
-      `cleanup.rs:2017`), which is the only reason this is not a determinism bug. A caller that
+      `cleanup.rs:2227`), which is the only reason this is not a determinism bug. A caller that
       starts reading `t` inherits scheduling nondeterminism.
