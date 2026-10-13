@@ -8,8 +8,14 @@ command-line, JSON, and release-asset contracts are the stable surface.
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-10-13
+
 ### Fixed
 
+- A cleanup blocked on unresolved ownership now names the blocked manifests in
+  human output (up to five, with stage and reason) instead of printing only a
+  count, plus a remediation hint for nested crates that believe they are in a
+  workspace. JSON (`unresolved_participants`) and `--format log` are unchanged.
 - Failed Cargo workspace lookups now retain a bounded, sanitized excerpt of
   several stderr lines, so causes commonly printed after Cargo's generic first
   line are visible. The unresolved-manifest ledger and cleanup blocking behavior
