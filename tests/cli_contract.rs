@@ -18,14 +18,9 @@ fn staged_cargo_cleanme() -> (tempfile::TempDir, PathBuf) {
         .expect("binary has a file name")
         .to_owned();
     let staged = dir.path().join(file_name);
-    fs::copy(&current, &staged).expect("stage cargo-cleanme binary");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions = fs::metadata(&staged).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&staged, permissions).unwrap();
-    }
+    // Flushed staging, not a bare copy: see `stage_runnable_binary` for the
+    // ETXTBSY window this closes.
+    stage_runnable_binary(&staged);
     (dir, staged)
 }
 
@@ -1288,14 +1283,7 @@ impl MaintenanceFixture {
         let staged = self
             .bin
             .join(format!("cargo-cleanme{}", std::env::consts::EXE_SUFFIX));
-        fs::copy(env!("CARGO_BIN_EXE_cargo-cleanme"), &staged).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut permissions = fs::metadata(&staged).unwrap().permissions();
-            permissions.set_mode(0o755);
-            fs::set_permissions(&staged, permissions).unwrap();
-        }
+        stage_runnable_binary(&staged);
         let path = path_with(&self.bin);
         assert_staged_is_resolved(&path, &staged);
 
@@ -1462,10 +1450,7 @@ fn routine_bare_dry_run_and_execute_use_real_cargo_on_default_seed() {
     let bin = temp.path().join("bin");
     fs::create_dir_all(&bin).unwrap();
     let staged = bin.join(format!("cargo-cleanme{}", std::env::consts::EXE_SUFFIX));
-    fs::copy(env!("CARGO_BIN_EXE_cargo-cleanme"), &staged).unwrap();
-    let mut permissions = fs::metadata(&staged).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&staged, permissions).unwrap();
+    stage_runnable_binary(&staged);
 
     let real_path = std::env::var_os("PATH").unwrap_or_default();
     let path =
@@ -2986,13 +2971,7 @@ impl StaleLearnedFixture {
         let staged = self
             .bin
             .join(format!("cargo-cleanme{}", std::env::consts::EXE_SUFFIX));
-        fs::copy(env!("CARGO_BIN_EXE_cargo-cleanme"), &staged).unwrap();
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut permissions = fs::metadata(&staged).unwrap().permissions();
-            permissions.set_mode(0o755);
-            fs::set_permissions(&staged, permissions).unwrap();
-        }
+        stage_runnable_binary(&staged);
         let path = path_with(&self.bin);
         assert_staged_is_resolved(&path, &staged);
 
