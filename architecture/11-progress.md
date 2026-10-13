@@ -21,7 +21,7 @@ Does **not** own:
   observer call; the report's numbers come from `ScanCounters`, carried in from
   discovery at `main.rs:479` and written into the report at `main.rs:642`.
   Independent counter sets — see §8.
-- **Phase sequencing.** `cleanup.rs:829-833` maps `CleanMode` → `ScanPhase`; the
+- **Phase sequencing.** `cleanup.rs:922-926` maps `CleanMode` → `ScanPhase`; the
   renderer reacts to whatever phase a caller names.
 
 **The stdout/stderr separation is a contract, verified on three axes:**
@@ -53,13 +53,13 @@ report so a size never renders in two notations within one run. Everything else 
 
 | Variant | Work it represents | Entered from | Total known in advance? |
 |---|---|---|---|
-| `Discovery` | Filesystem walk for `Cargo.toml` | `main.rs:469`, `cleanup.rs:835` | No — indeterminate |
+| `Discovery` | Filesystem walk for `Cargo.toml` | `main.rs:469` | No — indeterminate |
 | `Resolution` | `cargo metadata` per manifest | `main.rs:500` | No — no `units_total` ever |
 | `Analysis` | Parallel sizing + activity classification | `main.rs:601-602`, total at `workspace.rs:932` | Yes — determinate |
 | `Reporting` | About to write the stdout report | `main.rs:645` | No — never drawn |
-| `CleanupPreview` | Cargo's own `clean --dry-run` preview | `cleanup.rs:830` | Yes — `cleanup.rs:927` |
-| `CleanupSimulate` | Application simulation, no Cargo spawned | `cleanup.rs:831` | Yes — `cleanup.rs:927` |
-| `CleanupExecute` | Real cleanup through Cargo | `cleanup.rs:832` | Yes — `cleanup.rs:927` |
+| `CleanupPreview` | Cargo's own `clean --dry-run` preview | `cleanup.rs:923` | Yes — `cleanup.rs:1010` |
+| `CleanupSimulate` | Application simulation, no Cargo spawned | `cleanup.rs:924` | Yes — `cleanup.rs:1010` |
+| `CleanupExecute` | Real cleanup through Cargo | `cleanup.rs:925` | Yes — `cleanup.rs:1010` |
 
 `ProgressObserver` — `progress.rs:39-53`. `Send + Sync`. All thirteen methods take
 `&self` and **all thirteen have default empty bodies**, so an implementor overrides
@@ -78,9 +78,9 @@ is a complete, allocation-free implementation.
 | `empty_skipped()` | — | Group skipped: no eligible bytes (`workspace.rs:958,1154`) | `Analysis` |
 | `active_skipped()` | — | Group skipped: protected by source activity (`workspace.rs:1008,1167`) | `Analysis` |
 | `group_measured(u64)` | bytes | A group finished sizing (`workspace.rs:1179`) | `Analysis` |
-| `reportable_group(&Path, u64)` | path, bytes | A group qualifies for the report (`workspace.rs:1208`, `cleanup.rs:1333`) | `Analysis`, cleanup |
-| `units_total(ScanPhase, u64)` | phase, total | Announce the unit count for a phase | `Analysis` (`workspace.rs:932`), cleanup (`cleanup.rs:927`) |
-| `unit_completed(ScanPhase)` | phase | One unit finished | `Analysis` (`workspace.rs:1108-1180`), cleanup (16 sites, `cleanup.rs:958-1236`) |
+| `reportable_group(&Path, u64)` | path, bytes | A group qualifies for the report (`workspace.rs:1208`, `cleanup.rs:1454`) | `Analysis`, cleanup |
+| `units_total(ScanPhase, u64)` | phase, total | Announce the unit count for a phase | `Analysis` (`workspace.rs:932`), cleanup (`cleanup.rs:1010`) |
+| `unit_completed(ScanPhase)` | phase | One unit finished | `Analysis` (`workspace.rs:1108-1180`), cleanup (16 sites, `cleanup.rs:1041-1357`) |
 
 Everything else:
 
@@ -139,7 +139,7 @@ for counters, `Mutex` for the candidate list, the phase, and the draw timestamp
 **Why a trait and not a direct `indicatif` call.** Two independent reasons.
 **Testability:** `discovery`, `workspace` and `cleanup` are tested with
 `NoopObserver` at ~90 sites (`cleanup.rs` alone passes it at 60+) and with
-`TestObserver` for event assertions (`cleanup.rs:4604`, `:4612`, `:4620`); without
+`TestObserver` for event assertions (`cleanup.rs:4927`, `:4935`, `:4943`); without
 a trait every one of those tests would need a real terminal or a global renderer
 hook. **Multiple independent producers, one renderer:** all three modules report
 into a single `IndicatifRenderer` created in `main.rs` (`:222`, `:451`) and never
@@ -169,8 +169,8 @@ failures unknown until run. `Reporting` is never drawn.
 
 **Determinate: `Analysis` and the three cleanup phases.** `Analysis` gets its
 total from `workspace::analyze_groups` at `workspace.rs:932` (and redundantly from
-`main.rs:602`). Cleanup gets its total at `cleanup.rs:927`, gated on complete
-ownership coverage — the comment at `cleanup.rs:925-926` is explicit that a partial
+`main.rs:602`). Cleanup gets its total at `cleanup.rs:1010`, gated on complete
+ownership coverage — the comment at `cleanup.rs:1008-1009` is explicit that a partial
 total would be a lie.
 
 **Re-scoping semantics.** `main.rs:599` says *"Phase first (re-scopes totals), then
@@ -422,7 +422,7 @@ exit code? No — definitively.** Traced end to end:
 
 1. No trait method returns a `Result` (`progress.rs:40-51`); nothing to propagate.
 2. No caller in `src/` writes `?` against an observer call. All are bare
-   statements: `discovery.rs:630`, `workspace.rs:932`, `cleanup.rs:927`,
+   statements: `discovery.rs:630`, `workspace.rs:932`, `cleanup.rs:1010`,
    `main.rs:602`.
 3. `new` is infallible (`progress.rs:231`); the only fallible indicatif call,
    `multi.clear()`, has its `io::Result` dropped at `progress.rs:397`.
@@ -453,7 +453,7 @@ honour it: `discovery.rs:629-631` batches `dirs_visited` at 512 entries,
 The exception: **`unit_completed` takes a `Mutex` on every call** —
 `reset_totals_for_phase` locks `current_phase` (`progress.rs:309`) before checking
 whether the phase changed. That lock is taken by every `unit_completed` (16 sites
-in `cleanup.rs:958-1236`, 5 in `workspace.rs:1108-1180`) and every `units_total`.
+in `cleanup.rs:1041-1357`, 5 in `workspace.rs:1108-1180`) and every `units_total`.
 Bounded by group and unit count, not entry count, so not a hot-loop problem — but
 an uncontended lock per progress unit that a `load`/`store` on an `AtomicU8` phase
 tag would avoid.**Does a hidden renderer still pay observer cost? Yes, on two paths.** Counters are

@@ -71,7 +71,7 @@ and `ScopeBlock` only, never `CleanupSelector`. The two modules share no code;
 `output.rs` never calls `report::format_bytes`.
 
 The dependency arrow that does exist points the opposite way from the obvious:
-`cleanup.rs:367,375,380,392,399,406-408` and `progress.rs:171` all call
+`cleanup.rs:418,426,431,443,450,457-459` and `progress.rs:171` all call
 `crate::report::format_bytes`. The byte formatter is a shared library function, so
 `report.rs` sits *below* both `cleanup.rs` and `output.rs` in the layer map —
 which is why it needs no cleanup types at all.
@@ -232,7 +232,7 @@ the phrase *"N inactive Cargo output groups"* in the summary line, backed by
 `end_to_end.rs:197-198` (a freshly built project is absent).
 
 **What the user reads to decide whether to run `clean`:** the `[ownership]`
-label. Per `cleanup.rs:487-500` and `1261-1269`, only `PrivateBounded` is ever
+label. Per `cleanup.rs:538-554` and `718-728`, only `PrivateBounded` is ever
 eligible; `ExternalUnproven`, `Shared`, and `Uncertain` are inventory-only under
 any authorization-root configuration. A `[private]` row is a candidate; any other
 label is informational. This invariant is *not* restated in the report's prose.
@@ -415,7 +415,7 @@ same information. That asymmetry is worth naming: the machine contract is the
 
 `effective_policy: None` is reachable only if the policy
 were omitted from the `CleanReport` construction at `main.rs:196-210`; live paths
-always set it (`cleanup.rs:900`).
+always set it (`cleanup.rs:967`).
 
 ### `UnresolvedParticipantV1` — `output.rs:65-70`
 
@@ -945,9 +945,9 @@ consumer must infer the set from the summary field names.
 counters by matching `CleanOutcome`, including `failed`. It never reads
 `CleanReport.failed` (`cleanup.rs:231`). Meanwhile `main.rs:255` computes the exit
 code from `report.failed`. Two independent mechanisms that must agree. **They
-currently do, exactly**: `report.failed` is incremented at `cleanup.rs:1142` and
-`cleanup.rs:1161`, and those are the only two sites, each paired with a
-`CleanOutcome::Failed` push at `cleanup.rs:1148` and `cleanup.rs:1167`. But nothing
+currently do, exactly**: `report.failed` is incremented at `cleanup.rs:1263` and
+`cleanup.rs:1282`, and those are the only two sites, each paired with a
+`CleanOutcome::Failed` push at `cleanup.rs:1264` and `cleanup.rs:1283`. But nothing
 enforces the coupling — a future `Failed` push that forgets the increment would
 make `summary.failed: 0` in a document whose exit code is 1, with no test
 catching it.
@@ -1008,10 +1008,10 @@ Everything outside those is safe today. A consumer treating the document as
   (`output.rs:190-203` over an empty iteration). `mode` is `Some`, `scope` is the
   resolved scope. Valid, and asserted at `cli_contract.rs:335`.
 - *Scope-blocked cleanup* — the two early returns leave `results` **empty** while
-  `units_considered` is set from the live `units` vector: `cleanup.rs:899` is read
-  by the ownership-unproven block at `cleanup.rs:907-923`, and the
-  incomplete-discovery block at `cleanup.rs:846-871` returns before units exist,
-  so it reports `units_considered: 0` (`cleanup.rs:858`). A consumer can see
+  `units_considered` is set from the live `units` vector at `cleanup.rs:966`:
+  the ownership-unproven block at `cleanup.rs:990-1006` and the
+  incomplete-discovery block at `cleanup.rs:977-988` both report the live
+  counts. A consumer can see
   `units_considered: 7, units: []` for the first case. Structurally valid,
   semantically surprising, and not warned about in the document.
 - *No `Option` produces malformed output.* All `Option` fields serialise as `null`
@@ -1035,7 +1035,7 @@ the Unix epoch" (`output.rs:116`, `261-265`), and `before_bytes: null` conflates
   a promise about `workspace::build_groups`/`analyze_groups`, not about this
   module.
 - *Cleanup is worse*: `CleanReport::render` sorts only a local `ordered` vec
-  (`cleanup.rs:303-310`) and leaves `report.results` untouched, so the JSON `units`
+  (`cleanup.rs:354-361`) and leaves `report.results` untouched, so the JSON `units`
   array is in unsorted `results` order while the human rows are size-desc. **The
   two projections genuinely disagree on ordering for cleanup.** I did not read
   `workspace.rs` in depth, so I cannot certify the inherited scan order either;
@@ -1077,7 +1077,7 @@ and prints the raw integer. (The `f64` conversions that do exist —
   (faithfully reporting the path is the job), and it means a consumer that `cat`s
   a path field to a terminal re-opens the hazard the human path closes. The
   document has no consumer guidance on this.
-- `detail` (`output.rs:187`) is cloned unfiltered; `cleanup.rs:384` strips
+- `detail` (`output.rs:187`) is cloned unfiltered; `cleanup.rs:435` strips
   newlines for the *human* line only, so the stored value can contain `\n` and
   reaches JSON as an escaped `\n`. Not a hazard. Log mode never prints `detail`
   at all.
@@ -1087,7 +1087,7 @@ and prints the raw integer. (The `f64` conversions that do exist —
 **Do human and JSON ever disagree about the same fact?** Yes, in four places:
 
 1. **Ordering of cleanup units** — human size-desc with a path tie-break
-   (`cleanup.rs:303-310`), JSON raw `results` order.
+   (`cleanup.rs:354-361`), JSON raw `results` order.
 2. **Non-UTF-8 path rendering** — machine gets the escaped debug form, human gets
    U+FFFD (`output.rs:256-260` vs `report.rs:11`).
 3. **Byte representation** — human prints `"  1.50 MiB"`, JSON prints `1572864`.
@@ -1097,7 +1097,7 @@ and prints the raw integer. (The `f64` conversions that do exist —
    count (`main.rs:678-701`); log mode shows neither and carries
    `diagnostics=N` only (`output.rs:309`, `output.rs:363-366`).
 5. **Scope-block identity** — human prints the block's prose message
-   (`cleanup.rs:288-291`), JSON carries that prose in `scope_reason`, and log
+   (`cleanup.rs:288-289`), JSON carries that prose in `scope_reason`, and log
    mode carries the typed code `reason=<code>` and no prose
    (`output.rs:351-353`). Three surfaces, three different levels of
    machine-readability for the same event.
@@ -1259,19 +1259,19 @@ a real document.
    `Default` fill makes it conventional instead.
 4. **JSON ordering is inherited, not established, `output.rs:104-119`** — no sort
    here. Cross-check against the "deterministic" claim at `output-schema-v1.md:8`
-   and against `cleanup.rs:303-310`, where the human renderer sorts a local vec
+   and against `cleanup.rs:354-361`, where the human renderer sorts a local vec
    that `output::cleanup` never sees, so cleanup `units` order differs between the
    two surfaces.
 5. **`summary.failed` vs the exit code, `output.rs:194-203` vs `main.rs:255`** —
-   two independent mechanisms that agree only because `cleanup.rs:1142/1148` and
-   `1161/1167` are the sole paired sites. Re-verify that pairing on any diff
+   two independent mechanisms that agree only because `cleanup.rs:1263/1264` and
+   `1282/1283` are the sole paired sites. Re-verify that pairing on any diff
    touching failure paths.
 6. **Enum enumerations** — `cleanup.rs:160` (`skipped_ownership_unproven`) is
    absent from `output-schema-v1.md:20`; `cleanup.rs:178` /
    `output.rs:251` (`selector_estimate_unavailable`) is absent from line 25's
    five-value list. Both are live values the code emits today.
 7. **Empty and blocked states** — `main.rs:196-217` gives
-   `units_considered: 0, units: []`; `cleanup.rs:907-923` gives
+   `units_considered: 0, units: []`; `cleanup.rs:990-1006` gives
    `units_considered: N, units: []`. Confirm both are intended and that no
    consumer assumes `units.len() == units_considered`.
 8. **`mode` and `detail` are not optional, `output.rs:13` and `output.rs:91`** —

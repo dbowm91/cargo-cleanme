@@ -21,7 +21,7 @@ scope and recency belong to `policy::resolve`, `src/policy.rs:19-58`, and the
 CLI-over-config merge to `src/main.rs:155-170`; see
 [Policy & scope](04-policy-and-scope.md)); any authorization decision
 (`cleanup.allowed_output_roots` is carried and absoluteness-checked here,
-interpreted by `cleanup::is_authorized`, `src/cleanup.rs:453-462`; see
+interpreted by `cleanup::is_authorized`, `src/cleanup.rs:555-564`; see
 [Cleanup](09-cleanup.md)); process launching (`editor.rs` resolves,
 `src/main.rs:49-58` spawns); persisted discovery state, a separate file with its
 own atomic publish (see [Discovery state](06-discovery-state.md)).
@@ -54,8 +54,8 @@ setting.
 | `[cleanup]` | `allowed_output_roots` | `Vec<PathBuf>` | `[]` (`:22-23`) | Authorization for already-private output outside the `clean ROOT` sandbox. Must be absolute (`:123-125`). See below. |
 | `[cleanup.policy]` | `min_reclaimable_bytes` | `u64` | `0` (`:30-31`) | Minimum reclaimable size for a group. `--min-reclaimable-bytes` replaces it when supplied (`src/main.rs:157-158`). |
 | `[cleanup.policy]` | `min_inactive_seconds` | `Option<u64>` | `None` (`:32`) | Optional *extra* quiet age on top of the safety recency guard. `--older-than` wins (`src/main.rs:159`). Values above `u64::MAX / 1_000_000_000` are rejected (`:126-132`). |
-| `[cleanup.policy]` | `include` | `Vec<String>` | `[]` (`:33-34`) | Globs a candidate's physical output root must match to be selected at all (`src/cleanup.rs:881`). |
-| `[cleanup.policy]` | `exclude` | `Vec<String>` | `[]` (`:35-36`) | Globs that prune a candidate's output root (`src/cleanup.rs:891`). |
+| `[cleanup.policy]` | `include` | `Vec<String>` | `[]` (`:33-34`) | Globs a candidate's physical output root must match to be selected at all (`src/cleanup.rs:1034`). |
+| `[cleanup.policy]` | `exclude` | `Vec<String>` | `[]` (`:35-36`) | Globs that prune a candidate's output root (`src/cleanup.rs:1044`). |
 
 ### The two defaults that are not `Default::default()`
 
@@ -96,12 +96,12 @@ compares every field against `Config::default()`. The template writes
 field is *currently inert*. It authorizes a **location** for deletion of output
 already private but outside the `clean ROOT` sandbox; entries must be absolute
 directory roots, not globs, and symlink roots are invalid
-(`src/cleanup.rs:445-447`). Shared, uncertain and external-unproven output
+(`src/cleanup.rs:601-624`). Shared, uncertain and external-unproven output
 "remains inventory-only even inside an allowed root": authorization "never
 manufactures ownership proof and cannot promote ExternalUnproven to private"
 (`config.toml:30-33`; ADR 001, C002), restated as a hard contract at
-`src/cleanup.rs:451-452`. An empty list "preserves M004-style containment"
-(`config.toml:33`, `src/cleanup.rs:450`) and is the shipped default. The
+`src/cleanup.rs:595-597`. An empty list "preserves M004-style containment"
+(`config.toml:33`, `src/cleanup.rs:552`) and is the shipped default. The
 subtlety: the field "is currently operationally redundant because PrivateBounded
 output is normally workspace-contained, but is preserved for schema
 compatibility" (`config.toml:34-35`) — a retained extension point, not dead
@@ -112,7 +112,7 @@ is [overview invariant 2](overview.md#6-cross-cutting-invariants).
 
 Every pattern in `include`, `exclude` and `scan.ignore` is compiled with
 `globset::Glob::new` (`src/config.rs:143`, `:148`; recompiled per use at
-`src/discovery.rs:22`, `src/cleanup.rs:1248`), always with default `globset`
+`src/discovery.rs:22`, `src/cleanup.rs:1369`), always with default `globset`
 construction: no `literal_separator`, no `backslash_escape` override,
 case-sensitive. So `*` crosses path separators, `/` is not special on Windows,
 and matching is `globset`'s own: both sides are `/`-spelled, because
@@ -498,7 +498,7 @@ What must remain true for this surface to stay safe:
    `hard_link` (`:280`); a malformed config is never replaced (`:521-531`).
 5. **`allowed_output_roots` is authorization, not ownership proof.** It must
    never be read as a way to make an unproven class actionable (`config.toml:30-33`;
-   `src/cleanup.rs:451-452`; [overview invariant
+   `src/cleanup.rs:595-597`; [overview invariant
    2](overview.md#6-cross-cutting-invariants)). "Operationally redundant"
    (`config.toml:34-35`) does not mean unvalidated — it is still absoluteness-
    checked at `:123-125`.

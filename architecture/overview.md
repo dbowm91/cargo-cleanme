@@ -92,9 +92,9 @@ it.**
 ## 3. Module index
 
 Line counts are `total`; where a module carries an inline `#[cfg(test)]`
-module, the `prod` half of the split is given. The crate has **332 inline
-`#[test]` functions**, and **39.5% of them live in the two largest modules**
-(`cleanup.rs` 73 + `workspace.rs` 58). Three modules have **zero** tests:
+module, the `prod` half of the split is given. The crate has **334 inline
+`#[test]` functions**, and **39.8% of them live in the two largest modules**
+(`cleanup.rs` 75 + `workspace.rs` 58). Three modules have **zero** tests:
 `main.rs`, `error.rs`, `lib.rs`.
 
 Test counts in this table are **declared**, not "how many ran on my machine",
@@ -124,7 +124,7 @@ not as a claim that the ordering is verified.
 | [`discovery_state.rs`](06-discovery-state.md) | 925 / 490 | Persisted learned roots, complete-coverage reconciliation, C030 provenance hygiene, and atomic publish. | [Discovery state](06-discovery-state.md) |
 | [`workspace.rs`](07-workspace.md) | 4568 / 1534 | `cargo metadata` resolution, bounded Cargo failure causes, capability probing, physical grouping, cleanup-unit construction. | [Workspace](07-workspace.md) |
 | [`traverse.rs`](08-traverse.md) | 624 / 494 | Parallel size/recency measurement and source-activity classification. | [Traverse](08-traverse.md) |
-| [`cleanup.rs`](09-cleanup.md) | 6575 / 2481 | Authorization, ownership proof, pre-spawn decision, three clean modes, the admission-premise late recheck. The heart of the safety story. | [Cleanup](09-cleanup.md) |
+| [`cleanup.rs`](09-cleanup.md) | 6730 / 2532 | Authorization, ownership proof, pre-spawn decision, three clean modes, the admission-premise late recheck. The heart of the safety story. | [Cleanup](09-cleanup.md) |
 | [`report.rs`](10-reporting.md) | 195 / 71 | Human-readable rendering of a `ScanReport`; byte formatting. | [Reporting](10-reporting.md) |
 | [`output.rs`](10-reporting.md) | 941 | Versioned machine-readable DTOs (`EnvelopeV1`); the stable JSON contract, including the non-envelope `update` document and its stdout stream; the bounded `--format log` line renderer. | [Reporting](10-reporting.md) |
 | [`progress.rs`](11-progress.md) | 861 / 524 | `ProgressObserver` trait + indicatif renderer; terminal capability detection. | [Progress](11-progress.md) |
@@ -215,7 +215,7 @@ things a reviewer should check first in any change.
    user authorize a location for deletion; it cannot upgrade an unproven
    ownership class. `covering_is_authorized_roots` returns `Ok(false)` for any
    non-`PrivateBounded` class *before* it inspects a path
-   (`cleanup.rs:544-546`). See [Cleanup §5](09-cleanup.md).
+   (`cleanup.rs:595-597`). See [Cleanup §5](09-cleanup.md).
 3. **Re-validate at the last moment.** Proof work is repeated immediately
    before each spawn, because a workspace can change between scan and delete.
 4. **Fail closed on uncertainty.** Every uncertainty becomes a diagnostic, and
@@ -247,7 +247,7 @@ the same pass, so these rows point at completed work rather than at a plan.
 | # | Finding | Status |
 |---|---|---|
 | 1 | **JSON `scope` label was derived from CLI flags, not the resolved policy.** A scan configured with `scan.root` resolves to `ScanScope::Explicit` but reported `"routine"`. | **Fixed.** Now derived from `policy.scope` via `main::scope_label`, with a regression test that fails against the old code. |
-| 2 | **A failed ownership proof at cleanup time is recorded as a per-candidate skip, so the process can exit `0`.** | **Kept deliberately.** Per-candidate ineligibility is a legitimate skip with a typed reason code; the scan-time path at `cleanup.rs:846` still blocks. See the correction below. |
+| 2 | **A failed ownership proof at cleanup time is recorded as a per-candidate skip, so the process can exit `0`.** | **Kept deliberately.** Per-candidate ineligibility is a legitimate skip with a typed reason code; the scan-time path at `cleanup.rs:990-1006` still blocks. See the correction below. |
 | 3 | **Self-update provenance classification fails *open* in four paths.** | **Closed (C018).** Fail-closed typed provenance shipped: manager-evidence ambiguity is gone and real self-managed installs are preserved. Every published release from 0.1.6 onward refuses without remote acquisition or mutation when local provenance forbids replacement. |
 | 4 | **Release integrity rests on HTTPS plus a self-published checksum — no signature verification anywhere.** | **Closed for the planned scope (M011A).** Immutable-release attestation and verification shipped, enabled, and verified live. Independent signing/SLSA was deliberately deferred and remains an open Eggpack trust-model decision; see [Distribution §7.5](15-distribution-and-release.md). |
 | 5 | **The live self-update rehearsal is manual** (`workflow_dispatch`-only), and it is the only thing that has ever caught a self-update defect.** | **Closed (M011C).** Automatic on `release: published`, with deterministic predecessor selection and a bounded crates.io-authority wait. Demonstrated four times; run `37561575727` (v0.2.2) was the first green automatic five-lane run and `37652257315` (v0.2.3) is the fourth. `workflow_dispatch` remains the manual recovery path, and [Distribution §8.2](15-distribution-and-release.md) is the historical record of what that gap used to cost. |
@@ -257,7 +257,7 @@ the same pass, so these rows point at completed work rather than at a plan.
 | 9 | **Dead public API** in a published crate. | **Kept, documented** in §7.1 below. |
 | 10 | **A reachable panic in `traverse::measure_many_targets`**: duplicate indices are forwarded into `dua_core::walk_roots`, whose `assert_eq!` is not a debug assert. | **Fixed.** A repeated index is now measured once and every occurrence of that index reports the same measurement, with a unit test. |
 | 11 | **`config.toml` said the ignore/unignore filters apply "only to global discovery"; the code applies them to Routine too.** | **Fixed.** The template comment now states the real rule: filters apply to global and Routine, and an explicit root bypasses them. |
-| 12 | **ADR 001 describes symlinked output roots as producing an "inventory diagnostic"; the code makes them inert — no group and no diagnostic.** | **Open.** Adding a diagnostic is not a free change: `cleanup.rs:846` blocks on *any* non-empty discovery diagnostic, so a new one here widens the block condition. |
+| 12 | **ADR 001 describes symlinked output roots as producing an "inventory diagnostic"; the code makes them inert — no group and no diagnostic.** | **Open.** Adding a diagnostic is not a free change: `cleanup.rs:977-988` blocks on *any* non-empty discovery diagnostic, so a new one here widens the block condition. |
 | 13 | **The uncertainty contract is enforced at two different thresholds** — `main.rs` extracts three diagnostic categories, `cleanup.rs` blocks on any diagnostic. | **Open, and arguably intentional:** the cleanup path being stricter is fail-closed. Recorded because the asymmetry is invisible from either module alone. |
 | 14 | **`discovery_state`'s `covered` skip can drop a root that also intersects uncertainty, before the uncertainty veto is reached.** | **Not a bug — checked and dismissed.** The collapse always replaces an ancestor with a *descendant*, so the remembered set only ever narrows. Narrowing means less cleanup on the next run, which is fail-safe. |
 
@@ -286,9 +286,9 @@ reviewer:
   why it was wrong, and why the fix adds a test rather than correcting one.
 - **Item 2's mechanism was unreachable.** The reported cause — a shared hoisted
   universe failing via `hoisted.get()?` — cannot occur: the universe is
-  initialised immediately before the call that consumes it (`cleanup.rs:1049`).
+  initialised immediately before the call that consumes it (`cleanup.rs:1149-1152`).
   The real path is the per-candidate skip, where a `ProofFailure` becomes a
-  `skipped` row and the unit is abandoned (`cleanup.rs:1061-1064`).
+  `skipped` row and the unit is abandoned (`cleanup.rs:1165-1167`).
 - **Item 3 is a documented decision, not an oversight**, and the doc comment
   states the reasoning explicitly.
 

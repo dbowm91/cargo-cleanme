@@ -141,7 +141,7 @@ only three of them:
 | Variant | Produced by `resolve`? | Meaning |
 |---|---|---|
 | `Explicit(PathBuf)` | yes, `policy.rs:42` | one user-named root |
-| `ExplicitRoots(Vec<PathBuf>)` | **no** | multiple explicit roots forming one cleanup boundary; constructed only in `cleanup.rs:774` and `cleanup.rs:1606` |
+| `ExplicitRoots(Vec<PathBuf>)` | **no** | multiple explicit roots forming one cleanup boundary; constructed only in `cleanup.rs:918` and `cleanup.rs:1797` |
 | `Global(Vec<PathBuf>)` | yes, `policy.rs:23` | exhaustive platform roots |
 | `Routine(Vec<PathBuf>)` | yes, `policy.rs:46` | bounded adaptive roots |
 

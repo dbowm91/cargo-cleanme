@@ -681,7 +681,7 @@ it. Persistent targeted retirement remains decision-gated by proposed ADR 005.
 `cleanup.rs` has **no** import of this module (verified by grep over `src/`).
 Learned roots reach it only as admitted root paths plus an `AdmissionPremise`
 of safely omitted roots through
-`clean_with_roots_policy_selector_guarded` (`cleanup.rs:829`, called from
+`clean_with_roots_policy_selector_guarded` (`cleanup.rs:880`, called from
 `run_engine_guarded` at `main.rs:365`). That is the structural expression of
 ADR §8: the module that authorizes deletion has no access to the state that
 decides where to look, and the omitted set travels alongside only so the
