@@ -90,7 +90,7 @@ field of every `*V1` struct is assigned by hand at the projection site
 (`output.rs:107-118`, `123-136`, `167-188`, `221-226`, `228-233`). `Serialize` is
 derived on the *DTOs*; it is never derived on `domain` or `cleanup` types. (The
 one `Serialize` derive in that layer is on `PolicyDisposition`
-`cleanup.rs:170-172`, which the DTO layer does not use — `output.rs:243-254`
+`cleanup.rs:170-172`, which the DTO layer does not use — `output.rs:246-257`
 converts it by hand instead.)
 
 **Why this matters.** `ScanReport` (`domain.rs:84-90`) and `CleanReport`
@@ -279,7 +279,7 @@ document contains `"mode": null`. `plans/output-schema-v1.md:3` describes it as
 testing `'mode' in doc` would be wrong (§8 D6).
 
 **How the version is chosen: it isn't.** `schema_version: 1` is a literal at
-`output.rs:140` and `output.rs:207`. No `const`, no feature gate, no
+`output.rs:140` and `output.rs:209`. No `const`, no feature gate, no
 negotiation. A bump is a two-site edit plus a test edit.
 
 **`EnvelopeV1<T>` is a stability device.** The parameter lets one envelope shape
@@ -293,12 +293,12 @@ revisited, while consumers reading only known keys can ignore it. Field removal
 or meaning change is the trigger, not a tool release.
 
 **`mode` presence/absence.** Only two values are reachable: `None` (scan,
-`output.rs:144`) and `Some(mode)` (cleanup, `output.rs:210`), where `mode` comes
+`output.rs:144`) and `Some(mode)` (cleanup, `output.rs:213`), where `mode` comes
 from `CleanMode::as_str` (`cleanup.rs:50-56`) — `preview`, `simulate`,
 `execute`. `Option` is therefore a *discriminator*, not an "unknown" channel: for
 `operation == "scan"` the field is not applicable, and no reachable state makes it
 `Some`. It is `Option<String>` rather than `Option<&'static str>`, so the cleanup
-path allocates for one of three constants (`output.rs:210`).
+path allocates for one of three constants (`output.rs:213`).
 
 **`scope` is caller-supplied, not derived.** `main.rs` passes a literal, and M012A
 changed what those literals are: the `scope` value now names the scope that was
@@ -402,10 +402,10 @@ match on.
 
 `scope_blocked: false` with `scope_reason: null` is the normal state. `true`
 implies a non-null `scope_reason`, since both read the same `Option<ScopeBlock>`
-(`output.rs:215-216`). **M012A changed the domain type this splits.** `CleanReport.scope_blocked`
+(`output.rs:218-219`). **M012A changed the domain type this splits.** `CleanReport.scope_blocked`
 is now `Option<ScopeBlock>` (`cleanup.rs:235`), a struct of
 `{ reason: ScopeBlockReason, message: String }` (`cleanup.rs:211-220`) — no
-longer `Option<String>`. The DTO is unchanged: `output.rs:216` still projects
+longer `Option<String>`. The DTO is unchanged: `output.rs:219` still projects
 `b.message.clone()`, the human prose. **The typed `reason` is dropped from JSON
 entirely.** `output::log::cleanup` does read it (`output.rs:351-353`), which is
 where a consumer of a retained history line gets `reason=ownership_unproven` or
@@ -577,8 +577,8 @@ was hoisted into the domain type.
 
 **The `scope_blocked` split is a real semantic change.** The domain carries a typed
 `ScopeBlock`; the contract carries a `bool` and a nullable *prose* string. The
-`bool` is `is_some()` (`output.rs:215`) and the string is a clone of the same
-block's `message` (`output.rs:216`), so they cannot disagree — but the boolean is
+`bool` is `is_some()` (`output.rs:218`) and the string is a clone of the same
+block's `message` (`output.rs:219`), so they cannot disagree — but the boolean is
 *derived state*, and the enum half of the domain value is discarded. Before M012A
 the domain value was itself a bare `Option<String>`, so nothing was lost at the
 boundary; now the projection is lossy in a way the DTO cannot express.
@@ -595,7 +595,7 @@ form is not a serde tag, which is why there is no `#[serde(tag = ...)]` here.
 | `CleanupPolicy` | `PolicyV1` | all four fields direct; no loss |
 | `CleanupSelector::Profile(s)`/`::Package(s)` | `selector_kind` + `selector_value` | enum split; **lossless** |
 | `CleanupReasonCode` (19 variants) | `reason_code: String` | `.as_str()` (`cleanup.rs:145-167`) |
-| `PolicyDisposition` (6 variants) | `policy_disposition: Option<String>` | hand-written `policy_code` (`output.rs:243-254`) |
+| `PolicyDisposition` (6 variants) | `policy_disposition: Option<String>` | hand-written `policy_code` (`output.rs:246-257`) |
 | `CleanOutcome` (5 variants) | `outcome: String` | `.as_str()` (`cleanup.rs:71-79`) |
 
 Note the inconsistency in how these three enums reach the wire. `CleanOutcome` and
@@ -862,7 +862,7 @@ behaviour is intended — but undocumented.
 **D2 — the "stable policy disposition values" enumeration is short one value.**
 Line 25 lists five: `selected`, `below_minimum_size`, `too_recent_for_policy`,
 `not_included`, `excluded`. The code emits six — `policy_code`
-(`output.rs:243-254`) also produces `selector_estimate_unavailable`, from
+(`output.rs:246-257`) also produces `selector_estimate_unavailable`, from
 `PolicyDisposition::SelectorEstimateUnavailable` (`cleanup.rs:178`). The document
 does acknowledge the variant at line 20 and `cli_contract.rs` pins it, so
 the code is intended and the line-25 list is the stale one. As written it reads as
@@ -947,9 +947,9 @@ consumer must infer the set from the summary field names.
 counters by matching `CleanOutcome`, including `failed`. It never reads
 `CleanReport.failed` (`cleanup.rs:231`). Meanwhile `main.rs:255` computes the exit
 code from `report.failed`. Two independent mechanisms that must agree. **They
-currently do, exactly**: `report.failed` is incremented at `cleanup.rs:1263` and
-`cleanup.rs:1282`, and those are the only two sites, each paired with a
-`CleanOutcome::Failed` push at `cleanup.rs:1264` and `cleanup.rs:1283`. But nothing
+currently do, exactly**: `report.failed` is incremented at `cleanup.rs:1466` and
+`cleanup.rs:1485`, and those are the only two sites, each paired with a
+`CleanOutcome::Failed` push at `cleanup.rs:1472` and `cleanup.rs:1491`. But nothing
 enforces the coupling — a future `Failed` push that forgets the increment would
 make `summary.failed: 0` in a document whose exit code is 1, with no test
 catching it.
@@ -963,7 +963,7 @@ catching it.
 
 This is a *procedural* promise, not a compatibility guarantee, and as a promise it
 is currently honoured: `schema_version` is a pinned literal at both projection
-sites (`output.rs:140`, `output.rs:207`), there is no runtime negotiation or
+sites (`output.rs:140`, `output.rs:209`), there is no runtime negotiation or
 feature gating, and no field in any DTO is documented as deprecated. Nothing in the
 current code breaks the promise — D1 through D5 are defects in the *schema
 document*, not changes to a shipped v1.
@@ -1003,16 +1003,16 @@ Everything outside those is safe today. A consumer treating the document as
 - *Empty scan* — `ScanReport::default()` → `output.rs:104-119` maps empty vecs to
   empty vecs; `group_count: 0`, `inventory_bytes: 0` (fold over nothing). Valid.
 - *Zero groups but diagnostics* — same, plus the full diagnostic list. Valid.
-- *Cleanup that spawned nothing* — `main.rs:196-217` builds a `CleanReport` naming
+- *Cleanup that spawned nothing* — `main.rs:380-401` builds a `CleanReport` naming
   every field explicitly (no `..Default::default()`; M012A removed the spread so a
   new field is a compile error rather than a silent default). `results` is empty,
   so `units: []` and all five summary counters are `0`
   (`output.rs:190-203` over an empty iteration). `mode` is `Some`, `scope` is the
   resolved scope. Valid, and asserted at `cli_contract.rs:335`.
 - *Scope-blocked cleanup* — the two early returns leave `results` **empty** while
-  `units_considered` is set from the live `units` vector at `cleanup.rs:966`:
-  the ownership-unproven block at `cleanup.rs:990-1006` and the
-  incomplete-discovery block at `cleanup.rs:977-988` both report the live
+  `units_considered` is set from the live `units` vector at `cleanup.rs:1054`:
+  the ownership-unproven block at `cleanup.rs:1078-1094` and the
+  incomplete-discovery block at `cleanup.rs:1065-1076` both report the live
   counts. A consumer can see
   `units_considered: 7, units: []` for the first case. Structurally valid,
   semantically surprising, and not warned about in the document.
@@ -1037,7 +1037,7 @@ the Unix epoch" (`output.rs:116`, `261-265`), and `before_bytes: null` conflates
   a promise about `workspace::build_groups`/`analyze_groups`, not about this
   module.
 - *Cleanup is worse*: `CleanReport::render` sorts only a local `ordered` vec
-  (`cleanup.rs:354-361`) and leaves `report.results` untouched, so the JSON `units`
+  (`cleanup.rs:374-380`) and leaves `report.results` untouched, so the JSON `units`
   array is in unsorted `results` order while the human rows are size-desc. **The
   two projections genuinely disagree on ordering for cleanup.** I did not read
   `workspace.rs` in depth, so I cannot certify the inherited scan order either;
@@ -1089,7 +1089,7 @@ and prints the raw integer. (The `f64` conversions that do exist —
 **Do human and JSON ever disagree about the same fact?** Yes, in four places:
 
 1. **Ordering of cleanup units** — human size-desc with a path tie-break
-   (`cleanup.rs:354-361`), JSON raw `results` order.
+   (`cleanup.rs:374-380`), JSON raw `results` order.
 2. **Non-UTF-8 path rendering** — machine gets the escaped debug form, human gets
    U+FFFD (`output.rs:256-260` vs `report.rs:11`).
 3. **Byte representation** — human prints `"  1.50 MiB"`, JSON prints `1572864`.
@@ -1261,19 +1261,19 @@ a real document.
    `Default` fill makes it conventional instead.
 4. **JSON ordering is inherited, not established, `output.rs:104-119`** — no sort
    here. Cross-check against the "deterministic" claim at `output-schema-v1.md:8`
-   and against `cleanup.rs:354-361`, where the human renderer sorts a local vec
+   and against `cleanup.rs:374-380`, where the human renderer sorts a local vec
    that `output::cleanup` never sees, so cleanup `units` order differs between the
    two surfaces.
 5. **`summary.failed` vs the exit code, `output.rs:194-203` vs `main.rs:255`** —
-   two independent mechanisms that agree only because `cleanup.rs:1263/1264` and
+   two independent mechanisms that agree only because `cleanup.rs:1466/1264` and
    `1282/1283` are the sole paired sites. Re-verify that pairing on any diff
    touching failure paths.
 6. **Enum enumerations** — `cleanup.rs:160` (`skipped_ownership_unproven`) is
    absent from `output-schema-v1.md:20`; `cleanup.rs:178` /
    `output.rs:251` (`selector_estimate_unavailable`) is absent from line 25's
    five-value list. Both are live values the code emits today.
-7. **Empty and blocked states** — `main.rs:196-217` gives
-   `units_considered: 0, units: []`; `cleanup.rs:990-1006` gives
+7. **Empty and blocked states** — `main.rs:380-401` gives
+   `units_considered: 0, units: []`; `cleanup.rs:1078-1094` gives
    `units_considered: N, units: []`. Confirm both are intended and that no
    consumer assumes `units.len() == units_considered`.
 8. **`mode` and `detail` are not optional, `output.rs:13` and `output.rs:91`** —
@@ -1294,7 +1294,7 @@ a real document.
 11. **Keep byte formatting float-free, `report.rs:29-32`** — any change
     introducing `n as f64` silently breaks `report.rs:152`
     (`u64::MAX → 16.00 EiB`), the only guard at the `2^53` boundary.
-12. **`ScopeBlock.reason` is lost in JSON, `cleanup.rs:235` vs `output.rs:216`**
+12. **`ScopeBlock.reason` is lost in JSON, `cleanup.rs:235` vs `output.rs:219`**
     — the domain gained a typed block code in M012A and the envelope still
     projects only `.message`. Log mode reads it (`output.rs:352`) and JSON does
     not, so the versioned contract is the less machine-readable of the two. Adding

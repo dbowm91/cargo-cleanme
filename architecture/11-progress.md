@@ -2,7 +2,7 @@
 
 > Component deep dive · part of the [architecture overview](overview.md)
 
-`src/progress.rs` — 861 lines, 524 production (`progress.rs:525` opens the test
+`src/progress.rs` — 861 lines, 524 production (`progress.rs:534` opens the test
 module), 13 `#[test]` functions.
 
 ## 1. Responsibility
@@ -21,7 +21,7 @@ Does **not** own:
   observer call; the report's numbers come from `ScanCounters`, carried in from
   discovery at `main.rs:479` and written into the report at `main.rs:642`.
   Independent counter sets — see §8.
-- **Phase sequencing.** `cleanup.rs:922-926` maps `CleanMode` → `ScanPhase`; the
+- **Phase sequencing.** `cleanup.rs:1004-1008` maps `CleanMode` → `ScanPhase`; the
   renderer reacts to whatever phase a caller names.
 
 **The stdout/stderr separation is a contract, verified on three axes:**
@@ -55,11 +55,11 @@ report so a size never renders in two notations within one run. Everything else 
 |---|---|---|---|
 | `Discovery` | Filesystem walk for `Cargo.toml` | `main.rs:469` | No — indeterminate |
 | `Resolution` | `cargo metadata` per manifest | `main.rs:500` | No — no `units_total` ever |
-| `Analysis` | Parallel sizing + activity classification | `main.rs:601-602`, total at `workspace.rs:932` | Yes — determinate |
+| `Analysis` | Parallel sizing + activity classification | `main.rs:601-602`, total at `workspace.rs:1459` | Yes — determinate |
 | `Reporting` | About to write the stdout report | `main.rs:645` | No — never drawn |
-| `CleanupPreview` | Cargo's own `clean --dry-run` preview | `cleanup.rs:923` | Yes — `cleanup.rs:1010` |
-| `CleanupSimulate` | Application simulation, no Cargo spawned | `cleanup.rs:924` | Yes — `cleanup.rs:1010` |
-| `CleanupExecute` | Real cleanup through Cargo | `cleanup.rs:925` | Yes — `cleanup.rs:1010` |
+| `CleanupPreview` | Cargo's own `clean --dry-run` preview | `cleanup.rs:1005` | Yes — `cleanup.rs:1098` |
+| `CleanupSimulate` | Application simulation, no Cargo spawned | `cleanup.rs:1006` | Yes — `cleanup.rs:1098` |
+| `CleanupExecute` | Real cleanup through Cargo | `cleanup.rs:1007` | Yes — `cleanup.rs:1098` |
 
 `ProgressObserver` — `progress.rs:39-53`. `Send + Sync`. All thirteen methods take
 `&self` and **all thirteen have default empty bodies**, so an implementor overrides
@@ -79,7 +79,7 @@ is a complete, allocation-free implementation.
 | `active_skipped()` | — | Group skipped: protected by source activity (`workspace.rs:1008,1167`) | `Analysis` |
 | `group_measured(u64)` | bytes | A group finished sizing (`workspace.rs:1179`) | `Analysis` |
 | `reportable_group(&Path, u64)` | path, bytes | A group qualifies for the report (`workspace.rs:1208`, `cleanup.rs:1454`) | `Analysis`, cleanup |
-| `units_total(ScanPhase, u64)` | phase, total | Announce the unit count for a phase | `Analysis` (`workspace.rs:932`), cleanup (`cleanup.rs:1010`) |
+| `units_total(ScanPhase, u64)` | phase, total | Announce the unit count for a phase | `Analysis` (`workspace.rs:1459`), cleanup (`cleanup.rs:1098`) |
 | `unit_completed(ScanPhase)` | phase | One unit finished | `Analysis` (`workspace.rs:1108-1180`), cleanup (16 sites, `cleanup.rs:1041-1357`) |
 
 Everything else:
@@ -168,9 +168,9 @@ message). `Resolution` has no cheap cardinality — one subprocess per manifest,
 failures unknown until run. `Reporting` is never drawn.
 
 **Determinate: `Analysis` and the three cleanup phases.** `Analysis` gets its
-total from `workspace::analyze_groups` at `workspace.rs:932` (and redundantly from
-`main.rs:602`). Cleanup gets its total at `cleanup.rs:1010`, gated on complete
-ownership coverage — the comment at `cleanup.rs:1008-1009` is explicit that a partial
+total from `workspace::analyze_groups` at `workspace.rs:1459` (and redundantly from
+`main.rs:602`). Cleanup gets its total at `cleanup.rs:1098`, gated on complete
+ownership coverage — the comment at `cleanup.rs:1096-1097` is explicit that a partial
 total would be a lie.
 
 **Re-scoping semantics.** `main.rs:599` says *"Phase first (re-scopes totals), then
@@ -263,7 +263,7 @@ now fails if the branch is removed rather than passing for the wrong reason. The
 restore of the process-global `TERM` is an RAII guard, so a panic mid-test cannot
 leave `TERM=dumb` behind for every later test in the binary.
 `should_show_progress_respects_flag_and_dumb_term`
-(`progress.rs:593-603`) covers conditions 1 and 2. Condition 3 — the TTY branch —
+(`progress.rs:636-646`) covers conditions 1 and 2. Condition 3 — the TTY branch —
 is **never exercised by any test in the crate**: every integration case that runs
 a scan or cleanup passes `--no-progress` (26 occurrences, `tests/cli_contract.rs:183`
 through `:1701`) and `tests/end_to_end.rs:132` uses `NoopObserver` directly. The
@@ -422,7 +422,7 @@ exit code? No — definitively.** Traced end to end:
 
 1. No trait method returns a `Result` (`progress.rs:40-51`); nothing to propagate.
 2. No caller in `src/` writes `?` against an observer call. All are bare
-   statements: `discovery.rs:630`, `workspace.rs:932`, `cleanup.rs:1010`,
+   statements: `discovery.rs:630`, `workspace.rs:1459`, `cleanup.rs:1098`,
    `main.rs:602`.
 3. `new` is infallible (`progress.rs:231`); the only fallible indicatif call,
    `multi.clear()`, has its `io::Result` dropped at `progress.rs:397`.
@@ -572,7 +572,7 @@ entry", but the body (`:611-615`) only ever constructs a **hidden** renderer: th
 visible 10 Hz throttle is never measured, and the test proves `0 == 0`.
 
 **Platform risk.** The only environment-sensitive test is
-`should_show_progress_respects_flag_and_dumb_term` (`progress.rs:593-603`), which
+`should_show_progress_respects_flag_and_dumb_term` (`progress.rs:636-646`), which
 mutates the process-global `TERM` via `unsafe { std::env::set_var }` (`:596`,
 `:599`) — correctly wrapped, which edition 2024 / `rust-version = "1.89"`
 requires (`Cargo.toml:4-5`). It asserts only the flag and `TERM=dumb` branches, so

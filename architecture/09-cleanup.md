@@ -34,7 +34,7 @@ It explicitly does **not** own:
 - **JSON rendering** — `output.rs:158` maps `CleanReport` to `CleanupV1`.
 - **Progress presentation** — emits `ProgressObserver` events (`progress.rs:39`).
 
-Actual crate imports (`cleanup.rs:16-22`): `discovery`, `domain::*`,
+Actual crate imports (`cleanup.rs:14-21`): `discovery`, `domain::*`,
 `error::AppError`, `progress::{ProgressObserver, ScanPhase}`, `traverse`,
 `workspace::{self, CargoRunner}`. Additional fully-qualified uses:
 `crate::report::format_bytes` (`:316`, `:324`, `:341`, `:348`, `:355-357`),
@@ -44,10 +44,10 @@ Actual crate imports (`cleanup.rs:16-22`): `discovery`, `domain::*`,
 `workspace::{ProcessOutput, SystemCargoRunner}` so tests can inject I/O through
 this module's own seam.
 
-**The "one-way edge" is test-only.** `workspace.rs:2327` calls
+**The "one-way edge" is test-only.** `workspace.rs:3743` calls
 `crate::cleanup::covering_is_authorized`, but that line sits inside
 `workspace.rs`'s own `#[cfg(test)] mod tests`, which begins at
-`workspace.rs:1446`. There is no production edge from `workspace.rs` into
+`workspace.rs:2002`. There is no production edge from `workspace.rs` into
 `cleanup.rs`. `overview.md:33-35` describes this as "a deliberate one-way call
 into authorization helpers"; the substance (no cycle) holds, but the edge is a
 test reference, not a production call.
@@ -61,7 +61,7 @@ test reference, not a production call.
 | Item | Signature (line) | Contract |
 | --- | --- | --- |
 | `CleanMode` | `enum { Preview, Simulate, Execute }` `:31` | Which semantics to run. `Preview` is `#[default]` (`:34`). |
-| `CleanMode::as_str` | `-> &'static str` `:45` | `"preview"`/`"simulate"`/`"execute"`; JSON `mode` field (`output.rs:204`). |
+| `CleanMode::as_str` | `-> &'static str` `:45` | `"preview"`/`"simulate"`/`"execute"`; JSON `mode` field (`output.rs:213`). |
 | `CleanOutcome` | `enum { Previewed, Simulated, Cleaned, Skipped, Failed }` `:55` | Per-unit terminal state. |
 | `CleanOutcome::as_str` | `-> &'static str` `:66` | `"previewed"`/`"simulated"`/`"cleaned"`/`"skipped"`/`"failed"`. Comment `:64-65`: the JSON contract must not depend on `Debug`. |
 | `CleanResult` | `struct` `:78` | One row per workspace CleanupUnit: `display_path`, `workspace_roots`, `output_roots` (the dedup covering union one invocation can affect), `ownership`, `outcome`, `policy_disposition`, `reason_code`, `before_bytes`, `after_bytes`, `observed_decrease`, `detail`. |
@@ -72,7 +72,7 @@ test reference, not a production call.
 | `ProofFailure` | `struct { code, detail }` `:122` | A failed final proof. |
 | `ProofFailure::new` | constructor | Proof gates assign an explicit code at the failure site; new gates must use this. |
 | `From<String>` / `From<&str>` | `:127` / `:133` | Legacy fallback for the Cargo-refresh boundary only, which passes through Cargo/discovery strings with no typed site; it derives `code` via `proof_skip_code`. Proof gates must not rely on it. |
-| `PolicyDisposition` | 6-variant `enum` `:167` | `#[serde(rename_all="snake_case")]`; mapped at `output.rs:243-254`. |
+| `PolicyDisposition` | 6-variant `enum` `:167` | `#[serde(rename_all="snake_case")]`; mapped at `output.rs:246-257`. |
 
 Every `CleanupReasonCode` variant and wire name (`:140-162`):
 
@@ -104,7 +104,7 @@ Every `CleanupReasonCode` variant and wire name (`:140-162`):
 `:5796-5798`; the other two are covered nowhere.
 `policy_dispositions_have_stable_json_names` (`:2555-2572`) covers 5 of 6
 variants, omitting `SelectorEstimateUnavailable` (emitted as
-`"selector_estimate_unavailable"` at `output.rs:251`).
+`"selector_estimate_unavailable"` at `output.rs:254`).
 
 ### Policy, selection, runner seams, proof, authorization, entry points
 
@@ -122,7 +122,7 @@ variants, omitting `SelectorEstimateUnavailable` (emitted as
 | `final_cleanup_proof` | `pub fn (unit, universe, clean_root, allowed_output_roots, runner, recency_seconds, counters) -> Result<ExecutionProof, ProofFailure>` `:1767` | Single-root wrapper, `refresh_candidate=false`. **No production caller** — §7. |
 | `execute_pre_spawn_decision` | `pub fn (unit, universe, clean_root, allowed_output_roots, runner, recency_seconds) -> Result<ExecutionProof, ProofFailure>` `:2108` | Same gate set with throwaway counters. **No caller at all** — §7. |
 | `is_authorized` | `pub fn (group: &workspace::RawGroup, clean_root: &Path, allowed_roots: &[PathBuf]) -> Result<bool, String>` `:453` | Wrapper. **Test-only callers** (`:2836-3080`). |
-| `covering_is_authorized` | `pub fn (ownership, covering: &[PathBuf], clean_root: &Path, allowed_roots: &[PathBuf]) -> Result<bool, String>` `:470` | Single-root wrapper. **Test-only** (`workspace.rs:2327`). |
+| `covering_is_authorized` | `pub fn (ownership, covering: &[PathBuf], clean_root: &Path, allowed_roots: &[PathBuf]) -> Result<bool, String>` `:470` | Single-root wrapper. **Test-only** (`workspace.rs:3743`). |
 | `covering_is_authorized_roots` | `pub fn (ownership, covering, clean_roots: &[PathBuf], allowed_roots) -> Result<bool, String>` `:484` | The real gate. Production caller `:628`. |
 | `ownership_skip_detail` | `pub fn (ownership: OutputOwnershipClass) -> String` `:565` | The "why wasn't this cleaned" sentence. |
 | `unit_block_reason` | `pub fn (unit: &workspace::CleanupUnit, clean_root: &Path, allowed_output_roots: &[PathBuf]) -> Result<(), String>` `:589` | Single-root wrapper. **Test-only** (`:5263-5301`). |
@@ -134,7 +134,7 @@ single-root wrappers are test/consumer surface and carry no production weight.
 **Entry-point delegation chain.**
 
 ```text
-clean_with_roots_policy_selector   :788   ← run_engine_guarded (main.rs:365) calls the guarded form
+clean_with_roots_policy_selector   :788   ← run_engine_guarded (main.rs:470) calls the guarded form
   └─ clean_with_roots_policy_selector_guarded :829   (premise = None for the unguarded path)
   └─ clean_with_roots_policy       :766   (selector = None)
        └─ clean_with_roots         :746   (policy = CleanupPolicy::default())
@@ -161,7 +161,7 @@ pub trait CargoRunner {
     fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput>;
 }
 
-// cleanup.rs:479-487
+// cleanup.rs:499-507
 pub trait CleanupRunner: Sync {
     fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput>;
     fn run_with_env(&self, cwd: &Path, args: &[OsString],
@@ -240,8 +240,8 @@ actually fails on a real target tree.
 The mapping lives at `main.rs:100-110`, with the comment "Distinct spellings,
 distinct semantics" at `:100-101`. Note `main.rs:108`: `let _ = dry_run;` — the
 `--dry-run` flag is *explicitly discarded*, since it and the default already mean
-`Preview`. `cli.rs:75-80` makes the flags mutually exclusive in both directions
-and gives each a doc comment naming the other; `cli.rs:244` asserts
+`Preview`. `cli.rs:111-116` makes the flags mutually exclusive in both directions
+and gives each a doc comment naming the other; `cli.rs:453` asserts
 `--dry-run --dryrun` is a parse error.
 
 **Is the distinction adequately surfaced?** Documented in `cli.rs` and the
@@ -254,26 +254,26 @@ is safe (`Simulate` is stricter than `Preview`), but a mode line, or a
 "simulation is an estimate, not Cargo's own dry run" note in the `Simulate`
 footer, would close it.
 
-**Where roots come from** (`main.rs:457-592`, C028), all funnelled into
+**Where roots come from** (`main.rs:559-698`, C028), all funnelled into
 `clean_with_roots_policy_selector_guarded` via `run_engine_guarded`
-(`main.rs:365`):
+(`main.rs:470`):
 
 | Source | Code | Roots |
 | --- | --- | --- |
-| Explicit `ROOT` | `main.rs:464-482` | `[cli::absolutize_root(&root)]` classified `Explicit` — relative input accepted for ergonomics, absolutized before becoming the safety boundary. Any defect is fatal. |
-| `--full` | `main.rs:483-504` | The in-memory generation the just-finished Full reconciliation proved (`policy::full_cleanup_roots`, `policy.rs:328`), classified `Automatic` by `admit_automatic` (`main.rs:598`). No disk reload, so a failed save cannot resurrect stale roots. |
-| Maintenance / `--known` | `main.rs:509-591` | Raw Routine candidates (`policy::routine_cleanup_candidates`, `policy.rs:363`) classified `Automatic` before any collapse; a configured `scan.root` takes the strict explicit path instead. |
+| Explicit `ROOT` | `main.rs:570-588` | `[cli::absolutize_root(&root)]` classified `Explicit` — relative input accepted for ergonomics, absolutized before becoming the safety boundary. Any defect is fatal. |
+| `--full` | `main.rs:589-610` | The in-memory generation the just-finished Full reconciliation proved (`policy::full_cleanup_roots`, `policy.rs:430`), classified `Automatic` by `admit_automatic` (`main.rs:609`). No disk reload, so a failed save cannot resurrect stale roots. |
+| Maintenance / `--known` | `main.rs:615-697` | Raw Routine candidates (`policy::routine_cleanup_candidates`, `policy.rs:465`) classified `Automatic` before any collapse; a configured `scan.root` takes the strict explicit path instead. |
 | None | — | `AppError` (unknown scope) or a typed `ScopeBlock` (symlink/unreadable automatic root) — never a silent subset. |
 
-`admit_automatic` collapses admitted paths only (`main.rs:625`), remembers
+`admit_automatic` collapses admitted paths only (`main.rs:734`), remembers
 omissions for the late recheck, and converts symlink/uncertain automatic
 roots into a whole-scope `ScopeBlock` (exit 1) rather than a fatal error.
 `run_engine_guarded` additionally defends the admission→validation race: a
 fatal `InvalidRoot` over an automatic scope triggers one fresh
 reclassification, and only a now-proven-omittable offender rebuilds the
-universe from scratch (`main.rs:391-425`); anything else becomes a typed
+universe from scratch (`main.rs:495-530`); anything else becomes a typed
 block, never a sibling cleanup against a stale proof.
-`cleanup.rs:899` applies `collapse_roots` again and re-validates the collapsed
+`cleanup.rs:981` applies `collapse_roots` again and re-validates the collapsed
 set at `:908-910` with the comment that collapsing only narrows the set, so
 survivors still need checking. An empty admitted set short-circuits in
 `run_cleanup` and never reaches this module; a blocked set reports without
@@ -281,15 +281,15 @@ traversing anything.
 
 ### The admission premise and its late recheck (C028)
 
-`AdmissionPremise` (`cleanup.rs:875`) carries the safely omitted automatic
+`AdmissionPremise` (`cleanup.rs:957`) carries the safely omitted automatic
 roots alongside the admitted set. The engine re-examines the premise with
 fresh `symlink_metadata` — no timers, sleeps, or cached metadata — at two
-moments: before the first candidate reaches final proof (`cleanup.rs:1130`)
-and before every later Cargo spawn (`cleanup.rs:1240`). A violated premise
+moments: before the first candidate reaches final proof (`cleanup.rs:1244`)
+and before every later Cargo spawn (`cleanup.rs:1420`). A violated premise
 returns the completed results plus a whole-scope `IncompleteDiscovery` block
 instead of spawning. Policy-skipped units never reach proof and need no
 guard. `violated_admission_premise_blocks_with_zero_cargo_spawns`
-(`cleanup.rs:3559`) proves the block with zero spawns in both directions.
+(`cleanup.rs:4213`) proves the block with zero spawns in both directions.
 
 ---
 
@@ -362,7 +362,7 @@ invocation can affect, ownership must be `PrivateBounded` (`:617-626`) then
 `covering_is_authorized_roots` must return `Ok(true)` for that group alone
 (`:627-644`); (c) every group must have `measured.is_some()` (`:645-654`),
 otherwise the fail-fast verdict and its `GroupSkipReason::detail()`
-(`workspace.rs:885-895`) become the reason. The doc comment `:578-588` states
+(`workspace.rs:1412-1422`) become the reason. The doc comment `:578-588` states
 the C003 invariant — every affected group qualifies independently, and "No Cargo
 process is spawned for any subset of a unit" — which is what stops a
 `PrivateBounded` target smuggling an `ExternalUnproven` sibling build group into
@@ -371,11 +371,11 @@ one invocation (ADR 001 `:208-210`).
 **Is `allowed_output_roots` actually redundant?** `config.toml:36-38` claims it
 is "currently operationally redundant because PrivateBounded output is normally
 workspace-contained." **Assessment: consistent with the code, with a caveat.** The
-reason is the classification rule at `workspace.rs:717-720`: `PrivateBounded`
+reason is the classification rule at `workspace.rs:1217-1220`: `PrivateBounded`
 means "every covering root **strictly below the workspace root**";
 `ExternalUnproven` means "output **outside workspace root**." Classification
 depends on the *workspace root*, not on the clean root or allowed roots —
-`build_groups` (`workspace.rs:721`) takes only `&[ResolvedWorkspace]`. So a
+`build_groups` (`workspace.rs:1221`) takes only `&[ResolvedWorkspace]`. So a
 `PrivateBounded` group's covering roots are always beneath the workspace root and
 are already authorized by the `canonical_clean` branch at `:543-548` whenever
 the workspace root is inside a clean root. That is the ordinary case.
@@ -393,7 +393,7 @@ untested. An under-verified property, not a defect.
 **A separate divergence.** ADR 001 `:92` defines `PrivateBounded` as "every
 destructive output path is contained by an *authorized cleanup boundary*" — a
 predicate over authorization roots. The code defines it over the *workspace root*
-(`workspace.rs:717-719`). Reconciled by the argument above, but not the same
+(`workspace.rs:1217-1219`). Reconciled by the argument above, but not the same
 predicate, and the ADR's phrasing cannot be read literally alongside
 `workspace.rs`.
 
@@ -437,7 +437,7 @@ gate.
 ### `ProofUniverse` and hoisting
 
 ```rust
-// cleanup.rs:1755-1758
+// cleanup.rs:2081-2084
 struct ProofUniverse { fresh: Option<Vec<ResolvedWorkspace>>, failure: Option<String> }
 ```
 
@@ -468,7 +468,7 @@ sorted by root at `:1737`, so output is deterministic regardless of completion
 order. A thread panic degrades to `(ScanCounters::default(), None)` (`:1693`),
 treated by the caller as a re-resolve failure — fail-closed. Peak concurrency
 lands in `counters.proof_metadata_peak_concurrency` (`:1728-1736`) and reaches
-the user through `main.rs:242-243`.
+the user through `main.rs:445-447`.
 
 This apparatus is an efficiency concern the project tracked explicitly, not a
 safety mechanism: it keeps the *cost* of proving linear. Pinned by
@@ -478,7 +478,7 @@ asserts exactly 16 proof spawns for 4 workspaces and 32 for 8, with the comment
 
 ### `ExecutionProof` field by field
 
-`cleanup.rs:1557-1572`. The doc comment `:1539-1555` is the contract: it "binds
+`cleanup.rs:1764-1779`. The doc comment `:1539-1555` is the contract: it "binds
 the complete frozen state of ONE workspace CleanupUnit … all re-proven against
 the complete bounded ownership universe discovered under clean ROOT", and is
 "consumed with no intervening mutation window beyond the spawn itself. This
@@ -641,7 +641,7 @@ consumed by any spawn, and `:1806-1807` says so.
 
 ### `CleanupPolicy`
 
-`cleanup.rs:215-221`, `#[derive(Default)]`:
+`cleanup.rs:283-289`, `#[derive(Default)]`:
 
 | Field | Default | Enforced at | Notes |
 | --- | --- | --- | --- |
@@ -650,7 +650,7 @@ consumed by any spawn, and `:1806-1807` says so.
 | `include: Vec<String>` | empty | `:881-890` | Empty ⇒ no include filtering. |
 | `exclude: Vec<String>` | empty | `:891-900` | Always applied; an empty `GlobSet` never matches. |
 
-Config interaction is `main.rs:155-170`. CLI overrides configured per field, and
+Config interaction is `main.rs:321-338`. CLI overrides configured per field, and
 for the two list fields an **empty CLI list falls back to config**:
 `min_reclaimable_bytes: min_reclaimable_bytes.unwrap_or(configured.min_reclaimable_bytes)`,
 `min_inactive_seconds: older_than.or(configured.min_inactive_seconds)`,
@@ -717,7 +717,7 @@ Full `globset` syntax is available (`*`, `**`, `?`, `[…]`, `{a,b}`), and becau
 ### Disposition, outcome, result, report
 
 `PolicyDisposition` (`:165-174`) is serde snake_case, mapped at
-`output.rs:243-254`. It is set only on rows that reached the policy stage:
+`output.rs:246-257`. It is set only on rows that reached the policy stage:
 `Selected` on a row that passed every gate and spawned (`:1047`, `:1079`, `:1098`,
 `:1115`, `:1135`), or one of the five dispositions on a policy skip. A row
 blocked by the ownership gate or the proof carries `None` (`:865` default) — so
@@ -777,7 +777,7 @@ all — it pushes a `CleanResult` and moves on. `clean_args` is reachable only f
 the `CargoPreview | Execute` arm (`:1253`) and adds `--dry-run --verbose` only for
 `CargoPreview` (`:2391-2393`). So `Simulate` is prevented twice over: it never reaches
 the dispatch, and if it somehow did, the arg builder would not produce a
-non-dry-run clean. No flag combination turns `Simulate` into a clean; `cli.rs:79-82`
+non-dry-run clean. No flag combination turns `Simulate` into a clean; `cli.rs:119-122`
 makes `--dryrun` conflict with `--yes`. `Simulate` does run the *full* proof
 (`:1152` is mode-independent) — it is a rehearsal of the destructive path, not a
 cheaper one.
@@ -809,7 +809,7 @@ built once (`:1149-1151`) and shared, so a `ProofUniverse.failure` makes
 report where every row is `Skipped` with `SkippedOwnershipUnproven` or
 `SkippedChangedBeforeCleanup` — but `report.scope_blocked` stays `None` and
 `report.failed` stays `0`, because neither early-return site is reached.
-`main.rs:277-303` therefore returns exit code **0**. Tested at
+`main.rs:452-456` therefore returns exit code **0**. Tested at
 `universe_workspace_that_cannot_reresolve_fails_closed` (`:6013-6039`): the row
 is `Skipped` with "could not be re-proven" and `clean_calls()` is empty —
 safety fully preserved, the *signal* is a normal-looking skip. Fail-closed is
@@ -901,7 +901,7 @@ Killed during `cargo clean`: the observable state is a partially emptied target
 directory, which Cargo treats as a cache miss and rebuilds; no workspace *sources*
 are damaged, because a source tree used as an output root is classified
 `Uncertain` upstream and can never be a cleanup target
-(`workspace.rs:717-720`; test `source_tree_as_output_root_is_never_cleaned`
+(`workspace.rs:1217-1220`; test `source_tree_as_output_root_is_never_cleaned`
 `:6242`). Killed after the spawn but before `measure_union` (`:1126`): the
 cleanup happened but no `after_bytes`/`observed_decrease` is reported —
 under-reporting, never over-reporting.
@@ -921,7 +921,7 @@ code says so.**
 | --- | --- |
 | `validate_cleanup_root:1541` | A clean ROOT must be a real, non-symlink directory. |
 | `covering_is_authorized_roots:517-522` | A symlink allowed root is `Err`. |
-| `workspace.rs:732-734` | A symlink output root marks the whole workspace `uncertain_ws` upstream. |
+| `workspace.rs:1249-1251` | A symlink output root marks the whole workspace `uncertain_ws` upstream. |
 | Proof `:1989-1991` | Every covering root re-checked with `symlink_metadata`; a symlink is "preflight changed: covering root became symlink". |
 | Proof `:1961-1978` | Symlink/unresolvable *other* roots compared via `resolve_as_far_as_possible` so they cannot be silently ignored. |
 | `measure_union:2305-2307` | Post-clean measurement refuses a path that changed type or became a symlink. |
@@ -940,7 +940,7 @@ it entirely would require `cargo clean` to re-verify, outside this design.
 
 **No, and the code is stricter than the ADR's framing.** ADR 001 `:92-93` defines
 `PrivateBounded` relative to "authorized cleanup boundaries". The implementation
-is narrower: `workspace.rs:717-719` requires every covering root to be **strictly
+is narrower: `workspace.rs:1217-1219` requires every covering root to be **strictly
 below the workspace root**, disjoint from every member source root, with every
 universe root represented in the graph. Anything outside the workspace root is
 `ExternalUnproven` (`:720`) and inventory-only, permanently (§5).
@@ -956,7 +956,7 @@ once (`equal_and_nested_target_build_are_one_unit_and_one_invocation` `:5787`).
 
 ### Is the exit-code behaviour correct?
 
-`main.rs:347-351` returns `1` if `report.failed > 0 || report.scope_blocked.is_some()`.
+`main.rs:452-456` returns `1` if `report.failed > 0 || report.scope_blocked.is_some()`.
 `report.failed` is incremented only at `:1072` (spawn error) and `:1091` (non-zero
 exit). `scope_blocked` is set only at `:804` and `:841` — the two scan-time
 incompleteness sites.
@@ -982,7 +982,7 @@ safety hole.
 ## 10. Testing
 
 **Numbers (verified by grep):** 75 `#[test]` functions; the test module opens at
-`cleanup.rs:2533` (`#[cfg(test)] mod tests {` at `:2534`), so production is lines
+`cleanup.rs:2994` (`#[cfg(test)] mod tests {` at `:2534`), so production is lines
 1-2532 and tests 2533-6730 — 4198 lines, 62% of the file. No fixture files are
 needed: workspaces are built on disk (`ws_root` `:5338`, `cargo_output` `:5351`,
 `sibling_ws_fixture` `:5386`, `valid_fixture` `:2697`) and mtimes backdated
@@ -1168,7 +1168,7 @@ failed. Does that risk exist here? **Partly, in a narrower form.**
     (`:6652`) keeps both honest.
 15. **`config.toml:36-38`'s "operationally redundant" claim should be revisited.**
     It holds because `PrivateBounded` requires covering roots below the *workspace*
-    root (`workspace.rs:717-720`), but the positive `allowed_output_roots` branch
+    root (`workspace.rs:1217-1220`), but the positive `allowed_output_roots` branch
     (`:651-656`) and its advertised remediation (`:738-743`) have no end-to-end
     test. Add one or soften the comment.
 16. **The public wrappers with no production caller are a growing dead-code

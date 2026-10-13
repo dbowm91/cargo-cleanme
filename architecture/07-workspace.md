@@ -3,7 +3,7 @@
 > Component deep dive · part of the [architecture overview](overview.md)
 
 `src/workspace.rs` — 5146 lines: 1865 production, 3281 inline `#[cfg(test)]`,
-61 `#[test]` functions. The test module begins at `workspace.rs:1867`.
+61 `#[test]` functions. The test module begins at `workspace.rs:2002`.
 
 It is the bridge between "we found some `Cargo.toml` files" and "we know which
 physical bytes we are allowed to touch". Everything downstream of it — grouping,
@@ -41,17 +41,17 @@ Plus four fully-qualified `crate::domain::elapsed_nanos` uses (`:450`, `:509`,
 
 **The workspace → cleanup edge is one-way, and in this file it is test-only.**
 The production half of `workspace.rs` contains *zero* references to
-`crate::cleanup`. The two calls are at `workspace.rs:3547` and `:3633`
+`crate::cleanup`. The two calls are at `workspace.rs:3743` and `:3633`
 (`crate::cleanup::covering_is_authorized`), both inside the test module,
 asserting that source-overlapping groups are refused even by the most
 permissive caller.
 So the dependency direction that [the overview](overview.md) calls out is
-`cleanup → workspace` in production (`cleanup.rs:1483`, `1483-1515`, `1717`,
-`1813`, `2043`, `2122`, `2142`) plus a test-only back-reference. There is no
+`cleanup → workspace` in production (`cleanup.rs:1690`, `1690-1722`, `2043`,
+`2150`, `2408`, `2507`, `2539`) plus a test-only back-reference. There is no
 cycle and no production import from `workspace` into `cleanup`.
 
-Call sites in the read-only scan: `main.rs:821` (runner), `main.rs:822`
-(`resolve_workspaces`), `main.rs:932` (`build_groups`), `main.rs:948`
+Call sites in the read-only scan: `main.rs:932` (runner), `main.rs:933`
+(`resolve_workspaces`), `main.rs:1043` (`build_groups`), `main.rs:1059`
 (`analyze_groups`).
 
 ---
@@ -87,7 +87,7 @@ Twenty-two public items. Nothing else in the file is reachable from outside.
 | `RawGroup` | `struct { physicals, covering, display, owners: Vec<usize>, ownership, source_overlap }` (`:1233-1243`) | Pre-measurement group. `owners` are indices into the caller's `workspaces` slice, not IDs. |
 | `has_artifact_entries` | `(path: &Path) -> Option<bool>` (`:1247-1250`) | `Some(true)` if the directory has ≥1 entry, `Some(false)` if empty, `None` if unreadable. One `read_dir` + one `next()`. |
 | `GroupAnalysisInput` | `struct { group: RawGroup, owner_workspaces: Vec<ResolvedWorkspace> }` (`:1252-1255`) | **Dead.** Declared, never constructed, never referenced anywhere in `src/` or `tests/`. `analyze_groups_detailed` does not take it — see §7. |
-| `workspace_member_roots` | `(ws: &ResolvedWorkspace) -> Vec<PathBuf>` (`:1257-1262`) | Member `source_root`s, deduped, passed through `outermost`. Also used by `cleanup.rs:2015`. |
+| `workspace_member_roots` | `(ws: &ResolvedWorkspace) -> Vec<PathBuf>` (`:1257-1262`) | Member `source_root`s, deduped, passed through `outermost`. Also used by `cleanup.rs:2618`. |
 | `GroupSkipReason` | 7-variant enum (`:1266-1274`) + `detail(self) -> &'static str` (`:1277-1290`) | Why a group produced no candidate. Full table in §7. |
 | `GroupOutcome` | `struct { group: RawGroup, measured: Option<PhysicalOutputGroup>, skip: Option<GroupSkipReason> }` (`:1296-1300`) | One per input group, in input order. Exactly one of `measured`/`skip` is `Some`. |
 | `analyze_groups_detailed` | 9 params `-> Vec<GroupOutcome>` (`:1311-1620`) | **The real implementation.** Fail-fast gate pipeline. |
@@ -460,9 +460,9 @@ The asymmetry between the two selectors is the substantive part.
 bounds it to "exact tested releases where configured and explicit target
 dry-runs agree". `profile_selector` covers a wider, older set.
 
-Consequences, all verified in `cleanup.rs:2836-2849`: `1.96.0` → both false;
+Consequences, all verified in `cleanup.rs:3324-3337`: `1.96.0` → both false;
 `1.99.1` → both false; `1.99.0-nightly` → both false; `"unknown"` → both false.
-`runtime_clean_capabilities` (`cleanup.rs:2413-2425`) shells `cargo --version`,
+`runtime_clean_capabilities` (`cleanup.rs:2862-2874`) shells `cargo --version`,
 takes whitespace token 1, and **returns `CargoCleanCapabilities::default()` —
 all false — on any failure whatsoever**. So a user on an old, new, nightly, or
 absent Cargo gets the reduced behaviour: the clean still runs, just without
@@ -693,7 +693,7 @@ comment explains why it was kept.
 The output-recency predicate is `t >= clock_cutoff || t > clock_start` (`:1566`).
 The second disjunct protects against future-dated timestamps — a skewed clock or
 a restored backup must not be silently treated as ancient. The identical
-predicate lives in `traverse.rs:369`, so source and output agree on what
+predicate lives in `traverse.rs:319`, so source and output agree on what
 "recent" means. ADR §9 (`plans/adr/001-...md:121-123`): "A physical output group
 is protected by recent activity anywhere in that group. When a shared physical
 group is recent, all owners are protected" — which is what arm 3 and this stage
@@ -893,9 +893,9 @@ deterministic order" (`:333`) means "deterministic given a fixed input list", an
 it holds because `ordered_keys` is a `Vec` appended in iteration order. No
 consumer depends on it. The *other* parallel resolution in the
 project lives in
-`cleanup.rs` (`refresh_proof_universe_with_limit`, `cleanup.rs:1660-1700`); it
+`cleanup.rs` (`refresh_proof_universe_with_limit`, `cleanup.rs:2189-2332`); it
 threads `batch` with `std::thread::scope`, zips outcomes back against the input
-batch in order (`:1892`), and `cleanup.rs:6680` asserts sequential ==
+batch in order (`:1892`), and `cleanup.rs:7358` asserts sequential ==
 parallel. So the determinism claim survives the parallel path too.
 
 **`cargo` not on `PATH`?** A **diagnostic, not a hard error.** `Command::new("cargo")
@@ -915,7 +915,7 @@ condition, `cleanup.rs:2414-2416`.)
 **Warnings on stderr with a successful exit?** Ignored. `ProcessOutput.stderr`
 is inspected only after a non-zero locate/metadata exit; successful stdout remains
 authoritative and warning text cannot affect resolution. The same process-output
-type is shared with `CleanupRunner` (`cleanup.rs:375`).
+type is shared with `CleanupRunner` (`cleanup.rs:499`).
 
 **Malformed or unexpected metadata JSON?** A warning diagnostic, the workspace is
 dropped, resolution continues (`:552-565`). Same for unparseable `locate-project`
@@ -947,7 +947,7 @@ safety property still holds (the workspace is in `uncertain_ws`, so
 but the user gets no message. **This is a real gap between ADR wording and
 implementation**, and it is the one I would file. What the *spawned* `cargo
 clean` does with such a root is outside this module; `cleanup.rs`'s final proof
-(`cleanup.rs:1986`) is the only thing that could catch a change between scan
+(`cleanup.rs:2335`) is the only thing that could catch a change between scan
 and clean, and I did not audit that path in full.
 
 **Can a member's manifest produce a disagreeing nested resolution?** Only by
@@ -1104,7 +1104,7 @@ atomics on a `TestObserver` without exercising this module at all.
 11. **Version-gated capability changes are empirical, not documented.** The
     allowlist at `:147-163` may only gain a release after real `cargo clean`
     qualification with a *configured* `build.target`; unknown versions stay
-    `false` (tests `cleanup.rs:2836-2849`).
+    `false` (tests `cleanup.rs:3324-3337`).
 12. **New real-Cargo tests need a premise assertion, not a stub.** Follow
     `:4640-4643` (the case ran) and `:4669-4677` (cargo is present and
     responded) — and check the new file against

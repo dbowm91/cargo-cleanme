@@ -75,7 +75,7 @@ pub struct DiscoveryState {
 | `schema_version` | `u32` | Format generation. `0` is treated as invalid on read (`:460-461`). | Every `reconcile_full` publish (`:225`); normalized in memory on every successful load (`:463-464`); passthrough on a Routine touch. |
 | `last_full_at` | `Option<u64>` | The generation stamp: wall-clock seconds of the newest **complete** Full reconciliation that published. `None` = never reconciled. | `reconcile_full` only (`:226`). Never written by the Routine/Explicit touch branch. |
 | `projects` | `Vec<ProjectRecord>` | Exact project inventory from the last complete Full scan. Fully replaced, never merged. | `reconcile_full` only (`:227-241`). |
-| `learned_roots` | `Vec<LearnedRoot>` | Containers the Routine scan should search, each with a positive-observation stamp. | `reconcile_full` (`:243-351`), and `last_project_seen_at` only via the Routine touch in `main.rs:440-447`. |
+| `learned_roots` | `Vec<LearnedRoot>` | Containers the Routine scan should search, each with a positive-observation stamp. | `reconcile_full` (`:243-351`), and `last_project_seen_at` only via the Routine touch in `main.rs:1020-1035`. |
 
 `#[serde(default)]` sits on the **struct** (`:64`), so all four fields may be
 absent from the JSON and decode to `Default`. That is what lets a v1 file with
@@ -187,14 +187,14 @@ Both `Missing` and `Unavailable` fail to produce a usable prior, but only
 | `UnsupportedNewer` | `None` | **No** |
 | `Unavailable(_)` | `None` | **No** |
 
-The boolean is `replacing_invalid`. `main.rs:402-406` uses it to print
+The boolean is `replacing_invalid`. `main.rs:995-998` uses it to print
 "replaced unusable discovery state after successful Full reconciliation" — an
 operator-visible acknowledgement that stale bytes were clobbered, so the
 replacement is never silent.
 
 `Unavailable` and `UnsupportedNewer` returning `None` is the fail-closed half of
 the design: an unreadable file and a future-schema file are both treated as
-**unknown**, and unknown is never a licence to write. `main.rs:417-422` turns
+**unknown**, and unknown is never a licence to write. `main.rs:1013-1018` turns
 that `None` into a stderr warning and a skipped reconciliation.
 
 ### `load_default` (`:416-421`)
@@ -431,25 +431,25 @@ holds both facts.
 `Option<(DiscoveryState, bool)>` splits the two things a caller needs: the state
 (reconciliation input, or a fresh default for `Missing`/`RecoverableInvalid`),
 and a boolean reporting whether that state *replaces* something unusable — a
-purely operator-communication concern, used at `main.rs:402-406` and nowhere
+purely operator-communication concern, used at `main.rs:995-998` and nowhere
 else. Because the gate lives outside, a caller that forgets to consult it cannot
 silently clobber a newer binary's file. The one in-tree reconciliation caller
-does consult it (`main.rs:360`); `policy.rs` never reconciles.
+does consult it (`main.rs:952`); `policy.rs` never reconciles.
 
 ### How `main.rs` supplies the two gate inputs
 
-`uncertain` — `main.rs:327-339`: `discovered.diagnostics` filtered to
+`uncertain` — `main.rs:913-925`: `discovered.diagnostics` filtered to
 `DiagnosticCategory::PermissionDenied | Metadata | Vanished`, then
 `filter_map(|d| d.path.clone())`. `InvalidEntry`, `PlatformRoot`, and
 `CandidateUncertain` diagnostics are **excluded** and play no part in
 reconciliation. (A diagnostic with `path: None` is silently dropped, which is
 fail-open for that entry — see §8.)
 
-`complete` — `main.rs:383-386`: `!diagnostics.iter().any(|d| d.category ==
+`complete` — `main.rs:904-908`: `!diagnostics.iter().any(|d| d.category ==
 PlatformRoot && d.severity == Error)`. Only an `Error`-severity
 `PlatformRoot` diagnostic makes a Full scan incomplete. Everything else —
 including every `Warning`-severity diagnostic — leaves the scan publishable.
-`main.rs:479-483` recomputes the identical predicate into `full_incomplete` for
+`main.rs:1070` recomputes the identical predicate into `full_incomplete` for
 the exit code; the duplication is redundant but harmless.
 
 ## 5. Uncertainty handling
@@ -504,14 +504,14 @@ appliable outside uncertain coverage.
 
 The unit test at `:553-602` feeds `/work/uncertain/nested` as an uncertainty
 path, exercising genuinely localized uncertainty. But the production path
-supplies something much coarser: the diagnostic at `discovery.rs:843-848` sets
+supplies something much coarser: the diagnostic at `discovery.rs:516-520` sets
 `path: Some(root.to_path_buf())` — the **scan root of the walk**, not the
 unreadable subtree. The other uncertainty-producing site,
 `discovery.rs:585-594`, also carries a root path
 (`roots.get(root_idx).map(|(_, root)| root.clone())`).
 
 For a Full scan the roots are `["/"]` on Linux and `["/", "/usr/local"]` on
-macOS with `/usr/local` present (`policy.rs:141-156`, canonicalized at
+macOS with `/usr/local` present (`policy.rs:584-591`, canonicalized at
 `policy.rs:134`). Therefore, on both unix platforms, **any single unreadable
 directory anywhere on the machine during a Full scan yields an uncertainty entry
 of `/`**, and `uncertainty_intersects(any_absolute_root, "/")` is `true` for
@@ -554,7 +554,7 @@ Three honest limits:
 
 - The unix list is **exact equality, not prefix**. `/opt/homebrew/…` does not
   match, and neither does `/var`, `/tmp`, or `/usr/local` (which *is* an added
-  global discovery root at `policy.rs:145`). A project directly under
+  global discovery root at `policy.rs:587`). A project directly under
   `/usr/local` would learn `/usr/local` as a root, because `project.parent()`
   there is `/usr/local` itself and `is_broad_root("/usr/local")` is `false`.
 - The `home` comparison at `:151` is raw `Path` equality against an
@@ -565,7 +565,7 @@ Three honest limits:
   `$HOME` either.
 - It is a *conservative-in-the-right-direction* heuristic, not an authority. The
   real containment guarantee for the Routine walk is
-  `canonical_dedup_roots` in `policy.rs:236-278`, not this function.
+  `canonical_dedup_roots` in `policy.rs:653-695`, not this function.
 
 ## 6. Publication
 
@@ -605,7 +605,7 @@ There is no `set_permissions` call anywhere in the module (verified by grep).
 file with the process umask, i.e. typically `0644` on unix — **world-readable**.
 The file contains the canonical path of every Rust project on the machine, which
 is a mild but real information disclosure on a shared host. This is consistent
-with `config.rs:462-470`, which uses the identical temp+`create_new` pattern for
+with `config.rs:490-498`, which uses the identical temp+`create_new` pattern for
 `config.toml` and also sets no permissions, so it reads as an existing repo
 convention rather than an oversight in this module. It is still worth a decision.
 
@@ -615,13 +615,13 @@ convention rather than an oversight in this module. It is still worth a decision
 failure as a warning, never as a scan failure:
 
 - Full branch: `eprintln!("cargo-cleanme: discovery state was not saved: {error}")`
-  (`main.rs:408-410`).
-- Routine/Explicit touch: the same message at `main.rs:448-452`, guarded by
+  (`main.rs:1002-1005`).
+- Routine/Explicit touch: the same message at `main.rs:1031-1034`, guarded by
   `!observed.is_empty()` so an empty scan performs no write at all.
 
 `NoPublication` prints `"discovery state was not reconciled: {reason}"`
-(`main.rs:413-415`), and a `None` prior prints the `StateLoad::diagnostic()`
-message plus "; Full state reconciliation was skipped" (`main.rs:417-422`).
+(`main.rs:1008-1011`), and a `None` prior prints the `StateLoad::diagnostic()`
+message plus "; Full state reconciliation was skipped" (`main.rs:1013-1018`).
 
 **One correction to the usual framing — and the correction has since been
 applied.** A failed save *used to* change the exit code for a Full scan. The
@@ -673,14 +673,14 @@ it. Persistent targeted retirement remains decision-gated by proposed ADR 005.
 
 | Consumer | Call site | Reads | Notes |
 |---|---|---|---|
-| `policy::routine_roots` | `policy.rs:469` | `load_default()` | Routine scan root set. |
-| `policy::routine_roots_from_state` | `policy.rs:484-514` | `StateLoad`, `learned_roots`, `last_project_seen_at`, `now_seconds()` | Re-implements the retention filter independently at `policy.rs:502-504` (same three clauses as `discovery_state.rs:312-314`, plus its own `now < r.last_project_seen_at` future-timestamp clause). Seeds are always unioned in first (`policy.rs:489-491`); a non-`Loaded` load falls back to seeds + one warning (`policy.rs:510-511`). |
-| `policy::routine_cleanup_candidates` | `policy.rs:437` | `StateLoad`, `learned_roots`, `last_project_seen_at`, `now_seconds()` | C028: the cleanup-only variant. Same age filter, but raw paths with provenance and no canonicalization, so classification (`policy.rs:184`) sees a symlink before any collapse could resolve it. |
-| `clean --full` roots | `policy.rs:402`, `main.rs:598` | `learned_roots[].path` of the in-memory generation | C028: `full_cleanup_roots` consumes the generation the just-finished reconciliation proved — never a disk reload — then `admit_automatic` classifies before collapsing. A missing generation or non-zero reconciliation refuses cleanup. |
-| `clean --full` / maintenance generation | `main.rs:330` | `last_full_at` | `Option<u64>` → `state_generation`. |
-| `run_scan`, Full branch | `main.rs:818-888` | everything | `load_default`, `full_reconciliation_prior`, `now_seconds`, `ProjectObservation`, `reconcile_full`, `publish`. Returns the proven generation in `ScanOutcome::full_state` (`main.rs:727`) even when the save fails, so `clean --full` never falls back to a stale disk generation. |
-| `run_scan`, Routine/Explicit branch | `main.rs:889-905` | `learned_roots[].last_project_seen_at` | The touch branch. Mutates only timestamps; never adds roots, never removes them, never touches `projects` or `last_full_at`. Advances a root when `project.starts_with(&root.path)` (`main.rs:895`) for an observed workspace root. |
-| Human output | `main.rs:330` | `state_generation` | `println!("state generation last_full_at={generation} (Unix seconds)")` — Human format only, and only when a generation exists. |
+| `policy::routine_roots` | `policy.rs:497` | `load_default()` | Routine scan root set. |
+| `policy::routine_roots_from_state` | `policy.rs:512-542` | `StateLoad`, `learned_roots`, `last_project_seen_at`, `now_seconds()` | Re-implements the retention filter independently at `policy.rs:530-533` (same three clauses as `discovery_state.rs:318-321`, plus its own `now < r.last_project_seen_at` future-timestamp clause). Seeds are always unioned in first (`policy.rs:517-519`); a non-`Loaded` load falls back to seeds + one warning (`policy.rs:539-540`). |
+| `policy::routine_cleanup_candidates` | `policy.rs:465` | `StateLoad`, `learned_roots`, `last_project_seen_at`, `now_seconds()` | C028: the cleanup-only variant. Same age filter, but raw paths with provenance and no canonicalization, so classification (`policy.rs:210`) sees a symlink before any collapse could resolve it. |
+| `clean --full` roots | `policy.rs:430`, `main.rs:608` | `learned_roots[].path` of the in-memory generation | C028: `full_cleanup_roots` consumes the generation the just-finished reconciliation proved — never a disk reload — then `admit_automatic` classifies before collapsing. A missing generation or non-zero reconciliation refuses cleanup. |
+| `clean --full` / maintenance generation | `main.rs:435` | `last_full_at` | `Option<u64>` → `state_generation`. |
+| `run_scan`, Full branch | `main.rs:951-1019` | everything | `load_default`, `full_reconciliation_prior`, `now_seconds`, `ProjectObservation`, `reconcile_full`, `publish`. Returns the proven generation in `ScanOutcome::full_state` (`main.rs:992`) even when the save fails, so `clean --full` never falls back to a stale disk generation. |
+| `run_scan`, Routine/Explicit branch | `main.rs:1020-1035` | `learned_roots[].last_project_seen_at` | The touch branch. Mutates only timestamps; never adds roots, never removes them, never touches `projects` or `last_full_at`. Advances a root when `project.starts_with(&root.path)` (`main.rs:1026`) for an observed workspace root. |
+| Human output | `main.rs:435` | `state_generation` | `println!("state generation last_full_at={generation} (Unix seconds)")` — Human format only, and only when a generation exists. |
 | JSON output | `main.rs:650` | `state_generation` | Serialized as `state_generation_last_full_at: Option<u64>` (`output.rs:61`, `output.rs:236`). |
 
 `cleanup.rs` has **no** import of this module (verified by grep over `src/`).
@@ -698,7 +698,7 @@ engine can re-prove the boundary before spawning.
 partially-valid state. The consequences diverge sharply by consumer, and that
 divergence is intentional:
 
-- **Routine scope** (`policy.rs:105-123`): falls back to seed/configured roots
+- **Routine scope** (`policy.rs:521-541`): falls back to seed/configured roots
   with one warning. The scan still works; it is merely no longer adaptive.
 - **`clean --full`** (`main.rs:120-124`): `Loaded` is required, so roots become
   empty. `run_scan` has already returned 0 (it did not reconcile), so execution
@@ -839,7 +839,7 @@ explicit future-timestamp guard (`:181`).
 
 **Self-healing, by design, with one deliberate exception.** A corrupt file
 yields `RecoverableInvalid`, not an error, and read-only scanning stays fully
-functional: `policy.rs:105-123` falls back to seed/configured roots with one
+functional: `policy.rs:521-541` falls back to seed/configured roots with one
 warning. The *next complete Full scan* replaces it, sets
 `schema_version: CURRENT_SCHEMA`, and reports the replacement
 (`main.rs:402-406`). Pinned by
@@ -1006,7 +1006,7 @@ against the code, not against its test count.
    `discovery_state.rs:224`. Removing the `max` reintroduces a regressing
    generation stamp and makes the future-timestamp guard at `:312` the only
    remaining defence.
-8. **Do `policy.rs:502-504` and `discovery_state.rs:312-314` still agree?** The
+8. **Do `policy.rs:530-533` and `discovery_state.rs:318-321` still agree?** The
    retention predicate is duplicated across the module boundary. Any change to
    one must be made to the other, and the fact that Routine applies it at read
    time while Full applies it at write time is easy to miss.

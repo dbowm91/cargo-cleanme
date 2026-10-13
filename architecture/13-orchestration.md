@@ -4,13 +4,13 @@
 > **Status:** M012A and M012B have rewritten this file's subject. Bare
 > `cargo-cleanme` is now a Routine **execute cleanup**, not a scan; argv
 > normalization and intent resolution moved into `Cli::invocation`
-> (`src/cli.rs:250-305`); `--format log` added a third output format; and
+> (`src/cli.rs:254-325`); `--format log` added a third output format; and
 > `clean --full` on an incomplete scan now fails closed. Sections 1-6 below have
 > been re-derived against the current source. The earlier status note recording
 > the `scope`-label fix and the state-publish exit-code fix is preserved by the
 > findings themselves (§7, §8), not by a banner claiming them.
 
-`src/main.rs`, 1104 lines, zero inline tests. The only module that reaches every
+`src/main.rs`, 1245 lines, zero inline tests. The only module that reaches every
 other one, and the only place the two pipelines are stitched together.
 
 ## 1. Responsibility
@@ -49,25 +49,25 @@ list of what it depends on. Modules reached: `cli`, `config`, `error`, `domain`,
 `discovery`, `workspace`, `discovery_state`, `cleanup`, `update`, `editor`,
 `progress`, `report`, `output`, plus `serde_json` and `directories` (`:535`).
 
-**Twelve free functions and two structs**, all private:
+**Fourteen free functions, three structs and one enum**, all private:
 
 | Function | Lines | Role |
 |---|---:|---|
-| `main` | `10-36` | parse, dispatch, fatal rendering, `process::exit` |
-| `operation_name` | `40-47` | `Invocation` → stable `op=` token for the log fatal line |
-| `error_code` | `51-59` | `AppError` → stable `reason=` code |
-| `run` | `67-85` | config path, `RunOptions`, four-arm dispatch |
-| `run_update` | `87-122` | plan, JSON / dry-run four-liner / one-line success |
-| `run_config` | `:124` | `path`, `show`, `edit` + three post-edit checks |
-| `run_cleanup` | `:210` | the cleanup pipeline (§5) |
-| `run_engine_guarded` | `:365` | admission→validation race defence (C028, §5) |
-| `resolve_cleanup_roots` | `:457` | scope → admitted roots + label + generation (§5) |
-| `admit_automatic` | `:598` | provenance admission before collapse (C028, §5) |
-| `emit_cleanup` | `:639` | three-branch format dispatch for a cleanup report |
-| `collapse_roots` | `:674` | canonicalize, sort, dedupe, nest-collapse (§6) |
-| `scope_label` | `:698` | `ScanScope` → JSON `scope` string |
-| `run_scan` | `:733` | the scan pipeline (§4, §7) |
-| `ScanOutcome` | `:727` | exit code plus the proven Full generation (C028, §7) |
+| `main` | `11-37` | parse, dispatch, fatal rendering, `process::exit` |
+| `operation_name` | `41-48` | `Invocation` → stable `op=` token for the log fatal line |
+| `error_code` | `52-60` | `AppError` → stable `reason=` code |
+| `run` | `68-86` | config path, `RunOptions`, four-arm dispatch |
+| `run_update` | `88-214` | plan, JSON / dry-run four-liner / one-line success |
+| `run_config` | `:216` | `path`, `show`, `edit` + three post-edit checks |
+| `run_cleanup` | `:313` | the cleanup pipeline (§5) |
+| `run_engine_guarded` | `:470` | admission→validation race defence (C028, §5) |
+| `resolve_cleanup_roots` | `:563` | scope → admitted roots + label + generation (§5) |
+| `admit_automatic` | `:704` | provenance admission before collapse (C028, §5) |
+| `emit_cleanup` | `:748` | three-branch format dispatch for a cleanup report |
+| `collapse_roots` | `:786` | canonicalize, sort, dedupe, nest-collapse (§6) |
+| `scope_label` | `:810` | `ScanScope` → JSON `scope` string |
+| `run_scan` | `:845` | the scan pipeline (§4, §7) |
+| `ScanOutcome` | `:839` | exit code plus the proven Full generation (C028, §7) |
 
 The two log helpers are new in M012B and exist only to serve `main`'s fatal path;
 they are the reason `main` parses argv itself instead of leaving it inside `run`
@@ -897,17 +897,17 @@ Every destructive decision — ownership proof, authorization, recency, and the
 `main.rs` does is *choose what to pass*: a wrong root, a wrong mode, or a wrong
 `selected_roots` label is a correctness defect here and a safety defect only if
 `cleanup.rs` trusts it, which it does not (it re-proves every candidate). That
-separation is the reason this file can be 737 lines of untested composition.
+separation is the reason this file can be 1245 lines of untested composition.
 
 ## 10. Testing
 
 **`src/main.rs` has zero inline tests.** Verified:
 `grep -cE '#\[cfg(test)\]|#\[test\]' src/main.rs` → `0`. There is no
-`#[cfg(test)] mod tests` in the file; the `use` statements at `:423-424` and
-`:498` are ordinary function-scoped production imports inside `run_scan` — a
+`#[cfg(test)] mod tests` in the file; the `use` statements at `:851-852` and
+`:942` are ordinary function-scoped production imports inside `run_scan` — a
 common source of the opposite impression. The same grep on the two output
-modules: `src/main.rs` **0**, `src/output.rs` **12** (all inside `pub mod log`,
-`src/output.rs:426-671`), and `src/report.rs` **8** — it has an inline suite
+modules: `src/main.rs` **0**, `src/output.rs` **19** (2 in `path_tests`, 13 inside `pub mod log`,
+`src/output.rs:506-805`, and 4 in `update_tests`), and `src/report.rs` **7** — it has an inline suite
 (`src/report.rs:72-195`). See [10-reporting §10](10-reporting.md) for the log
 tests and what they leave uncovered.
 
@@ -916,7 +916,7 @@ tests and what they leave uncovered.
 `update`), and it is the only machine-readable surface hand-building its
 envelope outside `output.rs`'s `EnvelopeV1` (§8).
 
-### `tests/cli_contract.rs` — 1711 lines, 29 tests
+### `tests/cli_contract.rs` — 3431 lines, 51 tests
 
 Drives `env!("CARGO_BIN_EXE_cargo-cleanme")` as a subprocess and asserts on
 status, stdout and stderr. The pre-M012A tests survived; M012A and M012B added
@@ -952,7 +952,7 @@ Verified line numbers:
 | `json_scan_within_an_empty_root_is_a_successful_zero_result_report` | 1155 | the bounded-zero-result scan document |
 | `log_mode_routine_execute_is_one_bounded_line_and_a_silent_stderr` … `log_is_an_explicit_value_and_invalid_formats_still_fail_closed` | 1258-1711 | the eleven M012B log cases, via a shared `assert_bounded_log_line` (`:1218`): one line, bounded, silent stderr; `simulate` vs `preview` distinguishable; blocked carries a typed reason and exit 1 (`:1325`); failed cleanup is `status=failed` (`:1353`); zero-result maintenance is `status=ok` (`:1392`); scan reports the resolved scope (`:1418`); `--stats` stays opt-in on stderr and leaves the one line alone (`:1486`); the human diagnostic fan-out is suppressed (`:1536`); a fatal error is **one bounded stderr line and empty stdout**, exit 2 (`:1605`, `:1619-1642`), carrying a typed code and *not* the config path or parse error (`:1639-1642`); JSON and human are unchanged by log mode's existence (`:1648`); an unknown format still fails closed (`:1693`) |
 
-### `tests/end_to_end.rs` — 347 lines, 2 tests
+### `tests/end_to_end.rs` — 840 lines, 4 tests
 
 `end_to_end_reports_only_inactive_artifact_projects` (`:114`) does *not* invoke
 the binary; it drives the library directly with a fake `CargoRunner` (`:75`) through
@@ -966,12 +966,12 @@ human/machine agreement (`:210`).
 ignore/unignore literal-path behaviour end to end. **Still no cleanup projection
 assertions** — every end-to-end case here is scan-side.
 
-### `tests/common/mod.rs` — 229 lines, not a test target
+### `tests/common/mod.rs` — 244 lines, not a test target
 
 (Cargo compiles only top-level `tests/*.rs`; each suite pulls it in with
 `mod common;`.) Five fixture helpers: `set_path_modified` (`:24`), `backdate_file`
-(`:98`), `inactive_project` (`:111`), `write_fake_cargo` (`:167`), and `cargo_calls`
-(`:223`). It asserts nothing about the binary.
+(`:98`), `inactive_project` (`:111`), `write_fake_cargo` (`:173`), and `cargo_calls`
+(`:238`). It asserts nothing about the binary.
 
 ### What is well pinned, and what is not
 
