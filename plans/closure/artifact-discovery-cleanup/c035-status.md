@@ -82,7 +82,12 @@ and the test guards it. Pre-C035 `main` also fails the new cases (the
   escape). Fixed in commit `832a9ee` (spell through `toml_string`, plus a
   lane-independent round-trip pin); re-run (`38513116448`) green on all 9
   jobs. The Cargo selector qualification workflow passed on the branch as
-  well (`38512576013`).
+  well (`38512576013`). A later docs-only tip run (`38513464752`) first
+  failed `json_update_refusal_emits_no_document_and_exits_non_zero` on ubuntu
+  with `ETXTBSY` at spawn — the known staging flake documented at
+  `tests/cli_contract.rs:stage_runnable_binary`, unrelated to C035 (no C035
+  code in that path; prior run green on identical test code); `--failed`
+  re-run green on all jobs.
 
 ## Stop-condition compliance
 
