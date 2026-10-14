@@ -1221,13 +1221,44 @@ mod tests {
         assert!(err.contains("absolute"), "{err}");
         // Absolute is checked at load; existence is admission's job, so an
         // absolute-but-missing scope loads fine here and fails loudly later.
+        // Spelled through `toml_string`: on Windows the path carries
+        // backslashes and a raw interpolation would not parse (`\U` reads as
+        // a unicode escape), failing the fixture before the subject runs.
         let missing = d.path().join("not-created");
         fs::write(
             &p,
-            format!("[maintenance]\nscopes = [\"{}\"]\n", missing.display()),
+            format!(
+                "[maintenance]\nscopes = [{}]\n",
+                toml_string(&missing.display().to_string())
+            ),
         )
         .unwrap();
         assert_eq!(load(&p).unwrap().maintenance.scopes, vec![missing]);
+        // The Windows spelling round-trips through TOML on every lane: a raw
+        // backslash interpolation would not parse (`\U` reads as a unicode
+        // escape), failing the fixture before the subject runs — the exact
+        // failure the hosted Windows lane reported for this test. Asserted
+        // here because the encoding is pure string work; only absoluteness
+        // differs by platform.
+        let windows_spelling = r"C:\Users\runneradmin\not-created";
+        fs::write(
+            &p,
+            format!(
+                "[maintenance]\nscopes = [{}]\n",
+                toml_string(windows_spelling)
+            ),
+        )
+        .unwrap();
+        #[cfg(windows)]
+        assert_eq!(
+            load(&p).unwrap().maintenance.scopes,
+            vec![PathBuf::from(windows_spelling)]
+        );
+        #[cfg(not(windows))]
+        {
+            let err = load(&p).unwrap_err().to_string();
+            assert!(err.contains("maintenance.scopes"), "{err}");
+        }
     }
     #[test]
     fn config_without_maintenance_section_loads_as_undeclared() {
