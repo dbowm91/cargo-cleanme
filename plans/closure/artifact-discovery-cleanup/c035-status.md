@@ -46,7 +46,7 @@ result is not reopened; no closed plan or closure record was edited.
 | 5 | Late appearance / config mutation re-blocks the scope | Mechanism-shared: per-scope H-2 rediscovery over scope roots and per-scope hoisted-universe refresh reuse the unchanged `run_cleanup_units` gates; scope attribution covered by `scope_attribution_is_first_containing_scope_or_none`. No deterministic mid-run trigger test exists — same as legacy H-2, which also has none | Partial (mechanism shared + reviewed; no trigger test) |
 | 6 | Declaration hygiene: merge, fatal defects (exit 2), undeclared identity | `declared_scopes_merge_overlap_and_sort_disjoint`, `declared_scope_defects_are_fatal_not_skipped`, `declared_symlink_scopes_are_fatal` (unit) + `bad_scope_declarations_are_fatal_usage_errors`, `configured_scan_root_overrides_declared_scopes_with_a_warning` (subprocess); v0.2.6-config load test | Pass |
 | 7 | Contract: additive JSON, log bound, exit pins, human/JSON parity | `undeclared_runs_emit_no_scopes_key` (no `scopes` key undeclared), `multi_scope_log_line_is_one_bounded_blocked_line` (`status=blocked reason=ownership_unproven`, ≤384 B), `multi_scope_human_report_groups_by_scope`; exit pins in items 1–4/6 | Pass |
-| 8 | Heterogeneity shape with real Cargo | Items 1–4 run direct + plugin spellings under the stub; **plus** a live real-Cargo run on macOS (`cargo new` project + garbage-manifest scope, debug binary): Simulate predicted 1 would-clean + 1 scoped block, Execute reclaimed the real `target/` while the poison scope stood untouched, JSON `scope=routine mode=execute` with per-scope entries, exit 1. Hosted Linux/macOS/Windows + MSRV lanes: pending CI on merge | Local pass; hosted pending |
+| 8 | Heterogeneity shape with real Cargo | Items 1–4 run direct + plugin spellings under the stub; **plus** a live real-Cargo run on macOS (`cargo new` project + garbage-manifest scope, debug binary): Simulate predicted 1 would-clean + 1 scoped block, Execute reclaimed the real `target/` while the poison scope stood untouched, JSON `scope=routine mode=execute` with per-scope entries, exit 1. Hosted lanes: **CI green** (run `38513116448`, all 9 jobs: ubuntu/macos/windows checks, MSRV 1.89, generated-docs, benchmark, 3 installer lanes) | Pass locally and hosted |
 
 ## Discrimination evidence (what makes the load-bearing test fail)
 
@@ -75,6 +75,14 @@ and the test guards it. Pre-C035 `main` also fails the new cases (the
 - `cargo run --quiet --features dev-tools --bin generate-docs -- --check` —
   13 artifacts match (no CLI surface change, as designed).
 - `git diff --check` — passed.
+- Hosted CI on branch `plans/c035-operator-scoped-cleanup`: first run
+  (`38512575806`) went red on **one** case, `checks (windows-latest)` —
+  `config::tests::maintenance_scopes_require_absolute_paths` interpolated a
+  backslash path raw into TOML, which does not parse (`\U` reads as a unicode
+  escape). Fixed in commit `832a9ee` (spell through `toml_string`, plus a
+  lane-independent round-trip pin); re-run (`38513116448`) green on all 9
+  jobs. The Cargo selector qualification workflow passed on the branch as
+  well (`38512576013`).
 
 ## Stop-condition compliance
 
@@ -103,7 +111,7 @@ no dedicated kill-switch flag (operator rollback is deleting the section).
   `declared scopes` summary line; intentional (roots walked vs boundaries
   proven), not drift.
 - Item 5 has no deterministic trigger test (same standing as legacy H-2).
-- Hosted OS/MSRV evidence awaits CI lanes on merge.
+- Hosted OS/MSRV evidence complete via CI (run `38513116448`).
 
 ## Observed documentation debt (pre-existing, not caused by C035)
 
