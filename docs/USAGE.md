@@ -34,13 +34,20 @@ scan form walks the platform roots, and the cleanup form reconciles them first.
 
 ### The maintenance scope
 
-Bare invocation, `clean --known`, and `scan --known` all resolve the scope the
-same way:
+Bare invocation and `clean --known` resolve the scope the same way:
 
 1. a configured legacy `scan.root`, if set, is an **exclusive explicit
    override** — nothing else is searched and cleanup targets exactly that root;
-2. otherwise the **Routine scope**: bounded seed roots under your home plus
+2. otherwise operator-declared `[maintenance] scopes`, if any — each exact
+   absolute directory becomes its own cleanup proof boundary with the same
+   complete proof an explicit `clean ROOT` receives, so poison in one scope
+   blocks only that scope;
+3. otherwise the **Routine scope**: bounded seed roots under your home plus
    active learned roots from prior Full reconciliations.
+
+`scan --known` always inventories the seed/learned Routine scope (step 3),
+even when cleanup scopes are declared: it is the read-only discovery view,
+and read-only inventory stays partial-result tolerant.
 
 Rootless `scan` is **always** Full and deliberately ignores `scan.root`, so a
 configured root can never silently narrow the canonical reconciliation command.

@@ -66,7 +66,7 @@ test reference, not a production call.
 | `CleanOutcome::as_str` | `-> &'static str` `:66` | `"previewed"`/`"simulated"`/`"cleaned"`/`"skipped"`/`"failed"`. Comment `:64-65`: the JSON contract must not depend on `Debug`. |
 | `CleanResult` | `struct` `:78` | One row per workspace CleanupUnit: `display_path`, `workspace_roots`, `output_roots` (the dedup covering union one invocation can affect), `ownership`, `outcome`, `policy_disposition`, `reason_code`, `before_bytes`, `after_bytes`, `observed_decrease`, `detail`. |
 | `CleanReport` | `struct` `:177` | Run-level result; field table in §8. |
-| `CleanReport::render` | `-> String` `:224` | Human projection. Returns early with only the block reason when `scope_blocked` is set (`:237-240`). |
+| `CleanReport::render` | `-> String` `:310` | Human projection: merged summary plus per-scope sections when `scopes` is non-empty (`:310-338`), else the legacy single body (`render_into`, `:340`). The block message renders as its own line (`:352-356`). |
 | `CleanupReasonCode` | 19-variant `enum` `:96` | The machine-facing reason vocabulary, tabled below. |
 | `CleanupReasonCode::as_str` | `-> &'static str` `:140` | Stable snake_case, consumed at `output.rs:173`. |
 | `ProofFailure` | `struct { code, detail }` `:122` | A failed final proof. |
@@ -117,10 +117,10 @@ variants, omitting `SelectorEstimateUnavailable` (emitted as
 | `SystemCleanupRunner` | `pub struct SystemCleanupRunner;` `:387` | Real impl; also `impl CargoRunner` `:389` so one value serves resolution too. |
 | `WorkspaceCleanupAdapter` | private `:1332` | Adapts `&dyn CleanupRunner` to `&dyn CargoRunner`. |
 | `ProofRefreshMeter` | private `:1484` | Measures concurrent `cargo metadata` activity. |
-| `ExecutionProof` | `struct` `:1366` | Frozen pre-spawn state of one unit; 14 fields, §6. |
-| `ProofUniverse` | private `:1564` | One hoisted re-resolution of the complete universe. |
-| `final_cleanup_proof` | `pub fn (unit, universe, clean_root, allowed_output_roots, runner, recency_seconds, counters) -> Result<ExecutionProof, ProofFailure>` `:1767` | Single-root wrapper, `refresh_candidate=false`. **No production caller** — §7. |
-| `execute_pre_spawn_decision` | `pub fn (unit, universe, clean_root, allowed_output_roots, runner, recency_seconds) -> Result<ExecutionProof, ProofFailure>` `:2108` | Same gate set with throwaway counters. **No caller at all** — §7. |
+| `ExecutionProof` | `struct` `:2106` | Frozen pre-spawn state of one unit; 14 fields, §6. |
+| `ProofUniverse` | private `:2428` | One hoisted re-resolution of the complete universe. |
+| `final_cleanup_proof` | `pub fn (unit, universe, clean_root, allowed_output_roots, runner, recency_seconds, counters) -> Result<ExecutionProof, ProofFailure>` `:2649` | Single-root wrapper, `refresh_candidate=false`. **No production caller** — §7. |
+| `execute_pre_spawn_decision` | `pub fn (unit, universe, clean_root, allowed_output_roots, runner, recency_seconds) -> Result<ExecutionProof, ProofFailure>` `:3102` | Same gate set with throwaway counters. **No caller at all** — §7. |
 | `is_authorized` | `pub fn (group: &workspace::RawGroup, clean_root: &Path, allowed_roots: &[PathBuf]) -> Result<bool, String>` `:453` | Wrapper. **Test-only callers** (`:2836-3080`). |
 | `covering_is_authorized` | `pub fn (ownership, covering: &[PathBuf], clean_root: &Path, allowed_roots: &[PathBuf]) -> Result<bool, String>` `:470` | Single-root wrapper. **Test-only** (`workspace.rs:2327`). |
 | `covering_is_authorized_roots` | `pub fn (ownership, covering, clean_roots: &[PathBuf], allowed_roots) -> Result<bool, String>` `:484` | The real gate. Production caller `:628`. |
@@ -134,12 +134,17 @@ single-root wrappers are test/consumer surface and carry no production weight.
 **Entry-point delegation chain.**
 
 ```text
-clean_with_roots_policy_selector   :788   ← run_engine_guarded (main.rs:365) calls the guarded form
-  └─ clean_with_roots_policy_selector_guarded :829   (premise = None for the unguarded path)
-  └─ clean_with_roots_policy       :766   (selector = None)
-       └─ clean_with_roots         :746   (policy = CleanupPolicy::default())
-            └─ clean_with          :727   (roots = [root])
-                 └─ clean          :710   (SystemCleanupRunner + NoopObserver)
+clean_with_roots_policy_selector   :915   ← run_engine_guarded (main.rs:493) calls the guarded form
+  └─ clean_with_roots_policy_selector_guarded :956   (premise = None for the unguarded path)
+  └─ clean_with_roots_policy       :893   (selector = None)
+       └─ clean_with_roots         :873   (policy = CleanupPolicy::default())
+            └─ clean_with          :854   (roots = [root])
+                 └─ clean          :837   (SystemCleanupRunner + NoopObserver)
+
+clean_with_declared_scopes         :1660  ← run_cleanup declared-scope dispatch (main.rs:443),
+                                           one CleanReport with per-scope breakdowns (C035, §3a)
+  └─ run_cleanup_units             :1062  shared unit-loop tail: report shell, blocks,
+                                           policy gates, hoisted proof, spawn, assembly
 ```
 
 Each layer supplies only the defaults its caller omitted. `clean` is the only
@@ -149,7 +154,31 @@ tests — `main.rs` goes through `run_engine_guarded` and supplies
 `SystemCleanupRunner` itself. The unguarded `clean_with_roots_policy_selector`
 delegates with `premise = None` and exists so the public root contract stays
 strict: every selected root is still validated, whatever the caller proved
-beforehand.
+beforehand. `run_cleanup_units` is the shared tail both the legacy engine and
+the declared-scope driver call: the legacy path passes the same slice as
+index-valid workspaces and proof universe; the scoped path passes the combined
+slice for indexing and the in-scope slice for proof
+(`final_cleanup_proof_roots` looks the candidate up by workspace identity,
+while the package-selector check indexes `unit.workspace_idx`).
+
+### 2a. Declared scopes (C035)
+
+`clean_with_declared_scopes` (`:1660-1883`) proves each operator-declared
+scope separately while grouping once, combined, over every resolved
+workspace (`workspace::build_groups` on the union): a physical output claimed
+from two scopes is `Shared` in both, never `PrivateBounded` in either.
+Discovery and resolution also run once over the union; unresolved participants
+and discovery diagnostics attribute per scope by path
+(`scope_index_for_path`, `:1630`), instead of blocking the combined run —
+out-of-scope unresolved is outside the boundary, exactly as an explicit
+`clean ROOT` never sees it. Each clean scope then runs `run_cleanup_units`
+with the in-scope universe; per-scope blocks carry a `scope <root>:` prefix
+while reason codes are untouched. Reports merge in `merge_scope_outcome`
+(`:1885`): saturating sums, concatenated unresolved participants, and the
+first block in deterministic scope order. Anything unattributable falls back
+to the legacy combined run with a stderr note — the failure mode is today's
+behavior, never a silent partial clean. The per-scope `CleanReport`s nest
+under `CleanReport.scopes` (`:275`) as `ScopeOutcome { scope_root, report }`.
 
 ---
 
@@ -443,7 +472,7 @@ struct ProofUniverse { fresh: Option<Vec<ResolvedWorkspace>>, failure: Option<St
 
 `get()` (`:1588-1594`) returns the fresh set or the reason; the `(None, None)`
 arm is a defensive "ownership could not be re-proven: no refreshed universe".
-Hoisting happens at `:976-978` via `get_or_insert_with`, so it is **lazy**: a run
+Hoisting happens at `:1319-1321` via `get_or_insert_with`, so it is **lazy**: a run
 where every unit is skipped by policy still spawns nothing. That is the mechanism
 behind the zero-spawn property, not an accident of ordering.
 
@@ -542,7 +571,7 @@ The doc comment `:1741-1765` enumerates twelve gates. Execution order in
 12. `:2073-2100` — assemble the provisional proof, compute `frozen_env`, attach.
 
 **Why the work is repeated rather than reusing the scan's result: TOCTOU.** The
-initial analysis (`resolve_cleanup_scope:1281-1330`) ran at `scan_start`; the
+initial analysis (`resolve_cleanup_scope:2021-2070`) ran at `scan_start`; the
 proof runs immediately before the spawn. In between a workspace can be
 re-pointed, gain a member, have its target redirected, gain a second owner, or be
 touched. The comment `:1058-1060` is the honest statement of the residual risk:
@@ -733,7 +762,7 @@ this call."
 | `failed` | `:1072`, `:1091` | Cargo spawn/exit failures. Drives exit code 1. |
 | `mode` | `:798`, `:829` | The run's `CleanMode`. |
 | `counters` | `:808`, `:851`, `:1171` | `ScanCounters` including all `proof_*` fields. |
-| `scope_blocked` | `:804`, `:841` | `Some` only for scan-time incompleteness. Renders alone and returns early (`:237-240`). |
+| `scope_blocked` | `:1119-1129`, `:1132-1148` | `Some` only for scan-time incompleteness (discovery diagnostics, then unresolved ownership). Renders as its own line after the scope summary (`:352-356`). |
 | `unresolved_ownership` | `:849` | `UnresolvedOwnershipParticipant` list, for audit. |
 | `selected_roots` | `:799`, `:830` | The collapsed root set actually cleaned. |
 | `discovered_manifests` / `resolved_workspaces` / `units_considered` | `:800`/`:832`/`:833` | Counts for the combined scope header. |
@@ -794,7 +823,7 @@ incomplete: N discovery diagnostic(s); no cleanup commands were run") and
 unresolved manifests `:839-853` ("cleanup ownership could not be proven: N
 discovered Cargo manifest(s) did not resolve; no cleanup commands were run", with
 the full participant list retained at `:849`). Neither proceeds partially:
-`resolve_cleanup_scope` returns `units: Vec::new()` when unresolved is non-empty
+`resolve_cleanup_scope` returns `units: Vec::new()` when unresolved is non-empty (`:2042-2048`)
 (`:1302-1308`), so no unit even exists. Pinned by
 `unresolved_discovered_manifest_blocks_every_cleanup_mode_before_clean` (`:2702`,
 all three modes) and `unresolved_cargo_manifest_blocks_entire_cleanup_scope`
@@ -802,7 +831,7 @@ all three modes) and `unresolved_cargo_manifest_blocks_entire_cleanup_scope`
 
 **(b) Incomplete at proof time → the transaction does *not* abort; every
 candidate is skipped instead, and the run exits 0.** The hoisted universe is
-built once (`:976-978`) and shared, so a `ProofUniverse.failure` makes
+built once (`:1319-1321`) and shared, so a `ProofUniverse.failure` makes
 `hoisted.get()?` (`:1813`) return `Err` for *every* candidate. The result is a
 report where every row is `Skipped` with `SkippedOwnershipUnproven` or
 `SkippedChangedBeforeCleanup` — but `report.scope_blocked` stays `None` and
@@ -956,7 +985,7 @@ once (`equal_and_nested_target_build_are_one_unit_and_one_invocation` `:5306`).
 
 `main.rs:347-351` returns `1` if `report.failed > 0 || report.scope_blocked.is_some()`.
 `report.failed` is incremented only at `:1072` (spawn error) and `:1091` (non-zero
-exit). `scope_blocked` is set only at `:804` and `:841` — the two scan-time
+exit). `scope_blocked` is set only at `:1119-1129` and `:1132-1148` — the two scan-time
 incompleteness sites.
 
 **Is `scope_blocked` the right signal for "partial failure"? Partly.** It is
@@ -1128,7 +1157,7 @@ failed. Does that risk exist here? **Partly, in a narrower form.**
    Three reason codes and one disposition are currently missing from their tests.
 6. **The universe is shared, so a `ProofUniverse` failure is a run-wide skip, not
    a unit failure.** Touching `hoisted.get()?` (`:1813`) or the
-   `get_or_insert_with` at `:976-978` flips §9's answer from per-unit to
+   `get_or_insert_with` at `:1319-1321` flips §9's answer from per-unit to
    whole-run. Consider whether `scope_blocked` should be set there.
 7. **`refresh_candidate` is the difference between production and the public
    wrappers.** `:988` passes `true`; `:1790` and `:1804` pass `false`. A refactor

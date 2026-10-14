@@ -193,18 +193,40 @@ case "$1" in
       printf 'error: failed searching for potential workspace\nCaused by: fixture lookup failure\n' >&2
       exit 101
     fi
+    # Answer from the queried manifest so multi-project fixtures resolve each
+    # workspace from its own manifest, with `CARGO_TARGET_DIR` honored the way
+    # real Cargo honors it. A query without `--manifest-path` keeps the
+    # single-project FIXTURE_ROOT answer byte-for-byte, and a query for the
+    # FIXTURE_ROOT manifest itself keeps reporting FIXTURE_TARGET, so every
+    # existing single-project caller observes exactly the old behavior.
+    manifest=""
+    prev=""
+    for arg in "$@"; do
+      if [ "$prev" = "--manifest-path" ]; then manifest="$arg"; fi
+      prev="$arg"
+    done
+    if [ -z "$manifest" ]; then
+      manifest="$FIXTURE_ROOT/Cargo.toml"
+    fi
     # Real Cargo refuses a manifest it cannot parse. Without this check the
     # stub would answer every query, and a fixture built on an unresolvable
     # manifest would look like a clean one -- the "stub that is not the tool
     # the subject resolves" defect in a new costume.
-    case "$(head -c 9 "$FIXTURE_ROOT/Cargo.toml" 2>/dev/null)" in
+    case "$(head -c 9 "$manifest" 2>/dev/null)" in
       '[package]') ;;
-      *) printf 'error: failed to parse manifest at `%s/Cargo.toml`\n' "$FIXTURE_ROOT" >&2; exit 101 ;;
+      *) printf 'error: failed to parse manifest at `%s`\n' "$manifest" >&2; exit 101 ;;
     esac
-    if [ "$1" = locate-project ]; then
-      printf '{"root":"%s/Cargo.toml"}\n' "$FIXTURE_ROOT"
+    if [ "$manifest" = "$FIXTURE_ROOT/Cargo.toml" ]; then
+      root="$FIXTURE_ROOT"
+      target="$FIXTURE_TARGET"
     else
-      printf '{"packages":[{"id":"fixture 0.1.0","name":"fixture","version":"0.1.0","manifest_path":"%s/Cargo.toml"}],"workspace_members":["fixture 0.1.0"],"workspace_root":"%s","target_directory":"%s"}\n' "$FIXTURE_ROOT" "$FIXTURE_ROOT" "$FIXTURE_TARGET"
+      root=$(dirname "$manifest")
+      if [ -n "$CARGO_TARGET_DIR" ]; then target="$CARGO_TARGET_DIR"; else target="$root/target"; fi
+    fi
+    if [ "$1" = locate-project ]; then
+      printf '{"root":"%s/Cargo.toml"}\n' "$root"
+    else
+      printf '{"packages":[{"id":"fixture 0.1.0","name":"fixture","version":"0.1.0","manifest_path":"%s/Cargo.toml"}],"workspace_members":["fixture 0.1.0"],"workspace_root":"%s","target_directory":"%s"}\n' "$root" "$root" "$target"
     fi
     ;;
   clean)

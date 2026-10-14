@@ -117,7 +117,7 @@ separate struct with four named fields, constructed by a struct literal
 (`output.rs:145-154`). There is no `#[serde(flatten)]`, no `#[serde(untagged)]`,
 no `..Default::default()` widening, no pass-through map. Adding a field to
 `domain::ScanReport` is invisible to the wire format unless someone also writes a
-line in `output.rs`. Same for `CleanReport` → `CleanupV1` (`output.rs:211-239`).
+line in `output.rs`.     Same for `CleanReport` → `CleanupV1` (`output.rs:180-279`).
 
 The one place the discipline is *not* structurally enforced is `CleanupSummaryV1`
 (`output.rs:190-193`), which uses `..Default::default()` to fill the five outcome
@@ -381,7 +381,7 @@ match on.
 | `inventory_bytes` | `u64` | Saturating sum of group bytes; **observed, not recovered** |
 | `diagnostic_count` | `usize` | `diagnostics.len()` |
 
-### `CleanupV1` — `output.rs:48-64`
+### `CleanupV1` — `output.rs:49-69`
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -399,15 +399,16 @@ match on.
 | `state_generation_last_full_at` | `Option<u64>` | Discovery-state generation; metadata only |
 | `units` | `Vec<CleanupUnitV1>` | Per-CleanupUnit results |
 | `summary` | `CleanupSummaryV1` | Outcome tallies |
+| `scopes` | `Vec<CleanupScopeV1>` | Per-scope breakdown, C035 only; **absent** (not empty) on legacy paths via `skip_serializing_if` (`output.rs:68`) |
 
 `scope_blocked: false` with `scope_reason: null` is the normal state. `true`
 implies a non-null `scope_reason`, since both read the same `Option<ScopeBlock>`
-(`output.rs:215-216`). **M012A changed the domain type this splits.** `CleanReport.scope_blocked`
-is now `Option<ScopeBlock>` (`cleanup.rs:235`), a struct of
-`{ reason: ScopeBlockReason, message: String }` (`cleanup.rs:211-220`) — no
-longer `Option<String>`. The DTO is unchanged: `output.rs:216` still projects
+(`output.rs:226-227`). **M012A changed the domain type this splits.** `CleanReport.scope_blocked`
+is now `Option<ScopeBlock>` (`cleanup.rs:245`), a struct of
+`{ reason: ScopeBlockReason, message: String }` (`cleanup.rs:207-231`) — no
+longer `Option<String>`. The DTO is unchanged: `output.rs:227` still projects
 `b.message.clone()`, the human prose. **The typed `reason` is dropped from JSON
-entirely.** `output::log::cleanup` does read it (`output.rs:351-353`), which is
+entirely.** `output::log::cleanup` does read it (`output.rs:405`), which is
 where a consumer of a retained history line gets `reason=ownership_unproven` or
 `reason=incomplete_discovery`; a JSON consumer must parse prose to recover the
 same information. That asymmetry is worth naming: the machine contract is the
@@ -417,12 +418,12 @@ same information. That asymmetry is worth naming: the machine contract is the
 were omitted from the `CleanReport` construction at `main.rs:196-210`; live paths
 always set it (`cleanup.rs:900`).
 
-### `UnresolvedParticipantV1` — `output.rs:65-70`
+### `UnresolvedParticipantV1` — `output.rs:88-93`
 
 | Field | Type | Meaning |
 |---|---|---|
 | `manifest` | `String` | The manifest that failed to resolve |
-| `stage` | `&'static str` | Resolution stage, passed through unvalidated (`output.rs:223`) |
+| `stage` | `&'static str` | Resolution stage, passed through unvalidated (`output.rs:234`) |
 | `reason` | `String` | Prose diagnostic reason |
 
 `stage` is a bare `&'static str` with no type-level enumeration in `output.rs` or
@@ -577,8 +578,8 @@ was hoisted into the domain type.
 
 **The `scope_blocked` split is a real semantic change.** The domain carries a typed
 `ScopeBlock`; the contract carries a `bool` and a nullable *prose* string. The
-`bool` is `is_some()` (`output.rs:215`) and the string is a clone of the same
-block's `message` (`output.rs:216`), so they cannot disagree — but the boolean is
+`bool` is `is_some()` (`output.rs:226`) and the string is a clone of the same
+block's `message` (`output.rs:227`), so they cannot disagree — but the boolean is
 *derived state*, and the enum half of the domain value is discarded. Before M012A
 the domain value was itself a bare `Option<String>`, so nothing was lost at the
 boundary; now the projection is lossy in a way the DTO cannot express.
@@ -661,7 +662,7 @@ output-union measurement is known in both modes (matching the human
 | `CleanReport.counters` | `cleanup.rs:233` | Same as `ScanReport.counters`; cleanup `--stats` is stderr (`main.rs:241-254`) |
 | `CleanReport.failed` | `cleanup.rs:231` | Recomputed from results (`output.rs:194-203`); the domain field remains an exit-code input |
 | `CleanResult.workspace_roots` | `cleanup.rs:86` | Redundant with `workspace_root` + `output_roots` |
-| `ScopeBlock.reason` | `cleanup.rs:235` | Typed block code; JSON carries only `.message`. Read by log mode (`output.rs:352`) |
+| `ScopeBlock.reason` | `cleanup.rs:228` | Typed block code; JSON carries only `.message`. Read by log mode (`output.rs:438`) |
 | `PathBuf` types generally | — | Contract is `String`; identity is deliberately not re-derivable |
 
 All are either `--stats` stderr material or measurement internals. The schema
@@ -1099,9 +1100,9 @@ and prints the raw integer. (The `f64` conversions that do exist —
    count (`main.rs:678-701`); log mode shows neither and carries
    `diagnostics=N` only (`output.rs:309`, `output.rs:363-366`).
 5. **Scope-block identity** — human prints the block's prose message
-   (`cleanup.rs:288-291`), JSON carries that prose in `scope_reason`, and log
+   (`cleanup.rs:340-357`), JSON carries that prose in `scope_reason`, and log
    mode carries the typed code `reason=<code>` and no prose
-   (`output.rs:351-353`). Three surfaces, three different levels of
+   (`output.rs:405-438`). Three surfaces, three different levels of
    machine-readability for the same event.
 
 `end_to_end.rs:193-210` is the one place the project actively checks the two
@@ -1294,9 +1295,9 @@ a real document.
 11. **Keep byte formatting float-free, `report.rs:29-32`** — any change
     introducing `n as f64` silently breaks `report.rs:152`
     (`u64::MAX → 16.00 EiB`), the only guard at the `2^53` boundary.
-12. **`ScopeBlock.reason` is lost in JSON, `cleanup.rs:235` vs `output.rs:216`**
+12. **`ScopeBlock.reason` is lost in JSON, `cleanup.rs:228` vs `output.rs:227`**
     — the domain gained a typed block code in M012A and the envelope still
-    projects only `.message`. Log mode reads it (`output.rs:352`) and JSON does
+    projects only `.message`. Log mode reads it (`output.rs:438`) and JSON does
     not, so the versioned contract is the less machine-readable of the two. Adding
     a `scope_reason_code: Option<&'static str>` is a schema-version decision, not a
     patch.

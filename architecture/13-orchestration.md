@@ -26,8 +26,10 @@ Full reconciliation and exit status.
 
 **It declares two types.** `RunOptions` (`:60-66`) is the process-wide triple
 `no_progress` / `stats` / `format`, built once in `run` (`:69-73`) and passed to
-both report-producing operations. `ResolvedCleanup` (`:144-150`) carries the
-resolved roots, the machine scope label, and the discovery-state generation.
+both report-producing operations. `ResolvedCleanup` (`:301-316`) carries the
+resolved roots, the machine scope label, the discovery-state generation, and —
+since C035 — the operator-declared scopes (`declared_scopes`, empty on every
+legacy path).
 Both exist to make the "one resolved intent per invocation" property structural:
 because `Cli::invocation` collapses every cleanup spelling into one
 `CleanupRequest` (`src/cli.rs:291-302`), there is exactly one place where mode,
@@ -59,15 +61,15 @@ list of what it depends on. Modules reached: `cli`, `config`, `error`, `domain`,
 | `run` | `67-85` | config path, `RunOptions`, four-arm dispatch |
 | `run_update` | `87-122` | plan, JSON / dry-run four-liner / one-line success |
 | `run_config` | `:124` | `path`, `show`, `edit` + three post-edit checks |
-| `run_cleanup` | `:210` | the cleanup pipeline (§5) |
-| `run_engine_guarded` | `:365` | admission→validation race defence (C028, §5) |
-| `resolve_cleanup_roots` | `:457` | scope → admitted roots + label + generation (§5) |
-| `admit_automatic` | `:598` | provenance admission before collapse (C028, §5) |
-| `emit_cleanup` | `:639` | three-branch format dispatch for a cleanup report |
-| `collapse_roots` | `:674` | canonicalize, sort, dedupe, nest-collapse (§6) |
-| `scope_label` | `:698` | `ScanScope` → JSON `scope` string |
-| `run_scan` | `:733` | the scan pipeline (§4, §7) |
-| `ScanOutcome` | `:727` | exit code plus the proven Full generation (C028, §7) |
+| `run_cleanup` | `:318` | the cleanup pipeline (§5) |
+| `run_engine_guarded` | `:493` | admission→validation race defence (C028, §5) |
+| `resolve_cleanup_roots` | `:588` | scope → admitted roots + label + generation (§5) |
+| `admit_automatic` | `:762` | provenance admission before collapse (C028, §5) |
+| `emit_cleanup` | `:807` | three-branch format dispatch for a cleanup report |
+| `collapse_roots` | `:845` | canonicalize, sort, dedupe, nest-collapse (§6) |
+| `scope_label` | `:869` | `ScanScope` → JSON `scope` string |
+| `run_scan` | `:904` | the scan pipeline (§4, §7) |
+| `ScanOutcome` | `:898` | exit code plus the proven Full generation (C028, §7) |
 
 The two log helpers are new in M012B and exist only to serve `main`'s fatal path;
 they are the reason `main` parses argv itself instead of leaving it inside `run`
@@ -111,16 +113,16 @@ incomplete).
 
 | Code | Meaning | Produced by |
 |---:|---|---|
-| 0 | Success | `:1043-1046`; Update `:87-122`; Config `:124`; empty-roots cleanup `:303`; cleanup `:347-351` when `failed == 0 && scope_blocked.is_none()` |
-| 1 | Ran, partially failed | editor's own code `:166`; automatic-scope block `:275`; cleanup `:347-351`; scan `:1036-1046` |
+| 0 | Success | `:1043-1046`; Update `:87-122`; Config `:124`; empty-roots cleanup `:415`; cleanup `:475-480` when `failed == 0 && scope_blocked.is_none()` |
+| 1 | Ran, partially failed | editor's own code `:166`; automatic-scope block `:362-384`; cleanup `:475-480`; scan `:1036-1046` |
 | 2 | Could not run | any `AppError` via `main` `:33`; clap usage errors (clap's own path) |
 | 0 (clap) | `--help` / `--version` | clap, not this file |
 
 | Command | Codes | Decided at |
 |---|---|---|
 | bare `cargo-cleanme` / `scan [ROOT]` / `scan --known` | 0, 1, 2 | `:1036-1046` |
-| `clean ROOT …` / `clean` / `clean --known` | 0, 1, 2 | `:347-351` |
-| `clean --full …` | 0, **2**, 1, 2 | `:481-518` then `:347-351` |
+| `clean ROOT …` / `clean` / `clean --known` | 0, 1, 2 | `:475-480` |
+| `clean --full …` | 0, **2**, 1, 2 | `:615-640` then `:475-480` |
 | `config path` / `show` | 0, 2 | `:124` |
 | `config edit` | 0, 1, 2 | `:251-289` |
 | `update [--dry-run]` | 0, 2 | `:87-122` |
@@ -399,7 +401,7 @@ operation, not an error. `--dryrun` and `--yes` survive as hidden aliases
 (`src/cli.rs:113-119`) that map onto `Simulate` and the (now default) `Execute`
 respectively.
 
-**Root selection** is `resolve_cleanup_roots` (`:457-597`), matching on
+**Root selection** is `resolve_cleanup_roots` (`:588-760`), matching on
 `CleanupScope` — three arms, and *no error arm*, because M012A deleted the
 `"clean requires ROOT, --known, or --full"` case. Since C028 every arm
 classifies before collapsing, and automatic arms remember omissions and
@@ -407,9 +409,9 @@ convert uncertainty into a block rather than a fatal error:
 
 | Scope | Behaviour | Label |
 |---|---|---|
-| `Root(p)` (`:464-480`) | `cli::absolutize_root(p)` classified `Explicit`; any defect is fatal | `"explicit"` |
-| `Full` (`:481-518`) | run a Full scan, then consume the in-memory generation via `policy::full_cleanup_roots` — never a disk reload | `"full"` |
-| `Maintenance` (`:519-597`) | configured `scan.root` takes the strict explicit path; otherwise raw Routine candidates (`policy::routine_cleanup_candidates`) classified `Automatic` | `"routine"` or `"explicit"` |
+| `Root(p)` (`:595-614`) | `cli::absolutize_root(p)` classified `Explicit`; any defect is fatal | `"explicit"` |
+| `Full` (`:615-640`) | run a Full scan, then consume the in-memory generation via `policy::full_cleanup_roots` — never a disk reload | `"full"` |
+| `Maintenance` (`:641-760`) | declared `[maintenance] scopes` partition first (C035, `:646-670`); else a configured `scan.root` takes the strict explicit path; otherwise raw Routine candidates (`policy::routine_cleanup_candidates`) classified `Automatic` | `"routine"` or `"explicit"` |
 
 Two details in the `Maintenance` arm are worth more than their line count.
 First, it does **not** keep only `ScanScope::Routine(roots)` and discard the rest
@@ -421,34 +423,38 @@ configured root produced a bare maintenance run that reported a successful
 Explicit no-op it never performed; treating `Global` as "nothing to do" would fail
 open on a scope that covers the whole machine. Both are the right call.
 
-Second, **classification precedes collapse** (`admit_automatic`, `:598-637`):
-admitted paths only are collapsed (`:674`), omissions are remembered for the
+Second, **classification precedes collapse** (`admit_automatic`, `:762-801`):
+admitted paths only are collapsed (`:845`), omissions are remembered for the
 late pre-spawn recheck, and symlink/unreadable automatic roots become a
 whole-scope `ScopeBlock` carried on `ResolvedCleanup.blocked`
-(`main.rs:199-209`). A stale learned path therefore can no longer reach the
-engine's strict validation and abort the run — the C028 defect.
+(`:362-384`, `Ok(1)` with no traversal and no Cargo process). A stale learned
+path therefore can no longer reach the engine's strict validation and abort
+the run — the C028 defect.
 
-**Admission→validation race** (`run_engine_guarded`, `:365-455`): a fatal
+**Admission→validation race** (`run_engine_guarded`, `:493-586`): a fatal
 `InvalidRoot` over an automatic scope triggers one fresh reclassification; only
 a now-proven-omittable offender rebuilds the universe from scratch, anything
 else becomes a typed block. Explicit scopes propagate the fatal error
-unchanged.
+unchanged. Declared scopes (C035) bypass this defence: with no automatic
+roots there is nothing to reclassify, so the dispatch (`:425-453`) calls
+`clean_with_declared_scopes` directly and an engine-level `InvalidRoot`
+stays fatal, exactly like an explicit root.
 
 **Omission diagnostics** are printed to stderr for every format except log
-(`:247-253`): policy groups them by typed omission reason and includes a count
+(`:357-361`): policy groups them by typed omission reason and includes a count
 plus at most three sanitized example paths (`policy.rs:135-169`); log mode carries
 only the count in its one line. The full omission list remains available to the
 late pre-spawn premise recheck. Summarization does not mutate learned state, so a
 stale hint may be reconsidered on a later Routine invocation. A blocked
-automatic scope reports without traversing anything (`:255-281`, `Ok(1)`); an
+automatic scope reports without traversing anything (`:362-384`, `Ok(1)`); an
 empty admitted set is the successful no-op
-(`:276-303`, `Ok(0)`).
+(`:386-414`, `Ok(0)`).
 
-**Policy** (`:220-236`): `min_reclaimable_bytes` and `min_inactive_seconds`
+**Policy** (`:326-343`): `min_reclaimable_bytes` and `min_inactive_seconds`
 override cleanly (`Option`-on-scalar, so "unset" is distinguishable from "set
 to 0"). `include`/`exclude` are different — `Vec<String>`, and clap cannot
 distinguish "no `--include`" from "zero values", so **an empty CLI list falls
-back to the configured list** (`:227-236`). Consequence: **`--include`/`--exclude`
+back to the configured list** (`:334-343`). Consequence: **`--include`/`--exclude`
 cannot clear a configured list.** A user with `[cleanup.policy] exclude = ["**/target"]`
 who wants a one-off unfiltered run has no flag for it. Defensible — the empty
 list almost always means "I did not mention it", and treating it as "clear"
@@ -456,7 +462,7 @@ would be worse in the common case — but undocumented in `--help` and silently
 surprising when it bites. A `clear-include` flag pair would fix it without
 changing the default. Deliberate choice, not a defect.
 
-**Selector** (`:236-247`): `profile.map(…).or_else(|| package.map(…))` looks
+**Selector** (`:344-356`): `profile.map(…).or_else(|| package.map(…))` looks
 like silent-precedence, but **it is unreachable**. clap already enforces mutual
 exclusion: `src/cli.rs:100` gives `profile` `conflicts_with = "package"` and
 `:103` gives `package` `conflicts_with = "profile"`; `src/cli.rs:511-513` asserts
@@ -464,29 +470,31 @@ the combined forms are `Err`. The `.or_else` is defensive dead code, and a user
 supplying both gets a clap usage error and exit 2 — correct, by a different
 mechanism than the expression suggests.
 
-**Empty-roots short circuit** (`:276-303`). If the admitted set is empty and no
-block was raised, the pipeline stops before any Cargo invocation. The `CleanReport` literal
-(`:259-273`) names **every field explicitly** — M012A removed the
+**Empty-roots short circuit** (`:386-414`). If the admitted set is empty and no
+block was raised, the pipeline stops before any Cargo invocation. The `CleanReport` literals
+(`:367-381`, `:393-407`) name **every field explicitly** — M012A removed the
 `..Default::default()` spread, so a new `CleanReport` field is now a compile error
 here rather than a silent default. That is a real robustness gain and it is why
 the aggregate is still readable: `results`, `diagnostics`, `failed`, `mode`,
 `counters`, `scope_blocked`, `unresolved_ownership`, `selected_roots`,
 `discovered_manifests`, `resolved_workspaces`, `units_considered`,
-`effective_policy`, `selector`. Note `selected_roots: Vec::new()` even
+`effective_policy`, `selector`, `scopes`. Note `selected_roots: Vec::new()` even
 though `resolved.roots` is empty by construction — consistent, not contradictory.
 
 `emit_cleanup` is called with a fixed `empty_note` and **`Ok(0)` at
-`:303`** — "nothing to do" is success.
+`:415`** — "nothing to do" is success.
 
-**Reporting** (`:305-332`): `show` requires `format == Human` **and** a capable
-terminal (`:305-306`) — so progress is disabled for both JSON *and* log mode, which
-is what log mode wants; `wall_start` at `:308`; the engine call is `:316-324`;
-`renderer.finish_and_clear()` at `:325` clears transient UI **before** the report,
+**Reporting** (`:417-480`): `show` requires `format == Human` **and** a capable
+terminal (`:417-418`) — so progress is disabled for both JSON *and* log mode, which
+is what log mode wants; `wall_start` at `:420`; the engine call is `:425-453`
+(the legacy `run_engine_guarded` path or, when `declared_scopes` is non-empty,
+`clean_with_declared_scopes`, `src/cleanup.rs:1660`);
+`renderer.finish_and_clear()` at `:454` clears transient UI **before** the report,
 matching the scan ordering. It runs on the **failure** path too: the result is
 bound to `cleanup` and `finish_and_clear()` is called before the `?`
-(`:325-326`), because `BarState::drop` *finishes* a bar rather than clearing it,
+(`:454`), because `BarState::drop` *finishes* a bar rather than clearing it,
 and a `?` that returned first left a retained bar line above the
-`cargo-cleanme: …` message. The state-generation `println!` (`:327-331`) is also
+`cargo-cleanme: …` message. The state-generation `println!` (`:455-459`) is also
 Human-only, so it cannot corrupt JSON *or* a log line.
 
 **Exit code** (`:347-351`): `1` if `report.failed > 0 || report.scope_blocked.is_some()`.

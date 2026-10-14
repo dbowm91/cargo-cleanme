@@ -61,6 +61,28 @@ pub struct CleanupV1 {
     pub state_generation_last_full_at: Option<u64>,
     pub units: Vec<CleanupUnitV1>,
     pub summary: CleanupSummaryV1,
+    /// Per-scope breakdown for operator-declared maintenance scopes (C035).
+    /// Absent (not empty) on every legacy path, so undeclared JSON output is
+    /// byte-identical to previous releases: additive-only schema change.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub scopes: Vec<CleanupScopeV1>,
+}
+/// One declared scope's outcome within a multi-scope cleanup document.
+///
+/// Counts and the block state of that scope alone; the top-level `units`
+/// list stays the full merged unit set so the human surface still matches
+/// the JSON `units` list one-to-one.
+#[derive(Serialize)]
+pub struct CleanupScopeV1 {
+    pub scope_root: String,
+    pub discovered_manifests: usize,
+    pub resolved_workspaces: usize,
+    pub units_considered: usize,
+    pub scope_blocked: bool,
+    pub scope_reason: Option<String>,
+    pub unresolved_ownership: usize,
+    pub unresolved_participants: Vec<UnresolvedParticipantV1>,
+    pub summary: CleanupSummaryV1,
 }
 #[derive(Serialize)]
 pub struct UnresolvedParticipantV1 {
@@ -160,7 +182,6 @@ pub fn cleanup(
     scope: impl Into<String>,
     state_generation: Option<u64>,
 ) -> EnvelopeV1<CleanupV1> {
-    use crate::cleanup::CleanOutcome;
     let units = report
         .results
         .iter()
@@ -190,20 +211,7 @@ pub fn cleanup(
             detail: r.detail.clone(),
         })
         .collect::<Vec<_>>();
-    let mut summary = CleanupSummaryV1 {
-        diagnostics: report.diagnostics,
-        ..Default::default()
-    };
-    for result in &report.results {
-        let slot = match result.outcome {
-            CleanOutcome::Previewed => &mut summary.previewed,
-            CleanOutcome::Simulated => &mut summary.simulated,
-            CleanOutcome::Cleaned => &mut summary.cleaned,
-            CleanOutcome::Skipped => &mut summary.skipped,
-            CleanOutcome::Failed => &mut summary.failed,
-        };
-        *slot += 1;
-    }
+    let summary = summarize(&report.results, report.diagnostics);
     let mode = report.mode.as_str();
     EnvelopeV1 {
         schema_version: 1,
@@ -239,8 +247,54 @@ pub fn cleanup(
             state_generation_last_full_at: state_generation,
             units,
             summary,
+            scopes: report
+                .scopes
+                .iter()
+                .map(|s| CleanupScopeV1 {
+                    scope_root: path(&s.scope_root),
+                    discovered_manifests: s.report.discovered_manifests,
+                    resolved_workspaces: s.report.resolved_workspaces,
+                    units_considered: s.report.units_considered,
+                    scope_blocked: s.report.scope_blocked.is_some(),
+                    scope_reason: s.report.scope_blocked.as_ref().map(|b| b.message.clone()),
+                    unresolved_ownership: s.report.unresolved_ownership.len(),
+                    unresolved_participants: s
+                        .report
+                        .unresolved_ownership
+                        .iter()
+                        .map(|p| UnresolvedParticipantV1 {
+                            manifest: path(&p.manifest),
+                            stage: p.stage,
+                            reason: p.reason.clone(),
+                        })
+                        .collect(),
+                    summary: summarize(&s.report.results, s.report.diagnostics),
+                })
+                .collect(),
         },
     }
+}
+
+/// Outcome counts over one result list. Shared by the top-level summary and
+/// each declared scope's summary so the two cannot disagree on what an
+/// outcome means.
+fn summarize(results: &[crate::cleanup::CleanResult], diagnostics: usize) -> CleanupSummaryV1 {
+    use crate::cleanup::CleanOutcome;
+    let mut summary = CleanupSummaryV1 {
+        diagnostics,
+        ..Default::default()
+    };
+    for result in results {
+        let slot = match result.outcome {
+            CleanOutcome::Previewed => &mut summary.previewed,
+            CleanOutcome::Simulated => &mut summary.simulated,
+            CleanOutcome::Cleaned => &mut summary.cleaned,
+            CleanOutcome::Skipped => &mut summary.skipped,
+            CleanOutcome::Failed => &mut summary.failed,
+        };
+        *slot += 1;
+    }
+    summary
 }
 
 fn policy_code(code: crate::cleanup::PolicyDisposition) -> String {
@@ -528,6 +582,7 @@ pub mod log {
                 units_considered: 0,
                 effective_policy: None,
                 selector: None,
+                scopes: Vec::new(),
             }
         }
 

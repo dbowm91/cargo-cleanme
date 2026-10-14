@@ -46,3 +46,15 @@ min_reclaimable_bytes = 0
 # min_inactive_seconds = 2592000
 include = []
 exclude = []
+
+# Optional operator-declared independent maintenance scopes (C035).
+# Each entry is an exact absolute directory (not a glob) that becomes its own
+# cleanup proof boundary for bare/`--known` Routine maintenance, with the same
+# complete proof an explicit `clean ROOT` receives: poison inside one scope
+# blocks only that scope. A configured `scan.root` stays the exclusive
+# Explicit override and wins over these with a warning. Entries must exist as
+# real non-symlink directories when cleanup runs; a missing entry is a fatal
+# usage error, never a silent skip. Overlapping entries merge into one scope.
+# Absent or empty preserves previous behavior exactly.
+# [maintenance]
+# scopes = ["/path/to/projects-a", "/path/to/projects-b"]

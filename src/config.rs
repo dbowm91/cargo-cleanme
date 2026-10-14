@@ -17,6 +17,8 @@ pub struct Config {
     pub scan: ScanConfig,
     #[serde(default)]
     pub cleanup: CleanupConfig,
+    #[serde(default)]
+    pub maintenance: MaintenanceConfig,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -25,6 +27,23 @@ pub struct CleanupConfig {
     pub allowed_output_roots: Vec<PathBuf>,
     #[serde(default)]
     pub policy: CleanupPolicyConfig,
+}
+/// Operator-declared independent maintenance scopes (C035 / ADR 004 Route B).
+///
+/// Each entry names an exact absolute directory that becomes its own cleanup
+/// proof boundary for bare/`--known` Routine maintenance: poison inside one
+/// scope blocks only that scope. Entries are NOT globs — a glob boundary
+/// reintroduces the matching ambiguity the ownership proof must not depend
+/// on — and literal paths, mirroring `cleanup.allowed_output_roots` and
+/// `scan.unignore`. Absoluteness is checked at load; existence, directory
+/// type, and non-symlink identity are checked at admission (explicit-root
+/// precedent), so every invocation including `config show` survives an
+/// unmounted scope disk. Missing/empty behaves exactly as v0.2.6.
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct MaintenanceConfig {
+    #[serde(default)]
+    pub scopes: Vec<PathBuf>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -124,6 +143,9 @@ pub fn load(path: &Path) -> Result<Config, AppError> {
     }
     for p in &c.cleanup.allowed_output_roots {
         require_absolute(p, "cleanup.allowed_output_roots")?;
+    }
+    for p in &c.maintenance.scopes {
+        require_absolute(p, "maintenance.scopes")?;
     }
     if let Some(seconds) = c.cleanup.policy.min_inactive_seconds
         && seconds > u64::MAX / 1_000_000_000
@@ -1184,6 +1206,41 @@ mod tests {
             config.cleanup.allowed_output_roots,
             defaults.cleanup.allowed_output_roots
         );
+        assert!(config.maintenance.scopes.is_empty());
+        assert_eq!(config.maintenance.scopes, defaults.maintenance.scopes);
+    }
+    #[test]
+    fn maintenance_scopes_require_absolute_paths() {
+        // C035: a relative scope would resolve against the process CWD, so
+        // the boundary it names would depend on where the tool was invoked.
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("config.toml");
+        fs::write(&p, "[maintenance]\nscopes = [\"relative/scope\"]\n").unwrap();
+        let err = load(&p).unwrap_err().to_string();
+        assert!(err.contains("maintenance.scopes"), "{err}");
+        assert!(err.contains("absolute"), "{err}");
+        // Absolute is checked at load; existence is admission's job, so an
+        // absolute-but-missing scope loads fine here and fails loudly later.
+        let missing = d.path().join("not-created");
+        fs::write(
+            &p,
+            format!("[maintenance]\nscopes = [\"{}\"]\n", missing.display()),
+        )
+        .unwrap();
+        assert_eq!(load(&p).unwrap().maintenance.scopes, vec![missing]);
+    }
+    #[test]
+    fn config_without_maintenance_section_loads_as_undeclared() {
+        // C035 rollback identity: a v0.2.6 config with no `[maintenance]`
+        // section parses to zero declared scopes, so the legacy path runs.
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("config.toml");
+        fs::write(
+            &p,
+            "[scan]\nrecency_seconds = 300\n[cleanup]\nallowed_output_roots = []\n",
+        )
+        .unwrap();
+        assert!(load(&p).unwrap().maintenance.scopes.is_empty());
     }
     #[test]
     fn config_template_matches_repository_file() {

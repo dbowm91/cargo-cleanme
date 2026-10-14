@@ -227,3 +227,33 @@ Any discovered manifest that remains uncovered is an unresolved ownership partic
 Therefore Preview, Simulate, and Execute fail closed for the entire cleanup scope while unresolved ownership participants remain. No cargo clean command, including cargo clean --dry-run, may run in that state.
 
 Read-only scan remains partial-result tolerant; this completeness requirement is specific to destructive ownership qualification.
+
+
+## C035 clarification — operator-declared scopes are independent proof boundaries
+
+Clarification date: 2026-10-14. Owner product decision (Route B); plan
+`plans/implementation/artifact-discovery-cleanup/c035-operator-declared-independent-maintenance-scopes-corrective.md`.
+
+C004/C006 completeness applies *within* each proof boundary, and an
+operator-declared maintenance scope (`[maintenance] scopes`) is a proof
+boundary of its own, with the same standing as an explicit `clean ROOT`.
+The operator's declaration is the independence assertion — the exact finite
+roots, recorded as such — and the tool enforces the complete
+combined-universe proof inside each boundary: frozen roots, rebuilt
+discovery within the boundary, full manifest coverage, hoisted-universe
+refresh, and per-spawn revalidation, identical gates to explicit-root
+cleanup. Authorization still never manufactures proof: the declaration
+narrows *where proof is attempted*, never *what counts as proven*.
+
+What this does not change: automatic independence certificates remain
+rejected (C031-D — filesystem disjointness is not proof, an unresolved
+manifest supplies no authoritative output set, Cargo/env redirection plus
+late appearance defeat static partitions). There is no automatic per-root
+fallback after a combined failure; unresolved manifests are never silently
+dropped; per-scope grouping treats out-of-scope resolved output as an
+external claim, never as absence. An unresolvable manifest's unknown output
+stays an irreducible residual risk, carried by the operator's declaration
+exactly as `allowed_output_roots` carries boundary authorization today.
+
+This clarifies the original decision for operator-declared boundaries; it
+does not authorize new external/shared cleanup behavior.

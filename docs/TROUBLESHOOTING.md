@@ -124,6 +124,18 @@ keep the happy path (`scan`, then bare `cargo cleanme`) intact:
   `workspace.exclude` or giving it an empty `[workspace]` table), then rerun
   `cargo cleanme scan` so the next Full reconciliation observes a resolving
   tree.
+- Or declare independent maintenance scopes in `config.toml`, so the poisoned
+  subtree blocks only its own scope while healthy scopes clean:
+  ```toml
+  [maintenance]
+  scopes = ["/Users/you/projects-a", "/Users/you/projects-b"]
+  ```
+  Each entry is an exact absolute directory (not a glob) and receives the
+  complete ownership proof an explicit `clean ROOT` gets. Overlapping entries
+  merge; a missing, non-directory, or symlinked entry is a fatal usage
+  error, never a silent skip. A configured `scan.root` still overrides
+  declarations with a warning. Deleting the section restores previous
+  behavior exactly.
 - Or set a one-time default scope in `config.toml` (`scan.root`) to the
   subtree you maintain; bare invocations then use that default and never
   consult learned state. Per-invocation `clean ROOT` remains available for
@@ -132,8 +144,10 @@ keep the happy path (`scan`, then bare `cargo cleanme`) intact:
 What the tool will not do is clean the healthy-looking workspaces while
 silently ignoring the unresolved ones: filesystem disjointness between roots
 is not proof that outputs do not overlap (a workspace can redirect
-`target-dir` anywhere through Cargo configuration), so partial-scope cleaning
-needs an explicit safety decision first.
+`target-dir` anywhere through Cargo configuration). Declaring scopes is the
+explicit safety decision that authorizes per-scope cleanup — the declaration
+asserts the scopes are independent, and the tool still proves everything
+provable inside each boundary and stays fail-closed on the rest.
 
 ### If you are on 0.2.0: two things it could do that it should never have done
 

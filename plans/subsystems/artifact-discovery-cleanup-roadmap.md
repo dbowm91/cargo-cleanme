@@ -1005,3 +1005,29 @@ Planning baseline: `7c874ab7998bdac28a6236ec21ae59ec24b915f8` (`main`, 2026-10-0
 Rootless `scan` remains attempted exhaustive read-only Full with accurate partial coverage; `scan ROOT` is strict Explicit; bare `cargo cleanme` is Routine Execute and `--dry-run` is Simulate with zero Cargo cleans. Learned state remains advisory and can never authorize bytes. No direct deletion. Every Cargo-mediated clean remains one workspace's full OutputSet; physical shared/external/unproven output is inventory-only, and successful fresh complete ownership proof across the selected source universe remains mandatory. A new CLI/JSON/log contract change requires its own explicit decision, regenerated completions/man pages and machine-contract tests; `--format log` stays <=384 ASCII bytes without paths. All correctives retain Rust 1.89 support and full state-schema forward compatibility.
 
 Completion requires separate `plans/closure/artifact-discovery-cleanup/c032-status.md`, `c033-status.md`, `c034-status.md`, with implementation SHA, baseline failure, counterexample-negative fixtures that actually fail against v0.2.5, subprocess+real-Cargo fixture evidence, fmt/clippy/tests/checker self-tests and hosted OS/MSRV results. The specifically reported mixed-root no-clean case must either be demonstrably solved under accepted proof or transparently retained as a blocked limitation, not converted into a false green.
+
+## C035 — operator-declared independent maintenance scopes (Route B)
+
+Status: **implemented on `plans/c035-operator-scoped-cleanup`; publication
+pending — no release authorized by C035.**
+Plan: `plans/implementation/artifact-discovery-cleanup/c035-operator-declared-independent-maintenance-scopes-corrective.md`.
+Closure: `plans/closure/artifact-discovery-cleanup/c035-status.md`.
+Branch: `plans/c035-operator-scoped-cleanup`. Baseline: `6bad266` (`main`, v0.2.6, 2026-10-14).
+
+Live v0.2.6 evidence: bare Routine Simulate on a real developer machine
+reported 7 roots, 1253 manifests, 499 resolved, **288 unresolved, 0 units,
+exit 1**, while read-only `scan` inventoried 48 groups / 70.22 GiB; even
+`~/projects` alone is blocked (30 unresolved fuzz/worktree/broken-workspace
+manifests). Eleven recursive `[scan] ignore` patterns changed nothing,
+because cleanup hardcodes `DiscoveryFilters::Bypassed`
+(`src/cleanup.rs:995`) and `--exclude` runs after the whole-scope block
+(`src/cleanup.rs:1132-1148`) — no operator knob unblocks a poisoned scope
+today.
+
+Direction: accept the ADR 004 line for **operator-declared** scopes only.
+Each declared exact-absolute scope gets the complete combined-universe proof
+within its boundary; poison blocks only its scope. Automatic independence
+certificates stay rejected per C031-D. In-scope exclusions rejected for v1.
+Hard-depends on the C034 safe track; C032/C033/ADR 005 proceed
+independently. Closure: `plans/closure/artifact-discovery-cleanup/c035-status.md`;
+no release authorized.

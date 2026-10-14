@@ -166,6 +166,24 @@ walks all three, applying `scan.ignore` / `scan.unignore` normally. A Rust
 project in `~/Documents/sidequest` is **not** found — that is the deliberate
 blind spot, and `scan --full` is the documented way to teach the tool about it.
 
+### Declared scopes (C035) — cleanup only, not scan
+
+Operator-declared `[maintenance] scopes` (`config.rs:44-46`) do **not** go
+through `resolve`: `scan --known` still inventories the seed/learned Routine
+scope above. They take effect in `clean` Maintenance resolution (`main.rs:641-670`),
+which partitions them before seeds/learned roots are ever consulted:
+
+- `declared_scope_partitions` (`policy.rs:421-434`) classifies every entry
+  with `RootProvenance::Explicit`, so a missing path, non-directory, or
+  symlink is a fatal `InvalidRoot` (exit 2), never a skip; survivors are
+  canonicalized and containment-collapsed into disjoint sorted scopes.
+- A configured `scan.root` still wins over declarations with a stderr
+  warning; declarations win over seeds/learned. Empty/missing behaves as
+  before (rollback identity).
+- The resolved `scope_label` stays `"routine"` and `automatic` is `false`:
+  each declared scope is explicit-like, with no omitted automatic roots and
+  no admission premise to recheck.
+
 ### `Global(roots)` — `--full`
 
 `ScanScope::Global(global_discovery_policy().roots)` (`policy.rs:23`). Worked

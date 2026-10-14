@@ -258,6 +258,24 @@ pub struct CleanReport {
     pub units_considered: usize,
     pub effective_policy: Option<CleanupPolicy>,
     pub selector: Option<CleanupSelector>,
+    /// Per-scope breakdown for operator-declared maintenance scopes (C035).
+    /// Empty on every legacy path — single explicit roots, automatic
+    /// Routine/Full — whose report shape is unchanged.
+    pub scopes: Vec<ScopeOutcome>,
+}
+
+/// One declared scope's complete outcome within a multi-scope run (C035).
+///
+/// The nested report is a full [`CleanReport`] with `scopes` empty, so the
+/// human renderer and the JSON mapper reuse the single-scope code paths
+/// with a scope header. The merged top-level report concatenates every
+/// scope's results, sums every counter, and carries the first block in
+/// deterministic scope order.
+#[derive(Clone, Debug)]
+pub struct ScopeOutcome {
+    /// Outermost declared root of this scope (post-merge, canonical).
+    pub scope_root: PathBuf,
+    pub report: CleanReport,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -291,6 +309,35 @@ pub struct CleanupPolicy {
 impl CleanReport {
     pub fn render(&self) -> String {
         let mut out = String::new();
+        // Declared scopes (C035) render per scope: one merged summary line,
+        // then each scope's complete single-scope body under a scope header.
+        // Every other path renders the legacy single body below, unchanged.
+        if !self.scopes.is_empty() {
+            out.push_str(&format!(
+                "declared scopes: {} [{}]; {} manifest(s), {} resolved workspace(s), {} CleanupUnit(s), {} unresolved ownership participant(s)\n",
+                self.scopes.len(),
+                self.scopes
+                    .iter()
+                    .map(|s| escaped_path(&s.scope_root))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                self.discovered_manifests,
+                self.resolved_workspaces,
+                self.units_considered,
+                self.unresolved_ownership.len(),
+            ));
+            for scope in &self.scopes {
+                out.push_str(&format!("scope {}\n", escaped_path(&scope.scope_root)));
+                scope.report.render_into(&mut out);
+            }
+            return out;
+        }
+        self.render_into(&mut out);
+        out
+    }
+
+    /// Single-scope body shared by the legacy report and each declared scope.
+    fn render_into(&self, out: &mut String) {
         if !self.selected_roots.is_empty() {
             out.push_str(&format!(
                 "combined scope: {} root(s) [{}], {} manifest(s), {} resolved workspace(s), {} CleanupUnit(s), {} unresolved ownership participant(s)\n",
@@ -429,7 +476,6 @@ impl CleanReport {
                 ));
             }
         }
-        out
     }
 }
 
@@ -966,13 +1012,6 @@ pub fn clean_with_roots_policy_selector_guarded(
     let discovery_diagnostic_count = discovered.diagnostics.len();
     let mut diagnostics: Vec<ScanDiagnostic> = discovered.diagnostics;
     let manifests = discovered.manifests;
-    // H-2 snapshot: the manifest set the hoisted universe was built from.
-    // The last-moment gate before each spawn rediscovers and blocks on any
-    // growth, so a manifest created after hoisting cannot silently escape
-    // the overlap check. Sorted so the comparison is order-independent.
-    let mut initial_manifests = manifests.clone();
-    initial_manifests.sort();
-
     // Workspace resolution, physical grouping, fail-fast analysis, and
     // CleanupUnit construction share one clock.
     let scope = resolve_cleanup_scope(
@@ -984,24 +1023,91 @@ pub fn clean_with_roots_policy_selector_guarded(
         &mut diagnostics,
         observer,
     )?;
-    let workspaces = scope.workspaces;
-    let units = scope.units;
-    let unresolved_ownership = scope.unresolved;
+    run_cleanup_units(
+        &roots,
+        &manifests,
+        &scope.workspaces,
+        &scope.workspaces,
+        &scope.units,
+        scope.unresolved,
+        discovery_diagnostic_count,
+        diagnostics.len(),
+        &includes,
+        &excludes,
+        selector_capabilities,
+        mode,
+        runner,
+        observer,
+        policy,
+        selector,
+        premise,
+        allowed_output_roots,
+        recency_seconds,
+        counters,
+    )
+}
+
+/// Prove and execute one scope's CleanupUnits: report shell, whole-scope
+/// blocks, per-unit policy gates, hoisted-universe proof, spawn, assembly.
+///
+/// This is the shared tail of every cleanup path. The legacy single-scope
+/// engine calls it with `universe == workspaces`; the declared-scope driver
+/// (C035) calls it once per scope with the combined workspaces slice for
+/// index-stable unit references (`unit.workspace_idx`) and the in-scope
+/// slice as the proof universe. Units reaching proof carry
+/// all-`PrivateBounded` groups from the universe they were built from, so a
+/// narrower proof universe cannot promote a unit its own scope did not
+/// exclusively own at grouping time.
+#[allow(clippy::too_many_arguments)]
+fn run_cleanup_units(
+    roots: &[PathBuf],
+    manifests: &[PathBuf],
+    workspaces: &[ResolvedWorkspace],
+    universe: &[ResolvedWorkspace],
+    units: &[workspace::CleanupUnit],
+    unresolved_ownership: Vec<UnresolvedOwnershipParticipant>,
+    discovery_diagnostic_count: usize,
+    diagnostics_count: usize,
+    includes: &globset::GlobSet,
+    excludes: &globset::GlobSet,
+    selector_capabilities: CargoCleanCapabilities,
+    mode: CleanMode,
+    runner: &dyn CleanupRunner,
+    observer: &dyn ProgressObserver,
+    policy: &CleanupPolicy,
+    selector: Option<CleanupSelector>,
+    premise: Option<AdmissionPremise>,
+    allowed_output_roots: &[PathBuf],
+    recency_seconds: u64,
+    mut counters: ScanCounters,
+) -> Result<CleanReport, AppError> {
+    let cleanup_phase = match mode {
+        CleanMode::CargoPreview => ScanPhase::CleanupPreview,
+        CleanMode::Simulate => ScanPhase::CleanupSimulate,
+        CleanMode::Execute => ScanPhase::CleanupExecute,
+    };
+    // H-2 snapshot: the manifest set the hoisted universe was built from.
+    // The last-moment gate before each spawn rediscovers and blocks on any
+    // growth, so a manifest created after hoisting cannot silently escape
+    // the overlap check. Sorted so the comparison is order-independent.
+    let mut initial_manifests = manifests.to_vec();
+    initial_manifests.sort();
 
     let mut report = CleanReport {
         results: Vec::new(),
-        diagnostics: diagnostics.len(),
+        diagnostics: diagnostics_count,
         failed: 0,
         mode,
         counters: ScanCounters::default(),
         scope_blocked: None,
         unresolved_ownership: unresolved_ownership.clone(),
-        selected_roots: roots.clone(),
+        selected_roots: roots.to_vec(),
         discovered_manifests: manifests.len(),
-        resolved_workspaces: workspaces.len(),
+        resolved_workspaces: universe.len(),
         units_considered: units.len(),
         effective_policy: Some(policy.clone()),
         selector: selector.clone(),
+        scopes: Vec::new(),
     };
     // The blocked report carries the counters measured up to the point the
     // block was raised, exactly as the successful path does at the end.
@@ -1016,7 +1122,7 @@ pub fn clean_with_roots_policy_selector_guarded(
             format!(
                 "combined cleanup ownership universe is incomplete: {} discovery diagnostic(s); resolved {} workspace(s), considered {} cleanup unit(s); no cleanup commands were run",
                 discovery_diagnostic_count,
-                workspaces.len(),
+                universe.len(),
                 units.len()
             ),
         ));
@@ -1037,7 +1143,7 @@ pub fn clean_with_roots_policy_selector_guarded(
             ),
         ));
         report.unresolved_ownership = unresolved_ownership;
-        report.resolved_workspaces = workspaces.len();
+        report.resolved_workspaces = universe.len();
         return Ok(report);
     }
 
@@ -1048,7 +1154,7 @@ pub fn clean_with_roots_policy_selector_guarded(
     // Filled on the first candidate that reaches the final proof; shared by
     // every later candidate in this run (H3/O1).
     let mut hoisted: Option<ProofUniverse> = None;
-    for unit in &units {
+    for unit in units {
         let skipped = |report: &mut CleanReport,
                        detail: String,
                        disposition: Option<PolicyDisposition>,
@@ -1168,7 +1274,7 @@ pub fn clean_with_roots_policy_selector_guarded(
         // `SkippedUnauthorized` rows (exit 0). Only `Err` takes this path;
         // `Ok(false)` (private but outside the boundary) stays a per-unit
         // skip, so authorization still cannot promote.
-        if let Err(msg) = unit_block_reason_roots(unit, &roots, allowed_output_roots) {
+        if let Err(msg) = unit_block_reason_roots(unit, roots, allowed_output_roots) {
             if is_authorization_infrastructure_error(&msg) {
                 report.scope_blocked = Some(ScopeBlock::new(
                     ScopeBlockReason::OwnershipUnproven,
@@ -1191,7 +1297,7 @@ pub fn clean_with_roots_policy_selector_guarded(
         // `symlink_metadata` on every check: no timers, sleeps, or cache.
         if let Some(premise) = premise.as_ref()
             && let Some((path, reason)) =
-                crate::policy::recheck_admission_premise(&roots, &premise.omitted)
+                crate::policy::recheck_admission_premise(roots, &premise.omitted)
         {
             report.scope_blocked = Some(ScopeBlock::new(
                 ScopeBlockReason::IncompleteDiscovery,
@@ -1210,9 +1316,8 @@ pub fn clean_with_roots_policy_selector_guarded(
         // H3/O1: the ownership universe is re-proven once for the whole run,
         // on the first candidate that reaches the proof. Lazy so a run where
         // every unit is skipped by policy still spawns nothing.
-        let hoisted = hoisted.get_or_insert_with(|| {
-            ProofUniverse::refresh(&workspaces, &roots, runner, &mut counters)
-        });
+        let hoisted = hoisted
+            .get_or_insert_with(|| ProofUniverse::refresh(universe, roots, runner, &mut counters));
         // M-2: a universe that could not be re-proven invalidates every
         // candidate, like scan-time incompleteness (exit 1 via scope_blocked),
         // not N per-unit skips (exit 0). Per-candidate refresh failures below
@@ -1227,8 +1332,8 @@ pub fn clean_with_roots_policy_selector_guarded(
         }
         let proof = match final_cleanup_proof_roots(
             unit,
-            &workspaces,
-            &roots,
+            universe,
+            roots,
             allowed_output_roots,
             runner,
             recency_seconds,
@@ -1310,7 +1415,7 @@ pub fn clean_with_roots_policy_selector_guarded(
         {
             let rediscovery_policy = crate::domain::EffectiveScanPolicy {
                 recency: Duration::ZERO,
-                scope: ScanScope::ExplicitRoots(roots.clone()),
+                scope: ScanScope::ExplicitRoots(roots.to_vec()),
                 discovery_filters: crate::domain::DiscoveryFilters::Bypassed,
             };
             match discovery::discover_manifests(&rediscovery_policy, &crate::progress::NoopObserver)
@@ -1367,7 +1472,7 @@ pub fn clean_with_roots_policy_selector_guarded(
                 // them run against a stale boundary.
                 if let Some(premise) = premise.as_ref()
                     && let Some((path, reason)) =
-                        crate::policy::recheck_admission_premise(&roots, &premise.omitted)
+                        crate::policy::recheck_admission_premise(roots, &premise.omitted)
                 {
                     report.scope_blocked = Some(ScopeBlock::new(
                         ScopeBlockReason::IncompleteDiscovery,
@@ -1512,6 +1617,295 @@ pub fn clean_with_roots_policy_selector_guarded(
     // Include diagnostics from discovery/resolution in count (already set).
     report.counters = counters;
     Ok(report)
+}
+
+/// Attribute a discovered path to its declaring scope (C035).
+///
+/// Scope roots are canonical; discovered paths are walked from canonical
+/// roots, but the spelling is canonicalized defensively so a non-canonical
+/// spelling can never escape attribution into the wrong scope. A path that
+/// cannot be canonicalized falls back to its lexical spelling, which for a
+/// path walked from a canonical root still shares the prefix. Returns the
+/// first containing scope in deterministic scope order.
+fn scope_index_for_path(scopes: &[PathBuf], path: &Path) -> Option<usize> {
+    let canon = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    scopes.iter().position(|s| canon.starts_with(s))
+}
+
+/// Run Routine cleanup over operator-declared independent scopes (C035 /
+/// ADR 004 Route B).
+///
+/// `scopes` must be validated, containment-collapsed, sorted, and disjoint
+/// ([`crate::policy::declared_scope_partitions`]); each entry is re-validated
+/// here before anything observable, mirroring the single-scope engine.
+///
+/// Design: discovery and workspace resolution run ONCE over the combined
+/// union, because grouping must see every resolved workspace at once — a
+/// physical output claimed from two scopes is `Shared` in both, never
+/// `PrivateBounded` in either (§3: out-of-scope resolved output is an
+/// external claim, never absence). Unresolved participants and discovery
+/// diagnostics attribute per scope by path instead of blocking the combined
+/// run: out-of-scope unresolved is outside the boundary, exactly as an
+/// explicit `clean ROOT` never sees it. Each clean scope then receives the
+/// complete proof — hoisted-universe refresh, per-unit `ExecutionProof`,
+/// H-2 rediscovery, pre-spawn revalidation — with the in-scope slice as its
+/// proof universe.
+///
+/// Kill-switch: anything that cannot be attributed to exactly one scope, or
+/// any internal partitioning failure, falls back to the legacy single
+/// combined-scope run over the union — the failure mode is today's behavior,
+/// never a silent partial clean. The operator-level kill-switch is deleting
+/// the `[maintenance]` section, which restores the legacy path exactly.
+#[allow(clippy::too_many_arguments)]
+pub fn clean_with_declared_scopes(
+    scopes: &[PathBuf],
+    recency_seconds: u64,
+    allowed_output_roots: &[PathBuf],
+    mode: CleanMode,
+    runner: &dyn CleanupRunner,
+    observer: &dyn ProgressObserver,
+    policy: &CleanupPolicy,
+    selector: Option<CleanupSelector>,
+) -> Result<CleanReport, AppError> {
+    for scope in scopes {
+        validate_cleanup_root(scope)?;
+    }
+    if scopes.is_empty() {
+        return Err(AppError::InvalidRoot {
+            path: "<empty>".into(),
+            reason: "cleanup requires at least one bounded root".into(),
+        });
+    }
+    let includes = compile_policy_globs(&policy.include)?;
+    let excludes = compile_policy_globs(&policy.exclude)?;
+    let selector_capabilities = if selector.is_some() {
+        runtime_clean_capabilities()
+    } else {
+        CargoCleanCapabilities::default()
+    };
+    let scan_start = SystemTime::now();
+    let cleanup_phase = match mode {
+        CleanMode::CargoPreview => ScanPhase::CleanupPreview,
+        CleanMode::Simulate => ScanPhase::CleanupSimulate,
+        CleanMode::Execute => ScanPhase::CleanupExecute,
+    };
+    let mut union: Vec<PathBuf> = scopes.to_vec();
+    union.sort();
+    union.dedup();
+    // Legacy fallback for anything unpartitionable. Defined once so every
+    // attribution failure below takes the identical today's-behavior path.
+    let legacy_combined = |reason: &str| {
+        eprintln!(
+            "cargo-cleanme: {reason}; running legacy combined scope over {} root(s)",
+            union.len()
+        );
+        clean_with_roots_policy_selector_guarded(
+            &union,
+            recency_seconds,
+            allowed_output_roots,
+            mode,
+            runner,
+            observer,
+            policy,
+            selector.clone(),
+            None,
+        )
+    };
+    // Combined discovery (manifest-first, no Cargo yet).
+    observer.phase(cleanup_phase);
+    let combined_policy = crate::domain::EffectiveScanPolicy {
+        recency: Duration::from_secs(recency_seconds),
+        scope: ScanScope::ExplicitRoots(union.clone()),
+        discovery_filters: crate::domain::DiscoveryFilters::Bypassed,
+    };
+    let discovery_start = std::time::Instant::now();
+    let discovered = discovery::discover_manifests(&combined_policy, observer)?;
+    let mut counters = discovered.counters.clone();
+    counters.discovery_nanos = counters
+        .discovery_nanos
+        .saturating_add(crate::domain::elapsed_nanos(discovery_start.elapsed()));
+    let manifests = discovered.manifests;
+    let mut scope_diagnostics = vec![0usize; scopes.len()];
+    for diagnostic in &discovered.diagnostics {
+        match diagnostic
+            .path
+            .as_ref()
+            .and_then(|p| scope_index_for_path(scopes, p))
+        {
+            Some(index) => scope_diagnostics[index] += 1,
+            None => {
+                return legacy_combined(
+                    "a discovery diagnostic could not be attributed to one declared scope",
+                );
+            }
+        }
+    }
+    // Combined resolution over every manifest once. Unresolved participants
+    // do NOT block here; they attribute per scope below.
+    let adapter = WorkspaceCleanupAdapter { runner };
+    let mut combined_diagnostics: Vec<ScanDiagnostic> = Vec::new();
+    let coverage = workspace::resolve_workspaces_with_coverage(
+        &manifests,
+        &adapter,
+        &mut counters,
+        &mut combined_diagnostics,
+        observer,
+    );
+    counters.unresolved_ownership = coverage.unresolved.len() as u64;
+    let workspaces_all = coverage.workspaces;
+    let mut manifest_scope = Vec::with_capacity(manifests.len());
+    for manifest in &manifests {
+        match scope_index_for_path(scopes, manifest) {
+            Some(index) => manifest_scope.push(index),
+            None => {
+                return legacy_combined(
+                    "a discovered manifest could not be attributed to one declared scope",
+                );
+            }
+        }
+    }
+    let mut workspace_scope = Vec::with_capacity(workspaces_all.len());
+    for workspace in &workspaces_all {
+        match scope_index_for_path(scopes, &workspace.root) {
+            Some(index) => workspace_scope.push(index),
+            None => {
+                return legacy_combined(
+                    "a resolved workspace could not be attributed to one declared scope",
+                );
+            }
+        }
+    }
+    let mut unresolved_scope = Vec::with_capacity(coverage.unresolved.len());
+    for participant in &coverage.unresolved {
+        match scope_index_for_path(scopes, &participant.manifest) {
+            Some(index) => unresolved_scope.push(index),
+            None => {
+                return legacy_combined(
+                    "an unresolved manifest could not be attributed to one declared scope",
+                );
+            }
+        }
+    }
+    // Combined grouping: every scope's proof sees the same ownership facts.
+    let groups = workspace::build_groups(&workspaces_all);
+    let clock_cutoff = scan_start
+        .checked_sub(Duration::from_secs(recency_seconds))
+        .ok_or_else(|| AppError::Config("recency window exceeds system time range".into()))?;
+    let outcomes = workspace::analyze_groups_detailed(
+        &workspaces_all,
+        groups,
+        scan_start,
+        clock_cutoff,
+        Duration::from_secs(recency_seconds),
+        &mut counters,
+        &mut combined_diagnostics,
+        observer,
+    );
+    let units_all = workspace::build_cleanup_units(&workspaces_all, &outcomes);
+    let global_diagnostics = combined_diagnostics.len();
+    // Per-scope proof and execution. Scopes run in deterministic sorted
+    // order; each scope's block or failure never touches a sibling scope.
+    let mut merged = CleanReport {
+        results: Vec::new(),
+        diagnostics: global_diagnostics,
+        failed: 0,
+        mode,
+        counters,
+        scope_blocked: None,
+        unresolved_ownership: Vec::new(),
+        selected_roots: union,
+        discovered_manifests: manifests.len(),
+        resolved_workspaces: workspaces_all.len(),
+        units_considered: units_all.len(),
+        effective_policy: Some(policy.clone()),
+        selector: selector.clone(),
+        scopes: Vec::new(),
+    };
+    for (index, scope_root) in scopes.iter().enumerate() {
+        let scope_manifests: Vec<PathBuf> = manifests
+            .iter()
+            .zip(manifest_scope.iter())
+            .filter(|(_, scope)| **scope == index)
+            .map(|(manifest, _)| manifest.clone())
+            .collect();
+        let universe: Vec<ResolvedWorkspace> = workspaces_all
+            .iter()
+            .zip(workspace_scope.iter())
+            .filter(|(_, scope)| **scope == index)
+            .map(|(workspace, _)| workspace.clone())
+            .collect();
+        let scope_units: Vec<workspace::CleanupUnit> = units_all
+            .iter()
+            .filter(|unit| workspace_scope[unit.workspace_idx] == index)
+            .cloned()
+            .collect();
+        let scope_unresolved: Vec<UnresolvedOwnershipParticipant> = coverage
+            .unresolved
+            .iter()
+            .zip(unresolved_scope.iter())
+            .filter(|(_, scope)| **scope == index)
+            .map(|(participant, _)| participant.clone())
+            .collect();
+        let scope_report = run_cleanup_units(
+            std::slice::from_ref(scope_root),
+            &scope_manifests,
+            &workspaces_all,
+            &universe,
+            &scope_units,
+            scope_unresolved,
+            scope_diagnostics[index],
+            scope_diagnostics[index],
+            &includes,
+            &excludes,
+            selector_capabilities,
+            mode,
+            runner,
+            observer,
+            policy,
+            selector.clone(),
+            None,
+            allowed_output_roots,
+            recency_seconds,
+            ScanCounters::default(),
+        )?;
+        // Name the scope on its block: the shared unit loop reports the
+        // combined-universe prose, and a multi-scope run must say which
+        // boundary raised it. Reason codes are untouched.
+        merge_scope_outcome(&mut merged, scope_root, scope_report);
+    }
+    Ok(merged)
+}
+
+/// Accumulate one scope's report into the merged multi-scope report.
+///
+/// Sums are saturating; the top-level block is the first in deterministic
+/// scope order (fail-closed aggregation: any blocked scope blocks the run).
+/// Extracted from the driver loop so the merge arithmetic is unit-testable
+/// without running discovery.
+fn merge_scope_outcome(merged: &mut CleanReport, scope_root: &Path, mut scope_report: CleanReport) {
+    if let Some(block) = scope_report.scope_blocked.take() {
+        let scoped = ScopeBlock::new(
+            block.reason,
+            format!("scope {}: {}", scope_root.display(), block.message),
+        );
+        if merged.scope_blocked.is_none() {
+            merged.scope_blocked = Some(scoped.clone());
+        }
+        scope_report.scope_blocked = Some(scoped);
+    }
+    merged.results.extend(scope_report.results.iter().cloned());
+    merged.failed = merged.failed.saturating_add(scope_report.failed);
+    merged
+        .unresolved_ownership
+        .extend(scope_report.unresolved_ownership.iter().cloned());
+    merged
+        .counters
+        .saturating_add_assign(&scope_report.counters);
+    merged.diagnostics = merged.diagnostics.saturating_add(scope_report.diagnostics);
+    merged.scopes.push(ScopeOutcome {
+        scope_root: scope_root.to_path_buf(),
+        report: scope_report,
+    });
 }
 
 fn compile_policy_globs(patterns: &[String]) -> Result<globset::GlobSet, AppError> {
@@ -3808,6 +4202,103 @@ mod tests {
         assert!(!report.render().contains("would-clean"));
     }
 
+    /// C035: attribution is first-containing-scope in deterministic order, or
+    /// nothing. A nested path belongs to its outermost scope; an outside
+    /// path belongs nowhere and must fall back, never silently join a scope.
+    #[test]
+    fn scope_attribution_is_first_containing_scope_or_none() {
+        let d = tempfile::tempdir().unwrap();
+        // Canonical roots: on macOS `tempdir()` sits under a symlinked
+        // `/var`, so the declared spelling and the walked spelling would
+        // otherwise disagree about the first segment.
+        let base = fs::canonicalize(d.path()).unwrap();
+        let scope_a = base.join("a");
+        let scope_b = base.join("b");
+        fs::create_dir_all(scope_a.join("proj")).unwrap();
+        fs::create_dir_all(&scope_b).unwrap();
+        let scopes = vec![scope_a.clone(), scope_b.clone()];
+        assert_eq!(
+            scope_index_for_path(&scopes, &scope_a.join("proj/Cargo.toml")),
+            Some(0)
+        );
+        assert_eq!(
+            scope_index_for_path(&scopes, &scope_b.join("Cargo.toml")),
+            Some(1)
+        );
+        // The scope root itself is contained in its scope.
+        assert_eq!(scope_index_for_path(&scopes, &scope_a), Some(0));
+        assert_eq!(scope_index_for_path(&scopes, &base.join("elsewhere")), None);
+        assert_eq!(scope_index_for_path(&[], &scope_a), None);
+    }
+
+    /// C035: the merged report sums results/failures/counters/diagnostics,
+    /// concatenates unresolved participants, keeps the FIRST block in scope
+    /// order, and names the blocking scope on the block without touching the
+    /// reason code. A scope that cannot be merged must fail the run, not the
+    /// merge: merging is total over well-formed scope reports.
+    #[test]
+    fn merge_scope_outcome_sums_and_first_block_wins() {
+        fn shell() -> CleanReport {
+            CleanReport {
+                results: Vec::new(),
+                diagnostics: 0,
+                failed: 0,
+                mode: CleanMode::Simulate,
+                counters: ScanCounters::default(),
+                scope_blocked: None,
+                unresolved_ownership: Vec::new(),
+                selected_roots: Vec::new(),
+                discovered_manifests: 0,
+                resolved_workspaces: 0,
+                units_considered: 0,
+                effective_policy: None,
+                selector: None,
+                scopes: Vec::new(),
+            }
+        }
+        let mut merged = shell();
+        let mut clean_scope = shell();
+        clean_scope.failed = 1;
+        clean_scope.diagnostics = 2;
+        clean_scope.counters.manifests_found = 5;
+        merge_scope_outcome(&mut merged, Path::new("/scopes/a"), clean_scope);
+        let mut blocked_scope = shell();
+        blocked_scope.scope_blocked = Some(ScopeBlock::new(
+            ScopeBlockReason::OwnershipUnproven,
+            "cleanup ownership could not be proven: 1 discovered Cargo manifest did not resolve; no cleanup commands were run".into(),
+        ));
+        blocked_scope.diagnostics = 3;
+        blocked_scope.counters.manifests_found = 7;
+        merge_scope_outcome(&mut merged, Path::new("/scopes/b"), blocked_scope);
+        assert_eq!(merged.failed, 1);
+        assert_eq!(merged.diagnostics, 5);
+        assert_eq!(merged.counters.manifests_found, 12);
+        assert_eq!(merged.scopes.len(), 2);
+        let block = merged.scope_blocked.clone().expect("one scope blocked");
+        assert_eq!(block.reason, ScopeBlockReason::OwnershipUnproven);
+        assert!(
+            block.message.starts_with("scope /scopes/b: "),
+            "the merged block must name its scope: {}",
+            block.message
+        );
+        assert!(
+            block.message.contains("ownership could not be proven"),
+            "{}",
+            block.message
+        );
+        // A later block never displaces the first: scope order is the tie-break.
+        let mut later = shell();
+        later.scope_blocked = Some(ScopeBlock::new(
+            ScopeBlockReason::IncompleteDiscovery,
+            "combined cleanup ownership universe is incomplete".into(),
+        ));
+        merge_scope_outcome(&mut merged, Path::new("/scopes/c"), later);
+        let block = merged.scope_blocked.as_ref().expect("still blocked");
+        assert_eq!(block.reason, ScopeBlockReason::OwnershipUnproven);
+        assert!(block.message.starts_with("scope /scopes/b: "), "{block:?}");
+        assert_eq!(merged.scopes.len(), 3);
+    }
+
     #[test]
     fn clean_requires_absolute_root() {
         let runner = FakeCleanupRunner::new(Path::new("/x"), Path::new("/x/target"), 1);
@@ -4250,6 +4741,7 @@ mod tests {
             units_considered: 0,
             effective_policy: None,
             selector: None,
+            scopes: Vec::new(),
         };
         for i in 0..7 {
             report.results.push(CleanResult {

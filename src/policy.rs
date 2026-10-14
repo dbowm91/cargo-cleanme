@@ -419,6 +419,51 @@ pub fn recheck_admission_premise(
 /// caller-selected explicit root or an automatic search hint.
 pub type CleanupCandidates = Vec<(PathBuf, RootProvenance)>;
 
+/// Validate operator-declared maintenance scopes into disjoint proof
+/// boundaries (C035 / ADR 004 Route B).
+///
+/// Strict like explicit roots: every entry classifies with
+/// [`RootProvenance::Explicit`], so a missing path, a non-directory, or a
+/// symlink (including a trailing-slash spelling) is a fatal [`AppError::InvalidRoot`],
+/// never a silent skip or a block. Surviving roots are canonicalized and
+/// containment-collapsed so overlapping or duplicate declarations merge into
+/// one scope — merged, never dropped. Classification runs on the declared
+/// spellings *before* canonicalization, so a symlink identity can never be
+/// resolved into its target first (C028). Output is sorted, giving the
+/// deterministic scope order the report and log aggregation rely on.
+pub fn declared_scope_partitions(scopes: &[PathBuf]) -> Result<Vec<PathBuf>, AppError> {
+    let entries: CleanupCandidates = scopes
+        .iter()
+        .cloned()
+        .map(|s| (s, RootProvenance::Explicit))
+        .collect();
+    let classified = classify_cleanup_roots(entries)?;
+    debug_assert!(
+        classified.blocked.is_empty() && classified.omitted.is_empty(),
+        "explicit classification admits or fatals, never blocks or omits"
+    );
+    let mut canonical: Vec<PathBuf> = Vec::with_capacity(classified.admitted.len());
+    for root in &classified.admitted {
+        // Admitted a moment ago by strict `symlink_metadata`, so a
+        // canonicalization failure now is a TOCTOU race, not a spelling
+        // problem: fail closed rather than fall back to a lexical identity
+        // that could alias another scope.
+        canonical.push(fs::canonicalize(root).map_err(|e| AppError::InvalidRoot {
+            path: root.display().to_string(),
+            reason: format!("declared scope changed during admission: {e}"),
+        })?);
+    }
+    canonical.sort();
+    canonical.dedup();
+    let mut scopes: Vec<PathBuf> = Vec::new();
+    for root in canonical {
+        if !scopes.iter().any(|outer| root.starts_with(outer)) {
+            scopes.push(root);
+        }
+    }
+    Ok(scopes)
+}
+
 /// Decide `clean --full` roots from a finished Full reconciliation.
 ///
 /// The roots come from the in-memory generation the traversal just proved,
@@ -1149,6 +1194,83 @@ mod tests {
             "deleted durable project stays unavailable: {:?}",
             classified.omitted
         );
+    }
+
+    /// C035: overlapping and duplicate declarations merge into one scope —
+    /// merged, never silently dropped — while disjoint scopes stay separate
+    /// in deterministic sorted order.
+    #[test]
+    fn declared_scopes_merge_overlap_and_sort_disjoint() {
+        let d = tempdir().unwrap();
+        let parent = d.path().join("parent");
+        let child = parent.join("child");
+        let sibling = d.path().join("sibling");
+        fs::create_dir_all(&child).unwrap();
+        fs::create_dir_all(&sibling).unwrap();
+        let parent_canon = fs::canonicalize(&parent).unwrap();
+        let sibling_canon = fs::canonicalize(&sibling).unwrap();
+
+        // Child nested in parent, parent duplicated: one scope, the parent.
+        assert_eq!(
+            declared_scope_partitions(&[
+                child.clone(),
+                parent.clone(),
+                parent.clone(),
+                sibling.clone(),
+            ])
+            .unwrap(),
+            vec![parent_canon.clone(), sibling_canon.clone()],
+        );
+        // Order of declaration does not change scope order.
+        assert_eq!(
+            declared_scope_partitions(&[sibling.clone(), child, parent]).unwrap(),
+            vec![parent_canon, sibling_canon],
+        );
+        assert!(declared_scope_partitions(&[]).unwrap().is_empty());
+    }
+
+    /// C035: every declaration defect is fatal (`InvalidRoot`), even
+    /// alongside a valid sibling — a scope that cannot be bounded must
+    /// never be silently skipped.
+    #[test]
+    fn declared_scope_defects_are_fatal_not_skipped() {
+        let d = tempdir().unwrap();
+        let real = d.path().join("real");
+        fs::create_dir(&real).unwrap();
+        let missing = d.path().join("missing");
+        let file = d.path().join("file");
+        fs::write(&file, b"not a directory").unwrap();
+        for bad in [missing, file] {
+            let Err(crate::error::AppError::InvalidRoot { path, .. }) =
+                declared_scope_partitions(&[real.clone(), bad.clone()])
+            else {
+                panic!("a bad declaration must be fatal, not skipped");
+            };
+            assert!(path.contains(&bad.display().to_string()), "{path}");
+        }
+    }
+
+    /// C035: a symlinked declaration is fatal, including with a trailing
+    /// slash that `symlink_metadata` would otherwise follow.
+    #[test]
+    #[cfg(unix)]
+    fn declared_symlink_scopes_are_fatal() {
+        use std::os::unix::fs::symlink;
+        let d = tempdir().unwrap();
+        let target = d.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let link = d.path().join("link");
+        symlink(&target, &link).unwrap();
+        for spelling in [link.clone(), PathBuf::from(format!("{}/", link.display()))] {
+            assert!(
+                matches!(
+                    declared_scope_partitions(std::slice::from_ref(&spelling)),
+                    Err(crate::error::AppError::InvalidRoot { .. })
+                ),
+                "symlinked declaration must be fatal: {}",
+                spelling.display()
+            );
+        }
     }
 
     #[test]

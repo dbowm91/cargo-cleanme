@@ -286,6 +286,54 @@ pub fn elapsed_nanos(elapsed: std::time::Duration) -> u64 {
 }
 
 impl ScanCounters {
+    /// Merge another run's counters into these, saturating instead of
+    /// wrapping (C035: a multi-scope merged report sums per-scope counters;
+    /// a wrapping sum would report a small plausible number, the same
+    /// failure mode [`elapsed_nanos`] guards).
+    pub fn saturating_add_assign(&mut self, other: &Self) {
+        macro_rules! add {
+            ($($field:ident),*) => {
+                $(self.$field = self.$field.saturating_add(other.$field);)*
+            };
+        }
+        add!(
+            directories_visited,
+            directories_pruned,
+            platform_system_prunes,
+            cargo_home_prunes,
+            rustup_home_prunes,
+            target_vcs_prunes,
+            user_ignore_prunes,
+            manifests_found,
+            unique_workspaces,
+            cargo_locate_calls,
+            cargo_metadata_calls,
+            cargo_failures,
+            unresolved_ownership,
+            empty_no_output_skipped,
+            active_skipped,
+            groups_measured,
+            bytes_measured,
+            reportable_groups,
+            deduped_workspace_hits,
+            missing_output_skipped,
+            uncertain_skipped,
+            discovery_nanos,
+            cargo_locate_nanos,
+            cargo_metadata_nanos,
+            source_activity_nanos,
+            output_sizing_nanos,
+            proof_workspaces_refreshed,
+            proof_metadata_peak_concurrency,
+            proof_cargo_locate_calls,
+            proof_cargo_metadata_calls,
+            proof_cargo_locate_nanos,
+            proof_cargo_metadata_nanos,
+            proof_source_activity_nanos,
+            proof_output_sizing_nanos
+        );
+    }
+
     /// One-line semantic counters for `--stats` stderr output.
     pub fn stats_line(&self) -> String {
         format!(
@@ -407,5 +455,39 @@ mod tests {
         // nine factors of two, so this duration is a whole multiple of 2^64:
         // the truncating cast reports *zero* elapsed time for it.
         assert_eq!(elapsed_nanos(Duration::new(1 << 63, 0)), u64::MAX);
+    }
+
+    /// C035: the merged multi-scope report sums per-scope counters, so the
+    /// sum must saturate rather than wrap — and must touch every field, or
+    /// a scope's proof work vanishes from `--stats`.
+    #[test]
+    fn counters_sum_saturates_and_covers_every_field() {
+        let mut left = ScanCounters {
+            bytes_measured: u64::MAX,
+            manifests_found: 3,
+            proof_cargo_metadata_calls: u64::MAX,
+            ..Default::default()
+        };
+        let right = ScanCounters {
+            bytes_measured: 10,
+            manifests_found: 4,
+            proof_cargo_metadata_calls: 1,
+            directories_visited: 7,
+            ..Default::default()
+        };
+        left.saturating_add_assign(&right);
+        assert_eq!(left.bytes_measured, u64::MAX);
+        assert_eq!(left.manifests_found, 7);
+        assert_eq!(left.proof_cargo_metadata_calls, u64::MAX);
+        assert_eq!(left.directories_visited, 7);
+        // Every field summed: a zero-valued field on both sides stays zero,
+        // and adding zero changes nothing.
+        let fresh = ScanCounters::default();
+        let mut already = ScanCounters {
+            groups_measured: 5,
+            ..Default::default()
+        };
+        already.saturating_add_assign(&fresh);
+        assert_eq!(already.groups_measured, 5);
     }
 }

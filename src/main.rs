@@ -308,6 +308,11 @@ struct ResolvedCleanup {
     /// True for Routine/Full scopes whose roots are automatic hints; false
     /// for explicit scopes where every defect stays a fatal usage error.
     automatic: bool,
+    /// Operator-declared independent scopes (C035): validated, collapsed,
+    /// sorted, disjoint. Non-empty only for bare/`--known` Routine with
+    /// `[maintenance] scopes` declared and no `scan.root` override; the
+    /// engine proves each scope separately instead of one combined run.
+    declared_scopes: Vec<std::path::PathBuf>,
 }
 
 fn run_cleanup(
@@ -373,6 +378,7 @@ fn run_cleanup(
             units_considered: 0,
             effective_policy: Some(policy),
             selector,
+            scopes: Vec::new(),
         };
         emit_cleanup(&report, &resolved, &resolved.roots, options, "")?;
         return Ok(1);
@@ -397,6 +403,7 @@ fn run_cleanup(
             units_considered: 0,
             effective_policy: Some(policy),
             selector,
+            scopes: Vec::new(),
         };
         emit_cleanup(
             &empty,
@@ -415,20 +422,36 @@ fn run_cleanup(
     // top-level error reporter with the bar still live, and `BarState::drop`
     // *finishes* the bar rather than clearing it, so the retained line stayed
     // on screen above the `cargo-cleanme: …` message.
-    let premise = cargo_cleanme::cleanup::AdmissionPremise {
-        omitted: resolved.omitted.clone(),
+    let report = if resolved.declared_scopes.is_empty() {
+        let premise = cargo_cleanme::cleanup::AdmissionPremise {
+            omitted: resolved.omitted.clone(),
+        };
+        run_engine_guarded(
+            &resolved,
+            &config,
+            mode,
+            &renderer,
+            &policy,
+            selector.clone(),
+            Some(premise),
+        )?
+    } else {
+        // C035: each declared scope is proven separately, so poison in one
+        // scope blocks only that scope. Declared roots are explicit-like —
+        // strict at admission, fatal on defect — so there are no omitted
+        // automatic roots and no admission premise to recheck.
+        cargo_cleanme::cleanup::clean_with_declared_scopes(
+            &resolved.declared_scopes,
+            config.scan.recency_seconds,
+            &config.cleanup.allowed_output_roots,
+            mode,
+            &cargo_cleanme::cleanup::SystemCleanupRunner,
+            &renderer,
+            &policy,
+            selector.clone(),
+        )?
     };
-    let cleanup = run_engine_guarded(
-        &resolved,
-        &config,
-        mode,
-        &renderer,
-        &policy,
-        selector.clone(),
-        Some(premise),
-    );
     renderer.finish_and_clear();
-    let report = cleanup?;
     if options.format == OutputFormat::Human
         && let Some(generation) = resolved.state_generation
     {
@@ -525,6 +548,7 @@ fn run_engine_guarded(
                             units_considered: 0,
                             effective_policy: Some(policy.clone()),
                             selector: selector.clone(),
+                            scopes: Vec::new(),
                         });
                     }
                     let rebuilt = cargo_cleanme::cleanup::AdmissionPremise { omitted };
@@ -549,6 +573,7 @@ fn run_engine_guarded(
                     units_considered: 0,
                     effective_policy: Some(policy.clone()),
                     selector: selector.clone(),
+                    scopes: Vec::new(),
                 }),
             }
         }
@@ -584,6 +609,7 @@ fn resolve_cleanup_roots(
                 omitted: Vec::new(),
                 blocked: None,
                 automatic: false,
+                declared_scopes: Vec::new(),
             })
         }
         CleanupScope::Full => {
@@ -613,6 +639,36 @@ fn resolve_cleanup_roots(
         // `scan.root` is an exclusive Explicit override, otherwise bounded
         // seed roots plus active learned roots form the Routine scope.
         CleanupScope::Maintenance => {
+            // C035: operator-declared scopes win over seeds/learned roots.
+            // A configured `scan.root` stays the exclusive Explicit override
+            // and wins over declarations, with a warning — silently
+            // preferring either side would change what gets cleaned.
+            if !config.maintenance.scopes.is_empty() {
+                if config.scan.root.is_none() {
+                    let scopes = cargo_cleanme::policy::declared_scope_partitions(
+                        &config.maintenance.scopes,
+                    )?;
+                    let generation = match cargo_cleanme::discovery_state::load_default() {
+                        cargo_cleanme::discovery_state::StateLoad::Loaded(state) => {
+                            state.last_full_at
+                        }
+                        _ => None,
+                    };
+                    return Ok(ResolvedCleanup {
+                        roots: collapse_roots(scopes.clone()),
+                        scope_label: "routine",
+                        state_generation: generation,
+                        omitted_diagnostics: Vec::new(),
+                        omitted: Vec::new(),
+                        blocked: None,
+                        automatic: false,
+                        declared_scopes: scopes,
+                    });
+                }
+                eprintln!(
+                    "cargo-cleanme: scan.root overrides maintenance.scopes; declared scopes are ignored for this run"
+                );
+            }
             let policy = cargo_cleanme::policy::resolve(
                 cargo_cleanme::domain::ScanRequest {
                     cli_root: None,
@@ -642,6 +698,7 @@ fn resolve_cleanup_roots(
                         omitted: Vec::new(),
                         blocked: None,
                         automatic: false,
+                        declared_scopes: Vec::new(),
                     })
                 }
                 ScanScope::ExplicitRoots(roots) => {
@@ -658,6 +715,7 @@ fn resolve_cleanup_roots(
                         omitted: Vec::new(),
                         blocked: None,
                         automatic: false,
+                        declared_scopes: Vec::new(),
                     })
                 }
                 ScanScope::Routine(_) => {
@@ -738,6 +796,7 @@ fn admit_automatic(
         omitted,
         blocked,
         automatic: true,
+        declared_scopes: Vec::new(),
     })
 }
 

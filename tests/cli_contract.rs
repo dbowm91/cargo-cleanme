@@ -3429,3 +3429,587 @@ fn json_format_config_is_rejected_not_emitted_as_non_json() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// C035 — operator-declared independent maintenance scopes.
+//
+// Platform scope for every `#[cfg(unix)]` case below: these substitute the
+// POSIX `/bin/sh` Cargo stub (`common::write_fake_cargo`), extended to answer
+// each queried manifest from its own directory with `CARGO_TARGET_DIR`
+// honored the way real Cargo honors it. A lane that could not run the stub
+// proves nothing here rather than reporting green.
+// ---------------------------------------------------------------------------
+
+/// Two declared scopes, each with a healthy inactive project, plus the stub
+/// and an isolated HOME. Scope B is reshaped per case (poisoned, emptied,
+/// redirected); scope A stays the control. Every path is canonicalized so
+/// stub answers, FIXTURE env, and scope attribution compare one spelling
+/// (macOS `/var` is a symlink).
+#[cfg(unix)]
+struct DeclaredScopesFixture {
+    _temp: tempfile::TempDir,
+    scope_a: PathBuf,
+    scope_b: PathBuf,
+    project_a: PathBuf,
+    project_b: PathBuf,
+    config: PathBuf,
+    log: PathBuf,
+    args_log: PathBuf,
+    bin: PathBuf,
+    home: PathBuf,
+}
+
+#[cfg(unix)]
+impl DeclaredScopesFixture {
+    fn new() -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(temp.path()).unwrap();
+        let scope_a = root.join("scope-a");
+        let scope_b = root.join("scope-b");
+        fs::create_dir_all(&scope_a).unwrap();
+        fs::create_dir_all(&scope_b).unwrap();
+        let project_a = common::inactive_project(&scope_a, "healthy-a");
+        let project_b = common::inactive_project(&scope_b, "healthy-b");
+        let bin = root.join("bin");
+        common::write_fake_cargo(&bin, &root);
+        let home = root.join("home");
+        fs::create_dir_all(home.join("state")).unwrap();
+        let fixture = Self {
+            _temp: temp,
+            scope_a,
+            scope_b,
+            project_a,
+            project_b,
+            config: root.join("config.toml"),
+            log: root.join("cargo.log"),
+            args_log: root.join("cargo-args.log"),
+            bin,
+            home,
+        };
+        fixture.write_scopes(&[fixture.scope_a.clone(), fixture.scope_b.clone()]);
+        fixture
+    }
+
+    fn write_scopes(&self, scopes: &[PathBuf]) {
+        let list = scopes
+            .iter()
+            .map(|s| toml::Value::String(s.to_str().unwrap().to_owned()).to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        fs::write(
+            &self.config,
+            format!("[scan]\nrecency_seconds = 300\n[maintenance]\nscopes = [{list}]\n"),
+        )
+        .unwrap();
+    }
+
+    /// Replace scope B's manifest with garbage no Cargo can parse. Discovery
+    /// still finds the manifest file, but locate fails — the helix-grammar
+    /// shape from the incident (a locate-stage failure, not a missing file).
+    fn poison_scope_b(&self) {
+        let manifest = self.project_b.join("Cargo.toml");
+        fs::write(&manifest, "this is not toml {{{{\n").unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        common::backdate_file(&manifest, old);
+    }
+
+    /// Remove scope B's project entirely: a valid scope with zero manifests.
+    fn empty_scope_b(&self) {
+        fs::remove_dir_all(&self.project_b).unwrap();
+    }
+
+    /// A fake redirected output dir inside scope B: an artifact with a marker,
+    /// backdated everywhere the recency verdict can read.
+    fn scope_b_output(&self, name: &str) -> PathBuf {
+        let dir = self.scope_b.join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .unwrap();
+        fs::write(dir.join("artifact.bin"), vec![7u8; 4096]).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        for file in [dir.join("CACHEDIR.TAG"), dir.join("artifact.bin")] {
+            common::backdate_file(&file, old);
+        }
+        common::backdate_file(&dir, old);
+        dir
+    }
+
+    fn run(&self, format: &str, args: &[&str], extra_env: &[(&str, &str)]) -> std::process::Output {
+        self.run_with_fixture_roots(
+            format,
+            args,
+            extra_env,
+            &self.project_a,
+            &self.project_a.join("target"),
+        )
+    }
+
+    fn run_with_fixture_roots(
+        &self,
+        format: &str,
+        args: &[&str],
+        extra_env: &[(&str, &str)],
+        fixture_root: &std::path::Path,
+        fixture_target: &std::path::Path,
+    ) -> std::process::Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args([
+            "--config",
+            self.config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            format,
+        ]);
+        command.args(args);
+        command
+            .env("PATH", path_with(&self.bin))
+            .env("HOME", &self.home)
+            .env("XDG_STATE_HOME", self.home.join("state"))
+            .env("FIXTURE_ROOT", fixture_root)
+            .env("FIXTURE_TARGET", fixture_target)
+            .env("CARGO_LOG", &self.log)
+            .env("CARGO_ARGS_LOG", &self.args_log);
+        for (key, value) in extra_env {
+            command.env(key, value);
+        }
+        command.output().unwrap()
+    }
+
+    /// The same bare argv through Cargo's external-subcommand entry point,
+    /// with the C012 premise: the staged binary must provably be the one
+    /// Cargo resolves.
+    fn run_as_plugin(&self, args: &[&str]) -> std::process::Output {
+        let staged = self
+            .bin
+            .join(format!("cargo-cleanme{}", std::env::consts::EXE_SUFFIX));
+        fs::copy(env!("CARGO_BIN_EXE_cargo-cleanme"), &staged).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = fs::metadata(&staged).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&staged, permissions).unwrap();
+        }
+        let path = path_with(&self.bin);
+        assert_staged_is_resolved(&path, &staged);
+
+        let real_cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let mut command = Command::new("cargo");
+        command.args(["cleanme", "--config"]);
+        command.arg(&self.config);
+        command.args(["--no-progress", "--format", "json"]);
+        command.args(args);
+        command
+            .env("PATH", &path)
+            .env("HOME", &self.home)
+            .env("XDG_STATE_HOME", self.home.join("state"))
+            .env("CARGO_REAL", real_cargo)
+            .env("FIXTURE_ROOT", &self.project_a)
+            .env("FIXTURE_TARGET", self.project_a.join("target"))
+            .env("CARGO_LOG", &self.log)
+            .env("CARGO_ARGS_LOG", &self.args_log)
+            .output()
+            .unwrap()
+    }
+
+    fn clean_calls(&self) -> usize {
+        common::cargo_calls(&self.log, "clean")
+    }
+
+    fn artifact_a(&self) -> PathBuf {
+        self.project_a.join("target/artifact.bin")
+    }
+
+    fn artifact_b(&self) -> PathBuf {
+        self.project_b.join("target/artifact.bin")
+    }
+
+    fn restore_artifact_a(&self) {
+        let artifact = self.artifact_a();
+        fs::write(&artifact, vec![7u8; 4096]).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        common::backdate_file(&artifact, old);
+        common::backdate_file(&self.project_a.join("target"), old);
+    }
+
+    fn parse_json(output: &std::process::Output) -> serde_json::Value {
+        serde_json::from_slice(&output.stdout).unwrap_or_else(|_| {
+            panic!(
+                "stdout is not JSON: {:?}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+        })
+    }
+}
+
+/// One scope's entry in the additive `scopes` breakdown, by canonical root.
+#[cfg(unix)]
+fn scope_entry<'j>(json: &'j serde_json::Value, root: &std::path::Path) -> &'j serde_json::Value {
+    let root_str = root.to_str().unwrap();
+    json["result"]["scopes"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no scopes breakdown: {json}"))
+        .iter()
+        .find(|s| s["scope_root"].as_str().unwrap() == root_str)
+        .unwrap_or_else(|| panic!("no scope entry for {root_str}: {json}"))
+}
+
+/// C035 item 1: two declared scopes — one healthy, one poisoned — clean
+/// exactly the healthy scope (real `cargo clean` argv, bytes reclaimed) and
+/// report a typed per-scope block for the other with exit 1.
+///
+/// The discriminating assertion is the split itself: on the pre-C035 engine
+/// this shape is a whole-scope zero-unit block (exit 1, 0 cleaned), and a
+/// naive per-scope engine without combined grouping would still clean here
+/// only by accident of the poison being unresolvable rather than shared
+/// (see the overlap case below for the grouping control).
+#[cfg(unix)]
+#[test]
+fn declared_scopes_clean_the_healthy_scope_and_block_only_the_poisoned_scope() {
+    let fixture = DeclaredScopesFixture::new();
+    fixture.poison_scope_b();
+
+    let output = fixture.run("json", &[], &[]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a blocked scope exits 1: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = DeclaredScopesFixture::parse_json(&output);
+    assert_eq!(json["operation"], "clean", "{json}");
+    assert_eq!(json["scope"], "routine", "{json}");
+    assert_eq!(json["mode"], "execute", "{json}");
+    assert_eq!(json["result"]["scope_blocked"], true, "{json}");
+    assert!(
+        json["result"]["scope_reason"]
+            .as_str()
+            .unwrap()
+            .contains("ownership could not be proven"),
+        "{json}"
+    );
+    assert_eq!(json["result"]["discovered_manifests"], 2, "{json}");
+    assert_eq!(json["result"]["resolved_workspaces"], 1, "{json}");
+    assert_eq!(json["result"]["units_considered"], 1, "{json}");
+    assert_eq!(json["result"]["summary"]["cleaned"], 1, "{json}");
+    assert_eq!(
+        json["result"]["units"].as_array().unwrap().len(),
+        1,
+        "{json}"
+    );
+    assert_eq!(
+        json["result"]["scopes"].as_array().unwrap().len(),
+        2,
+        "{json}"
+    );
+
+    let clean_scope = scope_entry(&json, &fixture.scope_a);
+    assert_eq!(clean_scope["scope_blocked"], false, "{json}");
+    assert_eq!(clean_scope["summary"]["cleaned"], 1, "{json}");
+    let blocked_scope = scope_entry(&json, &fixture.scope_b);
+    assert_eq!(blocked_scope["scope_blocked"], true, "{json}");
+    assert_eq!(blocked_scope["unresolved_ownership"], 1, "{json}");
+    let reason = blocked_scope["scope_reason"].as_str().unwrap();
+    assert!(reason.contains("ownership could not be proven"), "{json}");
+    assert!(
+        reason.contains(fixture.scope_b.to_str().unwrap()),
+        "the per-scope block must name its scope: {json}"
+    );
+    let participant = &json["result"]["unresolved_participants"][0];
+    assert!(
+        participant["manifest"]
+            .as_str()
+            .unwrap()
+            .ends_with("healthy-b/Cargo.toml"),
+        "{json}"
+    );
+    assert_eq!(participant["stage"], "locate", "{json}");
+
+    assert_eq!(fixture.clean_calls(), 1, "exactly one Cargo clean spawns");
+    assert!(
+        !fixture.artifact_a().exists(),
+        "the healthy scope's artifact was reclaimed"
+    );
+    assert!(
+        fixture.artifact_b().exists(),
+        "the poisoned scope was never touched"
+    );
+
+    // The same bare invocation through the staged-plugin spelling cleans the
+    // restored artifact and blocks the same scope: heterogeneity item 8's
+    // two spellings on one fixture.
+    fixture.restore_artifact_a();
+    let plugin = fixture.run_as_plugin(&[]);
+    assert_eq!(
+        plugin.status.code(),
+        Some(1),
+        "plugin spelling blocks the same way: {}",
+        String::from_utf8_lossy(&plugin.stderr)
+    );
+    let plugin_json = DeclaredScopesFixture::parse_json(&plugin);
+    assert_eq!(
+        plugin_json["result"]["summary"]["cleaned"], 1,
+        "{plugin_json}"
+    );
+    assert_eq!(fixture.clean_calls(), 2);
+    assert!(!fixture.artifact_a().exists());
+}
+
+/// C035 item 2: simulation parity — the same unit/block set under
+/// `--dry-run`, zero Cargo clean spawns, no byte mutation.
+#[cfg(unix)]
+#[test]
+fn declared_scopes_simulate_the_same_split_with_zero_spawns() {
+    let fixture = DeclaredScopesFixture::new();
+    fixture.poison_scope_b();
+
+    let output = fixture.run("json", &["--dry-run"], &[]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "simulation reports the block, not success: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = DeclaredScopesFixture::parse_json(&output);
+    assert_eq!(json["mode"], "simulate", "{json}");
+    assert_eq!(json["result"]["scope_blocked"], true, "{json}");
+    let clean_scope = scope_entry(&json, &fixture.scope_a);
+    assert_eq!(clean_scope["summary"]["simulated"], 1, "{json}");
+    let blocked_scope = scope_entry(&json, &fixture.scope_b);
+    assert_eq!(blocked_scope["scope_blocked"], true, "{json}");
+    assert_eq!(json["result"]["summary"]["cleaned"], 0, "{json}");
+    assert_eq!(
+        fixture.clean_calls(),
+        0,
+        "simulation spawns no Cargo clean in any scope"
+    );
+    assert!(fixture.artifact_a().exists(), "simulation mutates no bytes");
+}
+
+/// C035 item 3: a workspace whose Cargo output is redirected outside its own
+/// root is `ExternalUnproven` and skipped — never cleaned, never blocking —
+/// so a redirected scope spawns nothing and exits 0.
+#[cfg(unix)]
+#[test]
+fn redirected_output_is_external_unproven_and_spawns_nothing() {
+    let fixture = DeclaredScopesFixture::new();
+    fixture.empty_scope_b();
+    let shared = fixture.scope_b_output("shared-target");
+    let target = shared.to_str().unwrap().to_owned();
+    // FIXTURE_ROOT must not claim either project, or the stub would answer
+    // from FIXTURE_TARGET and never observe the redirection.
+    let dummy = fixture.scope_a.join("..");
+    let output = fixture.run_with_fixture_roots(
+        "json",
+        &[],
+        &[("CARGO_TARGET_DIR", target.as_str())],
+        &dummy,
+        &dummy.join("target"),
+    );
+    assert!(
+        output.status.success(),
+        "skips are success: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = DeclaredScopesFixture::parse_json(&output);
+    assert_eq!(json["result"]["scope_blocked"], false, "{json}");
+    assert_eq!(
+        json["result"]["units"].as_array().unwrap().len(),
+        1,
+        "{json}"
+    );
+    let unit = &json["result"]["units"][0];
+    assert_eq!(unit["ownership"], "external-unproven", "{json}");
+    assert_eq!(unit["reason_code"], "skipped_ownership_unproven", "{json}");
+    assert_eq!(fixture.clean_calls(), 0, "no Cargo clean spawns");
+    assert!(
+        fixture.artifact_a().exists(),
+        "the project's own target dir is untouched"
+    );
+    assert!(
+        shared.join("artifact.bin").exists(),
+        "the redirected output is untouched"
+    );
+}
+
+/// C035 item 4: two scopes resolving to shared output skip on BOTH sides —
+/// never `PrivateBounded` on either. This is the control that keeps Route B
+/// honest: a naive per-scope engine without combined grouping would report
+/// the first scope cleaned.
+#[cfg(unix)]
+#[test]
+fn shared_output_across_scopes_skips_both_sides() {
+    let fixture = DeclaredScopesFixture::new();
+    let target = fixture.project_a.join("target");
+    let dummy = fixture.scope_a.join("..");
+    let output = fixture.run_with_fixture_roots(
+        "json",
+        &[],
+        &[("CARGO_TARGET_DIR", target.to_str().unwrap())],
+        &dummy,
+        &dummy.join("target"),
+    );
+    assert!(
+        output.status.success(),
+        "shared-output skips are success, not blocks: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = DeclaredScopesFixture::parse_json(&output);
+    assert_eq!(json["result"]["scope_blocked"], false, "{json}");
+    let units = json["result"]["units"].as_array().unwrap();
+    assert_eq!(units.len(), 2, "{json}");
+    for unit in units {
+        assert_eq!(unit["ownership"], "shared", "{json}");
+        assert_eq!(unit["reason_code"], "skipped_shared", "{json}");
+    }
+    assert_eq!(
+        fixture.clean_calls(),
+        0,
+        "neither side spawns against shared output"
+    );
+    assert!(fixture.artifact_a().exists());
+    assert!(fixture.artifact_b().exists());
+}
+
+/// C035 item 6: declaration hygiene. A missing, non-directory, or symlinked
+/// declaration is a fatal usage error (exit 2), never a silent skip — and a
+/// configured `scan.root` stays the exclusive override with a warning.
+#[cfg(unix)]
+#[test]
+fn bad_scope_declarations_are_fatal_usage_errors() {
+    let fixture = DeclaredScopesFixture::new();
+    // Missing directory.
+    fixture.write_scopes(&[
+        fixture.scope_a.clone(),
+        fixture.scope_a.join("does-not-exist"),
+    ]);
+    let output = fixture.run("json", &[], &[]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a missing scope is fatal: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "a fatal error emits no report: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("invalid scan root"),
+        "the fatal names the bad declaration: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Non-directory.
+    let file = fixture.scope_a.join("regular-file");
+    fs::write(&file, b"not a directory").unwrap();
+    fixture.write_scopes(&[file]);
+    let output = fixture.run("json", &[], &[]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("invalid scan root"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Symlink, including with a trailing slash.
+    let link = fixture.scope_a.join("link-scope");
+    std::os::unix::fs::symlink(&fixture.scope_b, &link).unwrap();
+    for spelling in [link.clone(), PathBuf::from(format!("{}/", link.display()))] {
+        fixture.write_scopes(&[spelling]);
+        let output = fixture.run("json", &[], &[]);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "a symlinked scope is fatal: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// A configured `scan.root` wins over declared scopes with a warning, and
+/// the run is the ordinary explicit-root run.
+#[cfg(unix)]
+#[test]
+fn configured_scan_root_overrides_declared_scopes_with_a_warning() {
+    let fixture = DeclaredScopesFixture::new();
+    let body = format!(
+        "[scan]\nrecency_seconds = 300\nroot = {}\n[maintenance]\nscopes = [{}, {}]\n",
+        toml::Value::String(fixture.project_a.to_str().unwrap().to_owned()),
+        toml::Value::String(fixture.scope_a.to_str().unwrap().to_owned()),
+        toml::Value::String(fixture.scope_b.to_str().unwrap().to_owned()),
+    );
+    fs::write(&fixture.config, body).unwrap();
+    let output = fixture.run("json", &[], &[]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("overrides maintenance.scopes"),
+        "the override must be loud: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = DeclaredScopesFixture::parse_json(&output);
+    assert_eq!(json["scope"], "explicit", "{json}");
+    assert_eq!(json["result"]["summary"]["cleaned"], 1, "{json}");
+    assert!(
+        json["result"].get("scopes").is_none(),
+        "the explicit run carries no scopes breakdown: {json}"
+    );
+}
+
+/// C035 item 7: the contract. Undeclared runs emit no `scopes` key
+/// (byte-identical shape), and the multi-scope log line stays one bounded
+/// ASCII line reporting the block with the stable reason code.
+#[cfg(unix)]
+#[test]
+fn undeclared_runs_emit_no_scopes_key() {
+    let fixture = MaintenanceFixture::new(true);
+    let output = fixture.run(&[]);
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        json["result"].get("scopes").is_none(),
+        "undeclared JSON gains no key: {json}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn multi_scope_log_line_is_one_bounded_blocked_line() {
+    let fixture = DeclaredScopesFixture::new();
+    fixture.poison_scope_b();
+    let output = fixture.run("log", &[], &[]);
+    assert_eq!(output.status.code(), Some(1));
+    let line = assert_bounded_log_line(&output.stdout);
+    assert!(line.contains("status=blocked"), "{line}");
+    assert!(line.contains("reason=ownership_unproven"), "{line}");
+}
+
+/// The multi-scope human report names every scope and keeps each scope's
+/// block and rows inside its own section.
+#[cfg(unix)]
+#[test]
+fn multi_scope_human_report_groups_by_scope() {
+    let fixture = DeclaredScopesFixture::new();
+    fixture.poison_scope_b();
+    let output = fixture.run("human", &[], &[]);
+    assert_eq!(output.status.code(), Some(1));
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("declared scopes: 2"), "{text}");
+    assert!(
+        text.contains(&format!("scope {}", fixture.scope_a.display())),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("scope {}", fixture.scope_b.display())),
+        "{text}"
+    );
+    assert!(text.contains("ownership could not be proven"), "{text}");
+}

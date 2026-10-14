@@ -1,9 +1,11 @@
-# ADR 004 (proposed) — Bounded Independent Cleanup Proof Islands Under Partial Discovery
+# ADR 004 (accepted-in-part) — Bounded Independent Cleanup Proof Islands Under Partial Discovery
 
-Status: **proposed — not accepted, not authorization for implementation**.
-Date: 2026-10-09.
+Status: **accepted-in-part 2026-10-14 — operator-declared scopes only; automatic independence certificates remain rejected per C031-D**.
+Date: 2026-10-09. Acceptance-in-part date: 2026-10-14 (owner product decision, Route B).
 Repository baseline: `f08705e77716e445e50097333a0313cab9574cdd`.
 Related corrective: `plans/implementation/artifact-discovery-cleanup/c031-happy-path-ownership-scope-and-partial-failure-corrective.md`.
+Accepting corrective: `plans/implementation/artifact-discovery-cleanup/c035-operator-declared-independent-maintenance-scopes-corrective.md`.
+Companion clarification: ADR 001 "C035 clarification — operator-declared scopes are independent proof boundaries" (2026-10-14).
 Supersedes nothing until accepted. This is an explicit **proposed change** to the operational consequences of accepted ADR 001 (C003/C004/C006), not a reinterpretation of those existing guarantees.
 
 ## Context
@@ -50,4 +52,16 @@ Acceptance requires: (a) explicit amendment/clarification of ADR 001 C004/C006; 
 
 ## Current disposition
 
-**Open question, proposed**. C029/C030 are the immediate safe corrective line. Historical records must remain unchanged, and planning handoff does not authorize new destructive behavior.
+**Accepted-in-part 2026-10-14 (owner decision, Route B).** The operator-declared
+branch is accepted: an operator-named exact-absolute maintenance scope is an
+independent proof boundary receiving the complete combined-universe proof
+within itself (C035). The automatic branch stays rejected: no partition may
+be constructed by the tool on the strength of inferred independence, no
+per-root fallback after combined failure, no silent narrowing — C031-D's
+negative result stands. Historical records remain unchanged; C035 carries
+the implementation under the acceptance conditions of §"Evidence required
+before acceptance" (ADR 001 C004/C006 amended via the C035 clarification
+above; auditable per-scope proof with negative controls; additive-only
+contract changes; rollback is deleting the `[maintenance]` section plus a
+legacy-combined fallback for internal partitioning errors; no release
+authorized by C035 itself).
