@@ -3845,7 +3845,7 @@ mod tests {
         std::fs::create_dir_all(root.join("gamma").join(".cargo")).unwrap();
         std::fs::write(
             root.join("gamma").join(".cargo/config.toml"),
-            format!("[build]\ntarget-dir = \"{redirected}\"\n"),
+            format!("[build]\ntarget-dir = {redirected:?}\n"), // Debug: escapes `\` so Windows paths stay valid TOML
         )
         .unwrap();
         let old = SystemTime::now() - Duration::from_secs(3600);
