@@ -49,6 +49,20 @@ required-features = ["dev-tools"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
+# Interactive workspace selection (`cargo cleanme -i`, M014): raw mode, key
+# events, and cursor control.
+#
+# Default features are kept on purpose. `windows` pulls the console API
+# (`winapi`/`crossterm_winapi`) that crossterm's Windows raw-mode and cursor
+# paths call unconditionally; trimming it compiles on Linux and is exactly the
+# kind of platform-only gap that this repository has been bitten by before
+# (C020, C021, C024). The `bracketed-paste` that comes along is inert here —
+# nothing in the selection session enables paste reporting.
+#
+# ADR 001 rejected `ratatui`/`crossterm` for *transient progress* rendering.
+# That rejection is not extended to an operator-driven selection UI, which is
+# a different requirement and did not exist when it was written.
+crossterm = "0.28"
 directories = "6"
 dua-core = "4.1"
 filesize = "0.2"

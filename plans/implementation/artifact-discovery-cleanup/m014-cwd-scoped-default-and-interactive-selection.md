@@ -1,6 +1,8 @@
 # M014 — Working-Directory-Scoped Default and Interactive Workspace Selection
 
-Status: **active** — plan accepted, implementation in progress.
+Status: **implemented, unpublished.** Work packages A–F are complete and the
+verification ladder is green. The milestone stays **open** until a published
+release carries it — compilation is not closure (M012A, C032).
 Baseline: `ba44927` (`main`, v0.2.7 published).
 Roadmap: `plans/subsystems/artifact-discovery-cleanup-roadmap.md`.
 Decision record: `plans/adr/006-accepted-working-directory-anchored-selection.md`.
@@ -147,9 +149,14 @@ Windows terminal handling is where this repository has repeatedly been bitten
   classification. Typed skip code for filtered-out units.
 - **B.** `CleanupRequest.selection`; bare invocation and `clean --known` anchor
   to `$PWD`; `clean ROOT`/`--full` stay `All`.
-- **C.** `scan --all`/`-a` with `required_unless_present_all`.
+- **C.** `scan --all`/`-a`, with requiredness expressed as an `ArgGroup`
+  rather than `required_unless_present_all`: clap 4 does not count a positional
+  ROOT as present for that check, so `scan /tmp` still demanded `--all`. The
+  group also derives mutual exclusion from one declaration, so the conflict
+  rules cannot drift from the requiredness rules.
 - **D.** `src/interactive.rs`: NOR/INS state machine, pure and testable, with
-  the terminal behind a narrow seam.
+  the terminal behind a narrow seam. Shipped; see
+  [`architecture/16-interactive.md`](../../../architecture/16-interactive.md).
 - **E.** Generated docs, architecture deep dives, citation re-derivation.
 - **F.** Verification ladder + hosted evidence.
 

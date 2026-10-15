@@ -30,6 +30,8 @@ set edit:completion:arg-completer[cargo] = {|@words|
             cand --stats 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination'
             cand --dry-run 'Simulate: run every decision, proof, and reporting step, but invoke no `cargo clean` process at all. Honoured wherever it appears, so the `cargo cleanme --dry-run clean ROOT` spelling cannot fall back to Execute. Only `clean` (and `update`''s own `--dry-run`) honour it: `scan` and `config` ignore a global `--dry-run` (read-only / local-only, no behaviour change)'
             cand --dryrun 'Historical spelling of `--dry-run`; retained as a hidden alias'
+            cand -i 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
+            cand --interactive 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
             cand -h 'Print help (see more with ''--help'')'
             cand --help 'Print help (see more with ''--help'')'
             cand -V 'Print version'
@@ -48,6 +50,8 @@ set edit:completion:arg-completer[cargo] = {|@words|
             cand --full 'Historical spelling of `--all`; retained as a hidden alias'
             cand --no-progress 'Disable transient progress UI (useful for benchmarks and debugging)'
             cand --stats 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination'
+            cand -i 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
+            cand --interactive 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
             cand -h 'Print help (see more with ''--help'')'
             cand --help 'Print help (see more with ''--help'')'
         }
@@ -56,6 +60,8 @@ set edit:completion:arg-completer[cargo] = {|@words|
             cand --format 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers'
             cand --no-progress 'Disable transient progress UI (useful for benchmarks and debugging)'
             cand --stats 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination'
+            cand -i 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
+            cand --interactive 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
             cand -h 'Print help (see more with ''--help'')'
             cand --help 'Print help (see more with ''--help'')'
             cand path 'path'
@@ -67,6 +73,8 @@ set edit:completion:arg-completer[cargo] = {|@words|
             cand --format 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers'
             cand --no-progress 'Disable transient progress UI (useful for benchmarks and debugging)'
             cand --stats 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination'
+            cand -i 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
+            cand --interactive 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
             cand -h 'Print help (see more with ''--help'')'
             cand --help 'Print help (see more with ''--help'')'
         }
@@ -75,6 +83,8 @@ set edit:completion:arg-completer[cargo] = {|@words|
             cand --format 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers'
             cand --no-progress 'Disable transient progress UI (useful for benchmarks and debugging)'
             cand --stats 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination'
+            cand -i 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
+            cand --interactive 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
             cand -h 'Print help (see more with ''--help'')'
             cand --help 'Print help (see more with ''--help'')'
         }
@@ -83,6 +93,8 @@ set edit:completion:arg-completer[cargo] = {|@words|
             cand --format 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers'
             cand --no-progress 'Disable transient progress UI (useful for benchmarks and debugging)'
             cand --stats 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination'
+            cand -i 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
+            cand --interactive 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
             cand -h 'Print help (see more with ''--help'')'
             cand --help 'Print help (see more with ''--help'')'
         }
@@ -103,6 +115,8 @@ set edit:completion:arg-completer[cargo] = {|@words|
             cand --dryrun 'Historical spelling of `--dry-run`; retained as a hidden alias'
             cand --no-progress 'Disable transient progress UI (useful for benchmarks and debugging)'
             cand --stats 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination'
+            cand -i 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
+            cand --interactive 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
             cand -h 'Print help (see more with ''--help'')'
             cand --help 'Print help (see more with ''--help'')'
         }
@@ -112,6 +126,8 @@ set edit:completion:arg-completer[cargo] = {|@words|
             cand --dry-run 'Resolve the plan and report it without acquiring or replacing bytes'
             cand --no-progress 'Disable transient progress UI (useful for benchmarks and debugging)'
             cand --stats 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination'
+            cand -i 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
+            cand --interactive 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
             cand -h 'Print help (see more with ''--help'')'
             cand --help 'Print help (see more with ''--help'')'
         }

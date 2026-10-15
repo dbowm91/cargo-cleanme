@@ -55,6 +55,17 @@ pub struct Cli {
     /// Historical spelling of `--dry-run`; retained as a hidden alias.
     #[arg(long = "dryrun", hide = true, conflicts_with = "dry_run")]
     pub dryrun_legacy: bool,
+    /// Choose the workspaces to clean from an inline selection list (NOR/INS).
+    ///
+    /// Resolves the cleanup units read-only, presents one row per unit with its
+    /// reclaimable bytes, and cleans only what is checked. A selection can
+    /// remove candidates but never add one: ownership is still proven across
+    /// the complete universe and the engine still re-proves it per spawn.
+    ///
+    /// Requires a terminal on stdin and stdout. Combine with `--dry-run` to
+    /// review a selection without invoking `cargo clean`.
+    #[arg(short = 'i', long, global = true)]
+    pub interactive: bool,
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -224,7 +235,17 @@ pub struct CleanupRequest {
     ///
     /// `WorkingDirectory` here is *unresolved intent*. `main.rs` must call
     /// [`CleanupSelection::resolved`] before the engine runs.
+    ///
+    /// `-i` overrides this: the interactive session replaces it with the
+    /// operator's choice, which is a strictly narrower `Roots` selection.
     pub selection: CleanupSelection,
+    /// `-i`/`--interactive`: present the selection list before cleaning.
+    ///
+    /// Kept separate from `selection` because the two answer different
+    /// questions — *how* units are chosen versus *whether* a session runs at
+    /// all — and because the interactive selection can only be resolved once a
+    /// terminal exists, which argv parsing must not do.
+    pub interactive: bool,
 }
 
 /// The resolved operation, scope, and mode for one invocation.
@@ -292,6 +313,7 @@ impl Cli {
                 mode: clean_mode(self.dry_run, false, self.dryrun_legacy),
                 overrides: CleanupOverrides::default(),
                 selection: CleanupSelection::WorkingDirectory,
+                interactive: self.interactive,
             }),
             Some(Command::Scan {
                 root,
@@ -369,6 +391,7 @@ impl Cli {
                         package: package.clone(),
                     },
                     selection,
+                    interactive: self.interactive,
                 })
             }
         }
@@ -478,6 +501,7 @@ mod tests {
             mode,
             overrides: CleanupOverrides::default(),
             selection,
+            interactive: false,
         }
     }
     #[test]
@@ -653,6 +677,78 @@ mod tests {
                 .invocation(),
             Invocation::Scan(ScanIntent::Maintenance)
         );
+    }
+
+    #[test]
+    fn the_interactive_flag_is_declared_advertised_and_not_implied() {
+        use clap::CommandFactory;
+        // M014 removed a previously-declared `-i` precisely because a flag that
+        // parses and silently does nothing is worse than no flag. This is the
+        // regression against reintroducing that shape.
+        let help = Cli::command().render_long_help().to_string();
+        assert!(
+            help.contains("-i, --interactive"),
+            "the flag must be advertised: {help}"
+        );
+        assert!(
+            Cli::try_parse_from(["cargo-cleanme", "-i"])
+                .unwrap()
+                .interactive
+        );
+        assert!(
+            Cli::try_parse_from(["cargo-cleanme", "--interactive"])
+                .unwrap()
+                .interactive,
+            "--interactive must be the same flag"
+        );
+        assert!(
+            !Cli::try_parse_from(["cargo-cleanme"]).unwrap().interactive,
+            "-i must not be implied by an ordinary invocation"
+        );
+        // It is global, so the subcommand spelling must carry it too.
+        match Cli::try_parse_from(["cargo-cleanme", "clean", "--known", "-i"])
+            .unwrap()
+            .invocation()
+        {
+            Invocation::Cleanup(request) => assert!(
+                request.interactive,
+                "the flag must reach the cleanup intent, not just the parser"
+            ),
+            other => panic!("expected a cleanup intent, got {other:?}"),
+        }
+        // The flag does not manufacture a selection: it declares that a
+        // session will produce one. The declared selection still travels
+        // alongside it, so the non-interactive path is unchanged.
+        match Cli::try_parse_from(["cargo-cleanme", "-i"])
+            .unwrap()
+            .invocation()
+        {
+            Invocation::Cleanup(request) => {
+                assert_eq!(
+                    request.selection,
+                    CleanupSelection::WorkingDirectory,
+                    "-i must not pre-empt the anchor; the session replaces it"
+                );
+            }
+            other => panic!("expected a cleanup intent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn interactive_without_a_terminal_still_means_human_format_only() {
+        // The machine formats are refused in `main`, not here: this layer does
+        // no IO and must stay pure. What it *can* prove is that the flag
+        // coexists with every output format, so the refusal is a runtime
+        // guard on a real conflict rather than an accident of parsing.
+        for (flag, expected) in [
+            ("human", OutputFormat::Human),
+            ("json", OutputFormat::Json),
+            ("log", OutputFormat::Log),
+        ] {
+            let cli = Cli::try_parse_from(["cargo-cleanme", "-i", "--format", flag]).unwrap();
+            assert_eq!(cli.format, expected);
+            assert!(cli.interactive);
+        }
     }
 
     #[test]
@@ -931,6 +1027,7 @@ mod tests {
                     package: None,
                 },
                 selection: CleanupSelection::WorkingDirectory,
+                interactive: false,
             }),
             "advanced policy overrides travel with the intent, not beside it"
         );

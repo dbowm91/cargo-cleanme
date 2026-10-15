@@ -1265,6 +1265,37 @@ impl MaintenanceFixture {
             .unwrap()
     }
 
+    /// Run with an explicit output format.
+    ///
+    /// The interactive-refusal tests need to name the format themselves: `-i`
+    /// is refused *because of* the format in one case, so inheriting the
+    /// default `json` would make the two tests indistinguishable.
+    fn run_with_format(&self, args: &[&str], format: &str) -> std::process::Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args([
+            "--config",
+            self.config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            format,
+        ]);
+        command.args(args);
+        command
+            .env("PATH", path_with(&self.bin))
+            .env("FIXTURE_ROOT", &self.root)
+            .env("FIXTURE_TARGET", &self.target)
+            .env("CARGO_LOG", &self.log)
+            .env("CARGO_ARGS_LOG", &self.args_log)
+            .current_dir(&self.root)
+            .output()
+            .unwrap()
+    }
+
+    /// Run with human output, the only format a terminal session can carry.
+    fn run_human(&self, args: &[&str]) -> std::process::Output {
+        self.run_with_format(args, "human")
+    }
+
     /// Run cargo-cleanme with the stub on PATH and return its output.
     fn run(&self, args: &[&str]) -> std::process::Output {
         self.run_with_locate_failure(args, false)
@@ -1421,6 +1452,116 @@ fn working_directory_anchor_selects_without_narrowing_the_ownership_universe() {
         inside_json["result"]["units"][0]["reason_code"], "simulated",
         "{inside_json}"
     );
+}
+
+/// `-i` needs a terminal on both stdin and stdout.
+///
+/// The test process has neither, so this is the precondition exercised for
+/// real rather than through a mock. The discriminating assertion is the exit
+/// code *and* the reason: a test that only checked "it failed" would pass just
+/// as well against an unrelated crash.
+#[test]
+fn interactive_without_a_terminal_is_a_usage_error_that_names_the_reason() {
+    let fixture = MaintenanceFixture::new(true);
+    let output = fixture.run_human(&["-i"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a missing terminal is a usage error, not a crash and not a silent no-op\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("requires a terminal"),
+        "the reason must be legible: {stderr}"
+    );
+    assert!(
+        stderr.contains("input is not a terminal"),
+        "the specific failing stream must be named: {stderr}"
+    );
+    assert_eq!(
+        fixture.clean_calls(),
+        0,
+        "a refused session must not spawn anything"
+    );
+    assert!(
+        fixture.artifact().exists(),
+        "a refused session must not touch bytes"
+    );
+}
+
+/// The machine formats cannot carry a terminal session.
+///
+/// This guards a contract decision rather than an implementation detail: JSON
+/// and log mode are automation contracts, and inventing a "the operator
+/// stopped here" document for them would be a new schema nobody asked for.
+#[test]
+fn interactive_refuses_the_machine_output_formats() {
+    // JSON and log are the automation contracts. Carrying a terminal session
+    // in either would mean inventing a document shape for "the operator stopped
+    // here", which is a new schema nobody asked for. The refusal is the
+    // honest answer.
+    //
+    // Each format is asserted against *its own* contract: human/JSON prose
+    // explains itself, while log mode is specified to carry a bounded code and
+    // no text at all. A single shared assertion would pass for the wrong reason
+    // in one of the two.
+    let json_fixture = MaintenanceFixture::new(true);
+    let json = json_fixture.run_with_format(&["-i"], "json");
+    assert_eq!(
+        json.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&json.stderr)
+    );
+    let json_stderr = String::from_utf8_lossy(&json.stderr);
+    assert!(
+        json_stderr.contains("requires human output"),
+        "JSON mode has no prose channel, so the human path must still explain: {json_stderr}"
+    );
+    assert_eq!(json_fixture.clean_calls(), 0, "no spawn for --format json");
+
+    let log_fixture = MaintenanceFixture::new(true);
+    let log = log_fixture.run_with_format(&["-i"], "log");
+    assert_eq!(
+        log.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&log.stderr)
+    );
+    let log_stderr = String::from_utf8_lossy(&log.stderr);
+    assert!(
+        log_stderr.contains("op=clean") && log_stderr.contains("status=error"),
+        "log mode's refusal must still be a greppable bounded line: {log_stderr}"
+    );
+    assert!(
+        !log_stderr.contains("requires human output"),
+        "log mode must not carry prose — that is its contract: {log_stderr}"
+    );
+    assert_eq!(log_fixture.clean_calls(), 0, "no spawn for --format log");
+}
+
+/// `-i` with `--dry-run` still refuses a redirected terminal.
+///
+/// The mode changes what a session *does* after the operator presses Enter; it
+/// cannot conjure a terminal. A test that let `--dry-run -i` through here would
+/// be letting the safest spelling skip the check.
+#[test]
+fn interactive_dry_run_still_requires_a_terminal() {
+    let fixture = MaintenanceFixture::new(true);
+    let output = fixture.run_human(&["-i", "--dry-run"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("requires a terminal"),
+        "the precondition is not a mode-dependent behaviour"
+    );
+    assert_eq!(fixture.clean_calls(), 0);
 }
 
 #[cfg(unix)]
