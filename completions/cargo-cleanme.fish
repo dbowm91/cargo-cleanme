@@ -37,7 +37,7 @@ complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fis
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -l dryrun -d 'Historical spelling of `--dry-run`; retained as a hidden alias'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -s V -l version -d 'Print version'
-complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -f -a "scan" -d 'Reconcile the machine read-only: full by default, explicit with ROOT, routine inventory with `--known`'
+complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -f -a "scan" -d 'Reconcile the machine read-only: full with `--all`, explicit with ROOT, routine inventory with `--known`'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -f -a "config"
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -f -a "clean" -d 'Preview or execute cleanup of revalidated Cargo build artifacts'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -f -a "update" -d 'Update this cargo-cleanme to the latest stable published release'
@@ -46,7 +46,8 @@ complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_se
 json\t''
 log\t'One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract: complete consumers use `json`'"
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -l known -d 'Routine read-only inventory over the maintenance scope'
-complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -l full -d 'Historical spelling of no-root Full `scan`; retained as a hidden alias'
+complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -s a -l all -d 'Full machine reconciliation'
+complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -l full -d 'Historical spelling of `--all`; retained as a hidden alias'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -l no-progress -d 'Disable transient progress UI (useful for benchmarks and debugging)'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -l stats -d 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -s h -l help -d 'Print help (see more with \'--help\')'
@@ -89,7 +90,7 @@ complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_se
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from update" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c cargo -n "__fish_cargo_using_subcommand help; and not __fish_seen_subcommand_from cargo-cleanme help" -f -a "cargo-cleanme" -d 'Clean inactive Cargo build artifacts through Cargo, or reconcile the machine read-only'
 complete -c cargo -n "__fish_cargo_using_subcommand help; and not __fish_seen_subcommand_from cargo-cleanme help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c cargo -n "__fish_cargo_using_subcommand help; and __fish_seen_subcommand_from cargo-cleanme" -f -a "scan" -d 'Reconcile the machine read-only: full by default, explicit with ROOT, routine inventory with `--known`'
+complete -c cargo -n "__fish_cargo_using_subcommand help; and __fish_seen_subcommand_from cargo-cleanme" -f -a "scan" -d 'Reconcile the machine read-only: full with `--all`, explicit with ROOT, routine inventory with `--known`'
 complete -c cargo -n "__fish_cargo_using_subcommand help; and __fish_seen_subcommand_from cargo-cleanme" -f -a "config"
 complete -c cargo -n "__fish_cargo_using_subcommand help; and __fish_seen_subcommand_from cargo-cleanme" -f -a "clean" -d 'Preview or execute cleanup of revalidated Cargo build artifacts'
 complete -c cargo -n "__fish_cargo_using_subcommand help; and __fish_seen_subcommand_from cargo-cleanme" -f -a "update" -d 'Update this cargo-cleanme to the latest stable published release'

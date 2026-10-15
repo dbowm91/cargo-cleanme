@@ -34,7 +34,7 @@ set edit:completion:arg-completer[cargo] = {|@words|
             cand --help 'Print help (see more with ''--help'')'
             cand -V 'Print version'
             cand --version 'Print version'
-            cand scan 'Reconcile the machine read-only: full by default, explicit with ROOT, routine inventory with `--known`'
+            cand scan 'Reconcile the machine read-only: full with `--all`, explicit with ROOT, routine inventory with `--known`'
             cand config 'config'
             cand clean 'Preview or execute cleanup of revalidated Cargo build artifacts'
             cand update 'Update this cargo-cleanme to the latest stable published release'
@@ -43,7 +43,9 @@ set edit:completion:arg-completer[cargo] = {|@words|
             cand --config 'config'
             cand --format 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers'
             cand --known 'Routine read-only inventory over the maintenance scope'
-            cand --full 'Historical spelling of no-root Full `scan`; retained as a hidden alias'
+            cand -a 'Full machine reconciliation'
+            cand --all 'Full machine reconciliation'
+            cand --full 'Historical spelling of `--all`; retained as a hidden alias'
             cand --no-progress 'Disable transient progress UI (useful for benchmarks and debugging)'
             cand --stats 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination'
             cand -h 'Print help (see more with ''--help'')'
@@ -118,7 +120,7 @@ set edit:completion:arg-completer[cargo] = {|@words|
             cand help 'Print this message or the help of the given subcommand(s)'
         }
         &'cargo;help;cargo-cleanme'= {
-            cand scan 'Reconcile the machine read-only: full by default, explicit with ROOT, routine inventory with `--known`'
+            cand scan 'Reconcile the machine read-only: full with `--all`, explicit with ROOT, routine inventory with `--known`'
             cand config 'config'
             cand clean 'Preview or execute cleanup of revalidated Cargo build artifacts'
             cand update 'Update this cargo-cleanme to the latest stable published release'

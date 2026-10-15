@@ -44,6 +44,8 @@ fn operation_name(invocation: &Invocation) -> &'static str {
         Invocation::Scan(_) => "scan",
         Invocation::Config(_) => "config",
         Invocation::Update { .. } => "update",
+        // Unreachable through `clap`, so no consumer can observe this value.
+        Invocation::UsageError(_) => "usage",
     }
 }
 
@@ -82,6 +84,9 @@ fn run(cli: Cli) -> Result<i32, AppError> {
             run_scan(intent, &path, options, EmitReport::Yes).map(|outcome| outcome.code)
         }
         Invocation::Cleanup(request) => run_cleanup(request, &path, options),
+        // Unreachable through `clap` (see `Invocation::UsageError`). Reported as
+        // a usage error (exit 2) rather than guessing an operation.
+        Invocation::UsageError(message) => Err(AppError::Config(message)),
     }
 }
 
@@ -317,6 +322,16 @@ fn run_cleanup(
 ) -> Result<i32, AppError> {
     let config = config::load_or_create(config_path)?;
     let mode = request.mode;
+    // M014: turn the CLI's selection *intent* into concrete roots before the
+    // engine runs. `WorkingDirectory` is the only unresolved form, and
+    // `resolved()` fails closed rather than falling back to "everything".
+    //
+    // This is a *post-classification* filter: `resolve_cleanup_roots` above and
+    // `workspace::build_groups` inside the engine still see the full Routine
+    // universe, so output shared with a workspace outside the anchor stays
+    // `Shared`. Narrowing root selection here instead would be the ADR 006
+    // defect.
+    let selection = request.selection.resolved()?;
     let resolved = resolve_cleanup_roots(&request.scope, config_path, &config, options)?;
     let configured = &config.cleanup.policy;
     let overrides = &request.overrides;
@@ -426,6 +441,7 @@ fn run_cleanup(
         &policy,
         selector.clone(),
         Some(premise),
+        &selection,
     );
     renderer.finish_and_clear();
     let report = cleanup?;
@@ -475,6 +491,7 @@ fn run_engine_guarded(
     policy: &cargo_cleanme::cleanup::CleanupPolicy,
     selector: Option<cargo_cleanme::cleanup::CleanupSelector>,
     premise: Option<cargo_cleanme::cleanup::AdmissionPremise>,
+    selection: &cargo_cleanme::cleanup::CleanupSelection,
 ) -> Result<cargo_cleanme::cleanup::CleanReport, AppError> {
     let attempt = |roots: &[std::path::PathBuf],
                    premise: Option<cargo_cleanme::cleanup::AdmissionPremise>| {
@@ -488,6 +505,7 @@ fn run_engine_guarded(
             policy,
             selector.clone(),
             premise,
+            selection,
         )
     };
     match attempt(&resolved.roots, premise.clone()) {

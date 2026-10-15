@@ -56,6 +56,98 @@ impl CleanMode {
     }
 }
 
+/// Which resolved `CleanupUnit`s are candidates for this invocation.
+///
+/// **A selection is applied after ownership classification and can only remove
+/// candidates.** It cannot add one, reclassify one, or unblock a scope. That
+/// is the whole reason a working-directory anchor is safe to use as a default:
+/// `workspace::build_groups` still sees every discovered workspace, so output
+/// shared with a workspace outside the anchor stays `Shared` and stays
+/// inventory-only.
+///
+/// The alternative — narrowing *discovery* to the anchor — was measured and
+/// rejected (ADR 006): narrowing discovery hides out-of-scope claimants and
+/// silently upgrades `shared` bytes to `private`, the only class that authorizes
+/// deletion.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CleanupSelection {
+    /// Every resolved unit is a candidate. `clean ROOT` and `clean --full`,
+    /// which are already bounded by their own root selection.
+    All,
+    /// An **unresolved** anchor on the process working directory.
+    ///
+    /// `cli.rs` resolves argv but must not perform IO, so it emits this
+    /// unresolved intent and `main.rs` turns it into [`Self::Ancestry`] before
+    /// the engine runs. It is deliberately fail-closed: [`Self::admits`]
+    /// selects nothing until [`Self::resolved`] has been called, so a caller
+    /// that forgets to resolve it cleans nothing rather than everything.
+    WorkingDirectory,
+    /// Units whose canonical workspace root is the anchor, an ancestor of it, or
+    /// a descendant of it.
+    Ancestry(PathBuf),
+    /// Units whose canonical workspace root is exactly one of these. The
+    /// interactive selection produces this.
+    Roots(Vec<PathBuf>),
+}
+
+impl CleanupSelection {
+    /// Whether one unit's workspace root survives this selection.
+    ///
+    /// `Ancestry` matches in **both** directions on purpose. An operator
+    /// standing inside a member of a virtual workspace must still select that
+    /// enclosing workspace, and an operator standing above several projects must
+    /// be able to select one of them. A descendant-only rule would make the
+    /// common virtual-workspace layout a silent no-op.
+    pub fn admits(&self, workspace_root: &Path) -> bool {
+        match self {
+            Self::All => true,
+            // Fail closed: an unresolved anchor selects nothing. See the
+            // variant documentation for why this is not `true`.
+            Self::WorkingDirectory => false,
+            Self::Ancestry(anchor) => {
+                workspace_root == anchor
+                    || workspace_root.starts_with(anchor)
+                    || anchor.starts_with(workspace_root)
+            }
+            Self::Roots(roots) => roots.iter().any(|root| root == workspace_root),
+        }
+    }
+
+    /// Resolve [`Self::WorkingDirectory`] against the process working directory.
+    ///
+    /// The IO lives here rather than in `cli.rs` so that argv resolution stays
+    /// pure and testable. An unresolvable working directory is an
+    /// [`AppError::InvalidRoot`] usage error, never a silent fallback to
+    /// [`Self::All`].
+    pub fn resolved(&self) -> Result<CleanupSelection, AppError> {
+        match self {
+            Self::WorkingDirectory => {
+                let cwd = std::env::current_dir().map_err(|e| AppError::InvalidRoot {
+                    path: ".".into(),
+                    reason: format!(
+                        "cannot resolve the working directory for cleanup selection: {e}"
+                    ),
+                })?;
+                Ok(Self::Ancestry(cwd))
+            }
+            other => Ok(other.clone()),
+        }
+    }
+
+    /// A bounded human description of what this selection anchors on, or `None`
+    /// when it does not filter.
+    pub fn describe(&self) -> Option<String> {
+        match self {
+            Self::All => None,
+            Self::Ancestry(anchor) => Some(format!("the working directory {}", anchor.display())),
+            Self::WorkingDirectory => {
+                Some("an unresolved working-directory anchor (internal error)".into())
+            }
+            Self::Roots(_) => Some("the interactive selection".into()),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CleanOutcome {
     Previewed,
@@ -117,6 +209,15 @@ pub enum CleanupReasonCode {
     /// that demonstrably changed.
     SkippedOwnershipUnproven,
     SkippedSafety,
+    /// The workspace was discovered, resolved, sized and proven, but the
+    /// operator's selection removed it from the candidate set (M014: a
+    /// working-directory anchor, or an interactive selection).
+    ///
+    /// This is deliberately *not* an ownership or safety code: the unit was
+    /// eligible and was left untouched on purpose. It exists so that a
+    /// selection can never produce a silent no-op the way a configured
+    /// `scan.root` once made `clean --known` (M012A defect).
+    SkippedOutsideSelection,
     CargoFailed,
     MeasurementFailed,
     SelectorUnsupported,
@@ -176,6 +277,7 @@ impl CleanupReasonCode {
             Self::SkippedChangedBeforeCleanup => "skipped_changed_before_cleanup",
             Self::SkippedOwnershipUnproven => "skipped_ownership_unproven",
             Self::SkippedSafety => "skipped_safety",
+            Self::SkippedOutsideSelection => "skipped_outside_selection",
             Self::CargoFailed => "cargo_failed",
             Self::MeasurementFailed => "measurement_failed",
             Self::SelectorUnsupported => "selector_unsupported",
@@ -938,6 +1040,7 @@ pub fn clean_with_roots_policy_selector(
         policy,
         selector,
         None,
+        &CleanupSelection::All,
     )
 }
 
@@ -969,6 +1072,7 @@ pub fn clean_with_roots_policy_selector_guarded(
     policy: &CleanupPolicy,
     selector: Option<CleanupSelector>,
     premise: Option<AdmissionPremise>,
+    selection: &CleanupSelection,
 ) -> Result<CleanReport, AppError> {
     let includes = compile_policy_globs(&policy.include)?;
     let excludes = compile_policy_globs(&policy.exclude)?;
@@ -1035,9 +1139,11 @@ pub fn clean_with_roots_policy_selector_guarded(
         &mut counters,
         &mut diagnostics,
         observer,
+        selection,
     )?;
     let workspaces = scope.workspaces;
     let units = scope.units;
+    let unselected = scope.unselected;
     let unresolved_ownership = scope.unresolved;
 
     let mut report = CleanReport {
@@ -1096,6 +1202,34 @@ pub fn clean_with_roots_policy_selector_guarded(
     // Cleanup phase is determinate only after complete ownership coverage is
     // established (C004). Announce the CleanupUnit total through the observer.
     observer.units_total(cleanup_phase, units.len() as u64);
+
+    // Units removed by the operator's selection are reported, never dropped.
+    // They were discovered, resolved, sized and classified exactly like the
+    // candidates; they simply were not asked for. Silence here would be the
+    // M012A silent-no-op defect in a new place.
+    //
+    // One row per excluded unit, not one synthetic summary row: the report's
+    // row identity is a workspace path, and the operator's next question after
+    // "why wasn't this cleaned?" is always "which one?", which a summary row
+    // cannot answer without inventing a path that is on disk.
+    for unit in &unselected {
+        let anchor = selection
+            .describe()
+            .unwrap_or_else(|| "the current selection".to_string());
+        report.results.push(CleanResult {
+            display_path: unit.root.clone(),
+            workspace_roots: vec![unit.root.clone()],
+            output_roots: unit.covering.clone(),
+            ownership: unit_blocking_class(unit),
+            outcome: CleanOutcome::Skipped,
+            policy_disposition: None,
+            reason_code: CleanupReasonCode::SkippedOutsideSelection,
+            before_bytes: Some(unit.bytes),
+            after_bytes: None,
+            observed_decrease: None,
+            detail: format!("workspace is outside {anchor}; it was proven and left untouched"),
+        });
+    }
 
     // Filled on the first candidate that reaches the final proof; shared by
     // every later candidate in this run (H3/O1).
@@ -1673,9 +1807,18 @@ fn observe_unit_groups(observer: &dyn ProgressObserver, unit: &workspace::Cleanu
 struct CleanupScope {
     workspaces: Vec<ResolvedWorkspace>,
     units: Vec<workspace::CleanupUnit>,
+    /// Units that were discovered, resolved, sized and proven, but removed from
+    /// the candidate set by the operator's selection (M014).
+    ///
+    /// They are reported with `SkippedOutsideSelection` rather than dropped:
+    /// a selection that silently discarded units would recreate the M012A
+    /// silent-no-op defect, where a configured `scan.root` made `clean --known`
+    /// report a successful run it never performed.
+    unselected: Vec<workspace::CleanupUnit>,
     unresolved: Vec<UnresolvedOwnershipParticipant>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_cleanup_scope(
     manifests: &[PathBuf],
     scan_start: SystemTime,
@@ -1684,6 +1827,7 @@ fn resolve_cleanup_scope(
     counters: &mut ScanCounters,
     diagnostics: &mut Vec<ScanDiagnostic>,
     observer: &dyn ProgressObserver,
+    selection: &CleanupSelection,
 ) -> Result<CleanupScope, AppError> {
     // Workspace resolution (cached, sequential).
     let adapter = WorkspaceCleanupAdapter { runner };
@@ -1701,6 +1845,7 @@ fn resolve_cleanup_scope(
         return Ok(CleanupScope {
             workspaces,
             units: Vec::new(),
+            unselected: Vec::new(),
             unresolved,
         });
     }
@@ -1719,10 +1864,25 @@ fn resolve_cleanup_scope(
         diagnostics,
         observer,
     );
-    let units = workspace::build_cleanup_units(&workspaces, &outcomes);
+    let all_units = workspace::build_cleanup_units(&workspaces, &outcomes);
+    // Selection happens HERE, after `build_groups` has classified ownership
+    // across the complete resolved universe. Applying it any earlier — to the
+    // roots, or to discovery — would be the ADR 006 defect: an out-of-scope
+    // workspace that shares an output root would become invisible, and its
+    // bytes would be promoted from `Shared` to `PrivateBounded`.
+    let mut units = Vec::with_capacity(all_units.len());
+    let mut unselected = Vec::new();
+    for unit in all_units {
+        if selection.admits(&unit.root) {
+            units.push(unit);
+        } else {
+            unselected.push(unit);
+        }
+    }
     Ok(CleanupScope {
         workspaces,
         units,
+        unselected,
         unresolved,
     })
 }
@@ -3000,6 +3160,79 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn ancestry_selection_matches_in_both_directions() {
+        // The layout that decides whether the new default is usable at all:
+        // standing inside a *member* of a virtual workspace must still select
+        // the enclosing workspace, or the most common Cargo layout would be a
+        // silent no-op for every user.
+        let member = Path::new("/home/u/projects");
+        assert!(
+            CleanupSelection::Ancestry(member.to_path_buf())
+                .admits(Path::new("/home/u/projects/crates/inner")),
+            "a workspace containing the anchor must be selected"
+        );
+        // And the reverse: standing above several projects must be able to
+        // select one of them.
+        assert!(
+            CleanupSelection::Ancestry(member.to_path_buf())
+                .admits(Path::new("/home/u/projects/crates/inner")),
+            "a workspace below the anchor must be selected"
+        );
+        assert!(
+            CleanupSelection::Ancestry(member.to_path_buf()).admits(member),
+            "the anchor itself must be selected"
+        );
+        // An unrelated tree must not be.
+        assert!(
+            !CleanupSelection::Ancestry(member.to_path_buf())
+                .admits(Path::new("/var/tmp/elsewhere")),
+            "an unrelated workspace must not be selected"
+        );
+        // A shared *prefix* is not ancestry. `/home/u/projects-old` does not
+        // live under `/home/u/projects`, and `Path::starts_with` is
+        // component-wise, so this is where a string-prefix implementation
+        // would wrongly select.
+        assert!(
+            !CleanupSelection::Ancestry(member.to_path_buf())
+                .admits(Path::new("/home/u/projects-old")),
+            "a string-prefix sibling must not be selected"
+        );
+    }
+
+    #[test]
+    fn roots_selection_matches_exactly() {
+        let selection =
+            CleanupSelection::Roots(vec![PathBuf::from("/a/one"), PathBuf::from("/a/two")]);
+        assert!(selection.admits(Path::new("/a/one")));
+        assert!(selection.admits(Path::new("/a/two")));
+        assert!(
+            !selection.admits(Path::new("/a/one/nested")),
+            "an exact-root selection must not sweep in children"
+        );
+        assert!(!selection.admits(Path::new("/a/three")));
+    }
+
+    #[test]
+    fn outside_selection_is_reported_rather_than_silently_dropped() {
+        // The M012A lesson: a selection that silently discarded units would be
+        // indistinguishable from "nothing was eligible". The typed code is the
+        // only thing that separates the two for an operator reading JSON.
+        assert_eq!(
+            CleanupReasonCode::SkippedOutsideSelection.as_str(),
+            "skipped_outside_selection"
+        );
+        // It must not be conflatable with any ownership or safety code, which
+        // warrant a different operator response.
+        for other in [
+            CleanupReasonCode::SkippedShared,
+            CleanupReasonCode::SkippedOwnershipUnproven,
+            CleanupReasonCode::SkippedSafety,
+        ] {
+            assert_ne!(other.as_str(), "skipped_outside_selection");
+        }
+    }
+
+    #[test]
     fn missing_output_identity_pair_compares_equal_not_unproven() {
         use crate::domain::OutputRootKind;
         let missing = |logical: PathBuf| OutputRoot {
@@ -4090,6 +4323,7 @@ mod tests {
             &mut counters,
             &mut diags,
             &noop,
+            &CleanupSelection::All,
         )
         .unwrap();
         assert_eq!(scope.units.len(), 1);
@@ -4232,6 +4466,7 @@ mod tests {
             Some(AdmissionPremise {
                 omitted: vec![crate::policy::AutomaticOmission::NotFound(absent.clone())],
             }),
+            &CleanupSelection::All,
         )
         .unwrap();
         assert!(ok.scope_blocked.is_none());
@@ -4254,6 +4489,7 @@ mod tests {
             Some(AdmissionPremise {
                 omitted: vec![crate::policy::AutomaticOmission::NotFound(absent.clone())],
             }),
+            &CleanupSelection::All,
         )
         .unwrap();
         assert_eq!(
@@ -4888,6 +5124,7 @@ mod tests {
             &mut counters,
             &mut diags,
             &noop,
+            &CleanupSelection::All,
         )
         .unwrap();
         let workspaces = scope.workspaces;

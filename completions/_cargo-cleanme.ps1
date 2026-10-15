@@ -38,7 +38,7 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
             [CompletionResult]::new('-V', '-V ', [CompletionResultType]::ParameterName, 'Print version')
             [CompletionResult]::new('--version', '--version', [CompletionResultType]::ParameterName, 'Print version')
-            [CompletionResult]::new('scan', 'scan', [CompletionResultType]::ParameterValue, 'Reconcile the machine read-only: full by default, explicit with ROOT, routine inventory with `--known`')
+            [CompletionResult]::new('scan', 'scan', [CompletionResultType]::ParameterValue, 'Reconcile the machine read-only: full with `--all`, explicit with ROOT, routine inventory with `--known`')
             [CompletionResult]::new('config', 'config', [CompletionResultType]::ParameterValue, 'config')
             [CompletionResult]::new('clean', 'clean', [CompletionResultType]::ParameterValue, 'Preview or execute cleanup of revalidated Cargo build artifacts')
             [CompletionResult]::new('update', 'update', [CompletionResultType]::ParameterValue, 'Update this cargo-cleanme to the latest stable published release')
@@ -48,7 +48,9 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
             [CompletionResult]::new('--config', '--config', [CompletionResultType]::ParameterName, 'config')
             [CompletionResult]::new('--format', '--format', [CompletionResultType]::ParameterName, 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers')
             [CompletionResult]::new('--known', '--known', [CompletionResultType]::ParameterName, 'Routine read-only inventory over the maintenance scope')
-            [CompletionResult]::new('--full', '--full', [CompletionResultType]::ParameterName, 'Historical spelling of no-root Full `scan`; retained as a hidden alias')
+            [CompletionResult]::new('-a', '-a', [CompletionResultType]::ParameterName, 'Full machine reconciliation')
+            [CompletionResult]::new('--all', '--all', [CompletionResultType]::ParameterName, 'Full machine reconciliation')
+            [CompletionResult]::new('--full', '--full', [CompletionResultType]::ParameterName, 'Historical spelling of `--all`; retained as a hidden alias')
             [CompletionResult]::new('--no-progress', '--no-progress', [CompletionResultType]::ParameterName, 'Disable transient progress UI (useful for benchmarks and debugging)')
             [CompletionResult]::new('--stats', '--stats', [CompletionResultType]::ParameterName, 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
@@ -131,7 +133,7 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
             break
         }
         'cargo;help;cargo-cleanme' {
-            [CompletionResult]::new('scan', 'scan', [CompletionResultType]::ParameterValue, 'Reconcile the machine read-only: full by default, explicit with ROOT, routine inventory with `--known`')
+            [CompletionResult]::new('scan', 'scan', [CompletionResultType]::ParameterValue, 'Reconcile the machine read-only: full with `--all`, explicit with ROOT, routine inventory with `--known`')
             [CompletionResult]::new('config', 'config', [CompletionResultType]::ParameterValue, 'config')
             [CompletionResult]::new('clean', 'clean', [CompletionResultType]::ParameterValue, 'Preview or execute cleanup of revalidated Cargo build artifacts')
             [CompletionResult]::new('update', 'update', [CompletionResultType]::ParameterValue, 'Update this cargo-cleanme to the latest stable published release')

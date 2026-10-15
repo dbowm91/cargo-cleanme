@@ -1,4 +1,4 @@
-use crate::cleanup::CleanMode;
+use crate::cleanup::{CleanMode, CleanupSelection};
 use clap::{Parser, Subcommand};
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
@@ -60,17 +60,32 @@ pub struct Cli {
 }
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Reconcile the machine read-only: full by default, explicit with ROOT,
+    /// Reconcile the machine read-only: full with `--all`, explicit with ROOT,
     /// routine inventory with `--known`.
+    ///
+    /// Exactly one scope selector is required. An `ArgGroup` expresses that
+    /// rather than a per-argument `required_unless_present_all`, because a
+    /// positional ROOT does not satisfy `required_unless_present` in clap 4 —
+    /// `scan /tmp` still demanded `--all`. The group also makes the selectors
+    /// mutually exclusive as a consequence of the same declaration, so the
+    /// conflict rules cannot drift from the requiredness rules.
+    #[command(group = clap::ArgGroup::new("scan-scope").required(true).args(["root", "known", "all", "full"]))]
     Scan {
         /// Optional bounded root. Makes the scan Explicit and bypasses
         /// configured ignore/unignore filters.
         root: Option<PathBuf>,
         /// Routine read-only inventory over the maintenance scope.
-        #[arg(long, conflicts_with = "root")]
+        #[arg(long)]
         known: bool,
-        /// Historical spelling of no-root Full `scan`; retained as a hidden alias.
-        #[arg(long, hide = true, conflicts_with_all = ["root", "known"])]
+        /// Full machine reconciliation.
+        ///
+        /// Required when no ROOT and no `--known` is given: this is the only
+        /// operation that may expire learned roots, and it walks the whole
+        /// platform, so it is never one keystroke from the front door.
+        #[arg(short = 'a', long)]
+        all: bool,
+        /// Historical spelling of `--all`; retained as a hidden alias.
+        #[arg(long, hide = true)]
         full: bool,
     },
     Config {
@@ -203,6 +218,13 @@ pub struct CleanupRequest {
     pub scope: CleanupScope,
     pub mode: CleanMode,
     pub overrides: CleanupOverrides,
+    /// Which resolved cleanup units are candidates. M014: bare invocation and
+    /// `clean --known` anchor this to the working directory; `clean ROOT` and
+    /// `clean --full` leave it unfiltered because their roots already bound it.
+    ///
+    /// `WorkingDirectory` here is *unresolved intent*. `main.rs` must call
+    /// [`CleanupSelection::resolved`] before the engine runs.
+    pub selection: CleanupSelection,
 }
 
 /// The resolved operation, scope, and mode for one invocation.
@@ -215,7 +237,18 @@ pub enum Invocation {
     Cleanup(CleanupRequest),
     Scan(ScanIntent),
     Config(ConfigCommand),
-    Update { dry_run: bool },
+    Update {
+        dry_run: bool,
+    },
+    /// An argv shape clap should have rejected before it reached this point.
+    ///
+    /// `scan` requires one of ROOT / `--known` / `--all`; clap enforces that,
+    /// so this arm is unreachable through the parser. It exists because the
+    /// compiler cannot see clap's invariant, and the two available fallbacks
+    /// were both wrong: defaulting to Full would silently run the machine-wide
+    /// reconciliation the flag exists to gate, and panicking would exit 101,
+    /// outside the 0/1/2 contract.
+    UsageError(String),
 }
 
 /// Resolve the mode flag triple onto the canonical mode.
@@ -258,12 +291,25 @@ impl Cli {
                 scope: CleanupScope::Maintenance,
                 mode: clean_mode(self.dry_run, false, self.dryrun_legacy),
                 overrides: CleanupOverrides::default(),
+                selection: CleanupSelection::WorkingDirectory,
             }),
-            Some(Command::Scan { root, known, .. }) => Invocation::Scan(match (root, *known) {
-                (Some(root), _) => ScanIntent::Explicit(root.clone()),
-                (None, true) => ScanIntent::Maintenance,
-                (None, false) => ScanIntent::Full,
-            }),
+            Some(Command::Scan {
+                root,
+                known,
+                all,
+                full,
+            }) => match (root, *known, *all || *full) {
+                (Some(root), _, _) => Invocation::Scan(ScanIntent::Explicit(root.clone())),
+                (None, true, _) => Invocation::Scan(ScanIntent::Maintenance),
+                // clap requires one of ROOT / --known / --all, so reaching the
+                // Full arm means an explicit flag (or its hidden alias) was
+                // actually given rather than defaulted.
+                (None, false, true) => Invocation::Scan(ScanIntent::Full),
+                // Unreachable through `clap`; fail closed rather than guess.
+                (None, false, false) => {
+                    Invocation::UsageError("scan requires a ROOT, --known, or --all".into())
+                }
+            },
             Some(Command::Config { command }) => Invocation::Config(*command),
             // The root-level `--dry-run` is honoured here too, not only on the
             // bare front door: `cargo cleanme --dry-run clean ROOT` is the
@@ -298,14 +344,17 @@ impl Cli {
                     // invocation, not a third scope.
                     (None, false, _) => CleanupScope::Maintenance,
                 };
+                // M014: the working-directory anchor belongs to the
+                // *maintenance* spellings, which are the ones whose Routine
+                // scope spans the machine. `clean ROOT` and `clean --full`
+                // already bound their own scope and stay unfiltered, so the
+                // two cannot silently disagree about what "everything" means.
+                let selection = match scope {
+                    CleanupScope::Maintenance => CleanupSelection::WorkingDirectory,
+                    CleanupScope::Root(_) | CleanupScope::Full => CleanupSelection::All,
+                };
                 Invocation::Cleanup(CleanupRequest {
                     scope,
-                    // A dry run asked for *before* the subcommand is a dry run,
-                    // exactly like one asked for after it: clap cannot make a
-                    // root flag mutually exclusive with a subcommand's flags,
-                    // so the combination is resolved here instead. Simulation
-                    // outranks every other cleanup mode because it is the one
-                    // that spawns no Cargo process at all.
                     mode: if self.dry_run || self.dryrun_legacy {
                         CleanMode::Simulate
                     } else {
@@ -319,6 +368,7 @@ impl Cli {
                         profile: profile.clone(),
                         package: package.clone(),
                     },
+                    selection,
                 })
             }
         }
@@ -416,10 +466,18 @@ mod tests {
     }
 
     fn cleanup(scope: CleanupScope, mode: CleanMode) -> CleanupRequest {
+        // Mirror `Cli::invocation` exactly: the working-directory anchor belongs
+        // to the maintenance spellings, whose Routine scope spans the machine.
+        // `clean ROOT` / `clean --full` are already bounded by their own roots.
+        let selection = match &scope {
+            CleanupScope::Maintenance => CleanupSelection::WorkingDirectory,
+            CleanupScope::Root(_) | CleanupScope::Full => CleanupSelection::All,
+        };
         CleanupRequest {
             scope,
             mode,
             overrides: CleanupOverrides::default(),
+            selection,
         }
     }
     #[test]
@@ -563,12 +621,26 @@ mod tests {
 
     #[test]
     fn scan_scope_selection_is_full_explicit_or_maintenance() {
-        assert_eq!(
-            Cli::try_parse_from(["cargo-cleanme", "scan"])
-                .unwrap()
-                .invocation(),
-            Invocation::Scan(ScanIntent::Full)
+        // M014: Full is no longer reachable without an explicit selector.
+        // `scan` alone is a usage error, so the machine-wide reconciliation --
+        // the only operation that may expire learned roots -- is never one
+        // keystroke from the front door.
+        assert!(
+            Cli::try_parse_from(["cargo-cleanme", "scan"]).is_err(),
+            "bare `scan` must require ROOT, --known, or --all"
         );
+        // Both spellings of the Full selector reach the same intent.
+        for spelling in [
+            ["cargo-cleanme", "scan", "--all"],
+            ["cargo-cleanme", "scan", "-a"],
+            ["cargo-cleanme", "scan", "--full"],
+        ] {
+            assert_eq!(
+                Cli::try_parse_from(spelling).unwrap().invocation(),
+                Invocation::Scan(ScanIntent::Full),
+                "{spelling:?} must resolve to Full"
+            );
+        }
         assert_eq!(
             Cli::try_parse_from(["cargo-cleanme", "scan", "/tmp"])
                 .unwrap()
@@ -581,12 +653,57 @@ mod tests {
                 .invocation(),
             Invocation::Scan(ScanIntent::Maintenance)
         );
-        // The hidden `--full` alias is exactly no-root Full.
-        assert_eq!(
-            Cli::try_parse_from(["cargo-cleanme", "scan", "--full"])
-                .unwrap()
-                .invocation(),
-            Invocation::Scan(ScanIntent::Full)
+    }
+
+    #[test]
+    fn maintenance_spellings_anchor_selection_to_the_working_directory() {
+        // M014 / ADR 006: the anchor belongs to the two spellings whose Routine
+        // scope spans the machine. Both must agree, or `cargo cleanme` and
+        // `cargo cleanme clean --known` would disagree about what "everything"
+        // means — which is the M012A silent-no-op failure in a new spelling.
+        for args in [
+            vec!["cargo-cleanme"],
+            vec!["cargo-cleanme", "clean"],
+            vec!["cargo-cleanme", "clean", "--known"],
+        ] {
+            let Invocation::Cleanup(request) =
+                Cli::try_parse_from(args.clone()).unwrap().invocation()
+            else {
+                panic!("{args:?} must resolve to a cleanup request");
+            };
+            assert_eq!(
+                request.selection,
+                CleanupSelection::WorkingDirectory,
+                "{args:?} must anchor its selection to the working directory"
+            );
+        }
+        // `clean ROOT` and `clean --full` are already bounded by their own root
+        // selection; anchoring them too would silently narrow an explicit scope.
+        for args in [
+            vec!["cargo-cleanme", "clean", "/x"],
+            vec!["cargo-cleanme", "clean", "--full"],
+        ] {
+            let Invocation::Cleanup(request) =
+                Cli::try_parse_from(args.clone()).unwrap().invocation()
+            else {
+                panic!("{args:?} must resolve to a cleanup request");
+            };
+            assert_eq!(
+                request.selection,
+                CleanupSelection::All,
+                "{args:?} must stay unfiltered"
+            );
+        }
+    }
+
+    #[test]
+    fn unresolved_working_directory_anchor_selects_nothing() {
+        // Fail-closed: `cli.rs` emits the anchor unresolved because it must not
+        // do IO. A caller that forgets to resolve it must clean nothing, not
+        // everything. Returning `true` here would make that bug delete data.
+        assert!(
+            !CleanupSelection::WorkingDirectory.admits(Path::new("/any/workspace")),
+            "an unresolved anchor must never admit a candidate"
         );
     }
 
@@ -594,8 +711,11 @@ mod tests {
     fn scan_scope_conflicts_fail_at_invocation_time() {
         for args in [
             vec!["cargo-cleanme", "scan", "/tmp", "--known"],
+            vec!["cargo-cleanme", "scan", "/tmp", "--all"],
             vec!["cargo-cleanme", "scan", "/tmp", "--full"],
             vec!["cargo-cleanme", "scan", "--known", "--full"],
+            vec!["cargo-cleanme", "scan", "--known", "--all"],
+            vec!["cargo-cleanme", "scan", "--all", "--full"],
         ] {
             assert!(
                 Cli::try_parse_from(args.clone()).is_err(),
@@ -728,10 +848,17 @@ mod tests {
         // before or after a subcommand and through the external form.
         for args in [
             vec!["cargo-cleanme", "--format", "log"],
-            vec!["cargo-cleanme", "scan", "--format", "log"],
-            vec!["cargo-cleanme", "--format", "log", "scan"],
+            vec!["cargo-cleanme", "scan", "--all", "--format", "log"],
+            vec!["cargo-cleanme", "--format", "log", "scan", "--all"],
             vec!["cargo-cleanme", "clean", "/x", "--format", "log"],
-            vec!["cargo-cleanme", "cleanme", "--format", "log", "scan"],
+            vec![
+                "cargo-cleanme",
+                "cleanme",
+                "--format",
+                "log",
+                "scan",
+                "--all",
+            ],
         ] {
             let normalized: Vec<OsString> = args.iter().map(OsString::from).collect();
             let parsed = Cli::try_parse_from(normalize_cargo_argv(normalized)).unwrap();
@@ -803,6 +930,7 @@ mod tests {
                     profile: None,
                     package: None,
                 },
+                selection: CleanupSelection::WorkingDirectory,
             }),
             "advanced policy overrides travel with the intent, not beside it"
         );

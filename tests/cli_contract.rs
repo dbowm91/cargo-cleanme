@@ -1240,6 +1240,31 @@ impl MaintenanceFixture {
         }
     }
 
+    /// Run cargo-cleanme from an arbitrary working directory.
+    ///
+    /// M014 makes the working directory part of the contract, so a test that
+    /// wants "the same run, somewhere else" needs to be able to say so.
+    fn run_from(&self, cwd: &std::path::Path, args: &[&str]) -> std::process::Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args([
+            "--config",
+            self.config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "json",
+        ]);
+        command.args(args);
+        command
+            .env("PATH", path_with(&self.bin))
+            .env("FIXTURE_ROOT", &self.root)
+            .env("FIXTURE_TARGET", &self.target)
+            .env("CARGO_LOG", &self.log)
+            .env("CARGO_ARGS_LOG", &self.args_log)
+            .current_dir(cwd)
+            .output()
+            .unwrap()
+    }
+
     /// Run cargo-cleanme with the stub on PATH and return its output.
     fn run(&self, args: &[&str]) -> std::process::Output {
         self.run_with_locate_failure(args, false)
@@ -1262,6 +1287,12 @@ impl MaintenanceFixture {
             .env("CARGO_LOG", &self.log)
             .env("CARGO_ARGS_LOG", &self.args_log)
             .env("CARGO_FAIL_LOCATE", if fail_locate { "1" } else { "" })
+            // M014: bare invocation anchors its *selection* to the working
+            // directory. The fixture root is this scenario's working
+            // directory, so run there. Load-bearing, not cosmetic: without it
+            // every candidate is correctly reported as
+            // `skipped_outside_selection` and nothing is ever cleaned.
+            .current_dir(&self.root)
             .output()
             .unwrap()
     }
@@ -1300,6 +1331,12 @@ impl MaintenanceFixture {
             .env("FIXTURE_TARGET", &self.target)
             .env("CARGO_LOG", &self.log)
             .env("CARGO_ARGS_LOG", &self.args_log)
+            // M014: bare invocation anchors its *selection* to the working
+            // directory. The fixture root is this scenario's working
+            // directory, so run there. This is load-bearing, not cosmetic:
+            // without it every candidate is legitimately reported as
+            // `skipped_outside_selection` and nothing is ever cleaned.
+            .current_dir(&self.root)
             .output()
             .unwrap()
     }
@@ -1327,6 +1364,65 @@ impl MaintenanceFixture {
 /// pre-M012A dispatch, `Cli::command` was `None` and `main` fell through to
 /// `run_scan(None, false, ...)`, so this run produced `operation = "scan"`,
 /// never invoked Cargo clean, and left the artifact in place.
+/// M014 / ADR 006: the working directory anchors *which proven units are
+/// cleaned*, and never which units are *proven*.
+///
+/// These two runs are identical except for the working directory. Both discover
+/// and prove the same private workspace over the same bytes; only the anchor
+/// differs. Asserting both directions is what distinguishes "the selection
+/// filter works" from "the scan got narrower" — the second would quietly
+/// promote shared output to `private` (ADR 006), and the first case below is
+/// the observable difference between them.
+#[cfg(unix)]
+#[test]
+fn working_directory_anchor_selects_without_narrowing_the_ownership_universe() {
+    let fixture = MaintenanceFixture::new(true);
+    assert!(fixture.artifact().exists(), "premise: the artifact exists");
+
+    // Standing somewhere unrelated: it is proven, then left untouched. This
+    // must be a *disjoint* directory, not the fixture's parent — the anchor
+    // matches ancestors too, so the parent would legitimately still select the
+    // workspace (that direction is asserted separately in `cli.rs`).
+    let elsewhere = tempfile::tempdir().unwrap();
+    let outside = fixture.run_from(elsewhere.path(), &["--dry-run"]);
+    let outside_json: serde_json::Value = serde_json::from_slice(&outside.stdout).unwrap();
+    assert_eq!(
+        outside_json["result"]["summary"]["cleaned"], 0,
+        "nothing outside the anchor may be cleaned: {outside_json}"
+    );
+    assert_eq!(
+        outside_json["result"]["units"][0]["reason_code"], "skipped_outside_selection",
+        "an excluded unit must carry a typed code, never vanish: {outside_json}"
+    );
+    // The premise that makes this a *selection* test rather than a discovery
+    // test: the unit was fully discovered, resolved and measured.
+    assert_eq!(
+        outside_json["result"]["discovered_manifests"], 1,
+        "the universe must still be discovered: {outside_json}"
+    );
+    assert_eq!(
+        outside_json["result"]["resolved_workspaces"], 1,
+        "the workspace must still resolve and be classified: {outside_json}"
+    );
+    assert_eq!(
+        outside_json["result"]["units"][0]["ownership"], "private",
+        "ownership is classified over the full universe, not the anchor: {outside_json}"
+    );
+    assert_eq!(fixture.clean_calls(), 0, "simulation spawns nothing");
+
+    // Standing inside it: the same proven unit is now a candidate.
+    let inside = fixture.run(&["--dry-run"]);
+    let inside_json: serde_json::Value = serde_json::from_slice(&inside.stdout).unwrap();
+    assert_eq!(
+        inside_json["result"]["summary"]["simulated"], 1,
+        "the anchored workspace must be simulated: {inside_json}"
+    );
+    assert_eq!(
+        inside_json["result"]["units"][0]["reason_code"], "simulated",
+        "{inside_json}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn bare_invocation_executes_routine_cleanup_and_is_not_a_scan() {
@@ -1486,6 +1582,9 @@ fn routine_bare_dry_run_and_execute_use_real_cargo_on_default_seed() {
             .env("HOME", &home)
             .env("CARGO_HOME", &cargo_home)
             .env("PATH", &path)
+            // M014: anchor the bare invocation's selection to this scenario's
+            // working directory.
+            .current_dir(&home)
             .output()
             .expect("run staged cargo cleanme")
     };
@@ -2076,6 +2175,9 @@ impl MaintenanceFixture {
             .env("FIXTURE_TARGET", &self.target)
             .env("CARGO_LOG", &self.log)
             .env("CARGO_ARGS_LOG", &self.args_log)
+            // M014: the bare invocation anchors its selection to the
+            // working directory; this fixture root is the scenario's.
+            .current_dir(&self.root)
             .output()
             .unwrap()
     }
@@ -2236,6 +2338,9 @@ fn log_mode_failed_cleanup_is_one_line_with_status_failed_and_exit_one() {
         .env("CARGO_LOG", &fixture.log)
         .env("CARGO_ARGS_LOG", &fixture.args_log)
         .env("CARGO_FAIL_CLEAN", "1")
+        // M014: anchor the bare invocation's selection to this scenario's
+        // working directory.
+        .current_dir(&fixture.root)
         .output()
         .unwrap();
     assert_eq!(
@@ -2371,6 +2476,10 @@ fn log_mode_stats_is_opt_in_stderr_and_leaves_the_single_line_alone() {
         .env("FIXTURE_TARGET", &fixture.target)
         .env("CARGO_LOG", &fixture.log)
         .env("CARGO_ARGS_LOG", &fixture.args_log)
+        // M014: this inline run must anchor its selection the same way
+        // `fixture.run_log` below does, or the two lines would differ for a
+        // reason that has nothing to do with `--stats`.
+        .current_dir(&fixture.root)
         .output()
         .unwrap();
     let stats_line = assert_bounded_log_line(&stats.stdout);
@@ -2938,6 +3047,9 @@ impl StaleLearnedFixture {
             .env("FIXTURE_TARGET", &self.target)
             .env("CARGO_LOG", &self.log)
             .env("CARGO_ARGS_LOG", &self.args_log)
+            // M014: the bare invocation anchors its selection to the
+            // working directory; this fixture root is the scenario's.
+            .current_dir(&self.home)
             .output()
             .unwrap()
     }
@@ -2960,6 +3072,9 @@ impl StaleLearnedFixture {
             .env("FIXTURE_TARGET", &self.target)
             .env("CARGO_LOG", &self.log)
             .env("CARGO_ARGS_LOG", &self.args_log)
+            // M014: the bare invocation anchors its selection to the
+            // working directory; this fixture root is the scenario's.
+            .current_dir(&self.home)
             .output()
             .unwrap()
     }
@@ -2990,6 +3105,9 @@ impl StaleLearnedFixture {
             .env("FIXTURE_TARGET", &self.target)
             .env("CARGO_LOG", &self.log)
             .env("CARGO_ARGS_LOG", &self.args_log)
+            // M014: the bare invocation anchors its selection to the
+            // working directory; this fixture root is the scenario's.
+            .current_dir(&self.home)
             .output()
             .unwrap()
     }

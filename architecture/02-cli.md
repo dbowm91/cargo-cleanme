@@ -121,21 +121,40 @@ Execute, .. })` (`src/cli.rs:257-263`), pinned by
 guards: before M012A, `Cli::command` being `None` sent `main.rs` to
 `run_scan(None, false, …)`.
 
-### 2.2 `scan` (`src/cli.rs:62-79`)
+### 2.2 `scan` (`src/cli.rs:66-91`)
+
+> **M014.** `scan` with no selector is **no longer Full**. It is a usage error.
+> Full now requires an explicit `-a`/`--all`, because bare `cargo cleanme` is
+> anchored to the working directory (ADR 006) and the machine-wide
+> reconciliation — the only operation that may expire learned roots — must not
+> sit one keystroke away from the front door.
 
 | Token | Kind | Notes |
 |---|---|---|
 | `[ROOT]` | optional positional `Option<PathBuf>` | Doc-commented and rendered in the manpage. Passed **raw** (not absolutized) to `policy::resolve` as `ScanRequest.cli_root` → `main.rs:866-871` |
-| `--known` | `bool` | `conflicts_with = "root"` — the Routine read-only inventory |
-| `--full` (hidden) | `bool` | `conflicts_with_all = ["root", "known"]`. A compatibility alias for *no-root* `scan`; M012A removed `--full` from the advertised surface |
+| `--known` | `bool` | Routine read-only inventory |
+| `-a`, `--all` | `bool` | Full machine reconciliation. The canonical Full selector |
+| `--full` (hidden) | `bool` | Historical spelling of `--all`; retained as a hidden alias |
 
-No selector at all is **Full**, not Routine. That is the load-bearing change:
+**Exactly one selector is required**, expressed as a
+`clap::ArgGroup::new("scan-scope").required(true).args(["root", "known", "all", "full"])`
+on the variant.
+
+The `ArgGroup` is not decoration. The obvious spelling —
+`required_unless_present_all = ["root", "full"]` on `--all` — **does not work
+for a positional**: `scan /tmp` still failed with `MissingRequiredArgument`,
+because a positional ROOT does not register as "present" for that check in
+clap 4. The group also makes the selectors mutually exclusive as a consequence
+of the same declaration, so the conflict rules cannot drift from the requiredness
+rules — `scan /tmp --known`, `scan --known --all` and `scan --all --full` are
+all rejected by one declaration.
+
 `cli.rs` cannot consult `scan.root`, so it cannot narrow the canonical
 reconciliation command by accident — `policy::resolve` returns
 `ScanScope::Global` before it ever looks at configuration
 (`full_resolution_ignores_a_configured_root`, `src/policy.rs:811`). `Cli::invocation`
 turns the three shapes into `ScanIntent::Full` / `Explicit(root)` /
-`Maintenance` at `src/cli.rs:262-270`.
+`Maintenance` at `src/cli.rs:308-316`.
 
 ### 2.3 `config` (`src/cli.rs:76-79`) → `ConfigCommand` (`src/cli.rs:140-145`)
 
