@@ -36,6 +36,8 @@ log\:"One bounded ASCII summary line per report, for unattended schedulers that 
 '--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
 '(--dryrun)--dry-run[Simulate\: run every decision, proof, and reporting step, but invoke no \`cargo clean\` process at all. Honoured wherever it appears, so the \`cargo cleanme --dry-run clean ROOT\` spelling cannot fall back to Execute. Only \`clean\` (and \`update\`'\''s own \`--dry-run\`) honour it\: \`scan\` and \`config\` ignore a global \`--dry-run\` (read-only / local-only, no behaviour change)]' \
 '(--dry-run)--dryrun[Historical spelling of \`--dry-run\`; retained as a hidden alias]' \
+'-i[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
+'--interactive[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '-V[Print version]' \
@@ -56,10 +58,14 @@ _arguments "${_arguments_options[@]}" : \
 '--format=[Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers]:FORMAT:((human\:""
 json\:""
 log\:"One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract\: complete consumers use \`json\`"))' \
-'()--known[Routine read-only inventory over the maintenance scope]' \
-'(--known)--full[Historical spelling of no-root Full \`scan\`; retained as a hidden alias]' \
+'--known[Routine read-only inventory over the maintenance scope]' \
+'-a[Full machine reconciliation]' \
+'--all[Full machine reconciliation]' \
+'--full[Historical spelling of \`--all\`; retained as a hidden alias]' \
 '--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
 '--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'-i[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
+'--interactive[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '::root -- Optional bounded root. Makes the scan Explicit and bypasses configured ignore/unignore filters:_files' \
@@ -73,6 +79,8 @@ json\:""
 log\:"One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract\: complete consumers use \`json\`"))' \
 '--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
 '--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'-i[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
+'--interactive[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 ":: :_cargo__subcmd__cargo-cleanme__subcmd__config_commands" \
@@ -93,6 +101,8 @@ json\:""
 log\:"One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract\: complete consumers use \`json\`"))' \
 '--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
 '--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'-i[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
+'--interactive[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -105,6 +115,8 @@ json\:""
 log\:"One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract\: complete consumers use \`json\`"))' \
 '--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
 '--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'-i[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
+'--interactive[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -117,6 +129,8 @@ json\:""
 log\:"One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract\: complete consumers use \`json\`"))' \
 '--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
 '--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'-i[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
+'--interactive[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -145,6 +159,8 @@ log\:"One bounded ASCII summary line per report, for unattended schedulers that 
 '(--dry-run --cargo-preview --yes)--dryrun[Historical spelling of \`--dry-run\`; retained as a hidden alias]' \
 '--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
 '--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'-i[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
+'--interactive[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '::root -- Optional bounded sandbox root. Omit to use the maintenance scope (identical to bare invocation) or select `--known` / `--full`:_files' \
@@ -159,6 +175,8 @@ log\:"One bounded ASCII summary line per report, for unattended schedulers that 
 '--dry-run[Resolve the plan and report it without acquiring or replacing bytes]' \
 '--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
 '--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'-i[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
+'--interactive[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -259,7 +277,7 @@ _cargo_commands() {
 (( $+functions[_cargo__subcmd__cargo-cleanme_commands] )) ||
 _cargo__subcmd__cargo-cleanme_commands() {
     local commands; commands=(
-'scan:Reconcile the machine read-only\: full by default, explicit with ROOT, routine inventory with \`--known\`' \
+'scan:Reconcile the machine read-only\: full with \`--all\`, explicit with ROOT, routine inventory with \`--known\`' \
 'config:' \
 'clean:Preview or execute cleanup of revalidated Cargo build artifacts' \
 'update:Update this cargo-cleanme to the latest stable published release' \
@@ -316,7 +334,7 @@ _cargo__subcmd__help_commands() {
 (( $+functions[_cargo__subcmd__help__subcmd__cargo-cleanme_commands] )) ||
 _cargo__subcmd__help__subcmd__cargo-cleanme_commands() {
     local commands; commands=(
-'scan:Reconcile the machine read-only\: full by default, explicit with ROOT, routine inventory with \`--known\`' \
+'scan:Reconcile the machine read-only\: full with \`--all\`, explicit with ROOT, routine inventory with \`--known\`' \
 'config:' \
 'clean:Preview or execute cleanup of revalidated Cargo build artifacts' \
 'update:Update this cargo-cleanme to the latest stable published release' \

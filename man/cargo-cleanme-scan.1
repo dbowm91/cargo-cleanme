@@ -2,18 +2,25 @@
 .el .ds Aq '
 .TH scan 1 0.2.7 https://github.com/dbowm91/cargo-cleanme "General Commands Manual"
 .SH NAME
-scan \- Reconcile the machine read\-only: full by default, explicit with ROOT, routine inventory with `\-\-known`
+scan \- Reconcile the machine read\-only: full with `\-\-all`, explicit with ROOT, routine inventory with `\-\-known`
 .SH SYNOPSIS
-\fBscan\fR [\fB\-\-known\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIROOT\fR] 
+\fBscan\fR [\fB\-\-known\fR] [\fB\-a\fR|\fB\-\-all\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIROOT\fR] 
 .SH DESCRIPTION
-Reconcile the machine read\-only: full by default, explicit with ROOT, routine inventory with `\-\-known`
+Reconcile the machine read\-only: full with `\-\-all`, explicit with ROOT, routine inventory with `\-\-known`.
+.PP
+Exactly one scope selector is required. An `ArgGroup` expresses that rather than a per\-argument `required_unless_present_all`, because a positional ROOT does not satisfy `required_unless_present` in clap 4 — `scan /tmp` still demanded `\-\-all`. The group also makes the selectors mutually exclusive as a consequence of the same declaration, so the conflict rules cannot drift from the requiredness rules.
 .SH OPTIONS
 .TP
 \fB\-\-known\fR
 Routine read\-only inventory over the maintenance scope
 .TP
+\fB\-a\fR, \fB\-\-all\fR
+Full machine reconciliation.
+
+Required when no ROOT and no `\-\-known` is given: this is the only operation that may expire learned roots, and it walks the whole platform, so it is never one keystroke from the front door.
+.TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 [\fIROOT\fR]
 Optional bounded root. Makes the scan Explicit and bypasses configured ignore/unignore filters

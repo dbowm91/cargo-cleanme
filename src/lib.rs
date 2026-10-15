@@ -6,6 +6,7 @@ pub mod discovery_state;
 pub mod domain;
 pub mod editor;
 pub mod error;
+pub mod interactive;
 pub mod output;
 pub mod policy;
 pub mod progress;

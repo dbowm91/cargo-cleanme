@@ -6,8 +6,8 @@ the one architecture deep dive your change touches.
 ## What this is
 
 A single Rust crate that finds Cargo build output and cleans it **through
-Cargo**, never by deleting directories. One binary over one library of 15
-modules, 17 source files, 26,315 lines in `src/`. No async runtime of its own.
+Cargo**, never by deleting directories. One binary over one library of 16
+modules, 18 source files, 30,483 lines in `src/`. No async runtime of its own.
 `cargo metadata` is the only binary dependency that matters for safety.
 
 Fourteen releases are published (v0.1.0 through v0.1.6, then 0.2.0, 0.2.1, 0.2.2,
@@ -17,7 +17,7 @@ Fourteen releases are published (v0.1.0 through v0.1.6, then 0.2.0, 0.2.1, 0.2.2
 ## Read this before your first change
 
 1. [`architecture/overview.md`](architecture/overview.md) — shape, the
-   cross-cutting safety invariants, and the index of 15 deep dives.
+   cross-cutting safety invariants, and the index of 16 deep dives.
 2. The deep dive for the module you are changing (table in §1 below).
 3. The matching skill in [`.skills/`](.skills/) (table in §2 below).
 
@@ -46,6 +46,7 @@ The one thing to internalise before touching cleanup or discovery:
 | [13-orchestration](architecture/13-orchestration.md) | `main.rs` | You touch composition, argv dispatch, or exit codes |
 | [14-testing-and-verification](architecture/14-testing-and-verification.md) | tests, gates | **You are writing or reviewing a test** |
 | [15-distribution-and-release](architecture/15-distribution-and-release.md) | installers, CI, packaging | You touch distribution |
+| [16-interactive](architecture/16-interactive.md) | `interactive.rs` | You touch `-i`, the selection TUI, or raw-mode lifecycle |
 
 ## 2. Skills
 
@@ -176,9 +177,9 @@ closure records.
 
 | Path | Contents |
 |---|---|
-| `src/` | the crate — 17 files; `main.rs` is the binary, `lib.rs` declares the 15 library modules |
-| `tests/` | `cli_contract.rs` (50 tests), `end_to_end.rs` (4), `common/` |
-| `architecture/` | `overview.md` + 15 deep dives |
+| `src/` | the crate — 18 files; `main.rs` is the binary, `lib.rs` declares the 16 library modules |
+| `tests/` | `cli_contract.rs` (55 tests), `end_to_end.rs` (4), `common/` |
+| `architecture/` | `overview.md` + 16 deep dives |
 | `docs/` | `RELEASING.md` (operator checklist), `TROUBLESHOOTING.md` (includes known defects by version) |
 | `plans/` | decision records — see §6 |
 | `.skills/` | the six skills — see §2 |

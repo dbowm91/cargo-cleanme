@@ -35,9 +35,10 @@ complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fis
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -l stats -d 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -l dry-run -d 'Simulate: run every decision, proof, and reporting step, but invoke no `cargo clean` process at all. Honoured wherever it appears, so the `cargo cleanme --dry-run clean ROOT` spelling cannot fall back to Execute. Only `clean` (and `update`\'s own `--dry-run`) honour it: `scan` and `config` ignore a global `--dry-run` (read-only / local-only, no behaviour change)'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -l dryrun -d 'Historical spelling of `--dry-run`; retained as a hidden alias'
+complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -s i -l interactive -d 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -s V -l version -d 'Print version'
-complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -f -a "scan" -d 'Reconcile the machine read-only: full by default, explicit with ROOT, routine inventory with `--known`'
+complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -f -a "scan" -d 'Reconcile the machine read-only: full with `--all`, explicit with ROOT, routine inventory with `--known`'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -f -a "config"
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -f -a "clean" -d 'Preview or execute cleanup of revalidated Cargo build artifacts'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -f -a "update" -d 'Update this cargo-cleanme to the latest stable published release'
@@ -46,9 +47,11 @@ complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_se
 json\t''
 log\t'One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract: complete consumers use `json`'"
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -l known -d 'Routine read-only inventory over the maintenance scope'
-complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -l full -d 'Historical spelling of no-root Full `scan`; retained as a hidden alias'
+complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -s a -l all -d 'Full machine reconciliation'
+complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -l full -d 'Historical spelling of `--all`; retained as a hidden alias'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -l no-progress -d 'Disable transient progress UI (useful for benchmarks and debugging)'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -l stats -d 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination'
+complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -s i -l interactive -d 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from config" -l config -r -F
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from config" -l format -d 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers' -r -f -a "human\t''
@@ -56,6 +59,7 @@ json\t''
 log\t'One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract: complete consumers use `json`'"
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from config" -l no-progress -d 'Disable transient progress UI (useful for benchmarks and debugging)'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from config" -l stats -d 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination'
+complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from config" -s i -l interactive -d 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from config" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from config" -f -a "path"
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from config" -f -a "show"
@@ -78,6 +82,7 @@ complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_se
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from clean" -l dryrun -d 'Historical spelling of `--dry-run`; retained as a hidden alias'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from clean" -l no-progress -d 'Disable transient progress UI (useful for benchmarks and debugging)'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from clean" -l stats -d 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination'
+complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from clean" -s i -l interactive -d 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from clean" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from update" -l config -r -F
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from update" -l format -d 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers' -r -f -a "human\t''
@@ -86,10 +91,11 @@ log\t'One bounded ASCII summary line per report, for unattended schedulers that 
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from update" -l dry-run -d 'Resolve the plan and report it without acquiring or replacing bytes'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from update" -l no-progress -d 'Disable transient progress UI (useful for benchmarks and debugging)'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from update" -l stats -d 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination'
+complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from update" -s i -l interactive -d 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from update" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c cargo -n "__fish_cargo_using_subcommand help; and not __fish_seen_subcommand_from cargo-cleanme help" -f -a "cargo-cleanme" -d 'Clean inactive Cargo build artifacts through Cargo, or reconcile the machine read-only'
 complete -c cargo -n "__fish_cargo_using_subcommand help; and not __fish_seen_subcommand_from cargo-cleanme help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c cargo -n "__fish_cargo_using_subcommand help; and __fish_seen_subcommand_from cargo-cleanme" -f -a "scan" -d 'Reconcile the machine read-only: full by default, explicit with ROOT, routine inventory with `--known`'
+complete -c cargo -n "__fish_cargo_using_subcommand help; and __fish_seen_subcommand_from cargo-cleanme" -f -a "scan" -d 'Reconcile the machine read-only: full with `--all`, explicit with ROOT, routine inventory with `--known`'
 complete -c cargo -n "__fish_cargo_using_subcommand help; and __fish_seen_subcommand_from cargo-cleanme" -f -a "config"
 complete -c cargo -n "__fish_cargo_using_subcommand help; and __fish_seen_subcommand_from cargo-cleanme" -f -a "clean" -d 'Preview or execute cleanup of revalidated Cargo build artifacts'
 complete -c cargo -n "__fish_cargo_using_subcommand help; and __fish_seen_subcommand_from cargo-cleanme" -f -a "update" -d 'Update this cargo-cleanme to the latest stable published release'

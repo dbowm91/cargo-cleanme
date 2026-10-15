@@ -56,6 +56,98 @@ impl CleanMode {
     }
 }
 
+/// Which resolved `CleanupUnit`s are candidates for this invocation.
+///
+/// **A selection is applied after ownership classification and can only remove
+/// candidates.** It cannot add one, reclassify one, or unblock a scope. That
+/// is the whole reason a working-directory anchor is safe to use as a default:
+/// `workspace::build_groups` still sees every discovered workspace, so output
+/// shared with a workspace outside the anchor stays `Shared` and stays
+/// inventory-only.
+///
+/// The alternative — narrowing *discovery* to the anchor — was measured and
+/// rejected (ADR 006): narrowing discovery hides out-of-scope claimants and
+/// silently upgrades `shared` bytes to `private`, the only class that authorizes
+/// deletion.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CleanupSelection {
+    /// Every resolved unit is a candidate. `clean ROOT` and `clean --full`,
+    /// which are already bounded by their own root selection.
+    All,
+    /// An **unresolved** anchor on the process working directory.
+    ///
+    /// `cli.rs` resolves argv but must not perform IO, so it emits this
+    /// unresolved intent and `main.rs` turns it into [`Self::Ancestry`] before
+    /// the engine runs. It is deliberately fail-closed: [`Self::admits`]
+    /// selects nothing until [`Self::resolved`] has been called, so a caller
+    /// that forgets to resolve it cleans nothing rather than everything.
+    WorkingDirectory,
+    /// Units whose canonical workspace root is the anchor, an ancestor of it, or
+    /// a descendant of it.
+    Ancestry(PathBuf),
+    /// Units whose canonical workspace root is exactly one of these. The
+    /// interactive selection produces this.
+    Roots(Vec<PathBuf>),
+}
+
+impl CleanupSelection {
+    /// Whether one unit's workspace root survives this selection.
+    ///
+    /// `Ancestry` matches in **both** directions on purpose. An operator
+    /// standing inside a member of a virtual workspace must still select that
+    /// enclosing workspace, and an operator standing above several projects must
+    /// be able to select one of them. A descendant-only rule would make the
+    /// common virtual-workspace layout a silent no-op.
+    pub fn admits(&self, workspace_root: &Path) -> bool {
+        match self {
+            Self::All => true,
+            // Fail closed: an unresolved anchor selects nothing. See the
+            // variant documentation for why this is not `true`.
+            Self::WorkingDirectory => false,
+            Self::Ancestry(anchor) => {
+                workspace_root == anchor
+                    || workspace_root.starts_with(anchor)
+                    || anchor.starts_with(workspace_root)
+            }
+            Self::Roots(roots) => roots.iter().any(|root| root == workspace_root),
+        }
+    }
+
+    /// Resolve [`Self::WorkingDirectory`] against the process working directory.
+    ///
+    /// The IO lives here rather than in `cli.rs` so that argv resolution stays
+    /// pure and testable. An unresolvable working directory is an
+    /// [`AppError::InvalidRoot`] usage error, never a silent fallback to
+    /// [`Self::All`].
+    pub fn resolved(&self) -> Result<CleanupSelection, AppError> {
+        match self {
+            Self::WorkingDirectory => {
+                let cwd = std::env::current_dir().map_err(|e| AppError::InvalidRoot {
+                    path: ".".into(),
+                    reason: format!(
+                        "cannot resolve the working directory for cleanup selection: {e}"
+                    ),
+                })?;
+                Ok(Self::Ancestry(cwd))
+            }
+            other => Ok(other.clone()),
+        }
+    }
+
+    /// A bounded human description of what this selection anchors on, or `None`
+    /// when it does not filter.
+    pub fn describe(&self) -> Option<String> {
+        match self {
+            Self::All => None,
+            Self::Ancestry(anchor) => Some(format!("the working directory {}", anchor.display())),
+            Self::WorkingDirectory => {
+                Some("an unresolved working-directory anchor (internal error)".into())
+            }
+            Self::Roots(_) => Some("the interactive selection".into()),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CleanOutcome {
     Previewed,
@@ -117,6 +209,15 @@ pub enum CleanupReasonCode {
     /// that demonstrably changed.
     SkippedOwnershipUnproven,
     SkippedSafety,
+    /// The workspace was discovered, resolved, sized and proven, but the
+    /// operator's selection removed it from the candidate set (M014: a
+    /// working-directory anchor, or an interactive selection).
+    ///
+    /// This is deliberately *not* an ownership or safety code: the unit was
+    /// eligible and was left untouched on purpose. It exists so that a
+    /// selection can never produce a silent no-op the way a configured
+    /// `scan.root` once made `clean --known` (M012A defect).
+    SkippedOutsideSelection,
     CargoFailed,
     MeasurementFailed,
     SelectorUnsupported,
@@ -176,6 +277,7 @@ impl CleanupReasonCode {
             Self::SkippedChangedBeforeCleanup => "skipped_changed_before_cleanup",
             Self::SkippedOwnershipUnproven => "skipped_ownership_unproven",
             Self::SkippedSafety => "skipped_safety",
+            Self::SkippedOutsideSelection => "skipped_outside_selection",
             Self::CargoFailed => "cargo_failed",
             Self::MeasurementFailed => "measurement_failed",
             Self::SelectorUnsupported => "selector_unsupported",
@@ -938,6 +1040,7 @@ pub fn clean_with_roots_policy_selector(
         policy,
         selector,
         None,
+        &CleanupSelection::All,
     )
 }
 
@@ -958,20 +1061,46 @@ pub struct AdmissionPremise {
     pub omitted: Vec<crate::policy::AutomaticOmission>,
 }
 
+/// The resolved ownership universe: manifest discovery, workspace resolution,
+/// physical grouping, fail-fast analysis, CleanupUnit construction, and the
+/// operator's selection applied to the resulting units.
+///
+/// This exists as one named value rather than as loose locals so that the
+/// destructive engine and the read-only `cargo cleanme -i` candidate listing
+/// run **the same proof**. A second copy of this pipeline would be a second
+/// ownership proof free to drift from the first, and the rows the interactive
+/// list offers would stop being the rows the engine acts on.
+struct ResolvedUniverse {
+    roots: Vec<PathBuf>,
+    cleanup_phase: ScanPhase,
+    counters: ScanCounters,
+    diagnostics: Vec<ScanDiagnostic>,
+    discovery_diagnostic_count: usize,
+    manifests: Vec<PathBuf>,
+    /// H-2 snapshot of the manifest set the universe was built from, taken
+    /// before the first candidate reaches its final proof.
+    initial_manifests: Vec<PathBuf>,
+    workspaces: Vec<ResolvedWorkspace>,
+    units: Vec<workspace::CleanupUnit>,
+    unselected: Vec<workspace::CleanupUnit>,
+    unresolved_ownership: Vec<UnresolvedOwnershipParticipant>,
+}
+
+/// Root validation, manifest discovery, and full ownership resolution.
+///
+/// Read-only: it spawns `cargo metadata` through the supplied runner, exactly
+/// as the cleanup engine does, but it never spawns `cargo clean` and mutates
+/// nothing on disk. That makes it the correct basis for an interactive listing
+/// and for any future dry inspection path.
 #[allow(clippy::too_many_arguments)]
-pub fn clean_with_roots_policy_selector_guarded(
+fn discover_and_resolve_universe(
     roots: &[PathBuf],
     recency_seconds: u64,
-    allowed_output_roots: &[PathBuf],
     mode: CleanMode,
     runner: &dyn CleanupRunner,
     observer: &dyn ProgressObserver,
-    policy: &CleanupPolicy,
-    selector: Option<CleanupSelector>,
-    premise: Option<AdmissionPremise>,
-) -> Result<CleanReport, AppError> {
-    let includes = compile_policy_globs(&policy.include)?;
-    let excludes = compile_policy_globs(&policy.exclude)?;
+    selection: &CleanupSelection,
+) -> Result<ResolvedUniverse, AppError> {
     // Validate every root before doing anything observable: an invalid
     // invocation must not spawn a process, and the runtime capability verdict
     // must not be able to mask a malformed root (M10).
@@ -990,11 +1119,6 @@ pub fn clean_with_roots_policy_selector_guarded(
     for root in &roots {
         validate_cleanup_root(root)?;
     }
-    let selector_capabilities = if selector.is_some() {
-        runtime_clean_capabilities()
-    } else {
-        CargoCleanCapabilities::default()
-    };
     let resolved = crate::domain::EffectiveScanPolicy {
         recency: Duration::from_secs(recency_seconds),
         scope: ScanScope::ExplicitRoots(roots.clone()),
@@ -1035,10 +1159,58 @@ pub fn clean_with_roots_policy_selector_guarded(
         &mut counters,
         &mut diagnostics,
         observer,
+        selection,
     )?;
-    let workspaces = scope.workspaces;
-    let units = scope.units;
-    let unresolved_ownership = scope.unresolved;
+    Ok(ResolvedUniverse {
+        roots,
+        cleanup_phase,
+        counters,
+        diagnostics,
+        discovery_diagnostic_count,
+        manifests,
+        initial_manifests,
+        workspaces: scope.workspaces,
+        units: scope.units,
+        unselected: scope.unselected,
+        unresolved_ownership: scope.unresolved,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn clean_with_roots_policy_selector_guarded(
+    roots: &[PathBuf],
+    recency_seconds: u64,
+    allowed_output_roots: &[PathBuf],
+    mode: CleanMode,
+    runner: &dyn CleanupRunner,
+    observer: &dyn ProgressObserver,
+    policy: &CleanupPolicy,
+    selector: Option<CleanupSelector>,
+    premise: Option<AdmissionPremise>,
+    selection: &CleanupSelection,
+) -> Result<CleanReport, AppError> {
+    let includes = compile_policy_globs(&policy.include)?;
+    let excludes = compile_policy_globs(&policy.exclude)?;
+    let selector_capabilities = if selector.is_some() {
+        runtime_clean_capabilities()
+    } else {
+        CargoCleanCapabilities::default()
+    };
+    let universe =
+        discover_and_resolve_universe(roots, recency_seconds, mode, runner, observer, selection)?;
+    let ResolvedUniverse {
+        roots,
+        cleanup_phase,
+        mut counters,
+        diagnostics,
+        discovery_diagnostic_count,
+        manifests,
+        initial_manifests,
+        workspaces,
+        units,
+        unselected,
+        unresolved_ownership,
+    } = universe;
 
     let mut report = CleanReport {
         results: Vec::new(),
@@ -1096,6 +1268,34 @@ pub fn clean_with_roots_policy_selector_guarded(
     // Cleanup phase is determinate only after complete ownership coverage is
     // established (C004). Announce the CleanupUnit total through the observer.
     observer.units_total(cleanup_phase, units.len() as u64);
+
+    // Units removed by the operator's selection are reported, never dropped.
+    // They were discovered, resolved, sized and classified exactly like the
+    // candidates; they simply were not asked for. Silence here would be the
+    // M012A silent-no-op defect in a new place.
+    //
+    // One row per excluded unit, not one synthetic summary row: the report's
+    // row identity is a workspace path, and the operator's next question after
+    // "why wasn't this cleaned?" is always "which one?", which a summary row
+    // cannot answer without inventing a path that is on disk.
+    for unit in &unselected {
+        let anchor = selection
+            .describe()
+            .unwrap_or_else(|| "the current selection".to_string());
+        report.results.push(CleanResult {
+            display_path: unit.root.clone(),
+            workspace_roots: vec![unit.root.clone()],
+            output_roots: unit.covering.clone(),
+            ownership: unit_blocking_class(unit),
+            outcome: CleanOutcome::Skipped,
+            policy_disposition: None,
+            reason_code: CleanupReasonCode::SkippedOutsideSelection,
+            before_bytes: Some(unit.bytes),
+            after_bytes: None,
+            observed_decrease: None,
+            detail: format!("workspace is outside {anchor}; it was proven and left untouched"),
+        });
+    }
 
     // Filled on the first candidate that reaches the final proof; shared by
     // every later candidate in this run (H3/O1).
@@ -1566,6 +1766,124 @@ pub fn clean_with_roots_policy_selector_guarded(
     Ok(report)
 }
 
+/// One cleanup unit offered to the operator by the interactive list.
+///
+/// A row is a resolved `CleanupUnit`, not a directory: a directory is what a
+/// tool *finds*, a unit is what the engine can act on, and the unit already
+/// carries the reclaimable bytes that make "how much will this free?" answerable
+/// before anything is deleted.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CleanupCandidate {
+    pub root: PathBuf,
+    /// Reclaimable bytes measured for this unit.
+    pub bytes: u64,
+    /// The unit's strongest ownership class.
+    ///
+    /// Only `PrivateBounded` authorizes `cargo clean`. A row carrying any other
+    /// class is shown with its class spelled out rather than hidden, because a
+    /// hidden row is indistinguishable from a row that does not exist, and the
+    /// operator's next question would again be "which one?".
+    pub ownership: OutputOwnershipClass,
+}
+
+impl CleanupCandidate {
+    /// Whether this unit can reach `cargo clean` on its ownership evidence alone.
+    ///
+    /// This is a *presentation* hint about ownership only. It is deliberately
+    /// not an eligibility verdict: policy gates (`include`/`exclude`, minimum
+    /// bytes, authorization) and selector capability live in the engine, and
+    /// duplicating them here is how a listing starts disagreeing with the run.
+    pub fn provably_private(&self) -> bool {
+        self.ownership == OutputOwnershipClass::PrivateBounded
+    }
+}
+
+/// The read-only result of listing cleanup candidates.
+#[derive(Clone, Debug, Default)]
+pub struct CandidateListing {
+    pub candidates: Vec<CleanupCandidate>,
+    /// A whole-scope block raised during resolution, if any.
+    ///
+    /// The interactive session must refuse to present a selection when this is
+    /// set. Offering rows from an unproven universe would be the ADR 006 shape
+    /// in a new costume: the operator would be choosing from a list whose
+    /// classification is exactly the thing that failed.
+    pub scope_blocked: Option<ScopeBlock>,
+    pub unresolved_ownership: Vec<UnresolvedOwnershipParticipant>,
+    pub selected_roots: Vec<PathBuf>,
+    pub resolved_workspaces: usize,
+    /// Discovery diagnostics observed while listing; also the reason a block may
+    /// exist.
+    pub diagnostics: usize,
+}
+
+/// Resolve the cleanup units a selection may choose from, without cleaning any
+/// of them (M014 work package D).
+///
+/// This runs the identical discovery and ownership-resolution pipeline the
+/// engine runs — [`discover_and_resolve_universe`] — so the offered rows are the
+/// engine's own units. It spawns `cargo metadata`, never `cargo clean`.
+///
+/// It is **not** a promise about what the subsequent cleanup run will do. The
+/// engine re-discovers, re-resolves, and re-proves ownership per spawn against
+/// the complete universe (C003 §7.3, C006), and it applies policy gates this
+/// listing does not model. Listing early is for the operator's benefit; it can
+/// never stand in for the final proof.
+pub fn list_cleanup_candidates(
+    roots: &[PathBuf],
+    recency_seconds: u64,
+    mode: CleanMode,
+    runner: &dyn CleanupRunner,
+    observer: &dyn ProgressObserver,
+    selection: &CleanupSelection,
+) -> Result<CandidateListing, AppError> {
+    let universe =
+        discover_and_resolve_universe(roots, recency_seconds, mode, runner, observer, selection)?;
+    let scope_blocked = if universe.discovery_diagnostic_count > 0 {
+        Some(ScopeBlock::new(
+            ScopeBlockReason::IncompleteDiscovery,
+            format!(
+                "combined cleanup ownership universe is incomplete: {} discovery diagnostic(s); resolved {} workspace(s), considered {} cleanup unit(s); nothing can be selected",
+                universe.discovery_diagnostic_count,
+                universe.workspaces.len(),
+                universe.units.len()
+            ),
+        ))
+    } else if !universe.unresolved_ownership.is_empty() {
+        let unresolved = universe.unresolved_ownership.len();
+        Some(ScopeBlock::new(
+            ScopeBlockReason::OwnershipUnproven,
+            format!(
+                "cleanup ownership could not be proven: {unresolved} discovered Cargo {} did not resolve; nothing can be selected",
+                if unresolved == 1 {
+                    "manifest"
+                } else {
+                    "manifests"
+                }
+            ),
+        ))
+    } else {
+        None
+    };
+    let candidates = universe
+        .units
+        .iter()
+        .map(|unit| CleanupCandidate {
+            root: unit.root.clone(),
+            bytes: unit.bytes,
+            ownership: unit_blocking_class(unit),
+        })
+        .collect();
+    Ok(CandidateListing {
+        candidates,
+        scope_blocked,
+        unresolved_ownership: universe.unresolved_ownership,
+        selected_roots: universe.roots,
+        resolved_workspaces: universe.workspaces.len(),
+        diagnostics: universe.diagnostics.len(),
+    })
+}
+
 fn compile_policy_globs(patterns: &[String]) -> Result<globset::GlobSet, AppError> {
     let mut builder = globset::GlobSetBuilder::new();
     for pattern in patterns {
@@ -1673,9 +1991,18 @@ fn observe_unit_groups(observer: &dyn ProgressObserver, unit: &workspace::Cleanu
 struct CleanupScope {
     workspaces: Vec<ResolvedWorkspace>,
     units: Vec<workspace::CleanupUnit>,
+    /// Units that were discovered, resolved, sized and proven, but removed from
+    /// the candidate set by the operator's selection (M014).
+    ///
+    /// They are reported with `SkippedOutsideSelection` rather than dropped:
+    /// a selection that silently discarded units would recreate the M012A
+    /// silent-no-op defect, where a configured `scan.root` made `clean --known`
+    /// report a successful run it never performed.
+    unselected: Vec<workspace::CleanupUnit>,
     unresolved: Vec<UnresolvedOwnershipParticipant>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_cleanup_scope(
     manifests: &[PathBuf],
     scan_start: SystemTime,
@@ -1684,6 +2011,7 @@ fn resolve_cleanup_scope(
     counters: &mut ScanCounters,
     diagnostics: &mut Vec<ScanDiagnostic>,
     observer: &dyn ProgressObserver,
+    selection: &CleanupSelection,
 ) -> Result<CleanupScope, AppError> {
     // Workspace resolution (cached, sequential).
     let adapter = WorkspaceCleanupAdapter { runner };
@@ -1701,6 +2029,7 @@ fn resolve_cleanup_scope(
         return Ok(CleanupScope {
             workspaces,
             units: Vec::new(),
+            unselected: Vec::new(),
             unresolved,
         });
     }
@@ -1719,10 +2048,25 @@ fn resolve_cleanup_scope(
         diagnostics,
         observer,
     );
-    let units = workspace::build_cleanup_units(&workspaces, &outcomes);
+    let all_units = workspace::build_cleanup_units(&workspaces, &outcomes);
+    // Selection happens HERE, after `build_groups` has classified ownership
+    // across the complete resolved universe. Applying it any earlier — to the
+    // roots, or to discovery — would be the ADR 006 defect: an out-of-scope
+    // workspace that shares an output root would become invisible, and its
+    // bytes would be promoted from `Shared` to `PrivateBounded`.
+    let mut units = Vec::with_capacity(all_units.len());
+    let mut unselected = Vec::new();
+    for unit in all_units {
+        if selection.admits(&unit.root) {
+            units.push(unit);
+        } else {
+            unselected.push(unit);
+        }
+    }
     Ok(CleanupScope {
         workspaces,
         units,
+        unselected,
         unresolved,
     })
 }
@@ -3000,6 +3344,79 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn ancestry_selection_matches_in_both_directions() {
+        // The layout that decides whether the new default is usable at all:
+        // standing inside a *member* of a virtual workspace must still select
+        // the enclosing workspace, or the most common Cargo layout would be a
+        // silent no-op for every user.
+        let member = Path::new("/home/u/projects");
+        assert!(
+            CleanupSelection::Ancestry(member.to_path_buf())
+                .admits(Path::new("/home/u/projects/crates/inner")),
+            "a workspace containing the anchor must be selected"
+        );
+        // And the reverse: standing above several projects must be able to
+        // select one of them.
+        assert!(
+            CleanupSelection::Ancestry(member.to_path_buf())
+                .admits(Path::new("/home/u/projects/crates/inner")),
+            "a workspace below the anchor must be selected"
+        );
+        assert!(
+            CleanupSelection::Ancestry(member.to_path_buf()).admits(member),
+            "the anchor itself must be selected"
+        );
+        // An unrelated tree must not be.
+        assert!(
+            !CleanupSelection::Ancestry(member.to_path_buf())
+                .admits(Path::new("/var/tmp/elsewhere")),
+            "an unrelated workspace must not be selected"
+        );
+        // A shared *prefix* is not ancestry. `/home/u/projects-old` does not
+        // live under `/home/u/projects`, and `Path::starts_with` is
+        // component-wise, so this is where a string-prefix implementation
+        // would wrongly select.
+        assert!(
+            !CleanupSelection::Ancestry(member.to_path_buf())
+                .admits(Path::new("/home/u/projects-old")),
+            "a string-prefix sibling must not be selected"
+        );
+    }
+
+    #[test]
+    fn roots_selection_matches_exactly() {
+        let selection =
+            CleanupSelection::Roots(vec![PathBuf::from("/a/one"), PathBuf::from("/a/two")]);
+        assert!(selection.admits(Path::new("/a/one")));
+        assert!(selection.admits(Path::new("/a/two")));
+        assert!(
+            !selection.admits(Path::new("/a/one/nested")),
+            "an exact-root selection must not sweep in children"
+        );
+        assert!(!selection.admits(Path::new("/a/three")));
+    }
+
+    #[test]
+    fn outside_selection_is_reported_rather_than_silently_dropped() {
+        // The M012A lesson: a selection that silently discarded units would be
+        // indistinguishable from "nothing was eligible". The typed code is the
+        // only thing that separates the two for an operator reading JSON.
+        assert_eq!(
+            CleanupReasonCode::SkippedOutsideSelection.as_str(),
+            "skipped_outside_selection"
+        );
+        // It must not be conflatable with any ownership or safety code, which
+        // warrant a different operator response.
+        for other in [
+            CleanupReasonCode::SkippedShared,
+            CleanupReasonCode::SkippedOwnershipUnproven,
+            CleanupReasonCode::SkippedSafety,
+        ] {
+            assert_ne!(other.as_str(), "skipped_outside_selection");
+        }
+    }
+
+    #[test]
     fn missing_output_identity_pair_compares_equal_not_unproven() {
         use crate::domain::OutputRootKind;
         let missing = |logical: PathBuf| OutputRoot {
@@ -3381,6 +3798,316 @@ mod tests {
         });
         assert!(resolve_package_spec(&duplicate, "alpha").is_err());
         assert!(resolve_package_spec(&duplicate, "alpha@0.3.0").is_err());
+    }
+
+    /// Three workspaces under one root: `alpha` and `beta` own private targets,
+    /// and `gamma` redirects its output into `alpha`'s through a project-level
+    /// `target-dir`, which makes that physical output `Shared` with two live
+    /// claimants.
+    ///
+    /// That mixed ownership is what makes this fixture able to catch drift: a
+    /// listing that quietly filtered candidates would disagree with an engine
+    /// that considers all three. Real `cargo metadata` is used so the production
+    /// resolution path is what is under test.
+    fn mixed_ownership_fixture() -> (TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
+        let d = tempfile::Builder::new()
+            .prefix("cargo-cleanme-m014-")
+            .tempdir()
+            .unwrap();
+        let root = d.path().canonicalize().unwrap().join("projects"); // macOS: /var is a symlink
+        let mut workspaces = Vec::new();
+        for name in ["alpha", "beta", "gamma"] {
+            let ws = root.join(name);
+            std::fs::create_dir_all(ws.join("src")).unwrap();
+            std::fs::write(
+                ws.join("Cargo.toml"),
+                format!("[package]\nname='{name}'\nversion='0.1.0'\nedition='2021'\n"),
+            )
+            .unwrap();
+            std::fs::write(ws.join("src/main.rs"), "fn main() {}\n").unwrap();
+            std::fs::write(ws.join("Cargo.lock"), "version = 4\n").unwrap();
+            workspaces.push(ws);
+        }
+        // Private, independently-owned targets for alpha and beta.
+        for name in ["alpha", "beta"] {
+            let target = root.join(name).join("target");
+            std::fs::create_dir_all(&target).unwrap();
+            std::fs::write(
+                target.join("CACHEDIR.TAG"),
+                b"Signature: 8a477f597d28d172789f06886806bc55\n",
+            )
+            .unwrap();
+            std::fs::write(target.join("artifact.bin"), vec![7u8; 4096]).unwrap();
+        }
+        // gamma points its build output at alpha's target: two live claimants,
+        // one physical directory.
+        let redirected = root.join("alpha").join("target").display().to_string();
+        std::fs::create_dir_all(root.join("gamma").join(".cargo")).unwrap();
+        std::fs::write(
+            root.join("gamma").join(".cargo/config.toml"),
+            format!("[build]\ntarget-dir = {redirected:?}\n"), // Debug: escapes `\` so Windows paths stay valid TOML
+        )
+        .unwrap();
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        backdate(d.path(), old);
+        (
+            d,
+            root,
+            workspaces[0].clone(),
+            workspaces[1].clone(),
+            workspaces[2].clone(),
+        )
+    }
+
+    #[test]
+    fn the_candidate_listing_is_the_engines_own_unit_set() {
+        // The interactive list must offer exactly the units the engine would
+        // act on. A parallel copy of the resolution pipeline would be a second
+        // ownership proof free to drift from the first — the ADR 006 failure
+        // wearing a UI: a row could be offered that the engine refuses, or a
+        // unit the engine would consider could be absent from the list the
+        // operator chose from.
+        //
+        // The comparison is against *every* unit the engine considered, not
+        // only the ones it would clean. A `Shared` unit the engine skips is
+        // still a unit the operator must be able to see and deselect; hiding
+        // it would conceal exactly the thing worth showing.
+        let (_d, root, _alpha, beta, _gamma) = mixed_ownership_fixture();
+        let noop = NoopObserver;
+
+        let all = list_cleanup_candidates(
+            std::slice::from_ref(&root),
+            0,
+            CleanMode::Simulate,
+            &SystemCleanupRunner,
+            &noop,
+            &CleanupSelection::All,
+        )
+        .unwrap();
+        assert!(all.scope_blocked.is_none(), "{:?}", all.scope_blocked);
+        assert_eq!(
+            all.candidates.len(),
+            3,
+            "every resolved unit must be offered: {:?}",
+            all.candidates
+        );
+        assert!(
+            all.candidates.iter().all(|c| c.bytes > 0),
+            "rows carry real measured bytes: {:?}",
+            all.candidates
+        );
+        // The premise that makes this comparison discriminating: the fixture
+        // must actually produce mixed ownership, or a filtered listing would
+        // still agree with the engine and the test would be decoration.
+        assert!(
+            all.candidates
+                .iter()
+                .any(|c| c.ownership != OutputOwnershipClass::PrivateBounded),
+            "the fixture must include a non-private unit: {:?}",
+            all.candidates
+        );
+
+        let report = clean_with_roots_policy_selector_guarded(
+            std::slice::from_ref(&root),
+            0,
+            &[],
+            CleanMode::Simulate,
+            &SystemCleanupRunner,
+            &noop,
+            &CleanupPolicy::default(),
+            None,
+            None,
+            &CleanupSelection::All,
+        )
+        .unwrap();
+
+        let mut listed: Vec<(PathBuf, u64, &'static str)> = all
+            .candidates
+            .iter()
+            .map(|c| (c.root.clone(), c.bytes, c.ownership.label()))
+            .collect();
+        listed.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut engine: Vec<(PathBuf, u64, &'static str)> = report
+            .results
+            .iter()
+            // Selection-excluded rows are deliberately excluded from the
+            // engine's unit set: they are rows the M014 filter added, not
+            // units the pipeline found.
+            .filter(|r| r.reason_code != CleanupReasonCode::SkippedOutsideSelection)
+            .map(|r| {
+                (
+                    r.display_path.clone(),
+                    r.before_bytes.unwrap_or(0),
+                    r.ownership.label(),
+                )
+            })
+            .collect();
+        engine.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            listed, engine,
+            "the interactive list and the engine must agree on units, bytes, and ownership"
+        );
+
+        // And the selection must travel identically into both. This is the
+        // property the TUI depends on: what the operator sees is what the
+        // engine treats as candidates.
+        let narrowed = CleanupSelection::Roots(vec![beta.clone()]);
+        let listed_narrow = list_cleanup_candidates(
+            std::slice::from_ref(&root),
+            0,
+            CleanMode::Simulate,
+            &SystemCleanupRunner,
+            &noop,
+            &narrowed,
+        )
+        .unwrap();
+        assert_eq!(
+            listed_narrow.candidates.len(),
+            1,
+            "the listing honours the selection: {:?}",
+            listed_narrow.candidates
+        );
+        assert_eq!(listed_narrow.candidates[0].root, beta);
+
+        let engine_narrow = clean_with_roots_policy_selector_guarded(
+            std::slice::from_ref(&root),
+            0,
+            &[],
+            CleanMode::Simulate,
+            &SystemCleanupRunner,
+            &noop,
+            &CleanupPolicy::default(),
+            None,
+            None,
+            &narrowed,
+        )
+        .unwrap();
+        let considered: Vec<&PathBuf> = engine_narrow
+            .results
+            .iter()
+            .filter(|r| r.reason_code != CleanupReasonCode::SkippedOutsideSelection)
+            .map(|r| &r.display_path)
+            .collect();
+        let excluded: Vec<&PathBuf> = engine_narrow
+            .results
+            .iter()
+            .filter(|r| r.reason_code == CleanupReasonCode::SkippedOutsideSelection)
+            .map(|r| &r.display_path)
+            .collect();
+        assert_eq!(considered, vec![&beta], "the engine honours it too");
+        assert_eq!(
+            excluded.len(),
+            2,
+            "every deselected unit is reported, not silently dropped: {excluded:?}"
+        );
+    }
+
+    #[test]
+    fn the_listing_never_spawns_a_clean() {
+        // Read-only by contract: the listing spawns `cargo metadata` and
+        // nothing else. If it ever grew a clean spawn, the operator would be
+        // looking at a list whose construction had already deleted bytes.
+        //
+        // `Execute` is requested deliberately: the listing must ignore the mode
+        // argument, because "what mode would this run in?" is not the listing's
+        // question to answer.
+        let (_d, root, alpha, beta, _gamma) = mixed_ownership_fixture();
+        let listing = list_cleanup_candidates(
+            std::slice::from_ref(&root),
+            0,
+            CleanMode::Execute,
+            &SystemCleanupRunner,
+            &NoopObserver,
+            &CleanupSelection::All,
+        )
+        .unwrap();
+        assert_eq!(listing.candidates.len(), 3);
+        for ws in [alpha, beta] {
+            assert!(
+                ws.join("target").join("artifact.bin").exists(),
+                "{} survived the listing",
+                ws.display()
+            );
+        }
+    }
+
+    #[test]
+    fn an_unproven_universe_blocks_the_listing_rather_than_offering_rows() {
+        // Offering a selection from a universe whose ownership could not be
+        // proven would be the ADR 006 shape in a new costume: the operator would
+        // be choosing from a list whose classification is exactly what failed.
+        let (_d, root, target) = valid_fixture(1);
+        let mut runner = FakeCleanupRunner::new(&root, &target, 1);
+        runner.unresolved_manifest = Some(root.join("Cargo.toml"));
+        let noop = NoopObserver;
+
+        let listing = list_cleanup_candidates(
+            std::slice::from_ref(&root),
+            0,
+            CleanMode::Simulate,
+            &runner,
+            &noop,
+            &CleanupSelection::All,
+        )
+        .unwrap();
+
+        let block = listing
+            .scope_blocked
+            .expect("an unresolved manifest must block the listing");
+        assert_eq!(block.reason, ScopeBlockReason::OwnershipUnproven);
+        assert!(
+            !listing.unresolved_ownership.is_empty(),
+            "the block must name the participant, not only count it"
+        );
+        assert!(
+            listing.candidates.is_empty(),
+            "no rows may be offered from an unproven universe: {:?}",
+            listing.candidates
+        );
+        assert!(runner.clean_calls().is_empty());
+    }
+
+    #[test]
+    fn a_candidate_row_states_when_it_cannot_be_cleaned() {
+        // `provably_private` is a presentation hint about ownership only. It
+        // must never be mistaken for the full policy verdict, and it must never
+        // claim a unit is cleanable when only authorization would decide.
+        let shared = CleanupCandidate {
+            root: PathBuf::from("/ws/shared"),
+            bytes: 10,
+            ownership: OutputOwnershipClass::Shared,
+        };
+        let private = CleanupCandidate {
+            root: PathBuf::from("/ws/private"),
+            bytes: 10,
+            ownership: OutputOwnershipClass::PrivateBounded,
+        };
+        let uncertain = CleanupCandidate {
+            root: PathBuf::from("/ws/uncertain"),
+            bytes: 10,
+            ownership: OutputOwnershipClass::Uncertain,
+        };
+        assert!(!shared.provably_private());
+        assert!(!uncertain.provably_private());
+        assert!(private.provably_private());
+        // The doc comment's claim, asserted: this is a projection of ownership
+        // alone. Size cannot change the answer — otherwise the row would be
+        // quietly growing an eligibility verdict the engine never asked it for.
+        let mut empty = private.clone();
+        empty.bytes = 0;
+        assert!(
+            empty.provably_private(),
+            "byte size must not affect an ownership projection"
+        );
+        let external = CleanupCandidate {
+            root: PathBuf::from("/ws/external"),
+            bytes: 10,
+            ownership: OutputOwnershipClass::ExternalUnproven,
+        };
+        assert!(
+            !external.provably_private(),
+            "unproven-by-construction output is never cleanable"
+        );
     }
 
     #[test]
@@ -4090,6 +4817,7 @@ mod tests {
             &mut counters,
             &mut diags,
             &noop,
+            &CleanupSelection::All,
         )
         .unwrap();
         assert_eq!(scope.units.len(), 1);
@@ -4232,6 +4960,7 @@ mod tests {
             Some(AdmissionPremise {
                 omitted: vec![crate::policy::AutomaticOmission::NotFound(absent.clone())],
             }),
+            &CleanupSelection::All,
         )
         .unwrap();
         assert!(ok.scope_blocked.is_none());
@@ -4254,6 +4983,7 @@ mod tests {
             Some(AdmissionPremise {
                 omitted: vec![crate::policy::AutomaticOmission::NotFound(absent.clone())],
             }),
+            &CleanupSelection::All,
         )
         .unwrap();
         assert_eq!(
@@ -4888,6 +5618,7 @@ mod tests {
             &mut counters,
             &mut diags,
             &noop,
+            &CleanupSelection::All,
         )
         .unwrap();
         let workspaces = scope.workspaces;

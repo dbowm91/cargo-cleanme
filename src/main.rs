@@ -44,6 +44,8 @@ fn operation_name(invocation: &Invocation) -> &'static str {
         Invocation::Scan(_) => "scan",
         Invocation::Config(_) => "config",
         Invocation::Update { .. } => "update",
+        // Unreachable through `clap`, so no consumer can observe this value.
+        Invocation::UsageError(_) => "usage",
     }
 }
 
@@ -82,6 +84,9 @@ fn run(cli: Cli) -> Result<i32, AppError> {
             run_scan(intent, &path, options, EmitReport::Yes).map(|outcome| outcome.code)
         }
         Invocation::Cleanup(request) => run_cleanup(request, &path, options),
+        // Unreachable through `clap` (see `Invocation::UsageError`). Reported as
+        // a usage error (exit 2) rather than guessing an operation.
+        Invocation::UsageError(message) => Err(AppError::Config(message)),
     }
 }
 
@@ -407,6 +412,20 @@ fn run_cleanup(
         )?;
         return Ok(0);
     }
+    // Which resolved units are candidates. Resolved *here*, after the root set
+    // is known, because `-i` needs those roots to list anything at all.
+    let selection = match resolve_candidate_selection(&request, &resolved, &config, mode, options)?
+    {
+        SelectionOutcome::Chosen(selection) => selection,
+        SelectionOutcome::Cancelled => {
+            // A deliberate operator decision, not a failure and not a silent
+            // no-op: say plainly that nothing ran.
+            eprintln!(
+                "cargo-cleanme: interactive selection cancelled; no cleanup commands were run"
+            );
+            return Ok(0);
+        }
+    };
     let show = options.format == OutputFormat::Human
         && cargo_cleanme::progress::should_show_progress(options.no_progress);
     let renderer = cargo_cleanme::progress::IndicatifRenderer::new(!show);
@@ -426,6 +445,7 @@ fn run_cleanup(
         &policy,
         selector.clone(),
         Some(premise),
+        &selection,
     );
     renderer.finish_and_clear();
     let report = cleanup?;
@@ -456,6 +476,100 @@ fn run_cleanup(
     })
 }
 
+/// What the selection step decided.
+enum SelectionOutcome {
+    /// Run the engine with this selection.
+    Chosen(cargo_cleanme::cleanup::CleanupSelection),
+    /// The operator quit the interactive list. Nothing runs.
+    Cancelled,
+}
+
+/// Resolve which resolved cleanup units are candidates for this run.
+///
+/// Without `-i` this is the CLI's declared selection, with `WorkingDirectory`
+/// turned into concrete roots. `WorkingDirectory` is the only unresolved form
+/// and `resolved()` fails closed rather than falling back to "everything".
+///
+/// This is a *post-classification* filter: `resolve_cleanup_roots` and
+/// `workspace::build_groups` inside the engine still see the full Routine
+/// universe, so output shared with a workspace outside the anchor stays
+/// `Shared`. Narrowing root selection here instead would be the ADR 006 defect.
+///
+/// With `-i` the operator's choice replaces it. The interactive path resolves
+/// candidates through the *same* [`cargo_cleanme::cleanup::list_cleanup_candidates`]
+/// pipeline the engine uses, so the offered rows are the engine's own units,
+/// and the result is a strictly narrower `Roots` selection — never a way to
+/// add, reclassify, or unblock one.
+fn resolve_candidate_selection(
+    request: &CleanupRequest,
+    resolved: &ResolvedCleanup,
+    config: &config::Config,
+    mode: cargo_cleanme::cleanup::CleanMode,
+    options: RunOptions,
+) -> Result<SelectionOutcome, AppError> {
+    if !request.interactive {
+        return Ok(SelectionOutcome::Chosen(request.selection.resolved()?));
+    }
+    // The machine formats are refused first because that conflict is a static
+    // property of the invocation: it is knowable without touching a single
+    // stream, and clap makes the same kind of call by rejecting conflicting
+    // argv before anything runs. The terminal precondition is reported next,
+    //    for the same reason in the opposite direction — both are checked before
+    // the listing, which is the first thing that would spawn `cargo metadata`.
+    if options.format != OutputFormat::Human {
+        return Err(AppError::Config(
+            "interactive selection requires human output; --format json and --format log are \
+             automation contracts and cannot carry a terminal session"
+                .into(),
+        ));
+    }
+    // The terminal precondition is checked *before* the listing, not after.
+    // The listing is a full read-only resolution that spawns `cargo metadata`
+    // across every resolved root; doing that only to then refuse for lack of a
+    // terminal would spend the operator's time and spawn processes for a run
+    // that was never going to happen.
+    if let Err(reason) = cargo_cleanme::interactive::ensure_interactive_terminal(
+        std::io::IsTerminal::is_terminal(&std::io::stdin()),
+        std::io::IsTerminal::is_terminal(&std::io::stdout()),
+    ) {
+        return Err(AppError::Config(format!(
+            "interactive selection requires a terminal ({reason}); \
+             drop -i to clean without choosing interactively, or \
+             use `cargo cleanme scan --all` to inspect the same units read-only"
+        )));
+    }
+    // Progress bars would fight the repainting list, so the listing runs
+    // silent. It is a read-only resolution: `cargo metadata` only.
+    let silent = cargo_cleanme::progress::IndicatifRenderer::new(true);
+    let listing = cargo_cleanme::cleanup::list_cleanup_candidates(
+        &resolved.roots,
+        config.scan.recency_seconds,
+        mode,
+        &cargo_cleanme::cleanup::SystemCleanupRunner,
+        &silent,
+        // Offer every unit in scope. The operator is choosing, and a list that
+        // hid the units their anchor excluded would just move the surprise to
+        // the report.
+        &cargo_cleanme::cleanup::CleanupSelection::All,
+    )?;
+    if let Some(block) = listing.scope_blocked {
+        // Offering rows from an unproven universe would be the ADR 006 shape in
+        // a new costume: the operator would be picking from a list whose
+        // classification is exactly what failed.
+        return Err(AppError::Config(format!(
+            "cannot present an interactive selection: {}",
+            block.message
+        )));
+    }
+    match cargo_cleanme::interactive::run_interactive(listing.candidates) {
+        Ok(cargo_cleanme::interactive::SessionResult::Selected(roots)) => Ok(
+            SelectionOutcome::Chosen(cargo_cleanme::cleanup::CleanupSelection::Roots(roots)),
+        ),
+        Ok(cargo_cleanme::interactive::SessionResult::Cancelled) => Ok(SelectionOutcome::Cancelled),
+        Err(reason) => Err(AppError::Config(reason)),
+    }
+}
+
 /// Run the combined cleanup engine against admitted roots, defending the
 /// narrow race in which an admitted automatic root disappears between
 /// admission and the engine's own strict validation.
@@ -475,6 +589,7 @@ fn run_engine_guarded(
     policy: &cargo_cleanme::cleanup::CleanupPolicy,
     selector: Option<cargo_cleanme::cleanup::CleanupSelector>,
     premise: Option<cargo_cleanme::cleanup::AdmissionPremise>,
+    selection: &cargo_cleanme::cleanup::CleanupSelection,
 ) -> Result<cargo_cleanme::cleanup::CleanReport, AppError> {
     let attempt = |roots: &[std::path::PathBuf],
                    premise: Option<cargo_cleanme::cleanup::AdmissionPremise>| {
@@ -488,6 +603,7 @@ fn run_engine_guarded(
             policy,
             selector.clone(),
             premise,
+            selection,
         )
     };
     match attempt(&resolved.roots, premise.clone()) {

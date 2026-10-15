@@ -1240,6 +1240,62 @@ impl MaintenanceFixture {
         }
     }
 
+    /// Run cargo-cleanme from an arbitrary working directory.
+    ///
+    /// M014 makes the working directory part of the contract, so a test that
+    /// wants "the same run, somewhere else" needs to be able to say so.
+    fn run_from(&self, cwd: &std::path::Path, args: &[&str]) -> std::process::Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args([
+            "--config",
+            self.config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "json",
+        ]);
+        command.args(args);
+        command
+            .env("PATH", path_with(&self.bin))
+            .env("FIXTURE_ROOT", &self.root)
+            .env("FIXTURE_TARGET", &self.target)
+            .env("CARGO_LOG", &self.log)
+            .env("CARGO_ARGS_LOG", &self.args_log)
+            .current_dir(cwd)
+            .output()
+            .unwrap()
+    }
+
+    /// Run with an explicit output format.
+    ///
+    /// The interactive-refusal tests need to name the format themselves: `-i`
+    /// is refused *because of* the format in one case, so inheriting the
+    /// default `json` would make the two tests indistinguishable.
+    fn run_with_format(&self, args: &[&str], format: &str) -> std::process::Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args([
+            "--config",
+            self.config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            format,
+        ]);
+        command.args(args);
+        command
+            .env("PATH", path_with(&self.bin))
+            .env("FIXTURE_ROOT", &self.root)
+            .env("FIXTURE_TARGET", &self.target)
+            .env("CARGO_LOG", &self.log)
+            .env("CARGO_ARGS_LOG", &self.args_log)
+            .current_dir(&self.root)
+            .output()
+            .unwrap()
+    }
+
+    /// Run with human output, the only format a terminal session can carry.
+    fn run_human(&self, args: &[&str]) -> std::process::Output {
+        self.run_with_format(args, "human")
+    }
+
     /// Run cargo-cleanme with the stub on PATH and return its output.
     fn run(&self, args: &[&str]) -> std::process::Output {
         self.run_with_locate_failure(args, false)
@@ -1262,6 +1318,12 @@ impl MaintenanceFixture {
             .env("CARGO_LOG", &self.log)
             .env("CARGO_ARGS_LOG", &self.args_log)
             .env("CARGO_FAIL_LOCATE", if fail_locate { "1" } else { "" })
+            // M014: bare invocation anchors its *selection* to the working
+            // directory. The fixture root is this scenario's working
+            // directory, so run there. Load-bearing, not cosmetic: without it
+            // every candidate is correctly reported as
+            // `skipped_outside_selection` and nothing is ever cleaned.
+            .current_dir(&self.root)
             .output()
             .unwrap()
     }
@@ -1300,6 +1362,12 @@ impl MaintenanceFixture {
             .env("FIXTURE_TARGET", &self.target)
             .env("CARGO_LOG", &self.log)
             .env("CARGO_ARGS_LOG", &self.args_log)
+            // M014: bare invocation anchors its *selection* to the working
+            // directory. The fixture root is this scenario's working
+            // directory, so run there. This is load-bearing, not cosmetic:
+            // without it every candidate is legitimately reported as
+            // `skipped_outside_selection` and nothing is ever cleaned.
+            .current_dir(&self.root)
             .output()
             .unwrap()
     }
@@ -1327,6 +1395,178 @@ impl MaintenanceFixture {
 /// pre-M012A dispatch, `Cli::command` was `None` and `main` fell through to
 /// `run_scan(None, false, ...)`, so this run produced `operation = "scan"`,
 /// never invoked Cargo clean, and left the artifact in place.
+/// M014 / ADR 006: the working directory anchors *which proven units are
+/// cleaned*, and never which units are *proven*.
+///
+/// These two runs are identical except for the working directory. Both discover
+/// and prove the same private workspace over the same bytes; only the anchor
+/// differs. Asserting both directions is what distinguishes "the selection
+/// filter works" from "the scan got narrower" — the second would quietly
+/// promote shared output to `private` (ADR 006), and the first case below is
+/// the observable difference between them.
+#[cfg(unix)]
+#[test]
+fn working_directory_anchor_selects_without_narrowing_the_ownership_universe() {
+    let fixture = MaintenanceFixture::new(true);
+    assert!(fixture.artifact().exists(), "premise: the artifact exists");
+
+    // Standing somewhere unrelated: it is proven, then left untouched. This
+    // must be a *disjoint* directory, not the fixture's parent — the anchor
+    // matches ancestors too, so the parent would legitimately still select the
+    // workspace (that direction is asserted separately in `cli.rs`).
+    let elsewhere = tempfile::tempdir().unwrap();
+    let outside = fixture.run_from(elsewhere.path(), &["--dry-run"]);
+    let outside_json: serde_json::Value = serde_json::from_slice(&outside.stdout).unwrap();
+    assert_eq!(
+        outside_json["result"]["summary"]["cleaned"], 0,
+        "nothing outside the anchor may be cleaned: {outside_json}"
+    );
+    assert_eq!(
+        outside_json["result"]["units"][0]["reason_code"], "skipped_outside_selection",
+        "an excluded unit must carry a typed code, never vanish: {outside_json}"
+    );
+    // The premise that makes this a *selection* test rather than a discovery
+    // test: the unit was fully discovered, resolved and measured.
+    assert_eq!(
+        outside_json["result"]["discovered_manifests"], 1,
+        "the universe must still be discovered: {outside_json}"
+    );
+    assert_eq!(
+        outside_json["result"]["resolved_workspaces"], 1,
+        "the workspace must still resolve and be classified: {outside_json}"
+    );
+    assert_eq!(
+        outside_json["result"]["units"][0]["ownership"], "private",
+        "ownership is classified over the full universe, not the anchor: {outside_json}"
+    );
+    assert_eq!(fixture.clean_calls(), 0, "simulation spawns nothing");
+
+    // Standing inside it: the same proven unit is now a candidate.
+    let inside = fixture.run(&["--dry-run"]);
+    let inside_json: serde_json::Value = serde_json::from_slice(&inside.stdout).unwrap();
+    assert_eq!(
+        inside_json["result"]["summary"]["simulated"], 1,
+        "the anchored workspace must be simulated: {inside_json}"
+    );
+    assert_eq!(
+        inside_json["result"]["units"][0]["reason_code"], "simulated",
+        "{inside_json}"
+    );
+}
+
+/// `-i` needs a terminal on both stdin and stdout.
+///
+/// The test process has neither, so this is the precondition exercised for
+/// real rather than through a mock. The discriminating assertion is the exit
+/// code *and* the reason: a test that only checked "it failed" would pass just
+/// as well against an unrelated crash.
+#[cfg(unix)]
+#[test]
+fn interactive_without_a_terminal_is_a_usage_error_that_names_the_reason() {
+    let fixture = MaintenanceFixture::new(true);
+    let output = fixture.run_human(&["-i"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a missing terminal is a usage error, not a crash and not a silent no-op\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("requires a terminal"),
+        "the reason must be legible: {stderr}"
+    );
+    assert!(
+        stderr.contains("input is not a terminal"),
+        "the specific failing stream must be named: {stderr}"
+    );
+    assert_eq!(
+        fixture.clean_calls(),
+        0,
+        "a refused session must not spawn anything"
+    );
+    assert!(
+        fixture.artifact().exists(),
+        "a refused session must not touch bytes"
+    );
+}
+
+/// The machine formats cannot carry a terminal session.
+///
+/// This guards a contract decision rather than an implementation detail: JSON
+/// and log mode are automation contracts, and inventing a "the operator
+/// stopped here" document for them would be a new schema nobody asked for.
+#[cfg(unix)]
+#[test]
+fn interactive_refuses_the_machine_output_formats() {
+    // JSON and log are the automation contracts. Carrying a terminal session
+    // in either would mean inventing a document shape for "the operator stopped
+    // here", which is a new schema nobody asked for. The refusal is the
+    // honest answer.
+    //
+    // Each format is asserted against *its own* contract: human/JSON prose
+    // explains itself, while log mode is specified to carry a bounded code and
+    // no text at all. A single shared assertion would pass for the wrong reason
+    // in one of the two.
+    let json_fixture = MaintenanceFixture::new(true);
+    let json = json_fixture.run_with_format(&["-i"], "json");
+    assert_eq!(
+        json.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&json.stderr)
+    );
+    let json_stderr = String::from_utf8_lossy(&json.stderr);
+    assert!(
+        json_stderr.contains("requires human output"),
+        "JSON mode has no prose channel, so the human path must still explain: {json_stderr}"
+    );
+    assert_eq!(json_fixture.clean_calls(), 0, "no spawn for --format json");
+
+    let log_fixture = MaintenanceFixture::new(true);
+    let log = log_fixture.run_with_format(&["-i"], "log");
+    assert_eq!(
+        log.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&log.stderr)
+    );
+    let log_stderr = String::from_utf8_lossy(&log.stderr);
+    assert!(
+        log_stderr.contains("op=clean") && log_stderr.contains("status=error"),
+        "log mode's refusal must still be a greppable bounded line: {log_stderr}"
+    );
+    assert!(
+        !log_stderr.contains("requires human output"),
+        "log mode must not carry prose — that is its contract: {log_stderr}"
+    );
+    assert_eq!(log_fixture.clean_calls(), 0, "no spawn for --format log");
+}
+
+/// `-i` with `--dry-run` still refuses a redirected terminal.
+///
+/// The mode changes what a session *does* after the operator presses Enter; it
+/// cannot conjure a terminal. A test that let `--dry-run -i` through here would
+/// be letting the safest spelling skip the check.
+#[cfg(unix)]
+#[test]
+fn interactive_dry_run_still_requires_a_terminal() {
+    let fixture = MaintenanceFixture::new(true);
+    let output = fixture.run_human(&["-i", "--dry-run"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("requires a terminal"),
+        "the precondition is not a mode-dependent behaviour"
+    );
+    assert_eq!(fixture.clean_calls(), 0);
+}
+
 #[cfg(unix)]
 #[test]
 fn bare_invocation_executes_routine_cleanup_and_is_not_a_scan() {
@@ -1486,6 +1726,9 @@ fn routine_bare_dry_run_and_execute_use_real_cargo_on_default_seed() {
             .env("HOME", &home)
             .env("CARGO_HOME", &cargo_home)
             .env("PATH", &path)
+            // M014: anchor the bare invocation's selection to this scenario's
+            // working directory.
+            .current_dir(&home)
             .output()
             .expect("run staged cargo cleanme")
     };
@@ -2076,6 +2319,9 @@ impl MaintenanceFixture {
             .env("FIXTURE_TARGET", &self.target)
             .env("CARGO_LOG", &self.log)
             .env("CARGO_ARGS_LOG", &self.args_log)
+            // M014: the bare invocation anchors its selection to the
+            // working directory; this fixture root is the scenario's.
+            .current_dir(&self.root)
             .output()
             .unwrap()
     }
@@ -2236,6 +2482,9 @@ fn log_mode_failed_cleanup_is_one_line_with_status_failed_and_exit_one() {
         .env("CARGO_LOG", &fixture.log)
         .env("CARGO_ARGS_LOG", &fixture.args_log)
         .env("CARGO_FAIL_CLEAN", "1")
+        // M014: anchor the bare invocation's selection to this scenario's
+        // working directory.
+        .current_dir(&fixture.root)
         .output()
         .unwrap();
     assert_eq!(
@@ -2371,6 +2620,10 @@ fn log_mode_stats_is_opt_in_stderr_and_leaves_the_single_line_alone() {
         .env("FIXTURE_TARGET", &fixture.target)
         .env("CARGO_LOG", &fixture.log)
         .env("CARGO_ARGS_LOG", &fixture.args_log)
+        // M014: this inline run must anchor its selection the same way
+        // `fixture.run_log` below does, or the two lines would differ for a
+        // reason that has nothing to do with `--stats`.
+        .current_dir(&fixture.root)
         .output()
         .unwrap();
     let stats_line = assert_bounded_log_line(&stats.stdout);
@@ -2938,6 +3191,9 @@ impl StaleLearnedFixture {
             .env("FIXTURE_TARGET", &self.target)
             .env("CARGO_LOG", &self.log)
             .env("CARGO_ARGS_LOG", &self.args_log)
+            // M014: the bare invocation anchors its selection to the
+            // working directory; this fixture root is the scenario's.
+            .current_dir(&self.home)
             .output()
             .unwrap()
     }
@@ -2960,6 +3216,9 @@ impl StaleLearnedFixture {
             .env("FIXTURE_TARGET", &self.target)
             .env("CARGO_LOG", &self.log)
             .env("CARGO_ARGS_LOG", &self.args_log)
+            // M014: the bare invocation anchors its selection to the
+            // working directory; this fixture root is the scenario's.
+            .current_dir(&self.home)
             .output()
             .unwrap()
     }
@@ -2990,6 +3249,9 @@ impl StaleLearnedFixture {
             .env("FIXTURE_TARGET", &self.target)
             .env("CARGO_LOG", &self.log)
             .env("CARGO_ARGS_LOG", &self.args_log)
+            // M014: the bare invocation anchors its selection to the
+            // working directory; this fixture root is the scenario's.
+            .current_dir(&self.home)
             .output()
             .unwrap()
     }

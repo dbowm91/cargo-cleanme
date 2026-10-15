@@ -34,11 +34,13 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
             [CompletionResult]::new('--stats', '--stats', [CompletionResultType]::ParameterName, 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination')
             [CompletionResult]::new('--dry-run', '--dry-run', [CompletionResultType]::ParameterName, 'Simulate: run every decision, proof, and reporting step, but invoke no `cargo clean` process at all. Honoured wherever it appears, so the `cargo cleanme --dry-run clean ROOT` spelling cannot fall back to Execute. Only `clean` (and `update`''s own `--dry-run`) honour it: `scan` and `config` ignore a global `--dry-run` (read-only / local-only, no behaviour change)')
             [CompletionResult]::new('--dryrun', '--dryrun', [CompletionResultType]::ParameterName, 'Historical spelling of `--dry-run`; retained as a hidden alias')
+            [CompletionResult]::new('-i', '-i', [CompletionResultType]::ParameterName, 'Choose the workspaces to clean from an inline selection list (NOR/INS)')
+            [CompletionResult]::new('--interactive', '--interactive', [CompletionResultType]::ParameterName, 'Choose the workspaces to clean from an inline selection list (NOR/INS)')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
             [CompletionResult]::new('-V', '-V ', [CompletionResultType]::ParameterName, 'Print version')
             [CompletionResult]::new('--version', '--version', [CompletionResultType]::ParameterName, 'Print version')
-            [CompletionResult]::new('scan', 'scan', [CompletionResultType]::ParameterValue, 'Reconcile the machine read-only: full by default, explicit with ROOT, routine inventory with `--known`')
+            [CompletionResult]::new('scan', 'scan', [CompletionResultType]::ParameterValue, 'Reconcile the machine read-only: full with `--all`, explicit with ROOT, routine inventory with `--known`')
             [CompletionResult]::new('config', 'config', [CompletionResultType]::ParameterValue, 'config')
             [CompletionResult]::new('clean', 'clean', [CompletionResultType]::ParameterValue, 'Preview or execute cleanup of revalidated Cargo build artifacts')
             [CompletionResult]::new('update', 'update', [CompletionResultType]::ParameterValue, 'Update this cargo-cleanme to the latest stable published release')
@@ -48,9 +50,13 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
             [CompletionResult]::new('--config', '--config', [CompletionResultType]::ParameterName, 'config')
             [CompletionResult]::new('--format', '--format', [CompletionResultType]::ParameterName, 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers')
             [CompletionResult]::new('--known', '--known', [CompletionResultType]::ParameterName, 'Routine read-only inventory over the maintenance scope')
-            [CompletionResult]::new('--full', '--full', [CompletionResultType]::ParameterName, 'Historical spelling of no-root Full `scan`; retained as a hidden alias')
+            [CompletionResult]::new('-a', '-a', [CompletionResultType]::ParameterName, 'Full machine reconciliation')
+            [CompletionResult]::new('--all', '--all', [CompletionResultType]::ParameterName, 'Full machine reconciliation')
+            [CompletionResult]::new('--full', '--full', [CompletionResultType]::ParameterName, 'Historical spelling of `--all`; retained as a hidden alias')
             [CompletionResult]::new('--no-progress', '--no-progress', [CompletionResultType]::ParameterName, 'Disable transient progress UI (useful for benchmarks and debugging)')
             [CompletionResult]::new('--stats', '--stats', [CompletionResultType]::ParameterName, 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination')
+            [CompletionResult]::new('-i', '-i', [CompletionResultType]::ParameterName, 'Choose the workspaces to clean from an inline selection list (NOR/INS)')
+            [CompletionResult]::new('--interactive', '--interactive', [CompletionResultType]::ParameterName, 'Choose the workspaces to clean from an inline selection list (NOR/INS)')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
             break
@@ -60,6 +66,8 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
             [CompletionResult]::new('--format', '--format', [CompletionResultType]::ParameterName, 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers')
             [CompletionResult]::new('--no-progress', '--no-progress', [CompletionResultType]::ParameterName, 'Disable transient progress UI (useful for benchmarks and debugging)')
             [CompletionResult]::new('--stats', '--stats', [CompletionResultType]::ParameterName, 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination')
+            [CompletionResult]::new('-i', '-i', [CompletionResultType]::ParameterName, 'Choose the workspaces to clean from an inline selection list (NOR/INS)')
+            [CompletionResult]::new('--interactive', '--interactive', [CompletionResultType]::ParameterName, 'Choose the workspaces to clean from an inline selection list (NOR/INS)')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
             [CompletionResult]::new('path', 'path', [CompletionResultType]::ParameterValue, 'path')
@@ -72,6 +80,8 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
             [CompletionResult]::new('--format', '--format', [CompletionResultType]::ParameterName, 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers')
             [CompletionResult]::new('--no-progress', '--no-progress', [CompletionResultType]::ParameterName, 'Disable transient progress UI (useful for benchmarks and debugging)')
             [CompletionResult]::new('--stats', '--stats', [CompletionResultType]::ParameterName, 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination')
+            [CompletionResult]::new('-i', '-i', [CompletionResultType]::ParameterName, 'Choose the workspaces to clean from an inline selection list (NOR/INS)')
+            [CompletionResult]::new('--interactive', '--interactive', [CompletionResultType]::ParameterName, 'Choose the workspaces to clean from an inline selection list (NOR/INS)')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
             break
@@ -81,6 +91,8 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
             [CompletionResult]::new('--format', '--format', [CompletionResultType]::ParameterName, 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers')
             [CompletionResult]::new('--no-progress', '--no-progress', [CompletionResultType]::ParameterName, 'Disable transient progress UI (useful for benchmarks and debugging)')
             [CompletionResult]::new('--stats', '--stats', [CompletionResultType]::ParameterName, 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination')
+            [CompletionResult]::new('-i', '-i', [CompletionResultType]::ParameterName, 'Choose the workspaces to clean from an inline selection list (NOR/INS)')
+            [CompletionResult]::new('--interactive', '--interactive', [CompletionResultType]::ParameterName, 'Choose the workspaces to clean from an inline selection list (NOR/INS)')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
             break
@@ -90,6 +102,8 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
             [CompletionResult]::new('--format', '--format', [CompletionResultType]::ParameterName, 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers')
             [CompletionResult]::new('--no-progress', '--no-progress', [CompletionResultType]::ParameterName, 'Disable transient progress UI (useful for benchmarks and debugging)')
             [CompletionResult]::new('--stats', '--stats', [CompletionResultType]::ParameterName, 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination')
+            [CompletionResult]::new('-i', '-i', [CompletionResultType]::ParameterName, 'Choose the workspaces to clean from an inline selection list (NOR/INS)')
+            [CompletionResult]::new('--interactive', '--interactive', [CompletionResultType]::ParameterName, 'Choose the workspaces to clean from an inline selection list (NOR/INS)')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
             break
@@ -111,6 +125,8 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
             [CompletionResult]::new('--dryrun', '--dryrun', [CompletionResultType]::ParameterName, 'Historical spelling of `--dry-run`; retained as a hidden alias')
             [CompletionResult]::new('--no-progress', '--no-progress', [CompletionResultType]::ParameterName, 'Disable transient progress UI (useful for benchmarks and debugging)')
             [CompletionResult]::new('--stats', '--stats', [CompletionResultType]::ParameterName, 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination')
+            [CompletionResult]::new('-i', '-i', [CompletionResultType]::ParameterName, 'Choose the workspaces to clean from an inline selection list (NOR/INS)')
+            [CompletionResult]::new('--interactive', '--interactive', [CompletionResultType]::ParameterName, 'Choose the workspaces to clean from an inline selection list (NOR/INS)')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
             break
@@ -121,6 +137,8 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
             [CompletionResult]::new('--dry-run', '--dry-run', [CompletionResultType]::ParameterName, 'Resolve the plan and report it without acquiring or replacing bytes')
             [CompletionResult]::new('--no-progress', '--no-progress', [CompletionResultType]::ParameterName, 'Disable transient progress UI (useful for benchmarks and debugging)')
             [CompletionResult]::new('--stats', '--stats', [CompletionResultType]::ParameterName, 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination')
+            [CompletionResult]::new('-i', '-i', [CompletionResultType]::ParameterName, 'Choose the workspaces to clean from an inline selection list (NOR/INS)')
+            [CompletionResult]::new('--interactive', '--interactive', [CompletionResultType]::ParameterName, 'Choose the workspaces to clean from an inline selection list (NOR/INS)')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
             break
@@ -131,7 +149,7 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
             break
         }
         'cargo;help;cargo-cleanme' {
-            [CompletionResult]::new('scan', 'scan', [CompletionResultType]::ParameterValue, 'Reconcile the machine read-only: full by default, explicit with ROOT, routine inventory with `--known`')
+            [CompletionResult]::new('scan', 'scan', [CompletionResultType]::ParameterValue, 'Reconcile the machine read-only: full with `--all`, explicit with ROOT, routine inventory with `--known`')
             [CompletionResult]::new('config', 'config', [CompletionResultType]::ParameterValue, 'config')
             [CompletionResult]::new('clean', 'clean', [CompletionResultType]::ParameterValue, 'Preview or execute cleanup of revalidated Cargo build artifacts')
             [CompletionResult]::new('update', 'update', [CompletionResultType]::ParameterValue, 'Update this cargo-cleanme to the latest stable published release')

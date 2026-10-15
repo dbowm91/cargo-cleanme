@@ -4,7 +4,7 @@
 .SH NAME
 cargo\-cleanme \- Clean inactive Cargo build artifacts through Cargo, or reconcile the machine read\-only
 .SH SYNOPSIS
-\fBcargo\-cleanme\fR [\fB\-\-config\fR] [\fB\-\-no\-progress\fR] [\fB\-\-stats\fR] [\fB\-\-format\fR] [\fB\-\-dry\-run\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIsubcommands\fR]
+\fBcargo\-cleanme\fR [\fB\-\-config\fR] [\fB\-\-no\-progress\fR] [\fB\-\-stats\fR] [\fB\-\-format\fR] [\fB\-\-dry\-run\fR] [\fB\-i\fR|\fB\-\-interactive\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIsubcommands\fR]
 .SH DESCRIPTION
 Clean inactive Cargo build artifacts through Cargo, or reconcile the machine read\-only
 .PP
@@ -47,6 +47,13 @@ log: One bounded ASCII summary line per report, for unattended schedulers that r
 \fB\-\-dry\-run\fR
 Simulate: run every decision, proof, and reporting step, but invoke no `cargo clean` process at all. Honoured wherever it appears, so the `cargo cleanme \-\-dry\-run clean ROOT` spelling cannot fall back to Execute. Only `clean` (and `update`\*(Aqs own `\-\-dry\-run`) honour it: `scan` and `config` ignore a global `\-\-dry\-run` (read\-only / local\-only, no behaviour change)
 .TP
+\fB\-i\fR, \fB\-\-interactive\fR
+Choose the workspaces to clean from an inline selection list (NOR/INS).
+
+Resolves the cleanup units read\-only, presents one row per unit with its reclaimable bytes, and cleans only what is checked. A selection can remove candidates but never add one: ownership is still proven across the complete universe and the engine still re\-proves it per spawn.
+
+Requires a terminal on stdin and stdout. Combine with `\-\-dry\-run` to review a selection without invoking `cargo clean`.
+.TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
@@ -55,7 +62,7 @@ Print version
 .SH SUBCOMMANDS
 .TP
 cargo\-cleanme\-scan(1)
-Reconcile the machine read\-only: full by default, explicit with ROOT, routine inventory with `\-\-known`
+Reconcile the machine read\-only: full with `\-\-all`, explicit with ROOT, routine inventory with `\-\-known`
 .TP
 cargo\-cleanme\-config(1)
 .TP

@@ -66,24 +66,29 @@ Cargo's own bookkeeping cannot be bypassed. Do not "optimise" a direct
 `remove_dir_all` in for performance — it would be a semantic change to the
 authority model, not an optimisation.
 
-## The three modes, and the two spellings
+## The three modes, and the hidden aliases
+
+`src/cli.rs::clean_mode` is authoritative. `src/cleanup.rs::CleanMode` is the
+vocabulary.
 
 | Mode | Flag | Cargo clean invoked? |
 |---|---|---|
-| `Preview` | default, or `--dry-run` | yes, as `cargo clean --dry-run --verbose` |
-| `Simulate` | `--dryrun` | **never**, not even preview |
-| `Execute` | `--yes` | yes |
+| `Execute` | default, or `--yes` (hidden alias) | yes |
+| `Simulate` | `--dry-run`, or `--dryrun` (hidden alias) | **never**, not even preview |
+| `CargoPreview` | `--cargo-preview` | yes, as `cargo clean --dry-run --verbose` |
 
-`--dry-run` and `--dryrun` are deliberately different spellings with different
-meanings, and they conflict pairwise with `--yes`. This has been called
-error-prone in review more than once. The CLI contract says: reconcile the
-contract explicitly rather than silently aliasing. Do not "help" by making one
-an alias of the other.
+`--dry-run` and `--cargo-preview` are deliberately different spellings with
+different meanings, and every mode pair conflicts. `--dryrun` is a hidden alias
+of `--dry-run` and `--yes` is a hidden alias of the (now default) `Execute`;
+neither alias introduces a fourth mode or a different safety path. Do not "help"
+by reintroducing a `Preview`-default table or by making `--dry-run` spawn a
+Cargo preview.
 
-`--dryrun` is not a weaker mode: it runs discovery, resolution, filtering,
-sizing, authorization, revalidation, progress, and reporting, and only the
-deletion step is a no-op. It shares the same completeness and final-proof gates
-as `Execute`, so it is the mode to use when testing a change to the gates.
+`Simulate` (`--dry-run`) is not a weaker mode: it runs discovery, resolution,
+filtering, sizing, authorization, revalidation, progress, and reporting, and
+only the deletion step is a no-op. It shares the same completeness and
+final-proof gates as `Execute`, so it is the mode to use when testing a change
+to the gates.
 
 ## Unresolved ownership blocks the whole scope
 
@@ -101,8 +106,8 @@ message.
 
 ## Before you claim the change is safe
 
-- `--dryrun` produces the same unit set, the same skips, and the same typed
-  reason codes as `--yes`, with zero spawns.
+- `--dry-run` produces the same unit set, the same skips, and the same typed
+  reason codes as default `Execute`, with zero spawns.
 - Any new `Shared`/`Uncertain`/`ExternalUnproven` case is inventory-only in
   **both** the scan report and the cleanup decision.
 - `cargo cleanme clean … --format json` round-trips: the `reason_code` for each
