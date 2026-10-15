@@ -3814,7 +3814,7 @@ mod tests {
             .prefix("cargo-cleanme-m014-")
             .tempdir()
             .unwrap();
-        let root = d.path().join("projects");
+        let root = d.path().canonicalize().unwrap().join("projects"); // macOS: /var is a symlink
         let mut workspaces = Vec::new();
         for name in ["alpha", "beta", "gamma"] {
             let ws = root.join(name);

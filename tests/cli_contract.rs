@@ -1460,6 +1460,7 @@ fn working_directory_anchor_selects_without_narrowing_the_ownership_universe() {
 /// real rather than through a mock. The discriminating assertion is the exit
 /// code *and* the reason: a test that only checked "it failed" would pass just
 /// as well against an unrelated crash.
+#[cfg(unix)]
 #[test]
 fn interactive_without_a_terminal_is_a_usage_error_that_names_the_reason() {
     let fixture = MaintenanceFixture::new(true);
@@ -1496,6 +1497,7 @@ fn interactive_without_a_terminal_is_a_usage_error_that_names_the_reason() {
 /// This guards a contract decision rather than an implementation detail: JSON
 /// and log mode are automation contracts, and inventing a "the operator
 /// stopped here" document for them would be a new schema nobody asked for.
+#[cfg(unix)]
 #[test]
 fn interactive_refuses_the_machine_output_formats() {
     // JSON and log are the automation contracts. Carrying a terminal session
@@ -1547,6 +1549,7 @@ fn interactive_refuses_the_machine_output_formats() {
 /// The mode changes what a session *does* after the operator presses Enter; it
 /// cannot conjure a terminal. A test that let `--dry-run -i` through here would
 /// be letting the safest spelling skip the check.
+#[cfg(unix)]
 #[test]
 fn interactive_dry_run_still_requires_a_terminal() {
     let fixture = MaintenanceFixture::new(true);
