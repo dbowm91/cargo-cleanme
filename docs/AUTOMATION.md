@@ -32,7 +32,7 @@ still identifies the whole-scope block, and no cleanup command is spawned.
 $ cargo cleanme --format log
 cargo-cleanme op=clean status=ok scope=routine mode=execute cleaned=7 skipped=3 failed=0 reclaimed_bytes=19778387968 diagnostics=0
 
-$ cargo cleanme scan --format log
+$ cargo cleanme scan --all --format log
 cargo-cleanme op=scan status=ok scope=full manifests=184 groups=31 bytes=51335569408 diagnostics=2
 
 $ cargo cleanme --format log
@@ -124,7 +124,7 @@ max_wait_ms = 86400000
 [[jobs]]
 name = "cargo-cleanme-weekly-scan"
 schedule = "0 3 * * 0"
-command = ["/home/user/.cargo/bin/cargo-cleanme", "scan", "--format", "log"]
+command = ["/home/user/.cargo/bin/cargo-cleanme", "scan", "--all", "--format", "log"]
 max_load = 8.0
 load_window = "15m"
 retry_interval_ms = 300000
@@ -142,8 +142,10 @@ max_wait_ms = 86400000
   globbing. Chain jobs with greggd's own dependency support, or run a second
   command as a second job.
 - **The daily job cleans; the weekly job only reads.** Bare
-  `cargo cleanme --format log` is Routine cleanup over the maintenance scope.
-  `cargo cleanme scan --format log` is Full reconciliation and **never deletes
+  `cargo cleanme --format log` is cleanup anchored at the job's working
+  directory, so run the daily job from your home directory (or name an explicit
+  root). `cargo cleanme scan --all --format log` is Full reconciliation and
+  **never deletes
   anything**, but it walks the platform roots and can be expensive on a
   machine with a large filesystem — hence weekly, at night, behind load gating.
 - **Load gating, retry, and max-wait belong to greggd, not to cargo-cleanme.**
@@ -190,7 +192,7 @@ load gating:
 
 ```cron
 0 2 * * * /home/user/.cargo/bin/cargo-cleanme --format log >> /home/user/.local/state/cargo-cleanme.log 2>&1
-0 3 * * 0 /home/user/.cargo/bin/cargo-cleanme scan --format log >> /home/user/.local/state/cargo-cleanme.log 2>&1
+0 3 * * 0 /home/user/.cargo/bin/cargo-cleanme scan --all --format log >> /home/user/.local/state/cargo-cleanme.log 2>&1
 ```
 
 **systemd timers** — gives you `OnFailure`, `RandomizedDelaySec`, and the

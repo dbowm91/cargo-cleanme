@@ -118,11 +118,11 @@ First check which admitted roots are actually yours: cache, download, temp,
 and system-software locations (`~/Library/Caches`, `~/Downloads`,
 `/private/tmp`, `/usr/local`, …) are already omitted from Routine admission,
 so a remaining block comes from inside a real developer root. Options that
-keep the happy path (`scan`, then bare `cargo cleanme`) intact:
+keep the happy path (`scan --all`, then bare `cargo cleanme`) intact:
 
 - Fix the upstream workspace configuration (usually adding the stray crate to
   `workspace.exclude` or giving it an empty `[workspace]` table), then rerun
-  `cargo cleanme scan` so the next Full reconciliation observes a resolving
+  `cargo cleanme scan --all` so the next Full reconciliation observes a resolving
   tree.
 - Or set a one-time default scope in `config.toml` (`scan.root`) to the
   subtree you maintain; bare invocations then use that default and never
@@ -190,7 +190,7 @@ from Cargo's own preview to application simulation.
 | You wrote | On 0.2.0 it | Same behaviour? |
 |---|---|---|
 | `cargo cleanme` | `cargo cleanme scan --known` | yes |
-| `cargo cleanme scan --full` | `cargo cleanme scan` | yes |
+| `cargo cleanme scan --full` | `cargo cleanme scan --all` | yes |
 | `cargo cleanme clean R --dry-run` | `cargo cleanme clean R --cargo-preview` | yes |
 | `cargo cleanme clean R --dryrun` | `cargo cleanme clean R --dry-run` | yes |
 | `cargo cleanme clean R --yes` | `cargo cleanme clean R` | yes |

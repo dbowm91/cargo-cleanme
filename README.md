@@ -19,13 +19,6 @@ operation.
 
 ## Install
 
-> **Do not install 0.2.0.** It is yanked, and two destructive defects were found
-> in it after release: `--dry-run clean ROOT` — the spelling Cargo itself passes —
-> fell through to a real cleanup, and a workspace whose declared output directory
-> contained another project's source tree was cleaned as `private`, deleting that
-> neighbour's files. Both report success and exit 0. See
-> [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#known-defects-by-version).
-
 ```sh
 cargo install cargo-cleanme --locked
 ```
@@ -68,9 +61,10 @@ exists yet, so nothing here advertises a minimum glibc. See
 ## Quickstart
 
 ```sh
-cargo cleanme                               # Routine maintenance: clean (Execute)
-cargo cleanme --dry-run                     # Routine maintenance: simulate, zero `cargo clean`
-cargo cleanme scan                          # Full read-only reconciliation of the machine
+cargo cleanme                               # clean anchored at the working directory (Execute)
+cargo cleanme --dry-run                     # same selection, simulated, zero `cargo clean`
+cargo cleanme -i                            # choose units from a terminal list, then clean
+cargo cleanme scan --all                    # Full read-only reconciliation of the machine
 cargo cleanme scan --known                  # Routine read-only inventory
 cargo cleanme scan ROOT                     # one explicit bounded scope
 cargo cleanme --format json                 # one versioned JSON document on stdout
@@ -80,21 +74,40 @@ cargo cleanme --format json                 # one versioned JSON document on std
 
 | Command | What it does | Runs `cargo clean`? |
 |---|---|---|
-| `cargo cleanme` | Routine cleanup over the maintenance scope | yes |
+| `cargo cleanme` | Cleanup anchored at the working directory (Execute) | yes |
 | `cargo cleanme --dry-run` | Simulation: every gate runs, nothing is removed | **never**, not even preview |
-| `cargo cleanme scan` | Full read-only reconciliation | never |
+| `cargo cleanme -i` / `--interactive` | Choose cleanup units from a terminal list, then clean | yes |
+| `cargo cleanme scan --all` | Full read-only reconciliation | never |
 | `cargo cleanme scan --known` | Routine read-only inventory | never |
 | `cargo cleanme scan ROOT` | One bounded read-only scope | never |
 | `cargo cleanme clean ROOT` | Cleanup of one explicit root (Execute by default) | yes |
 | `cargo cleanme clean --known` / `--full` | Advanced orchestration | yes |
 | `cargo cleanme clean … --cargo-preview` | Cargo's own `clean --dry-run --verbose`, after the same proof | yes, as a dry run |
 
+`scan --full` remains accepted as a hidden alias of `scan --all`.
+
 **The maintenance scope** is a configured legacy `scan.root` when one is set
 (exclusive, explicit), otherwise bounded seed roots plus active learned roots.
-Rootless `scan` is always Full and ignores `scan.root`, so configuration can
-never silently narrow the reconciliation command. Learned locations that
+Bare `cargo cleanme` and `clean --known` resolve that scope and then keep only
+the units anchored at the working directory: a unit qualifies when its workspace
+root is the directory you are standing in, contains it, or is contained by it.
+`clean ROOT` and `clean --full` keep every resolved unit, because their roots
+already bound the scope. Units outside the anchor are reported as typed
+`skipped_outside_selection` rows, never silently dropped. Ownership is still
+proven across the whole resolved universe before the anchor narrows anything, so
+a target shared with a project elsewhere stays shared and stays inventory-only.
+`scan --all` is the Full reconciliation and ignores `scan.root`, so
+configuration can never silently narrow it; bare `scan` is a usage error.
+Learned locations that
 provably vanished are omitted for the run with a diagnostic; symlinked or
 unreadable locations block instead, and explicit roots stay strict.
+
+`-i` / `--interactive` presents one row per resolved cleanup unit with its
+reclaimable bytes and cleans only what is checked. It is a selection surface,
+not a second deletion path: the choice only narrows the candidates, and the
+engine re-proves ownership per spawn exactly as in a non-interactive run. It
+needs a terminal on stdin and stdout; combine with `--dry-run` to review a
+selection without invoking `cargo clean`.
 
 Full scans are best-effort for inventory: protected or unreadable subtrees can
 leave coverage partial. Such scans retain discovered projects but do not
@@ -189,7 +202,7 @@ model, and [docs/USAGE.md](docs/USAGE.md#exit-codes) for exit codes.
 
 ```sh
 cargo cleanme --format log                # one bounded line: status, scope, mode, counts
-cargo cleanme scan --format log           # same, read-only Full reconciliation
+cargo cleanme scan --all --format log     # same, read-only Full reconciliation
 ```
 
 ```console
@@ -245,7 +258,10 @@ turn a shared or unproven group into a cleanable one.
 | `--config PATH` | use a specific `config.toml` |
 | `--min-reclaimable-bytes N` | only clean units above this measured size (`clean`) |
 | `--older-than SECONDS` | extra quiet-age requirement; never replaces the recency guard (`clean`) |
-| `--known` / `--full` | Routine roots / Full reconciliation, on `clean` and `scan` |
+| `--known` | Routine roots (`clean`, `scan`) |
+| `--full` | Full reconciliation before cleanup (`clean`) |
+| `-a` / `--all` | Full machine reconciliation (`scan`; `--full` is a hidden alias) |
+| `-i` / `--interactive` | choose cleanup units from a terminal list (needs a TTY) |
 
 `--dry-run`, `--cargo-preview`, and `--yes` conflict pairwise on purpose.
 
@@ -257,13 +273,21 @@ and `--dry-run` changed from Cargo preview to simulation.
 | 0.1.x | Now | Meaning |
 |---|---|---|
 | `cargo cleanme` | `cargo cleanme scan --known` | same old read-only Routine inventory |
-| `cargo cleanme scan --full` | `cargo cleanme scan` | Full reconciliation |
+| `cargo cleanme scan --full` | `cargo cleanme scan --all` | Full reconciliation |
 | `cargo cleanme clean R --dry-run` | `cargo cleanme clean R --cargo-preview` | same Cargo preview |
 | `cargo cleanme clean R --dryrun` | `cargo cleanme clean R --dry-run` | same simulation |
 | `cargo cleanme clean R --yes` | `cargo cleanme clean R` | Execute is now the default |
 
 `--dryrun` and `--yes` still work on `clean` as hidden aliases for the
 pre-1.0 migration period. They print nothing.
+
+### Changes in 0.2.8
+
+- Bare `cargo cleanme` and `clean --known` clean only the units anchored at the
+  working directory. `clean ROOT` and `clean --full` are unfiltered.
+- `scan` requires an explicit selector: `scan --all` (Full), `scan --known`
+  (Routine), or `scan ROOT` (explicit). Bare `scan` is a usage error.
+- `-i` / `--interactive` adds a terminal selection list over the resolved units.
 
 ## Exit codes
 

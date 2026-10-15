@@ -20,16 +20,18 @@ quickstart; this document has the detail.
 
 | Command | Effect |
 |---|---|
-| *(none)* | **Routine cleanup** over the maintenance scope |
-| `--dry-run` | Routine cleanup simulated end to end, zero `cargo clean` processes |
-| `cargo cleanme scan [ROOT]` | Full read-only reconciliation (no ROOT), or one explicit scope |
+| *(none)* | **Cleanup** anchored at the working directory (Execute) |
+| `--dry-run` | Same selection simulated end to end, zero `cargo clean` processes |
+| `-i` / `--interactive` | Terminal selection list over the resolved units, then clean |
+| `cargo cleanme scan --all` | Full read-only reconciliation |
+| `cargo cleanme scan ROOT` | One explicit read-only scope |
 | `cargo cleanme scan --known` | Routine read-only inventory of the maintenance scope |
 | `cargo cleanme clean [ROOT] [--known\|--full]` | advanced cleanup: execute (default), simulate, or Cargo preview |
 | `cargo cleanme config path\|show\|edit` | locate, print, or edit the config |
 | `cargo cleanme update [--dry-run]` | self-update to the latest stable release |
 
 `cargo cleanme …` and `cargo cleanme-cleanme …` are the same binary and behave
-identically. `scan` with no `ROOT` and `clean --full` take **no** `ROOT`; the
+identically. `scan --all` and `clean --full` take **no** `ROOT`; the
 scan form walks the platform roots, and the cleanup form reconciles them first.
 
 ### The maintenance scope
@@ -42,7 +44,18 @@ same way:
 2. otherwise the **Routine scope**: bounded seed roots under your home plus
    active learned roots from prior Full reconciliations.
 
-Rootless `scan` is **always** Full and deliberately ignores `scan.root`, so a
+Bare invocation and `clean --known` then anchor the **selection** to the working
+directory: a resolved unit is a candidate when its canonical workspace root is
+the directory you are standing in, contains it, or is contained by it.
+`clean ROOT` and `clean --full` skip this filter, because their roots already
+bound the scope. The anchor narrows candidates only — ownership is proven across
+the whole resolved universe first, so a target shared with a workspace outside
+the anchor stays `shared` and stays inventory-only. Units the anchor excludes
+are reported as typed `skipped_outside_selection` rows rather than dropped, so
+"nothing was selected" never looks like "nothing was eligible". `scan --known`
+is not anchored: it is the read-only inventory over the whole maintenance scope.
+
+`scan --all` is **always** Full and deliberately ignores `scan.root`, so a
 configured root can never silently narrow the canonical reconciliation command.
 `scan ROOT` remains the explicit per-invocation override, and any explicit
 effective scope bypasses the configured `ignore`/`unignore` filters.
@@ -67,15 +80,18 @@ their existing strict safety checks.
 ### scan
 
 ```sh
-cargo cleanme scan                 # Full: exhaustive platform-root walk
+cargo cleanme scan --all              # Full: exhaustive platform-root walk
 cargo cleanme scan ~/projects      # one explicit scope
 cargo cleanme scan --known         # Routine read-only inventory
 cargo cleanme scan --known --format json
 cargo cleanme scan ~/p --no-progress --stats
 ```
 
-`scan --full` remains accepted as a hidden alias for no-root `scan`.
-`ROOT` with `--known` or `--full`, and `--known` with `--full`, are usage errors.
+`scan` requires exactly one scope selector — `ROOT`, `--known`, or `--all`
+(`-a`) — and bare `scan` is a usage error, so the machine-wide reconciliation
+is never one keystroke from the front door. `scan --full` remains accepted as a
+hidden alias of `--all`.
+`ROOT` with `--known` or `--all`, and `--known` with `--all`, are usage errors.
 
 Output is deterministic: size-descending, with a stable path tie-break, and a
 deduplicated inventory total. It is an **estimate of reclaimable bytes**, never
@@ -88,12 +104,14 @@ as skipped. `--stats` shows this as `active_skipped=N`.
 ### clean
 
 ```sh
-cargo cleanme                                     # Routine cleanup (Execute)
-cargo cleanme --dry-run                           # Routine cleanup, zero cargo clean
+cargo cleanme                                     # cleanup anchored at $PWD (Execute)
+cargo cleanme --dry-run                           # same selection, zero cargo clean
+cargo cleanme -i                                  # choose units interactively, then clean
+cargo cleanme -i --dry-run                        # choose units, simulate, clean nothing
 cargo cleanme clean ~/projects                    # explicit root (Execute)
 cargo cleanme clean ~/projects --dry-run          # simulation, no cargo clean
 cargo cleanme clean ~/projects --cargo-preview    # Cargo's own dry-run, after the same proof
-cargo cleanme clean --known --dry-run             # maintenance scope only
+cargo cleanme clean --known --dry-run             # $PWD-anchored selection, simulated
 cargo cleanme clean --full --dry-run              # reconcile Full, then simulate
 cargo cleanme clean ~/projects --min-reclaimable-bytes 104857600
 cargo cleanme clean --known --older-than 2592000 --exclude '**/archived'
@@ -103,14 +121,40 @@ cargo cleanme clean --known --older-than 2592000 --exclude '**/archived'
 three different modes and never silently precedence-resolve.
 
 `clean` with no scope selector resolves the maintenance scope, exactly as bare
-invocation does — there is one cleanup code path, not two.
+invocation does — there is one cleanup code path, not two. Both anchor the
+selection to the working directory; only `clean ROOT` and `clean --full` clean
+every resolved unit.
+
+### Interactive selection
+
+`-i` / `--interactive` resolves the cleanup units read-only, presents one row
+per unit with its reclaimable bytes, and cleans only what is checked. A
+selection can remove candidates but never add one: ownership is still proven
+across the complete universe and the engine still re-proves it per spawn.
+
+| Key | Mode | Effect |
+|---|---|---|
+| `↑`/`k`, `↓`/`j` | NOR | move the cursor |
+| `space` | NOR | toggle the row under the cursor |
+| `i` | NOR | enter INS (filter) |
+| `Esc` | INS | back to NOR, keeping the filter |
+| `Esc` then `Esc` | NOR | exit |
+| `q`, `Ctrl-C` | either | exit immediately |
+| `Enter` | NOR | clean the selected units |
+
+Row 0 is an **all** toggle that ignores the filter. Typing in INS filters live
+without discarding the existing selection. `Enter` on an empty selection does
+not commit. Combine with `--dry-run` to review a selection without invoking
+`cargo clean`. The session refuses to start when stdin or stdout is not a
+terminal, and it refuses machine formats (`--format json` / `--format log`),
+because a selection list is an operator surface, not a report.
 
 ### Migration from 0.1.x
 
 | 0.1.x | Now | Same thing? |
 |---|---|---|
 | `cargo cleanme` (read-only Routine scan) | `cargo cleanme scan --known` | yes |
-| `cargo cleanme scan --full` | `cargo cleanme scan` | yes |
+| `cargo cleanme scan --full` | `cargo cleanme scan --all` | yes |
 | `cargo cleanme clean R --dry-run` (Cargo preview) | `cargo cleanme clean R --cargo-preview` | yes |
 | `cargo cleanme clean R --dryrun` (simulation) | `cargo cleanme clean R --dry-run` | yes |
 | `cargo cleanme clean R --yes` (execute) | `cargo cleanme clean R` | yes |
@@ -137,13 +181,13 @@ the editor exits and rejects an invalid file.
 | Scope | How to ask | What it walks |
 |---|---|---|
 | explicit | `clean ROOT` / `scan ROOT` | that directory, recursively |
-| Routine | `scan` with no ROOT | seed roots under Projects/projects, Developer, dev, Code/code, src, repos/Repos, GitHub/github, workspace/workspaces, **plus** active learned roots |
-| Full | `--full` | the full platform roots, exhaustively |
+| Routine | `scan --known` | seed roots under Projects/projects, Developer, dev, Code/code, src, repos/Repos, GitHub/github, workspace/workspaces, **plus** active learned roots |
+| Full | `scan --all` | the full platform roots, exhaustively |
 
 Explicit CLI roots take precedence over `scan.root`. Either explicit scope
 bypasses the user ignore/unignore search filters. Routine and Full honor them.
 
-A never-learned unusual location stays undiscovered until `scan` (Full) or an
+A never-learned unusual location stays undiscovered until `scan --all` (Full) or an
 explicit scan visits it.
 
 ## Discovery model
@@ -565,7 +609,7 @@ Discovery state is machine-local JSON and is normally self-managed.
 
 - Routine scans fall back to seed/configured roots when state is missing or
   unusable.
-- A successful rootless `scan` (Full) replaces corrupt or obsolete state **after**
+- A successful `scan --all` (Full) replaces corrupt or obsolete state **after**
   reconciliation completes. An incomplete Full scan leaves it untouched.
 - State written by a **newer** schema is preserved, and that version must be
   upgraded before it can be reconciled.
@@ -587,7 +631,7 @@ Discovery state is machine-local JSON and is normally self-managed.
   partial/failed Full passes, newer schemas, and unpublishable state never
   shrink the learned scope.
 
-A rootless `scan` (Full) on a typical workstation reports permission-denied diagnostics
+A Full `scan --all` on a typical workstation reports permission-denied diagnostics
 for platform roots it cannot read. Those are expected, and they are why a
 Full scan can be "incomplete" while still returning a usable report.
 
