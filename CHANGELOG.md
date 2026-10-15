@@ -8,6 +8,36 @@ command-line, JSON, and release-asset contracts are the stable surface.
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-10-15
+
+### Added
+
+- `-i` / `--interactive` presents one row per resolved cleanup unit with its
+  reclaimable bytes and cleans only what the operator checks. It is a selection
+  surface, not a second deletion path: the choice narrows the candidates and
+  the engine re-proves ownership per spawn exactly as in a non-interactive run.
+  It refuses to start without a terminal on stdin and stdout, and combines with
+  `--dry-run` for a review that spawns no `cargo clean`.
+
+### Changed
+
+- **Bare `cargo cleanme` and `clean --known` now select the cleanup units
+  anchored at the working directory.** Root resolution and the ownership proof
+  are unchanged: the full Routine scope is still discovered and classified, so
+  a target shared with a workspace outside the anchor stays `shared` and stays
+  inventory-only. The anchor only narrows which proven units become candidates,
+  matching in both directions (the unit's workspace root equals the anchor,
+  contains it, or is contained by it). `clean ROOT` and `clean --full` keep
+  every resolved unit, because their roots already bound the scope. Units the
+  anchor excludes are reported as typed `skipped_outside_selection` rows rather
+  than dropped, so "nothing was selected" never looks like "nothing was
+  eligible".
+- **`scan` requires an explicit selector.** Bare `scan` is now a usage error
+  (exit `2`); Full machine reconciliation is `scan --all` (short `-a`), so the
+  only operation that may expire learned roots is never one keystroke from the
+  front door. `scan --full` remains accepted as a hidden alias of `--all`.
+  `scan ROOT` and `scan --known` are unchanged.
+
 ## [0.2.7] - 2026-10-13
 
 ### Fixed
@@ -887,6 +917,8 @@ published yet.
 - No runtime release-artifact qualification has run; the exact release bytes
   are qualified when the first release workflow is dispatched.
 
+[0.2.8]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.8
+[0.2.7]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.7
 [0.2.6]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.6
 [0.2.5]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.5
 [0.2.4]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.4
