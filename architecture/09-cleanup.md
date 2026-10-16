@@ -789,18 +789,20 @@ most important distinction in the module.**
 
 **(a) Incomplete at scan time → the whole transaction aborts.** Two sites, both
 *before* the unit loop, both returning early with `scope_blocked` and zero
-results: discovery diagnostics `:977-988` ("combined cleanup ownership universe is
+results: discovery diagnostics `:1336-1356` ("combined cleanup ownership universe is
 incomplete: N discovery diagnostic(s); resolved W workspace(s), considered U
 cleanup unit(s); no cleanup commands were run") and
-unresolved manifests `:990-1006` ("cleanup ownership could not be proven: N
+unresolved manifests `:1359-1384` ("cleanup ownership could not be proven: N
 discovered Cargo manifest(s) did not resolve; no cleanup commands were run", with
-the full participant list retained at `:1003` and rendered bounded at
-`:290-340`). Neither proceeds partially:
+the full participant list retained and rendered bounded at `:510-560`).
+Neither proceeds partially:
 `resolve_cleanup_scope` returns `units: Vec::new()` when unresolved is non-empty
-(`:1493-1499`), so no unit even exists. Pinned by
-`unresolved_discovered_manifest_blocks_every_cleanup_mode_before_clean` (`:2934`,
-all three modes) and `unresolved_cargo_manifest_blocks_entire_cleanup_scope`
-(`:3636`).
+(`:2561-2568`), so no unit even exists. Pinned by
+`unresolved_discovered_manifest_blocks_every_cleanup_mode_before_clean` (`:4738`,
+all three modes), `unresolved_cargo_manifest_blocks_entire_cleanup_scope`
+(`:6491`), `combined_roots_classify_cross_root_output_as_shared_in_every_mode`
+(`:9408`) and `unresolved_manifest_in_second_root_blocks_first_root_for_all_modes`
+(`:9451`).
 
 **(b) Incomplete at proof time → the transaction does *not* abort; every
 candidate is skipped instead, and the run exits 0.** The hoisted universe is
@@ -816,6 +818,49 @@ safety fully preserved, the *signal* is a normal-looking skip. Fail-closed is
 correct and consistent; the reporting is inconsistent with case (a). A run where
 the universe cannot be re-proven and nothing was cleaned is reported like a run
 where every workspace was legitimately inactive, and exits 0.
+
+### The report-only proof-island partition (M015)
+
+Both scan-time block sites also compute a proof-island partition
+(`:1350-1355`, `:1376-1381`) and carry it on the report
+(`CleanReport.proof_partition`, `:446`), rendered as a bounded advisory section
+(`partition_section`, `:2196-2322`) after the participant listing. The machine
+surfaces never see it: no JSON field, no log-line field, no exit-code change
+(locked by `cleanup_json_result_key_set_is_stable`, `src/output.rs:658`, and the
+subprocess case `tests/cli_contract.rs:1930`).
+
+The partition answers ADR 004's question — *what constitutes independently
+proven non-overlap?* — without enforcing any answer. Its sharp edge is
+byte-capability (`domain.rs:178-195`): only unknowns Cargo itself refused
+(`locate` exit nonzero) own provably no bytes and merge nothing; every other
+class (transport, unparseable output, lost workers, metadata, identity,
+discovery holes) merges every island, because unproven outputs could overlap
+any island's. Attribution (`workspace::attribute_unknown`, `:419-438` in
+`workspace.rs`) assigns a refused manifest to the island of the workspace Cargo
+named, or to a scope-level note when nothing resolved was named; the union-find
+(`compute_proof_partition`, `:2023-2159`) merges islands on proven physical
+output overlap (equality or canonical-prefix, component-wise) and collapses to
+one blocked island on any merge cause (`PartitionMergeCause`, `:380-394`). The
+environment relevant to output placement is snapshotted with the partition
+(`snapshot_output_env`, `:357-362`); the mismatch detector is proven by tests
+(`output_env_matches`, `:367-372`) for M016 to wire as a merge.
+
+Parity is the load-bearing test:
+`partition_reports_islands_but_engine_still_blocks_with_zero_spawns_in_every_mode`
+(`:5026`) stages two output-disjoint workspaces plus a refused orphan — the
+certificate reports two would-proceed islands — and asserts the engine still
+blocks with empty results and zero clean spawns in all three modes. The hostile
+controls (`:5078-5390`) each fail against a naive skip (no union edges,
+unknowns dropped): cross-root redirect, nested-output prefix overlap,
+metadata-failure overlap with a zero-spawn engine assertion, symlinked output
+(unix), build-dir-only env moves, and H-2 growth both as predicate
+(`universe_manifests_stable`, `:2330`) and end to end
+(`mid_run_manifest_growth_blocks_remaining_scope`, `:5326`). The one listed
+shape that is *not* hostile — a target nested under another workspace's
+*sources* — splits under both and ships as a documented positive case, not a
+control. Activation (per-island proof and spawn) is explicitly deferred to
+M016, gated on ADR 004 acceptance; live island-hit data for that decision is
+attached to the M015 closure record, not to this section.
 
 ### What happens when the proof detects a mid-transaction change?
 
@@ -981,13 +1026,18 @@ safety hole.
 
 ## 10. Testing
 
-**Numbers (verified by grep):** 75 `#[test]` functions; the test module opens at
-`cleanup.rs:2994` (`#[cfg(test)] mod tests {` at `:2534`), so production is lines
-1-2532 and tests 2533-6730 — 4198 lines, 62% of the file. No fixture files are
-needed: workspaces are built on disk (`ws_root` `:5338`, `cargo_output` `:5351`,
-`sibling_ws_fixture` `:5386`, `valid_fixture` `:2697`) and mtimes backdated
-(`backdate` `:2729`, `touch_future` `:4131`) so recency gates run without
+**Numbers (verified by grep):** 118 `#[test]` functions; the test module opens at
+`cleanup.rs:3872` (`#[cfg(test)]` at `:3871`), so production is lines 1-3870 and tests 3871-9868 — 5998 lines, 61% of the file. No fixture files are
+needed: workspaces are built on disk (`ws_root` `:8229`, `cargo_output` `:8242`,
+`sibling_ws_fixture` `:8277`, `valid_fixture` `:4191`) and mtimes backdated
+(`backdate` `:4223`, `touch_future` `:6987`) so recency gates run without
 sleeping.
+
+Line numbers in the group table below were re-derived for the M015 row only.
+Older rows still cite pre-M015 numbering (the module grew ~490 production
+lines under M015 plus the uncommitted delta beneath it); a full
+re-derivation pass over this dive is recorded as follow-up work in the M015
+closure record, not silently claimed here.
 
 ### Grouped by invariant protected
 
@@ -1004,6 +1054,7 @@ sleeping.
 | Real Cargo integration | 3 | `real_temp_project_preview_and_execute_with_redirected_target` `:3785`; `real_cargo_package_selector_preserves_sibling_workspace_artifacts` `:3920`; `multi_member_private_workspace_can_be_cleaned` `:4034` |
 | Root validation / frozen env | 3 | `clean_requires_absolute_root` `:3480`; `frozen_env_sets_target_and_build_dir` `:3425`; `frozen_env_pins_the_build_directory_so_an_inherited_redirect_cannot_apply` `:6363` |
 | Misc | 9 | `cleanup_reason_codes_have_stable_contract_names` `:2807`; `source_tree_as_output_root_is_never_cleaned` `:6242`; `one_invocation_one_result_progress_total_and_no_sibling_row` `:5453`; `distinct_private_target_and_build_is_one_cleanable_unit` `:5403`; `equal_and_nested_target_build_are_one_unit_and_one_invocation` `:5787`; `proof_failures_distinguish_a_change_from_an_unproven_ownership` `:6334`; `cross_workspace_overlap_race_into_target_skips_candidate` `:5829`; `cross_workspace_overlap_race_into_distinct_build_skips_candidate` `:5873`; `another_workspaces_source_tree_inside_the_cleaned_region_is_never_cleaned` `:6196` |
+| Proof-island partition, report-only (M015) | 23 | Pure partition: `proof_partition_splits_disjoint_workspaces_with_no_unknowns` `:5509`; `proof_partition_merges_equal_targets_into_one_island` `:5527`; `proof_partition_merges_nested_outputs_by_prefix_overlap` `:5544`; `proof_partition_does_not_merge_string_prefix_siblings` `:5565`; `proof_partition_is_deterministic_across_input_orders` `:5581`; `proof_partition_merges_unproven_unknown_globally_with_named_cause` `:5601`; `proof_partition_assigns_refused_believed_manifest_as_passenger_without_merging` `:5632`; `proof_partition_reports_refused_manifest_without_owner_as_scope_note` `:5661`; `proof_partition_merges_discovery_holes_globally` `:5680`; `proof_partition_with_only_notes_has_no_islands` `:5704`; `proof_partition_merges_pathless_holes_with_counted_cause` `:5767`; holes extractor `discovery_holes_takes_discovery_prefix_with_pathless_remainder` `:5720`; render `partition_section_renders_islands_passengers_notes_and_provenance` `:4936`, `partition_section_bounds_islands_and_causes` `:4984`; parity `partition_reports_islands_but_engine_still_blocks_with_zero_spawns_in_every_mode` `:5026`; hostile controls `redirect_outputs_merge_under_certificate_but_split_under_naive_skip` `:5078`, `nested_outputs_merge_under_certificate_but_split_under_equality_naive` `:5114`, `unresolved_manifest_overlap_merges_and_engine_blocks_with_zero_spawns_in_every_mode` `:5152`, `symlinked_output_merges_under_certificate_but_splits_under_naive_skip` `:5211` (unix), `build_dir_move_detected_by_full_env_check_but_missed_by_target_only_naive` `:5256`, `universe_stability_predicate_detects_growth_that_naive_stub_misses` `:5297`, `mid_run_manifest_growth_blocks_remaining_scope` `:5326`; documented non-control `target_nested_under_foreign_sources_splits_under_both_and_is_not_a_control` `:5392` |
 
 ### What each fake runner exists to catch
 
@@ -1038,7 +1089,8 @@ anything here: no PATH is built, no shebang is used, all fixtures are constructe
 through `std::fs` in Rust.
 
 Within `cleanup.rs` the platform guards are narrow and correct: `#[cfg(unix)]`
-appears five times — `:3352`, `:4898`, `:5637`, `:5910`, `:5984` — all on
+appears eight times — `:5209` (the M015 symlinked-output control), `:6038`,
+`:6183`, `:6258`, `:7789`, `:8529`, `:8802`, `:8876` — all on
 symlink-manipulating tests, which is right since creating a symlink and
 asserting `symlink_metadata(...).file_type().is_symlink()` are the
 platform-sensitive operations. `symlink_allowed_root_rejected_and_shared_forbidden`

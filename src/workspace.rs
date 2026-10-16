@@ -361,6 +361,82 @@ fn canonical_manifest_key(path: &Path) -> PathBuf {
     canonical_or_absolute(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+/// The workspace manifest Cargo names when a package claims a workspace that
+/// does not claim it (`current package believes it's in a workspace when it's
+/// not`). Cargo prints `current:` and `workspace:` paths; the sanitized reason
+/// joins lines with ` | `, so the workspace path is the `Cargo.toml` token
+/// after `workspace:`.
+///
+/// `None` when the class does not apply or no workspace token is present
+/// (including truncation). Callers fail closed on `None`.
+fn believed_workspace_manifest(reason: &str) -> Option<PathBuf> {
+    if !reason.contains("believes it's in a workspace") {
+        return None;
+    }
+    let idx = reason.find("workspace:")?;
+    let after = &reason[idx + "workspace:".len()..];
+    for token in after.split_whitespace() {
+        let t = token.trim_matches(|c: char| {
+            c == '|' || c == '"' || c == '\'' || c == ',' || c == ';' || c == '(' || c == ')'
+        });
+        if t.contains("Cargo.toml") {
+            return Some(PathBuf::from(t));
+        }
+    }
+    None
+}
+
+/// Island assignment for one unresolved manifest (M015 certificate §4.3).
+///
+/// Total over every failure class: only `RefusedByCargo` unknowns (Cargo
+/// examined the manifest and refused it, so it owns no bytes) avoid the
+/// merge. Everything else — transport, unparseable output, lost workers,
+/// metadata, identity — is `MergeAll`, today's whole-scope block. A refused
+/// manifest that names a workspace resolved in this same run rides as a
+/// passenger of that island; a refused manifest with no resolved owner is a
+/// scope-level note. Neither merges nor blocks beyond the engine's own block,
+/// which M015 never relaxes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum UnknownDisposition {
+    /// Byte-incapable; Cargo named this workspace manifest as the believed
+    /// owner and it resolved here. Reported on that island, merges nothing.
+    PassengerOf { named_manifest: PathBuf },
+    /// Byte-incapable with no resolved owner named. A scope-level note that
+    /// merges nothing.
+    ScopeNote,
+    /// Byte-capability unproven: merges every island (today's block).
+    MergeAll,
+}
+
+/// Decide what one unresolved manifest means for the proof-island partition.
+///
+/// Pure: no spawns, no filesystem mutation, no counter or diagnostic changes.
+/// Takes the resolved workspace list directly — the rest of `coverage`
+/// (counts, the unresolved ledger itself) carries no signal this decision
+/// reads. Consortium with [`believed_workspace_manifest`]: the parse
+/// returning `None` (wrong class, truncation) fails closed to `ScopeNote`
+/// for refused manifests — never to a passenger of an unproven island.
+pub fn attribute_unknown(
+    participant: &UnresolvedOwnershipParticipant,
+    workspaces: &[ResolvedWorkspace],
+) -> UnknownDisposition {
+    if participant.capability != UnknownCapability::RefusedByCargo {
+        return UnknownDisposition::MergeAll;
+    }
+    match believed_workspace_manifest(&participant.reason) {
+        Some(named)
+            if workspaces.iter().any(|w| {
+                canonical_manifest_key(&w.root_manifest) == canonical_manifest_key(&named)
+            }) =>
+        {
+            UnknownDisposition::PassengerOf {
+                named_manifest: named,
+            }
+        }
+        _ => UnknownDisposition::ScopeNote,
+    }
+}
+
 /// Resolve manifests to unique workspaces with caching.
 ///
 /// Returns workspaces in deterministic order plus diagnostics. Cache key is the
@@ -672,9 +748,13 @@ pub fn resolve_workspaces_with_coverage(
     // ledger on concurrent mutation. Repeat triggers of a successful root
     // never reach the metadata code — the caches below divert them first.
     let mut failed_templates: HashMap<PathBuf, (MetadataFailure, u64)> = HashMap::new();
-    // Explicit failure stage per manifest, recorded where the diagnostic is
-    // pushed so `unresolved` labels do not depend on re-parsing message text.
-    let mut unresolved_stage: HashMap<PathBuf, &'static str> = HashMap::new();
+    // Explicit failure stage and byte-capability per manifest, recorded where
+    // the diagnostic is pushed so `unresolved` labels do not depend on
+    // re-parsing message text. Only the branch where Cargo itself ran and
+    // refused the manifest (`Failed`) is `RefusedByCargo`: transport,
+    // unparseable output, and lost workers never examined the manifest, so
+    // byte-capability stays unproven there.
+    let mut unresolved_stage: HashMap<PathBuf, (&'static str, UnknownCapability)> = HashMap::new();
     for (index, manifest) in manifests.iter().enumerate() {
         // Every manifest located exactly once up front, so the spawn is
         // accounted here — before any fast path. A fast-pathed manifest
@@ -707,7 +787,7 @@ pub fn resolve_workspaces_with_coverage(
                     path: Some(manifest.clone()),
                     message: format!("cargo locate-project could not start: {error}"),
                 });
-                unresolved_stage.insert(manifest.clone(), "locate");
+                unresolved_stage.insert(manifest.clone(), ("locate", UnknownCapability::Unproven));
                 continue;
             }
             LocateOutcome::Failed { reason, .. } => {
@@ -719,7 +799,10 @@ pub fn resolve_workspaces_with_coverage(
                     path: Some(manifest.clone()),
                     message: format!("cargo locate-project failed: {reason}"),
                 });
-                unresolved_stage.insert(manifest.clone(), "locate");
+                unresolved_stage.insert(
+                    manifest.clone(),
+                    ("locate", UnknownCapability::RefusedByCargo),
+                );
                 continue;
             }
             LocateOutcome::Unparseable { error, .. } => {
@@ -731,7 +814,7 @@ pub fn resolve_workspaces_with_coverage(
                     path: Some(manifest.clone()),
                     message: format!("cannot parse cargo locate-project output: {error}"),
                 });
-                unresolved_stage.insert(manifest.clone(), "locate");
+                unresolved_stage.insert(manifest.clone(), ("locate", UnknownCapability::Unproven));
                 continue;
             }
             LocateOutcome::WorkerFailed => {
@@ -744,7 +827,7 @@ pub fn resolve_workspaces_with_coverage(
                     message: "cargo locate-project could not start: parallel locate worker failed"
                         .into(),
                 });
-                unresolved_stage.insert(manifest.clone(), "locate");
+                unresolved_stage.insert(manifest.clone(), ("locate", UnknownCapability::Unproven));
                 continue;
             }
             LocateOutcome::Located {
@@ -782,7 +865,7 @@ pub fn resolve_workspaces_with_coverage(
                 path: Some(manifest.clone()),
                 message: "internal error: located manifest has no resolution group".into(),
             });
-            unresolved_stage.insert(manifest.clone(), "identity");
+            unresolved_stage.insert(manifest.clone(), ("identity", UnknownCapability::Unproven));
             continue;
         };
         if let Some((template, _)) = failed_templates.get(canonical_key) {
@@ -801,7 +884,7 @@ pub fn resolve_workspaces_with_coverage(
                 path: Some(manifest.clone()),
                 message: template.message.clone(),
             });
-            unresolved_stage.insert(manifest.clone(), "metadata");
+            unresolved_stage.insert(manifest.clone(), ("metadata", UnknownCapability::Unproven));
             continue;
         }
         counters.cargo_metadata_calls += 1;
@@ -841,7 +924,7 @@ pub fn resolve_workspaces_with_coverage(
                 canonical_key.clone(),
                 (template, metadata_spawns[group_idx].nanos),
             );
-            unresolved_stage.insert(manifest.clone(), "metadata");
+            unresolved_stage.insert(manifest.clone(), ("metadata", UnknownCapability::Unproven));
         }
     }
     let workspaces: Vec<_> = ordered_keys
@@ -863,17 +946,18 @@ pub fn resolve_workspaces_with_coverage(
                 .unwrap_or_else(|| {
                     "no successful Cargo workspace metadata covered this manifest".into()
                 });
-            // Stage is recorded where the diagnostic is pushed, not re-parsed
-            // from message text: a copy-edit to a diagnostic must not
-            // silently reclassify the stage.
-            let stage = unresolved_stage
+            // Stage and capability are recorded where the diagnostic is pushed,
+            // not re-parsed from message text: a copy-edit to a diagnostic
+            // must not silently reclassify the stage or the merge behavior.
+            let (stage, capability) = unresolved_stage
                 .get(manifest)
                 .copied()
-                .unwrap_or("identity");
+                .unwrap_or(("identity", UnknownCapability::Unproven));
             Some(UnresolvedOwnershipParticipant {
                 manifest: manifest.clone(),
                 stage,
                 reason: message,
+                capability,
             })
         })
         .collect();
@@ -889,6 +973,15 @@ pub fn resolve_workspaces_with_coverage(
     unresolved.dedup_by(|a, b| {
         canonical_manifest_key(&a.manifest) == canonical_manifest_key(&b.manifest)
     });
+    // No enforcement pass-through here, deliberately. A refused manifest that
+    // names a resolved workspace is still an unresolved participant and still
+    // blocks the whole scope under ADR 001 C004/C006: withholding it from
+    // `unresolved` would narrow the block without ADR cover, which is exactly
+    // what M015's non-goals forbid. Report-only attribution for that shape
+    // lives in [`attribute_unknown`] (passenger of the named island), and any
+    // future enforcement belongs to ADR-004-gated activation (M016), not to
+    // resolution. Permission, transport, parse, and metadata failures are
+    // untouched, as is every other failure class.
     ResolutionCoverage {
         workspaces,
         unresolved,
@@ -3548,6 +3641,492 @@ mod tests {
         assert_eq!(ws.len(), 1);
         assert_eq!(ws[0].root, std::fs::canonicalize(&good).unwrap_or(good));
         assert!(!diags.is_empty());
+    }
+
+    #[test]
+    fn believed_workspace_manifest_parses_sanitized_and_raw_forms() {
+        // Sanitized (newlines joined with " | ") as produced by
+        // `cargo_failure_reason`.
+        assert_eq!(
+            believed_workspace_manifest(
+                "error: current package believes it's in a workspace when it's not: | current: /a/b/Cargo.toml | workspace: /a/Cargo.toml"
+            ),
+            Some(PathBuf::from("/a/Cargo.toml"))
+        );
+        // Raw multi-line form, in case a caller passes stderr through.
+        assert_eq!(
+            believed_workspace_manifest(
+                "error: current package believes it's in a workspace when it's not:\ncurrent:   /a/b/Cargo.toml\nworkspace: /a/Cargo.toml\n"
+            ),
+            Some(PathBuf::from("/a/Cargo.toml"))
+        );
+        // Wrong failure class: no attribution.
+        assert_eq!(
+            believed_workspace_manifest("cargo locate-project failed: offline"),
+            None
+        );
+        // Truncated before any Cargo.toml token: fail closed.
+        assert_eq!(
+            believed_workspace_manifest(
+                "error: current package believes it's in a workspace when it's… (truncated)"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn misconfigured_member_with_resolved_parent_still_blocks_but_attributes_as_passenger() {
+        // The live case: `fuzz/Cargo.toml` claims parent workspace `ws`, which
+        // resolves. Under ADR 001 C004/C006 the fuzz manifest stays an
+        // unresolved participant and still blocks — M015 is report-only and
+        // ships no enforcement pass-through. What M015 adds is report-only
+        // attribution: the claimant rides as a passenger of the named island
+        // instead of merging it. The diagnostic stays so the misconfiguration
+        // is visible and fixable.
+        struct BelievesRunner {
+            parent_manifest: PathBuf,
+            parent_root: PathBuf,
+            parent_target: PathBuf,
+        }
+        impl CargoRunner for BelievesRunner {
+            fn run(&self, _cwd: &Path, args: &[std::ffi::OsString]) -> io::Result<ProcessOutput> {
+                if args.first().is_some_and(|a| a == "locate-project") {
+                    let manifest = args.last().unwrap().to_string_lossy().into_owned();
+                    if manifest.contains("fuzz") {
+                        let stderr = format!(
+                            "error: current package believes it's in a workspace when it's not:\ncurrent: {}\nworkspace: {}",
+                            manifest,
+                            self.parent_manifest.display()
+                        );
+                        return Ok(ProcessOutput {
+                            success: false,
+                            code: Some(1),
+                            stdout: Vec::new(),
+                            stderr: stderr.into_bytes(),
+                        });
+                    }
+                    let json = serde_json::json!({"root": self.parent_manifest});
+                    return Ok(ProcessOutput {
+                        success: true,
+                        code: Some(0),
+                        stdout: serde_json::to_vec(&json).unwrap(),
+                        stderr: Vec::new(),
+                    });
+                }
+                let json = serde_json::json!({
+                    "packages": [{"id": "m", "name": "m", "manifest_path": self.parent_manifest}],
+                    "workspace_members": ["m"],
+                    "workspace_root": self.parent_root,
+                    "target_directory": self.parent_target,
+                });
+                Ok(ProcessOutput {
+                    success: true,
+                    code: Some(0),
+                    stdout: serde_json::to_vec(&json).unwrap(),
+                    stderr: Vec::new(),
+                })
+            }
+        }
+        let d = tempfile::tempdir().unwrap();
+        let parent = d.path().join("ws");
+        let parent_manifest = parent.join("Cargo.toml");
+        std::fs::create_dir_all(&parent).unwrap();
+        std::fs::write(&parent_manifest, "").unwrap();
+        let fuzz_manifest = parent.join("crates/inner/fuzz/Cargo.toml");
+        std::fs::create_dir_all(fuzz_manifest.parent().unwrap()).unwrap();
+        std::fs::write(&fuzz_manifest, "").unwrap();
+        let runner = BelievesRunner {
+            parent_manifest: parent_manifest.clone(),
+            parent_root: parent.clone(),
+            parent_target: parent.join("target"),
+        };
+        let mut counters = ScanCounters::default();
+        let mut diags = Vec::new();
+        let coverage = resolve_workspaces_with_coverage(
+            &[parent_manifest.clone(), fuzz_manifest.clone()],
+            &runner,
+            &mut counters,
+            &mut diags,
+            &NoopObserver,
+        );
+        assert_eq!(coverage.workspaces.len(), 1);
+        assert!(
+            coverage
+                .unresolved
+                .iter()
+                .any(|p| p.manifest == fuzz_manifest),
+            "the claimant still blocks its resolved parent (no enforcement pass-through): {:?}",
+            coverage.unresolved
+        );
+        assert!(
+            diags.iter().any(|d| d.path.as_ref() == Some(&fuzz_manifest)
+                && d.message.contains("believes it's in a workspace")),
+            "the misconfiguration stays visible as a diagnostic: {:?}",
+            diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+        // Report-only attribution: the blocking claimant is a passenger of
+        // the named island, not a merge cause.
+        let participant = coverage
+            .unresolved
+            .iter()
+            .find(|p| p.manifest == fuzz_manifest)
+            .expect("claimant is unresolved");
+        assert_eq!(participant.capability, UnknownCapability::RefusedByCargo);
+        assert_eq!(
+            attribute_unknown(participant, &coverage.workspaces),
+            UnknownDisposition::PassengerOf {
+                named_manifest: parent_manifest.clone(),
+            },
+            "a refused claimant naming a resolved workspace rides that island",
+        );
+    }
+
+    #[test]
+    fn misconfigured_member_with_unresolved_parent_still_blocks() {
+        // Same claim, but the named parent does not resolve here: fail closed.
+        struct BelievesOrphanRunner {
+            parent_manifest: PathBuf,
+        }
+        impl CargoRunner for BelievesOrphanRunner {
+            fn run(&self, _cwd: &Path, args: &[std::ffi::OsString]) -> io::Result<ProcessOutput> {
+                if args.first().is_some_and(|a| a == "locate-project") {
+                    let manifest = args.last().unwrap().to_string_lossy().into_owned();
+                    if manifest.contains("fuzz") {
+                        let stderr = format!(
+                            "error: current package believes it's in a workspace when it's not:\ncurrent: {}\nworkspace: {}",
+                            manifest,
+                            self.parent_manifest.display()
+                        );
+                        return Ok(ProcessOutput {
+                            success: false,
+                            code: Some(1),
+                            stdout: Vec::new(),
+                            stderr: stderr.into_bytes(),
+                        });
+                    }
+                    let json = serde_json::json!({"root": self.parent_manifest});
+                    return Ok(ProcessOutput {
+                        success: true,
+                        code: Some(0),
+                        stdout: serde_json::to_vec(&json).unwrap(),
+                        stderr: Vec::new(),
+                    });
+                }
+                // Parent metadata fails: the named workspace never resolves.
+                Ok(ProcessOutput {
+                    success: false,
+                    code: Some(1),
+                    stdout: Vec::new(),
+                    stderr: b"metadata failed".to_vec(),
+                })
+            }
+        }
+        let d = tempfile::tempdir().unwrap();
+        let parent = d.path().join("ws");
+        let parent_manifest = parent.join("Cargo.toml");
+        std::fs::create_dir_all(&parent).unwrap();
+        std::fs::write(&parent_manifest, "").unwrap();
+        let fuzz_manifest = parent.join("fuzz/Cargo.toml");
+        std::fs::create_dir_all(fuzz_manifest.parent().unwrap()).unwrap();
+        std::fs::write(&fuzz_manifest, "").unwrap();
+        let runner = BelievesOrphanRunner { parent_manifest };
+        let mut counters = ScanCounters::default();
+        let mut diags = Vec::new();
+        let coverage = resolve_workspaces_with_coverage(
+            std::slice::from_ref(&fuzz_manifest),
+            &runner,
+            &mut counters,
+            &mut diags,
+            &NoopObserver,
+        );
+        assert!(
+            coverage
+                .unresolved
+                .iter()
+                .any(|p| p.manifest == fuzz_manifest),
+            "without a resolved parent the claim must still block: {:?}",
+            coverage.unresolved
+        );
+    }
+
+    /// M015 package B: every merge-default row of the failure-class table.
+    ///
+    /// The discriminating input per row is the exact reason text that row's
+    /// branch records, and the required verdict is `MergeAll` in all of them
+    /// — including a believed-workspace reason paired with an `Unproven`
+    /// capability, which proves classification follows the recorded branch,
+    /// never the prose. Fails if any class is ever attributed by text.
+    #[test]
+    fn attribute_unknown_merges_every_unproven_class() {
+        let empty: &[ResolvedWorkspace] = &[];
+        let rows = [
+            (
+                "locate",
+                "cargo locate-project could not start: broken pipe",
+            ),
+            (
+                "locate",
+                "cargo locate-project could not start: parallel locate worker failed",
+            ),
+            (
+                "locate",
+                "cannot parse cargo locate-project output: unexpected EOF",
+            ),
+            (
+                "locate",
+                "error: current package believes it's in a workspace when it's not: | current: /w/fuzz/Cargo.toml | workspace: /w/Cargo.toml",
+            ),
+            ("metadata", "cargo metadata could not start: broken pipe"),
+            (
+                "metadata",
+                "cargo metadata failed: failed to parse manifest",
+            ),
+            (
+                "metadata",
+                "cannot parse cargo metadata output: unexpected EOF",
+            ),
+            (
+                "identity",
+                "no successful Cargo workspace metadata covered this manifest",
+            ),
+        ];
+        for (stage, reason) in rows {
+            let participant = UnresolvedOwnershipParticipant {
+                manifest: PathBuf::from("/w/Cargo.toml"),
+                stage,
+                reason: reason.into(),
+                capability: UnknownCapability::Unproven,
+            };
+            assert_eq!(
+                attribute_unknown(&participant, empty),
+                UnknownDisposition::MergeAll,
+                "stage={stage} reason={reason:?} must merge",
+            );
+        }
+    }
+
+    /// A refused manifest with no naming evidence is a scope-level note: it
+    /// owns no bytes (Cargo refused it), so it merges nothing.
+    #[test]
+    fn attribute_unknown_reports_refused_manifest_as_scope_note_without_naming_evidence() {
+        let empty: &[ResolvedWorkspace] = &[];
+        for reason in [
+            "cargo locate-project failed: could not find Cargo.toml in this directory",
+            "cargo locate-project failed: error: manifest path is a directory",
+        ] {
+            let participant = UnresolvedOwnershipParticipant {
+                manifest: PathBuf::from("/w/Cargo.toml"),
+                stage: "locate",
+                reason: reason.into(),
+                capability: UnknownCapability::RefusedByCargo,
+            };
+            assert_eq!(
+                attribute_unknown(&participant, empty),
+                UnknownDisposition::ScopeNote,
+                "reason={reason:?} names no workspace and must not merge",
+            );
+        }
+    }
+
+    /// The one attribution rule: a refused manifest naming a workspace that
+    /// resolved here rides as that island's passenger.
+    #[test]
+    fn attribute_unknown_assigns_refused_believed_manifest_to_resolved_island() {
+        let ws = ResolvedWorkspace {
+            id: WorkspaceId(PathBuf::from("/w")),
+            root: PathBuf::from("/w"),
+            root_manifest: PathBuf::from("/w/Cargo.toml"),
+            members: vec![],
+            packages: vec![],
+            output: OutputSet {
+                target: OutputRoot {
+                    kind: OutputRootKind::Target,
+                    logical_path: PathBuf::from("/w/target"),
+                    physical_path: None,
+                    exists: false,
+                    is_symlink: false,
+                },
+                build: OutputRoot {
+                    kind: OutputRootKind::Build,
+                    logical_path: PathBuf::from("/w/target"),
+                    physical_path: None,
+                    exists: false,
+                    is_symlink: false,
+                },
+            },
+            capability: CargoCapabilities {
+                build_dir: CargoBuildDirCapability::Unavailable,
+                metadata_had_build_directory: false,
+                env_build_dir_set: false,
+            },
+        };
+        let workspaces = vec![ws];
+        let participant = UnresolvedOwnershipParticipant {
+            manifest: PathBuf::from("/w/fuzz/Cargo.toml"),
+            stage: "locate",
+            reason: "error: current package believes it's in a workspace when it's not: | current: /w/fuzz/Cargo.toml | workspace: /w/Cargo.toml".into(),
+            capability: UnknownCapability::RefusedByCargo,
+        };
+        assert_eq!(
+            attribute_unknown(&participant, &workspaces),
+            UnknownDisposition::PassengerOf {
+                named_manifest: PathBuf::from("/w/Cargo.toml"),
+            },
+        );
+    }
+
+    /// Same claim, named parent not resolved here: refused (owns no bytes)
+    /// but unattributable, so a scope note — never a passenger of an
+    /// unproven island, and never a merge. Fails if the rule ever attributes
+    /// by name alone without checking resolution.
+    #[test]
+    fn attribute_unknown_with_unresolved_named_parent_is_scope_note_not_passenger() {
+        let empty: &[ResolvedWorkspace] = &[];
+        let participant = UnresolvedOwnershipParticipant {
+            manifest: PathBuf::from("/w/fuzz/Cargo.toml"),
+            stage: "locate",
+            reason: "error: current package believes it's in a workspace when it's not: | current: /w/fuzz/Cargo.toml | workspace: /w/Cargo.toml".into(),
+            capability: UnknownCapability::RefusedByCargo,
+        };
+        assert_eq!(
+            attribute_unknown(&participant, empty),
+            UnknownDisposition::ScopeNote,
+        );
+    }
+
+    /// Truncated believed reason: the parse fails closed to a scope note.
+    #[test]
+    fn attribute_unknown_truncated_believed_reason_is_scope_note() {
+        let empty: &[ResolvedWorkspace] = &[];
+        let participant = UnresolvedOwnershipParticipant {
+            manifest: PathBuf::from("/w/fuzz/Cargo.toml"),
+            stage: "locate",
+            reason: "error: current package believes it's in a workspace when it's… (truncated)"
+                .into(),
+            capability: UnknownCapability::RefusedByCargo,
+        };
+        assert_eq!(
+            attribute_unknown(&participant, empty),
+            UnknownDisposition::ScopeNote,
+        );
+    }
+
+    /// Resolution-level: a Cargo-refused locate records `RefusedByCargo`, and
+    /// the attribution reads it back as a scope note — the branch, not the
+    /// text, decides. Fails if the emulation ever records the wrong class.
+    #[test]
+    fn resolution_records_refused_capability_for_cargo_refused_locate() {
+        struct RefusedRunner;
+        impl CargoRunner for RefusedRunner {
+            fn run(&self, _cwd: &Path, args: &[std::ffi::OsString]) -> io::Result<ProcessOutput> {
+                if args.first().is_some_and(|a| a == "locate-project") {
+                    return Ok(ProcessOutput {
+                        success: false,
+                        code: Some(1),
+                        stdout: Vec::new(),
+                        stderr:
+                            b"error: current package believes it's in a workspace when it's not"
+                                .to_vec(),
+                    });
+                }
+                panic!("metadata must never run for a refused manifest");
+            }
+        }
+        let d = tempfile::tempdir().unwrap();
+        let manifest = d.path().join("fuzz/Cargo.toml");
+        std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        std::fs::write(&manifest, "").unwrap();
+        let mut counters = ScanCounters::default();
+        let mut diags = Vec::new();
+        let coverage = resolve_workspaces_with_coverage(
+            std::slice::from_ref(&manifest),
+            &RefusedRunner,
+            &mut counters,
+            &mut diags,
+            &NoopObserver,
+        );
+        assert_eq!(coverage.unresolved.len(), 1);
+        let participant = &coverage.unresolved[0];
+        assert_eq!(participant.stage, "locate");
+        assert_eq!(participant.capability, UnknownCapability::RefusedByCargo);
+        assert_eq!(
+            attribute_unknown(participant, &coverage.workspaces),
+            UnknownDisposition::ScopeNote,
+        );
+    }
+
+    /// Resolution-level: a metadata failure records `Unproven`, and the
+    /// attribution merges it — even though its located root is known. The
+    /// located path is not ownership evidence for unproven output. Fails if
+    /// metadata failures ever stop merging.
+    #[test]
+    fn resolution_records_unproven_capability_for_metadata_failure() {
+        struct MetadataFailRunner {
+            root_manifest: PathBuf,
+        }
+        impl CargoRunner for MetadataFailRunner {
+            fn run(&self, _cwd: &Path, args: &[std::ffi::OsString]) -> io::Result<ProcessOutput> {
+                if args.first().is_some_and(|a| a == "locate-project") {
+                    let json = serde_json::json!({"root": self.root_manifest});
+                    return Ok(ProcessOutput {
+                        success: true,
+                        code: Some(0),
+                        stdout: serde_json::to_vec(&json).unwrap(),
+                        stderr: Vec::new(),
+                    });
+                }
+                Ok(ProcessOutput {
+                    success: false,
+                    code: Some(101),
+                    stdout: Vec::new(),
+                    stderr: b"error: failed to parse manifest".to_vec(),
+                })
+            }
+        }
+        let d = tempfile::tempdir().unwrap();
+        let root_manifest = d.path().join("ws/Cargo.toml");
+        std::fs::create_dir_all(root_manifest.parent().unwrap()).unwrap();
+        std::fs::write(&root_manifest, "").unwrap();
+        let mut counters = ScanCounters::default();
+        let mut diags = Vec::new();
+        let coverage = resolve_workspaces_with_coverage(
+            std::slice::from_ref(&root_manifest),
+            &MetadataFailRunner {
+                root_manifest: root_manifest.clone(),
+            },
+            &mut counters,
+            &mut diags,
+            &NoopObserver,
+        );
+        assert!(coverage.workspaces.is_empty());
+        assert_eq!(coverage.unresolved.len(), 1);
+        let participant = &coverage.unresolved[0];
+        assert_eq!(participant.stage, "metadata");
+        assert_eq!(participant.capability, UnknownCapability::Unproven);
+        assert_eq!(
+            attribute_unknown(participant, &coverage.workspaces),
+            UnknownDisposition::MergeAll,
+        );
+    }
+
+    /// Premise pin for M015/F: a symlinked target dir probes as
+    /// `{physical: None, exists: true, is_symlink: true}` — present but
+    /// without provable identity, so the partition merges rather than proving
+    /// through the link. Unix-gated: symlink creation is not portable, and an
+    /// ungated fixture would fail before the behavior under test runs.
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_output_root_reports_no_physical_identity() {
+        let d = tempfile::tempdir().unwrap();
+        let real = d.path().join("real-target");
+        std::fs::create_dir_all(&real).unwrap();
+        let link = d.path().join("ws-target");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let mut diags = Vec::new();
+        let root = output_root(OutputRootKind::Target, link, &mut diags);
+        assert_eq!(root.physical_path, None);
+        assert!(root.exists, "a symlinked output is present but unusable");
+        assert!(root.is_symlink);
     }
 
     #[test]

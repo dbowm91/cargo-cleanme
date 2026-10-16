@@ -236,8 +236,9 @@ pub struct CleanupRequest {
     /// `WorkingDirectory` here is *unresolved intent*. `main.rs` must call
     /// [`CleanupSelection::resolved`] before the engine runs.
     ///
-    /// `-i` overrides this: the interactive session replaces it with the
-    /// operator's choice, which is a strictly narrower `Roots` selection.
+    /// `-i` narrows this further: the interactive session offers only
+    /// anchor-matching units and replaces them with the operator's choice,
+    /// which is a strictly narrower `Roots` subset of the anchor.
     pub selection: CleanupSelection,
     /// `-i`/`--interactive`: present the selection list before cleaning.
     ///

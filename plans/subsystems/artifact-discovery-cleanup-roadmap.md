@@ -1004,4 +1004,54 @@ Planning baseline: `7c874ab7998bdac28a6236ec21ae59ec24b915f8` (`main`, 2026-10-0
 
 Rootless `scan` remains attempted exhaustive read-only Full with accurate partial coverage; `scan ROOT` is strict Explicit; bare `cargo cleanme` is Routine Execute and `--dry-run` is Simulate with zero Cargo cleans. Learned state remains advisory and can never authorize bytes. No direct deletion. Every Cargo-mediated clean remains one workspace's full OutputSet; physical shared/external/unproven output is inventory-only, and successful fresh complete ownership proof across the selected source universe remains mandatory. A new CLI/JSON/log contract change requires its own explicit decision, regenerated completions/man pages and machine-contract tests; `--format log` stays <=384 ASCII bytes without paths. All correctives retain Rust 1.89 support and full state-schema forward compatibility.
 
-Completion requires separate `plans/closure/artifact-discovery-cleanup/c032-status.md`, `c033-status.md`, `c034-status.md`, with implementation SHA, baseline failure, counterexample-negative fixtures that actually fail against v0.2.5, subprocess+real-Cargo fixture evidence, fmt/clippy/tests/checker self-tests and hosted OS/MSRV results. The specifically reported mixed-root no-clean case must either be demonstrably solved under accepted proof or transparently retained as a blocked limitation, not converted into a false green.
+ Completion requires separate `plans/closure/artifact-discovery-cleanup/c032-status.md`, `c033-status.md`, `c034-status.md`, with implementation SHA, baseline failure, counterexample-negative fixtures that actually fail against v0.2.5, subprocess+real-Cargo fixture evidence, fmt/clippy/tests/checker self-tests and hosted OS/MSRV results. The specifically reported mixed-root no-clean case must either be demonstrably solved under accepted proof or transparently retained as a blocked limitation, not converted into a false green.
+
+## Post-v0.2.8 — M015 proof-island certificate and partition report (conditionally closed)
+
+Status: **conditionally closed** — see
+`plans/closure/artifact-discovery-cleanup/m015-status.md`. Research +
+reporting milestone; no destructive behavior change and no ADR amendment.
+Hosted OS/MSRV lanes and VCS landing are outstanding; no publication is
+required (zero disposition change).
+
+Plan:
+
+- `plans/implementation/artifact-discovery-cleanup/m015-proof-island-certificate-and-partition-report.md`
+
+M015 answers ADR 004's question to decide (*what constitutes independently
+proven non-overlap?*) with a four-part independence certificate (component
+completeness, resolved non-overlap from the kept combined graph, unknown
+quarantine by failure-class attribution with merge-by-default, environment
+provenance snapshot), a deterministic partition computation, a human-only
+partitionability report on blocked runs, a disposition-parity proof that the
+computation changes nothing, premise-negative hostile controls (cross-root
+redirect, unresolved overlap, symlink, env change, TOCTOU), and live island-hit
+data as the go/no-go input for any activation. Destructive activation (M016:
+opt-in flag, per-island spawn, partial-success contract, kill-switch) is named
+in the plan but explicitly blocked until M015 closes **and** ADR 004 is
+accepted with a C004/C006 amendment. Stop condition S1 names the anticipated
+rejection — if every live failure class resolves to merge-by-default, the
+whole-scope block is retained and the rejection itself is the completed result.
+Outcome: S1 did **not** trigger — live runs show multi-island partitions with
+would-proceed islands (pair + refused orphan) and passenger attribution under
+a retained block (believed-orphan case) — so activation has a real target when
+ADR 004 is decided. An in-tree enforcement pass-through found during the work
+was removed rather than shipped (see closure record §"Plan §2 disposition").
+
+## Post-M015 proposed (blocked) — M016 per-island cleanup activation
+
+Status: **proposed, blocked**. Implementation plan (design only, no
+authority to implement):
+
+- `plans/implementation/artifact-discovery-cleanup/m016-per-island-cleanup-activation.md`
+
+M016 is the operator goal as stated — run the command, clean every
+provable island, hold the rest with typed reasons, no aberrant directory
+stalls the run — delivered behind one explicit opt-in flag with the
+default behavior byte-identical to today. Activation gates, in order:
+M015 fully closed, ADR 004 accepted with an explicit C004/C006 amendment
+(per-island activation + refused-manifest passenger rule), live islands
+occur (already shown). Per-island proof reuses the twelve-gate final
+proof with overlap evidence still read from the full combined universe;
+partitioning touches the spawn decision, never the graph. Stop
+conditions S1–S4; S3 (ADR refusal) ends the line with the block retained.

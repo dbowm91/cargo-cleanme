@@ -1296,6 +1296,29 @@ impl MaintenanceFixture {
         self.run_with_format(args, "human")
     }
 
+    /// Human format with locate failure: the blocked human report path.
+    fn run_human_with_locate_failure(&self, args: &[&str]) -> std::process::Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args([
+            "--config",
+            self.config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "human",
+        ]);
+        command.args(args);
+        command
+            .env("PATH", path_with(&self.bin))
+            .env("FIXTURE_ROOT", &self.root)
+            .env("FIXTURE_TARGET", &self.target)
+            .env("CARGO_LOG", &self.log)
+            .env("CARGO_ARGS_LOG", &self.args_log)
+            .env("CARGO_FAIL_LOCATE", "1")
+            .current_dir(&self.root)
+            .output()
+            .unwrap()
+    }
+
     /// Run cargo-cleanme with the stub on PATH and return its output.
     fn run(&self, args: &[&str]) -> std::process::Output {
         self.run_with_locate_failure(args, false)
@@ -1896,6 +1919,41 @@ fn bare_cleanup_with_unresolved_ownership_blocks_and_runs_no_cargo_clean() {
             "blocked {mode} must spawn no Cargo clean"
         );
     }
+}
+
+/// The blocked human report carries the advisory proof-island partition while
+/// the JSON surface stays exactly one object: two renderings of one result.
+/// Unix-gated like the locate-failure case it extends: the fixture substitutes
+/// a POSIX shell stub for Cargo.
+#[cfg(unix)]
+#[test]
+fn blocked_human_cleanup_report_carries_advisory_partition_and_json_stays_one_object() {
+    let fixture = MaintenanceFixture::new(true);
+    let human = fixture.run_human_with_locate_failure(&[]);
+    assert_eq!(human.status.code(), Some(1), "{human:?}");
+    let text = String::from_utf8_lossy(&human.stdout);
+    assert!(
+        text.contains("cleanup ownership could not be proven"),
+        "block message retained: {text}"
+    );
+    assert!(
+        text.contains("proof-island partition (advisory only;"),
+        "human blocked report carries the partition section: {text}"
+    );
+    // Nothing resolved (the only manifest was refused), so no island exists
+    // and nothing claims it would proceed — while the refused manifest is
+    // still named as a scope note.
+    assert!(text.contains("0 island(s)"), "{text}");
+    assert!(!text.contains("would proceed"), "{text}");
+    assert!(text.contains("scope note [locate]"), "{text}");
+    assert_eq!(
+        fixture.clean_calls(),
+        0,
+        "advisory means advisory: no Cargo clean ran"
+    );
+    let json_out = fixture.run_with_locate_failure(&[], true);
+    let json: serde_json::Value = serde_json::from_slice(&json_out.stdout).unwrap();
+    assert_eq!(json["result"]["scope_blocked"], true, "{json}");
 }
 
 /// Advanced cleanup defaults to Execute, and Cargo's own preview is reachable

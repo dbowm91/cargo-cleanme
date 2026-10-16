@@ -338,6 +338,94 @@ impl ScopeBlock {
     }
 }
 
+/// Output-placement environment a partition was computed under (M015
+/// certificate §4.4).
+///
+/// A change to either variable between discovery and spawn moves output
+/// placement out from under the partition, so activation (M016) must treat a
+/// mismatch as a merge. M015 records the snapshot as evidence and proves the
+/// detector ([`output_env_matches`]) with tests.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OutputProvenanceSnapshot {
+    pub cargo_target_dir: Option<OsString>,
+    pub cargo_build_build_dir: Option<OsString>,
+}
+
+/// Capture the output-placement environment through an injectable getter so
+/// tests can vary it without touching the process environment (parallel-test
+/// safe: no `std::env::set_var` anywhere near this code).
+fn snapshot_output_env(get: &dyn Fn(&str) -> Option<OsString>) -> OutputProvenanceSnapshot {
+    OutputProvenanceSnapshot {
+        cargo_target_dir: get("CARGO_TARGET_DIR"),
+        cargo_build_build_dir: get("CARGO_BUILD_BUILD_DIR"),
+    }
+}
+
+/// True when the current output-placement environment still matches a
+/// snapshot. Absent and empty are distinct: unsetting a variable is a change.
+#[cfg(test)]
+fn output_env_matches(
+    snapshot: &OutputProvenanceSnapshot,
+    get: &dyn Fn(&str) -> Option<OsString>,
+) -> bool {
+    *snapshot == snapshot_output_env(get)
+}
+
+/// Why the partition collapsed to one island (M015 certificate §4.3).
+///
+/// Every cause names the unknown that forced the merge: a merged island is
+/// blocked *by* these, and the render lists them bounded, like the
+/// unresolved-participant listing. Ordered for deterministic partitions.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum PartitionMergeCause {
+    /// A byte-capable unknown: its outputs could overlap any island.
+    UnprovenUnknown(PathBuf),
+    /// A discovery hole: it may hide a manifest with any outputs.
+    DiscoveryHole(PathBuf),
+    /// Pathless discovery diagnostics: counted but unlocatable (the walk
+    /// could not attribute the loss to a path). The count proves the
+    /// universe is incomplete even though no hole can be named; merging is
+    /// still required, because an unlocatable hole may hide any manifest.
+    UnnamedDiscoveryHoles(usize),
+    /// A resolved workspace with an existing but unresolvable output root
+    /// (symlink, unreadable, or non-directory): identity unprovable, so
+    /// non-overlap with any island is unprovable too.
+    UnresolvableOutput(PathBuf),
+}
+
+/// One proof island over the combined universe (M015, report-only).
+///
+/// An island carries the four certificate proofs in summary form: its member
+/// workspaces are completely resolved with pairwise-disjoint proven outputs
+/// (proofs 1–2), its passengers are byte-incapable unknowns Cargo refused
+/// (proof 3, quarantine without merge), and the partition's provenance
+/// snapshot covers proof 4. `would_proceed` is what the island *would* do
+/// under activation; M015 never enforces it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProofIsland {
+    /// Workspace roots pinning the island, sorted.
+    pub roots: Vec<PathBuf>,
+    /// Byte-incapable unknowns Cargo named to this island, by manifest.
+    pub passengers: Vec<UnresolvedOwnershipParticipant>,
+    /// True when the certificate would let this island proceed on its own.
+    /// Always false on a globally merged partition.
+    pub would_proceed: bool,
+}
+
+/// The computed partition for one blocked scope (M015, report-only).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProofPartition {
+    /// Islands sorted by first root. Exactly one entry when anything merged.
+    pub islands: Vec<ProofIsland>,
+    /// Byte-incapable unknowns with no resolved owner: scope-level notes.
+    /// They merge nothing and name no island.
+    pub scope_notes: Vec<UnresolvedOwnershipParticipant>,
+    /// Named causes that forced a global merge, sorted. Empty ⟺ no merge.
+    pub merge_causes: Vec<PartitionMergeCause>,
+    /// Output-placement environment the partition was computed under.
+    pub provenance: OutputProvenanceSnapshot,
+}
+
 /// The complete outcome of one cleanup run.
 ///
 /// `Default` is intentionally not derived: a report must always state its
@@ -352,6 +440,10 @@ pub struct CleanReport {
     pub counters: ScanCounters,
     /// Whole-scope safety block raised before sizing or per-unit proof.
     pub scope_blocked: Option<ScopeBlock>,
+    /// Report-only proof-island partition, present exactly when a scope block
+    /// was raised (M015). Feeds the human report and nothing else: JSON, the
+    /// log line, exit codes, units, and spawns never see it.
+    pub proof_partition: Option<ProofPartition>,
     /// Structured participants retained for diagnostics and audit consumers.
     pub unresolved_ownership: Vec<UnresolvedOwnershipParticipant>,
     pub selected_roots: Vec<PathBuf>,
@@ -459,6 +551,12 @@ impl CleanReport {
                         "  hint: a nested crate that believes it is in a workspace needs an empty `[workspace]` table or a parent `workspace.exclude` entry; otherwise clean a healthy workspace explicitly, e.g. `cargo cleanme clean ROOT`\n",
                     );
                 }
+            }
+            // M015/D: the report-only partition, bounded like the participant
+            // listing above. Advisory only — the block still applies, and the
+            // machine surfaces never see this section.
+            if let Some(partition) = &self.proof_partition {
+                out.push_str(&partition_section(partition));
             }
             return out;
         }
@@ -1219,6 +1317,7 @@ pub fn clean_with_roots_policy_selector_guarded(
         mode,
         counters: ScanCounters::default(),
         scope_blocked: None,
+        proof_partition: None,
         unresolved_ownership: unresolved_ownership.clone(),
         selected_roots: roots.clone(),
         discovered_manifests: manifests.len(),
@@ -1244,6 +1343,16 @@ pub fn clean_with_roots_policy_selector_guarded(
                 units.len()
             ),
         ));
+        // M015: report-only partition over whatever resolved. Discovery holes
+        // merge by construction, so this almost always renders one merged
+        // island naming the holes — the honest picture, not a silent count.
+        let (holes, unnamed) = discovery_holes(&diagnostics, discovery_diagnostic_count);
+        report.proof_partition = Some(compute_proof_partition(
+            &workspaces,
+            &report.unresolved_ownership,
+            &holes,
+            unnamed,
+        ));
         return Ok(report);
     }
 
@@ -1259,6 +1368,16 @@ pub fn clean_with_roots_policy_selector_guarded(
                     "manifests"
                 }
             ),
+        ));
+        // M015: report-only partition. Pure over data already in hand — no new
+        // spawns, no counter or diagnostic mutation, no disposition change.
+        // The block above is raised exactly as before.
+        let (holes, unnamed) = discovery_holes(&diagnostics, discovery_diagnostic_count);
+        report.proof_partition = Some(compute_proof_partition(
+            &workspaces,
+            &unresolved_ownership,
+            &holes,
+            unnamed,
         ));
         report.unresolved_ownership = unresolved_ownership;
         report.resolved_workspaces = workspaces.len();
@@ -1570,7 +1689,7 @@ pub fn clean_with_roots_policy_selector_guarded(
                 Ok(fresh) if fresh.diagnostics.is_empty() => {
                     let mut now = fresh.manifests;
                     now.sort();
-                    if now != initial_manifests {
+                    if !universe_manifests_stable(&initial_manifests, &now) {
                         report.scope_blocked = Some(ScopeBlock::new(
                             ScopeBlockReason::IncompleteDiscovery,
                             "cleanup ownership universe changed: manifest set differs after proof; no further cleanup commands were run".into(),
@@ -1796,6 +1915,420 @@ impl CleanupCandidate {
     pub fn provably_private(&self) -> bool {
         self.ownership == OutputOwnershipClass::PrivateBounded
     }
+}
+
+/// Human detail for a blocked interactive listing, with bounded participant
+/// paths and the workspace-membership hint when it applies.
+///
+/// This is the listing counterpart of the engine's blocked-report rendering in
+/// `CleanReport::render`: the block message alone carries a count, which never
+/// told the operator which manifest to fix or which healthy workspace to clean
+/// explicitly instead. Paths are sanitized (no control characters, bounded
+/// length, at most five) because this surfaces on a human terminal; JSON and
+/// log consumers read `unresolved_ownership` / counts instead.
+pub fn blocked_listing_detail(
+    block: &ScopeBlock,
+    unresolved: &[UnresolvedOwnershipParticipant],
+) -> String {
+    let mut detail = block.message.clone();
+    const MAX_LISTED: usize = 5;
+    const MAX_FIELD_CHARS: usize = 200;
+    let mut listed = 0usize;
+    let mut workspace_hint = false;
+    for participant in unresolved.iter().take(MAX_LISTED) {
+        let manifest = participant
+            .manifest
+            .display()
+            .to_string()
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(MAX_FIELD_CHARS)
+            .collect::<String>();
+        let reason = participant
+            .reason
+            .replace('\n', " ")
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(MAX_FIELD_CHARS)
+            .collect::<String>();
+        detail.push_str(&format!(
+            "\n  unresolved [{}] {}: {}",
+            participant.stage, manifest, reason
+        ));
+        listed += 1;
+        if participant
+            .reason
+            .contains("believes it's in a workspace when it's not")
+        {
+            workspace_hint = true;
+        }
+    }
+    let remaining = unresolved.len().saturating_sub(listed);
+    if remaining > 0 {
+        detail.push_str(&format!("\n  … {remaining} more unresolved participant(s)"));
+    }
+    if workspace_hint {
+        detail.push_str(
+            "\n  hint: a nested crate that believes it is in a workspace needs an empty `[workspace]` table or a parent `workspace.exclude` entry; otherwise clean a healthy workspace explicitly, e.g. `cargo cleanme clean ROOT`",
+        );
+    }
+    detail
+}
+
+/// Proven physical outputs of one resolved workspace, plus whether any
+/// existing output lacks provable physical identity.
+///
+/// A nonexistent output contributes nothing: it holds no bytes to share. An
+/// existing output without identity — symlink (deliberately inert: symlinked
+/// roots carry no group and no diagnostic, so nothing downstream proves
+/// through them), unreadable, or non-directory — cannot prove non-overlap
+/// with any island, so the caller merges globally.
+fn physical_outputs(ws: &ResolvedWorkspace) -> (Vec<PathBuf>, bool) {
+    let mut paths = Vec::new();
+    let mut unresolvable = false;
+    for root in [&ws.output.target, &ws.output.build] {
+        match (&root.physical_path, root.exists) {
+            (Some(path), _) => paths.push(path.clone()),
+            (None, false) => {}
+            (None, true) => {
+                unresolvable = true;
+            }
+        }
+    }
+    (paths, unresolvable)
+}
+
+/// True when two proven physical-output sets may share bytes: any equality
+/// or canonical-prefix overlap in either direction.
+///
+/// Component-wise (`Path::starts_with`), never string-prefix: `/a/target2`
+/// is not under `/a/target`. Only proven (canonical) paths ever reach here;
+/// unresolvable identities merge before this runs.
+fn outputs_overlap(a: &[PathBuf], b: &[PathBuf]) -> bool {
+    a.iter().any(|x| {
+        b.iter()
+            .any(|y| x == y || x.starts_with(y) || y.starts_with(x))
+    })
+}
+
+/// Compute the proof-island partition over the combined resolved universe
+/// (M015 package C). Report-only: the result feeds the human blocked-scope
+/// report and nothing else.
+///
+/// Pure and infallible: no spawns, no filesystem mutation, no counter or
+/// diagnostic changes, no `Result`. Any internal inconsistency degrades to a
+/// single merged island — today's block — never to a finer partition.
+/// Deterministic: islands sort by first root, passengers/notes/causes sort
+/// by path, so the same universe always renders the same section.
+fn compute_proof_partition(
+    workspaces: &[ResolvedWorkspace],
+    unresolved: &[UnresolvedOwnershipParticipant],
+    discovery_holes: &[PathBuf],
+    unnamed_hole_count: usize,
+) -> ProofPartition {
+    let provenance = snapshot_output_env(&|key| std::env::var_os(key));
+    // Island keys: canonical root manifests, in workspace order.
+    let keys: Vec<PathBuf> = workspaces
+        .iter()
+        .map(|ws| canon(&ws.root_manifest))
+        .collect();
+    let mut merge_causes: Vec<PartitionMergeCause> = discovery_holes
+        .iter()
+        .map(|hole| PartitionMergeCause::DiscoveryHole(hole.clone()))
+        .collect();
+    if unnamed_hole_count > 0 {
+        merge_causes.push(PartitionMergeCause::UnnamedDiscoveryHoles(
+            unnamed_hole_count,
+        ));
+    }
+    let mut island_passengers: Vec<Vec<UnresolvedOwnershipParticipant>> =
+        vec![Vec::new(); keys.len()];
+    let mut scope_notes: Vec<UnresolvedOwnershipParticipant> = Vec::new();
+    for participant in unresolved {
+        match workspace::attribute_unknown(participant, workspaces) {
+            workspace::UnknownDisposition::PassengerOf { named_manifest } => {
+                match keys.iter().position(|key| *key == canon(&named_manifest)) {
+                    Some(index) => island_passengers[index].push(participant.clone()),
+                    // Defensive totality: attribution verified membership
+                    // against these same keys, so a miss means the inputs
+                    // disagree — merge rather than misattribute.
+                    None => merge_causes.push(PartitionMergeCause::UnprovenUnknown(
+                        participant.manifest.clone(),
+                    )),
+                }
+            }
+            workspace::UnknownDisposition::ScopeNote => scope_notes.push(participant.clone()),
+            workspace::UnknownDisposition::MergeAll => merge_causes.push(
+                PartitionMergeCause::UnprovenUnknown(participant.manifest.clone()),
+            ),
+        }
+    }
+    for ws in workspaces {
+        if physical_outputs(ws).1 {
+            merge_causes.push(PartitionMergeCause::UnresolvableOutput(ws.root.clone()));
+        }
+    }
+    merge_causes.sort();
+    merge_causes.dedup();
+    scope_notes.sort_by(|a, b| a.manifest.cmp(&b.manifest));
+    if !merge_causes.is_empty() {
+        let mut roots: Vec<PathBuf> = workspaces.iter().map(|ws| ws.root.clone()).collect();
+        roots.sort();
+        roots.dedup();
+        let mut passengers: Vec<UnresolvedOwnershipParticipant> =
+            island_passengers.into_iter().flatten().collect();
+        passengers.sort_by(|a, b| a.manifest.cmp(&b.manifest));
+        return ProofPartition {
+            islands: vec![ProofIsland {
+                roots,
+                passengers,
+                would_proceed: false,
+            }],
+            scope_notes,
+            merge_causes,
+            provenance,
+        };
+    }
+    // No merge: union resolved islands by physical-output overlap.
+    let outputs: Vec<Vec<PathBuf>> = workspaces.iter().map(|ws| physical_outputs(ws).0).collect();
+    let mut parent: Vec<usize> = (0..keys.len()).collect();
+    // Disjoint-set find with path halving. Indices stay in range by
+    // construction (`parent` is exactly `0..keys.len()`); no user data
+    // indexes here, so this cannot panic on adversarial input.
+    fn find(parent: &mut [usize], mut x: usize) -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        x
+    }
+    for i in 0..keys.len() {
+        for j in (i + 1)..keys.len() {
+            if outputs_overlap(&outputs[i], &outputs[j]) {
+                let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
+                if ri != rj {
+                    // Deterministic union: the smaller root index wins.
+                    let (keep, drop) = if ri < rj { (ri, rj) } else { (rj, ri) };
+                    parent[drop] = keep;
+                }
+            }
+        }
+    }
+    let compressed: Vec<usize> = (0..keys.len()).map(|i| find(&mut parent, i)).collect();
+    // Group member indices by representative, ordered by smallest member root.
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for (index, representative) in compressed.iter().enumerate() {
+        match groups
+            .iter_mut()
+            .find(|group| compressed[group[0]] == *representative)
+        {
+            Some(group) => group.push(index),
+            None => groups.push(vec![index]),
+        }
+    }
+    groups.sort_by(|a, b| {
+        a.iter()
+            .map(|&i| &workspaces[i].root)
+            .min()
+            .cmp(&b.iter().map(|&i| &workspaces[i].root).min())
+    });
+    let islands = groups
+        .into_iter()
+        .map(|group| {
+            let mut roots: Vec<PathBuf> =
+                group.iter().map(|&i| workspaces[i].root.clone()).collect();
+            roots.sort();
+            let mut passengers: Vec<UnresolvedOwnershipParticipant> = group
+                .iter()
+                .flat_map(|&i| island_passengers[i].clone())
+                .collect();
+            passengers.sort_by(|a, b| a.manifest.cmp(&b.manifest));
+            ProofIsland {
+                roots,
+                passengers,
+                would_proceed: true,
+            }
+        })
+        .collect();
+    ProofPartition {
+        islands,
+        scope_notes,
+        merge_causes,
+        provenance,
+    }
+}
+
+/// Discovery holes feeding the partition: the discovery prefix of the
+/// diagnostic vector (resolution diagnostics append after it), split into
+/// locatable paths and the pathless remainder. Both merge: a pathless
+/// diagnostic still proves the universe incomplete. Sorted and deduplicated
+/// paths plus an exact remainder count keep partitions deterministic.
+fn discovery_holes(
+    diagnostics: &[ScanDiagnostic],
+    discovery_diagnostic_count: usize,
+) -> (Vec<PathBuf>, usize) {
+    let mut paths: Vec<PathBuf> = Vec::new();
+    let mut pathless = 0usize;
+    for diagnostic in diagnostics.iter().take(discovery_diagnostic_count) {
+        match &diagnostic.path {
+            Some(path) => paths.push(path.clone()),
+            None => pathless += 1,
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    (paths, pathless)
+}
+
+/// Bounds for the advisory partition section (M015/D), mirroring the
+/// unresolved-participant listing: a many-workspace universe must not flood
+/// the human report.
+const PARTITION_MAX_ISLANDS: usize = 5;
+const PARTITION_MAX_ROWS: usize = 5;
+const PARTITION_MAX_FIELD_CHARS: usize = 200;
+
+/// Bounded human-only rendering of the proof-island partition (M015/D).
+///
+/// Advisory: the scope block above still applies and the engine enforces it.
+/// Machine surfaces (JSON, the log line, exit codes) never see this section,
+/// and the `-i` listing path does not render it either: offering islands
+/// there would suggest a selectability the engine refuses.
+fn partition_section(partition: &ProofPartition) -> String {
+    fn field(text: &str) -> String {
+        text.chars()
+            .filter(|ch| !ch.is_control())
+            .take(PARTITION_MAX_FIELD_CHARS)
+            .collect()
+    }
+    let mut out = String::new();
+    let islands = partition.islands.len();
+    out.push_str(&format!(
+        "  proof-island partition (advisory only; the block above still applies): {islands} island(s)"
+    ));
+    if !partition.merge_causes.is_empty() {
+        out.push_str(&format!(
+            ", merged by {} cause(s)",
+            partition.merge_causes.len()
+        ));
+    }
+    out.push('\n');
+    for (index, island) in partition
+        .islands
+        .iter()
+        .take(PARTITION_MAX_ISLANDS)
+        .enumerate()
+    {
+        let disposition = if island.would_proceed {
+            "would proceed"
+        } else {
+            "blocked"
+        };
+        if island.roots.len() == 1 {
+            // Single-root islands name the workspace: the operator's next
+            // question is always "which one?".
+            let root = island
+                .roots
+                .first()
+                .map(|path| escaped_path(path))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "  island {} of {islands}: {} -- 1 workspace, {disposition}\n",
+                index + 1,
+                field(&root),
+            ));
+        } else {
+            out.push_str(&format!(
+                "  island {} of {islands}: {} workspaces -- {disposition}\n",
+                index + 1,
+                island.roots.len(),
+            ));
+        }
+        for passenger in island.passengers.iter().take(PARTITION_MAX_ROWS) {
+            out.push_str(&format!(
+                "    passenger [{}] {}: cargo refused it; attributed to this island\n",
+                passenger.stage,
+                field(&passenger.manifest.display().to_string()),
+            ));
+        }
+        if island.passengers.len() > PARTITION_MAX_ROWS {
+            out.push_str(&format!(
+                "    … {} more passenger(s)\n",
+                island.passengers.len() - PARTITION_MAX_ROWS
+            ));
+        }
+    }
+    if islands > PARTITION_MAX_ISLANDS {
+        out.push_str(&format!(
+            "  … {} more island(s)\n",
+            islands - PARTITION_MAX_ISLANDS
+        ));
+    }
+    for note in partition.scope_notes.iter().take(PARTITION_MAX_ROWS) {
+        out.push_str(&format!(
+            "  scope note [{}] {}: cargo refused it; no owning workspace resolved\n",
+            note.stage,
+            field(&note.manifest.display().to_string()),
+        ));
+    }
+    if partition.scope_notes.len() > PARTITION_MAX_ROWS {
+        out.push_str(&format!(
+            "  … {} more scope note(s)\n",
+            partition.scope_notes.len() - PARTITION_MAX_ROWS
+        ));
+    }
+    for cause in partition.merge_causes.iter().take(PARTITION_MAX_ROWS) {
+        if let PartitionMergeCause::UnnamedDiscoveryHoles(count) = cause {
+            out.push_str(&format!(
+                "  merged by {count} unnamed discovery hole(s): counted but unlocatable\n"
+            ));
+            continue;
+        }
+        // Path-bearing causes render with the path. The remaining arm is the
+        // variant matched above; `continue` (never type) keeps a future
+        // variant from silently falling through to path rendering.
+        let (kind, path) = match cause {
+            PartitionMergeCause::UnprovenUnknown(path) => ("unproven unknown", path),
+            PartitionMergeCause::DiscoveryHole(path) => ("discovery hole", path),
+            PartitionMergeCause::UnresolvableOutput(path) => ("unresolvable output of", path),
+            PartitionMergeCause::UnnamedDiscoveryHoles(_) => continue,
+        };
+        out.push_str(&format!(
+            "  merged by {kind}: {}\n",
+            field(&escaped_path(path))
+        ));
+    }
+    if partition.merge_causes.len() > PARTITION_MAX_ROWS {
+        out.push_str(&format!(
+            "  … {} more merge cause(s)\n",
+            partition.merge_causes.len() - PARTITION_MAX_ROWS
+        ));
+    }
+    let target_dir = partition
+        .provenance
+        .cargo_target_dir
+        .as_ref()
+        .map(|value| field(&value.to_string_lossy()))
+        .unwrap_or_else(|| "<absent>".to_string());
+    let build_dir = partition
+        .provenance
+        .cargo_build_build_dir
+        .as_ref()
+        .map(|value| field(&value.to_string_lossy()))
+        .unwrap_or_else(|| "<absent>".to_string());
+    out.push_str(&format!(
+        "  provenance: CARGO_TARGET_DIR={target_dir}, CARGO_BUILD_BUILD_DIR={build_dir}\n"
+    ));
+    out
+}
+
+/// H-2 universe-stability predicate: the rediscovered manifest set must equal
+/// the hoisted snapshot exactly — growth, shrinkage, or any difference blocks
+/// the remaining scope instead of proceeding against a stale claimant set.
+///
+/// Extracted pure (M015/F) so the TOCTOU control can prove the detector
+/// carries the detection: the naive always-stable stub passes growth through.
+fn universe_manifests_stable(initial: &[PathBuf], fresh_sorted: &[PathBuf]) -> bool {
+    initial == fresh_sorted
 }
 
 /// The read-only result of listing cleanup candidates.
@@ -3344,6 +3877,62 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn blocked_listing_detail_names_participants_and_hints_workspace_membership() {
+        // The `-i` block used to carry only a count ("1 ... did not resolve"),
+        // so the operator could not tell which manifest to fix. A test that
+        // only asserted "it blocked" would pass against that shape too.
+        let block = ScopeBlock::new(
+            ScopeBlockReason::OwnershipUnproven,
+            "cleanup ownership could not be proven: 1 discovered Cargo manifest did not resolve; nothing can be selected".into(),
+        );
+        let unresolved = vec![UnresolvedOwnershipParticipant {
+            manifest: PathBuf::from("/work/a/fuzz/Cargo.toml"),
+            stage: "locate",
+            reason: "cargo locate-project failed: error: current package believes it's in a workspace when it's not".into(),
+            capability: UnknownCapability::RefusedByCargo,
+        }];
+        let detail = blocked_listing_detail(&block, &unresolved);
+        assert!(
+            detail.contains("/work/a/fuzz/Cargo.toml"),
+            "the manifest path must be named: {detail}"
+        );
+        assert!(
+            detail.contains("unresolved [locate]"),
+            "the stage must be named: {detail}"
+        );
+        assert!(
+            detail.contains("empty `[workspace]` table"),
+            "the workspace-membership hint must be present for this reason: {detail}"
+        );
+        // A generic failure must not carry that hint.
+        let generic = vec![UnresolvedOwnershipParticipant {
+            manifest: PathBuf::from("/work/b/Cargo.toml"),
+            stage: "metadata",
+            reason: "cargo metadata failed: broken pipe".into(),
+            capability: UnknownCapability::Unproven,
+        }];
+        let generic_detail = blocked_listing_detail(&block, &generic);
+        assert!(
+            generic_detail.contains("/work/b/Cargo.toml"),
+            "generic participants are still named: {generic_detail}"
+        );
+        assert!(
+            !generic_detail.contains("empty `[workspace]` table"),
+            "the hint is specific to the workspace-belief reason: {generic_detail}"
+        );
+        // A discovery block with no participants stays count-only.
+        let discovery = ScopeBlock::new(
+            ScopeBlockReason::IncompleteDiscovery,
+            "combined cleanup ownership universe is incomplete: 2 discovery diagnostic(s); nothing can be selected".into(),
+        );
+        let empty = blocked_listing_detail(&discovery, &[]);
+        assert!(
+            !empty.contains("unresolved ["),
+            "no participants means no rows: {empty}"
+        );
+    }
+
+    #[test]
     fn ancestry_selection_matches_in_both_directions() {
         // The layout that decides whether the new default is usable at all:
         // standing inside a *member* of a virtual workspace must still select
@@ -4228,11 +4817,13 @@ mod tests {
                     manifest: PathBuf::from("/work/a/website/Cargo.toml"),
                     stage: "locate",
                     reason: "cargo locate-project failed: error: current package believes it's in a workspace when it's not: current: /work/a/website/Cargo.toml".into(),
+                    capability: UnknownCapability::RefusedByCargo,
                 },
                 UnresolvedOwnershipParticipant {
                     manifest: PathBuf::from("/work/b/Cargo.toml"),
                     stage: "metadata",
                     reason: "cargo metadata failed: something else".into(),
+                    capability: UnknownCapability::Unproven,
                 },
             ],
             selected_roots: vec![PathBuf::from("/work")],
@@ -4241,6 +4832,7 @@ mod tests {
             units_considered: 0,
             effective_policy: None,
             selector: None,
+            proof_partition: None,
         };
         let text = report.render();
         assert!(
@@ -4276,6 +4868,7 @@ mod tests {
                 manifest: PathBuf::from(format!("/work/p{i}/Cargo.toml")),
                 stage: "locate",
                 reason: "cargo locate-project failed".into(),
+                capability: UnknownCapability::RefusedByCargo,
             })
             .collect();
         let report = CleanReport {
@@ -4295,6 +4888,7 @@ mod tests {
             units_considered: 0,
             effective_policy: None,
             selector: None,
+            proof_partition: None,
         };
         let text = report.render();
         assert_eq!(
@@ -4309,6 +4903,883 @@ mod tests {
         assert!(
             !text.contains("empty `[workspace]` table"),
             "no workspace hint without the workspace-belief reason: {text}"
+        );
+    }
+
+    fn report_with_partition(partition: ProofPartition) -> CleanReport {
+        CleanReport {
+            results: Vec::new(),
+            diagnostics: 1,
+            failed: 0,
+            mode: CleanMode::Simulate,
+            counters: ScanCounters::default(),
+            scope_blocked: Some(ScopeBlock::new(
+                ScopeBlockReason::OwnershipUnproven,
+                "cleanup ownership could not be proven: 1 discovered Cargo manifest did not resolve; no cleanup commands were run".into(),
+            )),
+            unresolved_ownership: Vec::new(),
+            selected_roots: Vec::new(),
+            discovered_manifests: 1,
+            resolved_workspaces: 0,
+            units_considered: 0,
+            effective_policy: None,
+            selector: None,
+            proof_partition: Some(partition),
+        }
+    }
+
+    /// The advisory section renders islands, passengers, notes, causes, and
+    /// provenance — and a report with no computed partition renders no
+    /// section at all. Fails against a render that drops the section or one
+    /// that invents it without computation.
+    #[test]
+    fn partition_section_renders_islands_passengers_notes_and_provenance() {
+        let workspaces = vec![
+            partition_ws(Path::new("/w/a"), Some(PathBuf::from("/w/a/target"))),
+            partition_ws(Path::new("/w/b"), Some(PathBuf::from("/w/b/target"))),
+        ];
+        let passenger = refused_participant(
+            PathBuf::from("/w/b/fuzz/Cargo.toml"),
+            "error: current package believes it's in a workspace when it's not: | current: /w/b/fuzz/Cargo.toml | workspace: /w/b/Cargo.toml",
+        );
+        let note = refused_participant(
+            PathBuf::from("/w/orphan/Cargo.toml"),
+            "cargo locate-project failed: gone",
+        );
+        let partition = compute_proof_partition(&workspaces, &[passenger, note], &[], 0);
+        let text = report_with_partition(partition).render();
+        assert!(
+            text.contains("proof-island partition (advisory only;"),
+            "section header present: {text}"
+        );
+        assert!(text.contains("2 island(s)"), "island count: {text}");
+        assert!(
+            text.contains("island 1 of 2: /w/a -- 1 workspace, would proceed"),
+            "first island named with disposition: {text}"
+        );
+        assert!(
+            text.contains("passenger [locate] /w/b/fuzz/Cargo.toml"),
+            "passenger named with stage: {text}"
+        );
+        assert!(
+            text.contains("scope note [locate] /w/orphan/Cargo.toml"),
+            "scope note named: {text}"
+        );
+        assert!(
+            text.contains("provenance: CARGO_TARGET_DIR="),
+            "provenance snapshot rendered: {text}"
+        );
+
+        let mut bare = report_with_partition(compute_proof_partition(&[], &[], &[], 0));
+        bare.proof_partition = None;
+        assert!(
+            !bare.render().contains("proof-island"),
+            "no computed partition means no section"
+        );
+    }
+
+    /// The section is bounded: seven islands render five rows plus overflow,
+    /// and seven merge causes render five rows plus overflow.
+    #[test]
+    fn partition_section_bounds_islands_and_causes() {
+        let workspaces: Vec<ResolvedWorkspace> = (0..7)
+            .map(|i| {
+                partition_ws(
+                    &PathBuf::from(format!("/w/ws{i}")),
+                    Some(PathBuf::from(format!("/w/ws{i}/target"))),
+                )
+            })
+            .collect();
+        let text =
+            report_with_partition(compute_proof_partition(&workspaces, &[], &[], 0)).render();
+        assert!(text.contains("7 island(s)"), "{text}");
+        assert!(text.contains("island 5 of 7"), "{text}");
+        assert!(!text.contains("island 6 of 7"), "{text}");
+        assert!(text.contains("… 2 more island(s)"), "{text}");
+
+        let unknowns: Vec<UnresolvedOwnershipParticipant> = (0..7)
+            .map(|i| {
+                unproven_participant(
+                    PathBuf::from(format!("/w/p{i}/Cargo.toml")),
+                    "metadata",
+                    "cargo metadata failed",
+                )
+            })
+            .collect();
+        let merged =
+            report_with_partition(compute_proof_partition(&[], &unknowns, &[], 0)).render();
+        assert!(merged.contains("merged by 7 cause(s)"), "{merged}");
+        assert_eq!(
+            merged.matches("merged by unproven unknown:").count(),
+            5,
+            "exactly five cause rows: {merged}"
+        );
+        assert!(merged.contains("… 2 more merge cause(s)"), "{merged}");
+    }
+
+    /// M015/E, the teeth: the certificate reports two islands that would both
+    /// proceed, yet the engine still blocks the whole scope with zero spawns
+    /// in every mode. The partition says "go"; the engine says "no" — parity
+    /// proven, not asserted. Fails if partitioning ever leaks into
+    /// dispositions.
+    #[test]
+    fn partition_reports_islands_but_engine_still_blocks_with_zero_spawns_in_every_mode() {
+        let d = tempfile::tempdir().unwrap();
+        let root_a = ws_root(d.path(), "island-a");
+        let root_b = ws_root(d.path(), "island-b");
+        // A third manifest no staged workspace claims: locate refuses it, so
+        // it owns no bytes (scope note), while A and B stay output-disjoint.
+        let orphan = d.path().join("orphan/Cargo.toml");
+        std::fs::create_dir_all(orphan.parent().unwrap()).unwrap();
+        std::fs::write(&orphan, "").unwrap();
+        for mode in [
+            CleanMode::CargoPreview,
+            CleanMode::Simulate,
+            CleanMode::Execute,
+        ] {
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, root_a.join("target"), None);
+            runner.add(&root_b, root_b.join("target"), None);
+            let report = clean_with(d.path(), 0, &[], mode, &runner, &NoopObserver).unwrap();
+            assert_eq!(
+                report.scope_blocked.as_ref().map(|block| block.reason),
+                Some(ScopeBlockReason::OwnershipUnproven),
+                "{mode:?}"
+            );
+            assert!(report.results.is_empty(), "{mode:?}: no units may exist");
+            assert!(
+                runner.clean_calls().is_empty(),
+                "{mode:?}: zero clean spawns despite two would-proceed islands"
+            );
+            let partition = report
+                .proof_partition
+                .as_ref()
+                .expect("blocked runs carry a partition");
+            assert_eq!(partition.islands.len(), 2, "{mode:?}");
+            assert!(
+                partition.islands.iter().all(|island| island.would_proceed),
+                "{mode:?}: {partition:?}"
+            );
+            assert!(partition.merge_causes.is_empty(), "{mode:?}");
+            assert_eq!(partition.scope_notes.len(), 1, "{mode:?}");
+            assert_eq!(partition.scope_notes[0].manifest, orphan, "{mode:?}");
+            assert!(
+                report.render().contains("2 island(s)"),
+                "{mode:?}: the human report shows the split it refuses to act on"
+            );
+        }
+    }
+
+    /// M015/F, cross-root redirect through resolution: two workspaces sharing
+    /// one proven target merge into one island. Reuses the M014 hostile
+    /// shape (shared at full width); the naive splits it and would clean
+    /// both sides of shared bytes.
+    #[test]
+    fn redirect_outputs_merge_under_certificate_but_split_under_naive_skip() {
+        let d = tempfile::tempdir().unwrap();
+        let root_a = ws_root(d.path(), "redirect-a");
+        let root_b = ws_root(d.path(), "redirect-b");
+        let shared = cargo_output(&root_a.join("target"), 4096);
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        let mut runner = StagedCargo::new();
+        runner.add(&root_a, shared.clone(), None);
+        runner.add(&root_b, shared.clone(), None);
+        let mut counters = ScanCounters::default();
+        let mut diags = Vec::new();
+        let coverage = workspace::resolve_workspaces_with_coverage(
+            &[root_a.join("Cargo.toml"), root_b.join("Cargo.toml")],
+            &runner,
+            &mut counters,
+            &mut diags,
+            &NoopObserver,
+        );
+        assert!(coverage.unresolved.is_empty());
+        assert_eq!(coverage.workspaces.len(), 2);
+        let partition = compute_proof_partition(&coverage.workspaces, &coverage.unresolved, &[], 0);
+        assert_eq!(
+            partition.islands.len(),
+            1,
+            "shared bytes cannot be separated: {partition:?}"
+        );
+        assert_eq!(
+            naive_islands(&coverage.workspaces).len(),
+            2,
+            "naive skip splits shared output: the control fails against it"
+        );
+    }
+
+    /// M015/F, nesting through resolution: B's target inside A's target
+    /// shares bytes by prefix. Equality-only union misses it.
+    #[test]
+    fn nested_outputs_merge_under_certificate_but_split_under_equality_naive() {
+        let d = tempfile::tempdir().unwrap();
+        let root_a = ws_root(d.path(), "nest-a");
+        let root_b = ws_root(d.path(), "nest-b");
+        let outer = cargo_output(&root_a.join("target"), 2048);
+        let nested = cargo_output(&root_a.join("target").join("nested"), 2048);
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        let mut runner = StagedCargo::new();
+        runner.add(&root_a, outer, None);
+        runner.add(&root_b, nested, None);
+        let mut counters = ScanCounters::default();
+        let mut diags = Vec::new();
+        let coverage = workspace::resolve_workspaces_with_coverage(
+            &[root_a.join("Cargo.toml"), root_b.join("Cargo.toml")],
+            &runner,
+            &mut counters,
+            &mut diags,
+            &NoopObserver,
+        );
+        assert!(coverage.unresolved.is_empty());
+        let partition = compute_proof_partition(&coverage.workspaces, &coverage.unresolved, &[], 0);
+        assert_eq!(
+            partition.islands.len(),
+            1,
+            "nested outputs share bytes: {partition:?}"
+        );
+        assert_eq!(
+            naive_equality_islands(&coverage.workspaces).len(),
+            2,
+            "equality-only union misses nesting"
+        );
+    }
+
+    /// M015/F, unresolved-manifest overlap through resolution: B's metadata
+    /// fails, so B's true outputs are unknown and could overlap A's. The
+    /// certificate merges and names B; the engine blocks with zero spawns in
+    /// every mode. The naive drops B and proceeds past unknown bytes.
+    #[test]
+    fn unresolved_manifest_overlap_merges_and_engine_blocks_with_zero_spawns_in_every_mode() {
+        let d = tempfile::tempdir().unwrap();
+        let root_a = ws_root(d.path(), "overlap-a");
+        let root_b = ws_root(d.path(), "overlap-b");
+        let target_a = cargo_output(&root_a.join("target"), 4096);
+        let target_b = cargo_output(&root_b.join("target"), 2048);
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        for mode in [
+            CleanMode::CargoPreview,
+            CleanMode::Simulate,
+            CleanMode::Execute,
+        ] {
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, target_a.clone(), None);
+            runner.add(&root_b, target_b.clone(), None);
+            runner.fail_metadata_from(1, 1);
+            let report = clean_with_roots(
+                &[root_a.clone(), root_b.clone()],
+                0,
+                &[],
+                mode,
+                &runner,
+                &NoopObserver,
+            )
+            .unwrap();
+            assert_eq!(
+                report.scope_blocked.as_ref().map(|block| block.reason),
+                Some(ScopeBlockReason::OwnershipUnproven),
+                "{mode:?}"
+            );
+            assert!(report.results.is_empty(), "{mode:?}");
+            assert!(runner.clean_calls().is_empty(), "{mode:?}");
+            let partition = report
+                .proof_partition
+                .as_ref()
+                .expect("blocked runs carry a partition");
+            assert_eq!(partition.islands.len(), 1, "{mode:?}");
+            assert!(!partition.islands[0].would_proceed, "{mode:?}");
+            assert_eq!(
+                partition.merge_causes,
+                vec![PartitionMergeCause::UnprovenUnknown(
+                    root_b.join("Cargo.toml")
+                )],
+                "{mode:?}: the merge names B"
+            );
+            let text = report.render();
+            assert!(
+                text.contains("merged by unproven unknown:"),
+                "{mode:?}: the human report names the blocker: {text}"
+            );
+        }
+    }
+
+    /// M015/F, symlinked output through resolution: B's target is a symlink,
+    /// so its physical identity is unprovable and could overlap A's. The
+    /// certificate merges; the naive lexical split would clean past unknown
+    /// bytes. Unix-gated:link creation is not portable.
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_output_merges_under_certificate_but_splits_under_naive_skip() {
+        let d = tempfile::tempdir().unwrap();
+        let root_a = ws_root(d.path(), "link-a");
+        let root_b = ws_root(d.path(), "link-b");
+        let target_a = cargo_output(&root_a.join("target"), 4096);
+        let link = root_b.join("target");
+        std::os::unix::fs::symlink(&target_a, &link).unwrap();
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        let mut runner = StagedCargo::new();
+        runner.add(&root_a, target_a.clone(), None);
+        runner.add(&root_b, link.clone(), None);
+        let mut counters = ScanCounters::default();
+        let mut diags = Vec::new();
+        let coverage = workspace::resolve_workspaces_with_coverage(
+            &[root_a.join("Cargo.toml"), root_b.join("Cargo.toml")],
+            &runner,
+            &mut counters,
+            &mut diags,
+            &NoopObserver,
+        );
+        assert!(coverage.unresolved.is_empty());
+        let partition = compute_proof_partition(&coverage.workspaces, &coverage.unresolved, &[], 0);
+        assert_eq!(
+            partition.islands.len(),
+            1,
+            "unprovable identity cannot be separated: {partition:?}"
+        );
+        assert_eq!(
+            partition.merge_causes,
+            vec![PartitionMergeCause::UnresolvableOutput(
+                coverage.workspaces[1].root.clone()
+            )],
+            "the merge names the symlinked workspace"
+        );
+        assert_eq!(
+            naive_islands(&coverage.workspaces).len(),
+            2,
+            "naive lexical split proves through a symlink"
+        );
+    }
+
+    /// M015/F, environment: a build-dir move between discovery and spawn is
+    /// caught by the full snapshot check and missed by a target-only naive
+    /// check. The detector — not the wiring, which is M016 — is proven here.
+    #[test]
+    fn build_dir_move_detected_by_full_env_check_but_missed_by_target_only_naive() {
+        use std::ffi::OsString;
+        let disco = |key: &str| match key {
+            "CARGO_TARGET_DIR" => Some(OsString::from("/cache/target")),
+            _ => None,
+        };
+        let snapshot = snapshot_output_env(&disco);
+        assert!(output_env_matches(&snapshot, &disco));
+        let moved_build = |key: &str| match key {
+            "CARGO_TARGET_DIR" => Some(OsString::from("/cache/target")),
+            "CARGO_BUILD_BUILD_DIR" => Some(OsString::from("/cache/build")),
+            _ => None,
+        };
+        assert!(
+            !output_env_matches(&snapshot, &moved_build),
+            "a build-dir move is an output-placement change"
+        );
+        fn naive_env_matches(
+            snapshot: &OutputProvenanceSnapshot,
+            get: &dyn Fn(&str) -> Option<OsString>,
+        ) -> bool {
+            snapshot.cargo_target_dir == get("CARGO_TARGET_DIR")
+        }
+        assert!(
+            naive_env_matches(&snapshot, &moved_build),
+            "target-only naive misses build-dir moves: the control fails against it"
+        );
+        let emptied_target = |key: &str| match key {
+            "CARGO_TARGET_DIR" => Some(OsString::from("")),
+            _ => None,
+        };
+        assert!(
+            !output_env_matches(&snapshot, &emptied_target),
+            "empty is not absent"
+        );
+    }
+
+    /// M015/F, TOCTOU predicate: growth and shrinkage both fail the
+    /// stability check the H-2 gate runs, while the naive always-stable stub
+    /// passes growth through. Fails if the wired check ever stops comparing.
+    #[test]
+    fn universe_stability_predicate_detects_growth_that_naive_stub_misses() {
+        let before = vec![PathBuf::from("/w/a/Cargo.toml")];
+        let grown = vec![
+            PathBuf::from("/w/a/Cargo.toml"),
+            PathBuf::from("/w/b/Cargo.toml"),
+        ];
+        assert!(universe_manifests_stable(&before, &before));
+        assert!(
+            !universe_manifests_stable(&before, &grown),
+            "a planted manifest must fail the check"
+        );
+        assert!(
+            !universe_manifests_stable(&grown, &before),
+            "shrinkage fails the check too"
+        );
+        fn naive_stable(_: &[PathBuf], _: &[PathBuf]) -> bool {
+            true
+        }
+        assert!(
+            naive_stable(&before, &grown),
+            "no rediscovery passes growth through: the control fails against it"
+        );
+    }
+
+    /// M015/F, TOCTOU engine: a manifest planted by A's own cleanup (via the
+    /// clean hook) is visible to B's H-2 rediscovery, which blocks the
+    /// remaining scope instead of cleaning against a stale claimant set.
+    /// Without the rediscovery, B would clean.
+    #[test]
+    fn mid_run_manifest_growth_blocks_remaining_scope() {
+        let d = tempfile::tempdir().unwrap();
+        let root_a = ws_root(d.path(), "growth-a");
+        let root_b = ws_root(d.path(), "growth-b");
+        let target_a = cargo_output(&root_a.join("target"), 4096);
+        let target_b = cargo_output(&root_b.join("target"), 4096);
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        let mut runner = StagedCargo::new();
+        runner.add(&root_a, target_a.clone(), None);
+        runner.add(&root_b, target_b.clone(), None);
+        let planted = d.path().join("planted");
+        runner.on_clean(move || {
+            std::fs::create_dir_all(planted.join("src")).unwrap();
+            std::fs::write(
+                planted.join("Cargo.toml"),
+                "[package]\nname='planted'\nversion='0.1.0'\n",
+            )
+            .unwrap();
+        });
+        let report =
+            clean_with(d.path(), 0, &[], CleanMode::Execute, &runner, &NoopObserver).unwrap();
+        assert_eq!(
+            report.scope_blocked.as_ref().map(|block| block.reason),
+            Some(ScopeBlockReason::IncompleteDiscovery),
+            "post-proof growth blocks the remaining scope"
+        );
+        assert!(
+            report
+                .scope_blocked
+                .as_ref()
+                .is_some_and(|block| block.message.contains("universe changed")),
+            "the block names the cause: {:?}",
+            report.scope_blocked
+        );
+        assert_eq!(
+            row_for(&report, &root_a).outcome,
+            CleanOutcome::Cleaned,
+            "A cleaned before the growth existed"
+        );
+        assert!(
+            report
+                .results
+                .iter()
+                .all(|row| row.display_path != canonical(&root_b)),
+            "B never ran against the stale universe: {:?}",
+            report
+                .results
+                .iter()
+                .map(|row| &row.display_path)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            runner.clean_calls().len(),
+            1,
+            "exactly one spawn: the growth stopped the run"
+        );
+    }
+
+    /// The plan's listed "target under another source tree" case, resolved by
+    /// evidence: B/target nested under A's *sources* shares no bytes with A's
+    /// *outputs*, and `cargo clean` touches only the target dir — so both the
+    /// certificate and the naive split. A control the naive also passes is
+    /// decoration, so this ships as a documented positive case, not a
+    /// premise-negative control: outputs-vs-foreign-sources is out of the
+    /// output-ownership model.
+    #[test]
+    fn target_nested_under_foreign_sources_splits_under_both_and_is_not_a_control() {
+        let workspaces = vec![
+            partition_ws(Path::new("/w/a"), Some(PathBuf::from("/w/out/a-target"))),
+            partition_ws(
+                Path::new("/w/b"),
+                Some(PathBuf::from("/w/a/src/vendor/target")),
+            ),
+        ];
+        let partition = compute_proof_partition(&workspaces, &[], &[], 0);
+        assert_eq!(
+            partition.islands.len(),
+            2,
+            "no shared bytes: nothing to merge"
+        );
+        assert_eq!(
+            naive_islands(&workspaces).len(),
+            2,
+            "the naive splits too — hence not a control"
+        );
+    }
+
+    // --- M015: proof-island certificate, partition, report, and controls. ---
+
+    /// Hand-built resolved workspace for partition unit tests: target carries
+    /// the given proven physical identity (or none, when never built); build
+    /// is always absent so only the target participates in union edges.
+    fn partition_ws(root: &Path, target_physical: Option<PathBuf>) -> ResolvedWorkspace {
+        let (physical, exists) = match target_physical {
+            Some(path) => (Some(path), true),
+            None => (None, false),
+        };
+        ResolvedWorkspace {
+            id: WorkspaceId(root.to_path_buf()),
+            root: root.to_path_buf(),
+            root_manifest: root.join("Cargo.toml"),
+            members: Vec::new(),
+            packages: Vec::new(),
+            output: OutputSet {
+                target: OutputRoot {
+                    kind: OutputRootKind::Target,
+                    logical_path: root.join("target"),
+                    physical_path: physical,
+                    exists,
+                    is_symlink: false,
+                },
+                build: OutputRoot {
+                    kind: OutputRootKind::Build,
+                    logical_path: root.join("target"),
+                    physical_path: None,
+                    exists: false,
+                    is_symlink: false,
+                },
+            },
+            capability: CargoCapabilities {
+                build_dir: CargoBuildDirCapability::Unavailable,
+                metadata_had_build_directory: false,
+                env_build_dir_set: false,
+            },
+        }
+    }
+
+    fn refused_participant(manifest: PathBuf, reason: &str) -> UnresolvedOwnershipParticipant {
+        UnresolvedOwnershipParticipant {
+            manifest,
+            stage: "locate",
+            reason: reason.into(),
+            capability: UnknownCapability::RefusedByCargo,
+        }
+    }
+
+    fn unproven_participant(
+        manifest: PathBuf,
+        stage: &'static str,
+        reason: &str,
+    ) -> UnresolvedOwnershipParticipant {
+        UnresolvedOwnershipParticipant {
+            manifest,
+            stage,
+            reason: reason.into(),
+            capability: UnknownCapability::Unproven,
+        }
+    }
+
+    /// Naive skip-and-continue, partition-level (M015/F decoration detector):
+    /// one island per workspace, unknowns dropped, no union edges. Every
+    /// premise-negative control asserts the certificate merges where this
+    /// splits; a control this naive also merges is decoration and is
+    /// discarded, not shipped.
+    fn naive_islands(workspaces: &[ResolvedWorkspace]) -> Vec<Vec<PathBuf>> {
+        workspaces.iter().map(|ws| vec![ws.root.clone()]).collect()
+    }
+
+    /// Naive with equality-only union (no prefix overlap): the control for
+    /// nested outputs fails against *this* naive, proving prefix-overlap is
+    /// load-bearing beyond path equality.
+    fn naive_equality_islands(workspaces: &[ResolvedWorkspace]) -> Vec<Vec<PathBuf>> {
+        let mut islands: Vec<(Vec<PathBuf>, Vec<PathBuf>)> = Vec::new();
+        for ws in workspaces {
+            let (paths, _) = physical_outputs(ws);
+            match islands
+                .iter_mut()
+                .find(|(_, unioned)| paths.iter().any(|path| unioned.contains(path)))
+            {
+                Some((members, unioned)) => {
+                    members.push(ws.root.clone());
+                    unioned.extend(paths);
+                }
+                None => islands.push((vec![ws.root.clone()], paths)),
+            }
+        }
+        islands.into_iter().map(|(members, _)| members).collect()
+    }
+
+    /// Two disjoint workspaces with no unknowns split into two islands that
+    /// would both proceed. The positive control against over-merging: a
+    /// partition that never splits is itself decoration.
+    #[test]
+    fn proof_partition_splits_disjoint_workspaces_with_no_unknowns() {
+        let workspaces = vec![
+            partition_ws(Path::new("/w/a"), Some(PathBuf::from("/w/a/target"))),
+            partition_ws(Path::new("/w/b"), Some(PathBuf::from("/w/b/target"))),
+        ];
+        let partition = compute_proof_partition(&workspaces, &[], &[], 0);
+        assert_eq!(partition.islands.len(), 2);
+        assert!(partition.islands.iter().all(|island| island.would_proceed));
+        assert!(partition.merge_causes.is_empty());
+        assert!(partition.scope_notes.is_empty());
+        assert_eq!(partition.islands[0].roots, vec![PathBuf::from("/w/a")]);
+        assert_eq!(partition.islands[1].roots, vec![PathBuf::from("/w/b")]);
+    }
+
+    /// Equal proven targets merge into one island: the workspaces cannot be
+    /// separated, so there is exactly one island — which still faces per-unit
+    /// proof under activation (M016), not a free clean.
+    #[test]
+    fn proof_partition_merges_equal_targets_into_one_island() {
+        let workspaces = vec![
+            partition_ws(Path::new("/w/a"), Some(PathBuf::from("/shared/target"))),
+            partition_ws(Path::new("/w/b"), Some(PathBuf::from("/shared/target"))),
+        ];
+        let partition = compute_proof_partition(&workspaces, &[], &[], 0);
+        assert_eq!(partition.islands.len(), 1);
+        assert_eq!(
+            naive_islands(&workspaces).len(),
+            2,
+            "naive string-identity splits what shares bytes"
+        );
+    }
+
+    /// Proper-prefix nesting merges: B's target inside A's target shares
+    /// bytes with A. Fails if union edges ever degrade to equality.
+    #[test]
+    fn proof_partition_merges_nested_outputs_by_prefix_overlap() {
+        let workspaces = vec![
+            partition_ws(Path::new("/w/a"), Some(PathBuf::from("/w/a/target"))),
+            partition_ws(Path::new("/w/b"), Some(PathBuf::from("/w/a/target/nested"))),
+        ];
+        let partition = compute_proof_partition(&workspaces, &[], &[], 0);
+        assert_eq!(
+            partition.islands.len(),
+            1,
+            "nested outputs share bytes and must not split"
+        );
+        assert_eq!(
+            naive_equality_islands(&workspaces).len(),
+            2,
+            "equality-only union misses nesting: the prefix edge is load-bearing"
+        );
+    }
+
+    /// Component-wise overlap, never string-prefix: `/w/a/target2` is not
+    /// under `/w/a/target`. Fails if anyone reimplements the edge on strings.
+    #[test]
+    fn proof_partition_does_not_merge_string_prefix_siblings() {
+        let workspaces = vec![
+            partition_ws(Path::new("/w/a"), Some(PathBuf::from("/w/a/target"))),
+            partition_ws(Path::new("/w/b"), Some(PathBuf::from("/w/a/target2"))),
+        ];
+        let partition = compute_proof_partition(&workspaces, &[], &[], 0);
+        assert_eq!(
+            partition.islands.len(),
+            2,
+            "string-prefix siblings share no bytes: {partition:?}"
+        );
+    }
+
+    /// Determinism: the same universe in any input order renders the same
+    /// partition. Fails on order-dependent union or unsorted output.
+    #[test]
+    fn proof_partition_is_deterministic_across_input_orders() {
+        let base = vec![
+            partition_ws(Path::new("/w/a"), Some(PathBuf::from("/w/a/target"))),
+            partition_ws(Path::new("/w/b"), Some(PathBuf::from("/w/b/target"))),
+            partition_ws(Path::new("/w/c"), Some(PathBuf::from("/w/c/target"))),
+        ];
+        let first = compute_proof_partition(&base, &[], &[], 0);
+        for order in [&[2, 0, 1][..], &[1, 2, 0][..]] {
+            let shuffled: Vec<ResolvedWorkspace> = order.iter().map(|&i| base[i].clone()).collect();
+            assert_eq!(
+                compute_proof_partition(&shuffled, &[], &[], 0),
+                first,
+                "input order {order:?} changed the partition"
+            );
+        }
+    }
+
+    /// An unproven unknown merges everything and names itself as the cause.
+    /// The naive drops the unknown and would clean past it.
+    #[test]
+    fn proof_partition_merges_unproven_unknown_globally_with_named_cause() {
+        let workspaces = vec![
+            partition_ws(Path::new("/w/a"), Some(PathBuf::from("/w/a/target"))),
+            partition_ws(Path::new("/w/b"), Some(PathBuf::from("/w/b/target"))),
+        ];
+        let unknown = unproven_participant(
+            PathBuf::from("/w/c/Cargo.toml"),
+            "metadata",
+            "cargo metadata failed: failed to parse manifest",
+        );
+        let partition =
+            compute_proof_partition(&workspaces, std::slice::from_ref(&unknown), &[], 0);
+        assert_eq!(partition.islands.len(), 1);
+        assert!(!partition.islands[0].would_proceed);
+        assert_eq!(
+            partition.merge_causes,
+            vec![PartitionMergeCause::UnprovenUnknown(PathBuf::from(
+                "/w/c/Cargo.toml"
+            ))],
+        );
+        assert_eq!(
+            naive_islands(&workspaces).len(),
+            2,
+            "naive is blind to the unknown: it would clean past it"
+        );
+    }
+
+    /// The island-hit shape: a refused manifest naming a resolved workspace
+    /// rides as that island's passenger while the sibling island also
+    /// proceeds — and neither merges.
+    #[test]
+    fn proof_partition_assigns_refused_believed_manifest_as_passenger_without_merging() {
+        let workspaces = vec![
+            partition_ws(Path::new("/w/a"), Some(PathBuf::from("/w/a/target"))),
+            partition_ws(Path::new("/w/b"), Some(PathBuf::from("/w/b/target"))),
+        ];
+        let passenger = refused_participant(
+            PathBuf::from("/w/b/fuzz/Cargo.toml"),
+            "error: current package believes it's in a workspace when it's not: | current: /w/b/fuzz/Cargo.toml | workspace: /w/b/Cargo.toml",
+        );
+        let partition =
+            compute_proof_partition(&workspaces, std::slice::from_ref(&passenger), &[], 0);
+        assert_eq!(partition.islands.len(), 2);
+        assert!(partition.islands.iter().all(|island| island.would_proceed));
+        assert!(partition.merge_causes.is_empty());
+        let host = partition
+            .islands
+            .iter()
+            .find(|island| island.roots == vec![PathBuf::from("/w/b")])
+            .expect("named island must exist");
+        assert_eq!(host.passengers, vec![passenger]);
+        assert!(
+            partition.islands[0].passengers.is_empty(),
+            "the unnamed sibling carries no passenger"
+        );
+    }
+
+    /// A refused manifest with no resolved owner is a scope note: no island,
+    /// no merge, still reported.
+    #[test]
+    fn proof_partition_reports_refused_manifest_without_owner_as_scope_note() {
+        let workspaces = vec![partition_ws(
+            Path::new("/w/a"),
+            Some(PathBuf::from("/w/a/target")),
+        )];
+        let note = refused_participant(
+            PathBuf::from("/w/orphan/Cargo.toml"),
+            "cargo locate-project failed: could not find Cargo.toml in this directory",
+        );
+        let partition = compute_proof_partition(&workspaces, std::slice::from_ref(&note), &[], 0);
+        assert_eq!(partition.islands.len(), 1);
+        assert!(partition.islands[0].would_proceed);
+        assert!(partition.merge_causes.is_empty());
+        assert_eq!(partition.scope_notes, vec![note]);
+    }
+
+    /// Discovery holes merge globally and name themselves: a hole may hide a
+    /// manifest with any outputs, so no island can prove non-overlap with it.
+    #[test]
+    fn proof_partition_merges_discovery_holes_globally() {
+        let workspaces = vec![partition_ws(
+            Path::new("/w/a"),
+            Some(PathBuf::from("/w/a/target")),
+        )];
+        let partition = compute_proof_partition(
+            &workspaces,
+            &[],
+            &[PathBuf::from("/w/locked/Cargo.toml")],
+            0,
+        );
+        assert_eq!(partition.islands.len(), 1);
+        assert!(!partition.islands[0].would_proceed);
+        assert_eq!(
+            partition.merge_causes,
+            vec![PartitionMergeCause::DiscoveryHole(PathBuf::from(
+                "/w/locked/Cargo.toml"
+            ))],
+        );
+    }
+
+    /// Degenerate universe: no workspaces, only scope notes. Renders without
+    /// panicking and without claiming an island.
+    #[test]
+    fn proof_partition_with_only_notes_has_no_islands() {
+        let note = refused_participant(
+            PathBuf::from("/w/orphan/Cargo.toml"),
+            "cargo locate-project failed: gone",
+        );
+        let partition = compute_proof_partition(&[], std::slice::from_ref(&note), &[], 0);
+        assert!(partition.islands.is_empty());
+        assert_eq!(partition.scope_notes, vec![note]);
+        assert!(partition.merge_causes.is_empty());
+    }
+
+    /// The hole extractor takes exactly the discovery prefix — locatable
+    /// paths plus the pathless remainder — and never the resolution
+    /// diagnostics appended after it. A pathless diagnostic still counts:
+    /// dropping it would render "would proceed" over an incomplete universe.
+    #[test]
+    fn discovery_holes_takes_discovery_prefix_with_pathless_remainder() {
+        let diagnostics = vec![
+            ScanDiagnostic {
+                severity: DiagnosticSeverity::Warning,
+                category: DiagnosticCategory::PermissionDenied,
+                path: Some(PathBuf::from("/w/b")),
+                message: "denied".into(),
+            },
+            ScanDiagnostic {
+                severity: DiagnosticSeverity::Warning,
+                category: DiagnosticCategory::PermissionDenied,
+                path: Some(PathBuf::from("/w/a")),
+                message: "denied".into(),
+            },
+            ScanDiagnostic {
+                severity: DiagnosticSeverity::Warning,
+                category: DiagnosticCategory::PermissionDenied,
+                path: None,
+                message: "skipped region location unknown".into(),
+            },
+            ScanDiagnostic {
+                severity: DiagnosticSeverity::Warning,
+                category: DiagnosticCategory::CandidateUncertain,
+                path: Some(PathBuf::from("/w/a/Cargo.toml")),
+                message: "cargo locate-project could not start: x".into(),
+            },
+        ];
+        assert_eq!(
+            discovery_holes(&diagnostics, 3),
+            (vec![PathBuf::from("/w/a"), PathBuf::from("/w/b")], 1),
+            "prefix paths sorted and deduplicated, pathless remainder counted"
+        );
+        assert_eq!(
+            discovery_holes(&diagnostics, 0),
+            (Vec::new(), 0),
+            "the OwnershipUnproven path always passes count zero"
+        );
+        // The resolution diagnostic past the prefix never becomes a hole,
+        // even with a path.
+        assert_eq!(discovery_holes(&diagnostics, 4).1, 1);
+    }
+
+    /// Pathless holes merge with a counted cause: the universe is provably
+    /// incomplete even though no hole can be named. Fails against the old
+    /// shape, which rendered "would proceed" over an IncompleteDiscovery
+    /// block — found live by G4, not by any unit test.
+    #[test]
+    fn proof_partition_merges_pathless_holes_with_counted_cause() {
+        let workspaces = vec![partition_ws(
+            Path::new("/w/a"),
+            Some(PathBuf::from("/w/a/target")),
+        )];
+        let partition = compute_proof_partition(&workspaces, &[], &[], 2);
+        assert_eq!(partition.islands.len(), 1);
+        assert!(!partition.islands[0].would_proceed);
+        assert_eq!(
+            partition.merge_causes,
+            vec![PartitionMergeCause::UnnamedDiscoveryHoles(2)],
+        );
+        let text = report_with_partition(partition).render();
+        assert!(
+            text.contains("merged by 2 unnamed discovery hole(s): counted but unlocatable"),
+            "the human report owns the incompleteness: {text}"
         );
     }
 
@@ -5136,6 +6607,7 @@ mod tests {
             units_considered: 0,
             effective_policy: None,
             selector: None,
+            proof_partition: None,
         };
         for i in 0..7 {
             report.results.push(CleanResult {

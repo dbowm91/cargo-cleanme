@@ -166,12 +166,33 @@ pub struct ResolvedWorkspace {
     pub capability: CargoCapabilities,
 }
 
+/// What an unresolved manifest proves about its own byte-ownership (M015).
+///
+/// The proof-island certificate distinguishes unknowns Cargo itself refused —
+/// no Cargo command can place output for them, so they merge nothing — from
+/// unknowns whose byte-capability is unproven and therefore merge every
+/// island. The class is recorded where the failure is classified, never
+/// re-parsed from message text: a copy-edit to a diagnostic must not silently
+/// reclassify an unknown from merging to non-merging.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UnknownCapability {
+    /// `cargo locate-project` ran and refused the manifest (nonzero exit):
+    /// the manifest is in no workspace Cargo can see, so it owns no bytes.
+    /// Transport failures, unparseable output, and lost workers are *not*
+    /// this class — Cargo never examined the manifest there.
+    RefusedByCargo,
+    /// Byte-capability unproven: transport, unparseable output, lost worker,
+    /// metadata, identity, and discovery-hole unknowns. Merges everything.
+    Unproven,
+}
+
 /// Why a discovered manifest did not receive authoritative Cargo coverage.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UnresolvedOwnershipParticipant {
     pub manifest: PathBuf,
     pub stage: &'static str,
     pub reason: String,
+    pub capability: UnknownCapability,
 }
 
 /// Workspace resolution plus explicit coverage of the discovered manifest set.

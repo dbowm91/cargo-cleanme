@@ -528,6 +528,7 @@ pub mod log {
                 units_considered: 0,
                 effective_policy: None,
                 selector: None,
+                proof_partition: None,
             }
         }
 
@@ -634,6 +635,7 @@ pub mod log {
                 manifest: PathBuf::from("/x/Cargo.toml"),
                 stage: "locate",
                 reason: "cargo locate-project failed".into(),
+                capability: crate::domain::UnknownCapability::RefusedByCargo,
             }];
             let line = super::cleanup(&report, "routine");
             assert!(line.contains("status=blocked"), "{line}");
@@ -646,6 +648,43 @@ pub mod log {
                 "prose must never reach a retained history line: {line}"
             );
             assert_ascii_and_bounded(&line);
+        }
+
+        /// M015/E: the partition is human-only. If a field is ever added to
+        /// the machine result, this fails and forces a conscious contract
+        /// decision — not a quiet schema drift. Fails against any additive
+        /// change to `CleanupV1`, which is exactly the failure it exists for.
+        #[test]
+        fn cleanup_json_result_key_set_is_stable() {
+            let report = empty_report();
+            let envelope = crate::output::cleanup(&report, "routine", None);
+            let value = serde_json::to_value(&envelope).unwrap();
+            let mut keys: Vec<&str> = value["result"]
+                .as_object()
+                .expect("result is an object")
+                .keys()
+                .map(String::as_str)
+                .collect();
+            keys.sort_unstable();
+            assert_eq!(
+                keys,
+                [
+                    "discovered_manifests",
+                    "effective_policy",
+                    "resolved_workspaces",
+                    "scope_blocked",
+                    "scope_reason",
+                    "selected_roots",
+                    "selector_kind",
+                    "selector_value",
+                    "state_generation_last_full_at",
+                    "summary",
+                    "units",
+                    "units_considered",
+                    "unresolved_ownership",
+                    "unresolved_participants",
+                ],
+            );
         }
 
         #[test]
