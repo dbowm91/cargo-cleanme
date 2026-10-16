@@ -3,6 +3,10 @@ on: [push, pull_request]
 jobs:
   checks:
     strategy:
+      # fail-fast is off on purpose: a lane cancelled by a sibling's failure
+      # reports nothing, which is the "green that proves nothing" shape in a
+      # different guise. Every OS must report its own result, red or green.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
