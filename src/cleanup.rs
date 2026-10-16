@@ -6162,10 +6162,9 @@ mod tests {
         let passengers = host_json["passengers"].as_array().unwrap();
         assert_eq!(passengers.len(), 1, "{host_json}");
         assert!(
-            passengers[0]
-                .as_str()
-                .unwrap()
-                .ends_with("orphan/Cargo.toml")
+            std::path::Path::new(passengers[0].as_str().unwrap())
+                .ends_with(std::path::Path::new("orphan").join("Cargo.toml")),
+            "component-wise: backslash separators on Windows: {host_json}"
         );
     }
 
