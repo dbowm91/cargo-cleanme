@@ -1,10 +1,10 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH clean 1 0.2.8 https://github.com/dbowm91/cargo-cleanme "General Commands Manual"
+.TH clean 1 0.2.9 https://github.com/dbowm91/cargo-cleanme "General Commands Manual"
 .SH NAME
 clean \- Preview or execute cleanup of revalidated Cargo build artifacts
 .SH SYNOPSIS
-\fBclean\fR [\fB\-\-known\fR] [\fB\-\-full\fR] [\fB\-\-min\-reclaimable\-bytes\fR] [\fB\-\-older\-than\fR] [\fB\-\-include\fR] [\fB\-\-exclude\fR] [\fB\-\-profile\fR] [\fB\-\-package\fR] [\fB\-\-dry\-run\fR] [\fB\-\-cargo\-preview\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIROOT\fR] 
+\fBclean\fR [\fB\-\-known\fR] [\fB\-\-full\fR] [\fB\-\-min\-reclaimable\-bytes\fR] [\fB\-\-older\-than\fR] [\fB\-\-include\fR] [\fB\-\-exclude\fR] [\fB\-\-profile\fR] [\fB\-\-package\fR] [\fB\-\-dry\-run\fR] [\fB\-\-cargo\-preview\fR] [\fB\-\-partitioned\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIROOT\fR] 
 .SH DESCRIPTION
 Preview or execute cleanup of revalidated Cargo build artifacts
 .SH OPTIONS
@@ -38,6 +38,9 @@ Application simulation: run the full decision/proof/report path but invoke no Ca
 .TP
 \fB\-\-cargo\-preview\fR
 Cargo preview: after the same complete final proof, invoke Cargo\*(Aqs own `clean \-\-dry\-run \-\-verbose`. Never removes anything
+.TP
+\fB\-\-partitioned\fR
+Partition a blocked scope into proof islands and clean each provable island independently; hold the rest with typed reasons. Default off: without it a single unprovable manifest blocks the whole scope. Composes with `\-\-dry\-run` (predicts per\-island spawns, spawns nothing) and never changes default behavior
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

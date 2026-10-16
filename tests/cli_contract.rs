@@ -1355,6 +1355,49 @@ impl MaintenanceFixture {
         common::cargo_calls(&self.log, "clean")
     }
 
+    /// M016 island scenario: the clean root is the fixture temp dir, holding
+    /// the resolving workspace plus a refused orphan. Returns the orphan
+    /// manifest path for assertions.
+    fn refused_orphan(&self) -> PathBuf {
+        let orphan = self.temp.path().join("refused-orphan/Cargo.toml");
+        fs::create_dir_all(orphan.parent().unwrap()).unwrap();
+        fs::write(&orphan, "[package]\nname='orphan'\nversion='0.1.0'\n").unwrap();
+        orphan
+    }
+
+    /// M016: run cleanup over the island scenario with an explicit format.
+    /// `believes` selects the parent-naming refusal (passenger, G1c shape)
+    /// over the generic one (scope note, G1 shape). Unix-gated like the
+    /// POSIX stub knobs it sets.
+    #[cfg(unix)]
+    fn run_island_scenario(
+        &self,
+        args: &[&str],
+        format: &str,
+        believes: bool,
+    ) -> std::process::Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args([
+            "--config",
+            self.config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            format,
+        ]);
+        command.args(args);
+        command
+            .env("PATH", path_with(&self.bin))
+            .env("FIXTURE_ROOT", &self.root)
+            .env("FIXTURE_TARGET", &self.target)
+            .env("CARGO_LOG", &self.log)
+            .env("CARGO_ARGS_LOG", &self.args_log)
+            .env("CARGO_FAIL_LOCATE_FOR", "refused-orphan");
+        if believes {
+            command.env("CARGO_FAIL_LOCATE_BELIEVES", "1");
+        }
+        command.current_dir(&self.root).output().unwrap()
+    }
+
     /// Run the same argv through Cargo's external-subcommand entry point.
     ///
     /// The binary under test is staged *inside* `self.bin` — the same directory
@@ -1954,6 +1997,170 @@ fn blocked_human_cleanup_report_carries_advisory_partition_and_json_stays_one_ob
     let json_out = fixture.run_with_locate_failure(&[], true);
     let json: serde_json::Value = serde_json::from_slice(&json_out.stdout).unwrap();
     assert_eq!(json["result"]["scope_blocked"], true, "{json}");
+}
+
+/// M016/§10 partial-success surface, repo-owned G1 shape: one provable
+/// workspace plus one refused manifest under the same clean root.
+/// Partitioned Execute cleans the island, holds the orphan with a typed
+/// block, and exits 1. Unix-gated: POSIX shell stub with selective refusal.
+#[cfg(unix)]
+#[test]
+fn partitioned_execute_cleans_provable_island_and_holds_refused_orphan() {
+    let fixture = MaintenanceFixture::new(false);
+    let _orphan = fixture.refused_orphan();
+    let root = fixture.temp.path().to_str().unwrap().to_string();
+    let json_out = fixture.run_island_scenario(&["clean", &root, "--partitioned"], "json", false);
+    assert_eq!(
+        json_out.status.code(),
+        Some(1),
+        "a held orphan keeps the exit nonzero: {}",
+        String::from_utf8_lossy(&json_out.stderr)
+    );
+    // Exactly one JSON object: parsing consumes all of stdout.
+    let json: serde_json::Value = serde_json::from_slice(&json_out.stdout).unwrap();
+    assert_eq!(json["result"]["scope_blocked"], true, "{json}");
+    let units = json["result"]["units"].as_array().unwrap();
+    assert_eq!(units.len(), 1, "{json}");
+    assert_eq!(units[0]["outcome"], "cleaned", "{json}");
+    let islands = json["result"]["islands"].as_array().unwrap();
+    assert_eq!(islands.len(), 1, "{json}");
+    assert_eq!(islands[0]["verdict"], "proceeded", "{islands:?}");
+    assert!(islands[0]["cause"].is_null(), "{islands:?}");
+    assert!(
+        islands[0]["roots"][0]
+            .as_str()
+            .unwrap()
+            .ends_with("workspace"),
+        "{islands:?}"
+    );
+    assert_eq!(
+        units[0]["workspace_root"], islands[0]["roots"][0],
+        "units join to islands on the workspace-root path: {json}"
+    );
+    assert!(
+        json["result"]["scope_reason"]
+            .as_str()
+            .unwrap()
+            .contains("; partitioned execute: 1 of 1 island(s) acted on, 0 held"),
+        "{json}"
+    );
+    assert_eq!(fixture.clean_calls(), 1, "exactly one Cargo clean ran");
+    assert!(
+        !fixture.artifact().exists(),
+        "the proven island was really cleaned"
+    );
+}
+
+/// M016/§10: the Simulate twin predicts the island spawn with zero spawns.
+#[cfg(unix)]
+#[test]
+fn partitioned_simulate_predicts_island_spawn_with_zero_spawns() {
+    let fixture = MaintenanceFixture::new(false);
+    let _orphan = fixture.refused_orphan();
+    let root = fixture.temp.path().to_str().unwrap().to_string();
+    let json_out = fixture.run_island_scenario(
+        &["clean", &root, "--partitioned", "--dry-run"],
+        "json",
+        false,
+    );
+    assert_eq!(
+        json_out.status.code(),
+        Some(1),
+        "still blocked: {json_out:?}"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&json_out.stdout).unwrap();
+    assert_eq!(json["result"]["scope_blocked"], true, "{json}");
+    let units = json["result"]["units"].as_array().unwrap();
+    assert_eq!(units.len(), 1, "{json}");
+    assert_eq!(units[0]["outcome"], "simulated", "{json}");
+    assert_eq!(fixture.clean_calls(), 0, "simulation spawns nothing");
+    assert!(fixture.artifact().exists(), "simulation touches nothing");
+}
+
+/// M016/§10 G1c shape: a refusal naming the resolved workspace rides along
+/// as a passenger. The island proceeds with the passenger named on the
+/// island axis — and in the unresolved participants, as before.
+#[cfg(unix)]
+#[test]
+fn partitioned_execute_carries_parent_naming_refusal_as_passenger() {
+    let fixture = MaintenanceFixture::new(false);
+    let _orphan = fixture.refused_orphan();
+    let root = fixture.temp.path().to_str().unwrap().to_string();
+    let json_out = fixture.run_island_scenario(&["clean", &root, "--partitioned"], "json", true);
+    assert_eq!(json_out.status.code(), Some(1), "{json_out:?}");
+    let json: serde_json::Value = serde_json::from_slice(&json_out.stdout).unwrap();
+    assert_eq!(json["result"]["scope_blocked"], true, "{json}");
+    let islands = json["result"]["islands"].as_array().unwrap();
+    assert_eq!(islands.len(), 1, "{json}");
+    assert_eq!(islands[0]["verdict"], "proceeded", "{islands:?}");
+    let passengers = islands[0]["passengers"].as_array().unwrap();
+    assert_eq!(passengers.len(), 1, "{islands:?}");
+    assert!(
+        passengers[0]
+            .as_str()
+            .unwrap()
+            .ends_with("refused-orphan/Cargo.toml"),
+        "{islands:?}"
+    );
+    let units = json["result"]["units"].as_array().unwrap();
+    assert_eq!(units.len(), 1, "{json}");
+    assert_eq!(units[0]["outcome"], "cleaned", "{json}");
+    assert_eq!(fixture.clean_calls(), 1);
+}
+
+/// M016/§10: the human render carries completed rows, the block, and the
+/// per-island outcomes together — two renderings of one result.
+#[cfg(unix)]
+#[test]
+fn partitioned_human_report_carries_rows_block_and_island_outcomes() {
+    let fixture = MaintenanceFixture::new(false);
+    let _orphan = fixture.refused_orphan();
+    let root = fixture.temp.path().to_str().unwrap().to_string();
+    let human = fixture.run_island_scenario(&["clean", &root, "--partitioned"], "human", false);
+    assert_eq!(human.status.code(), Some(1), "{human:?}");
+    let text = String::from_utf8_lossy(&human.stdout);
+    assert!(
+        text.contains("cleanup ownership could not be proven"),
+        "pinned block substring survives: {text}"
+    );
+    assert!(
+        text.contains("1 of 1 island(s) acted on, 0 held"),
+        "additive suffix: {text}"
+    );
+    assert!(
+        text.contains("island outcomes (partitioned run):"),
+        "per-island outcomes: {text}"
+    );
+    assert!(
+        text.contains("-- proceeded: 1 cleaned"),
+        "the acted-on island: {text}"
+    );
+    assert_eq!(fixture.clean_calls(), 1);
+}
+
+/// M016/§6D: -i with the flag still refuses without a terminal before any
+/// listing — the terminal precondition precedes the partitioned listing, so
+/// no unproven universe is ever offered. The positive offer path (proceed
+/// rows with held context) is covered at the listing level, where a TTY is
+/// not required to observe it.
+#[cfg(unix)]
+#[test]
+fn interactive_partitioned_without_a_terminal_is_a_usage_error() {
+    let fixture = MaintenanceFixture::new(true);
+    let root = fixture.temp.path().to_str().unwrap().to_string();
+    let output = fixture.run_human(&["clean", &root, "--partitioned", "-i"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a missing terminal is a usage error: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("requires a terminal"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fixture.clean_calls(), 0);
 }
 
 /// Advanced cleanup defaults to Execute, and Cargo's own preview is reachable

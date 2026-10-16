@@ -363,7 +363,10 @@ fn snapshot_output_env(get: &dyn Fn(&str) -> Option<OsString>) -> OutputProvenan
 
 /// True when the current output-placement environment still matches a
 /// snapshot. Absent and empty are distinct: unsetting a variable is a change.
-#[cfg(test)]
+///
+/// M016/B wires this as the §4-rule-4 merge detector: the partition's
+/// provenance snapshot is re-compared before each island's first dispatch,
+/// and any mismatch merges the remaining islands into one blocked scope.
 fn output_env_matches(
     snapshot: &OutputProvenanceSnapshot,
     get: &dyn Fn(&str) -> Option<OsString>,
@@ -558,7 +561,15 @@ impl CleanReport {
             if let Some(partition) = &self.proof_partition {
                 out.push_str(&partition_section(partition));
             }
-            return out;
+            if self.results.is_empty() {
+                return out;
+            }
+            // M016/F: partial success — completed rows stay visible so the
+            // human surface matches the JSON `units` list, then per-island
+            // outcomes. The block message above stays the close: no footer.
+            if let Some(partition) = &self.proof_partition {
+                out.push_str(&partition_outcome_section(partition, &self.results));
+            }
         }
         let mut previewed = 0usize;
         let mut simulated = 0usize;
@@ -1139,6 +1150,9 @@ pub fn clean_with_roots_policy_selector(
         selector,
         None,
         &CleanupSelection::All,
+        // The unguarded convenience path is always the flag-off contract:
+        // whole-scope block, no island dispatch.
+        false,
     )
 }
 
@@ -1198,6 +1212,7 @@ fn discover_and_resolve_universe(
     runner: &dyn CleanupRunner,
     observer: &dyn ProgressObserver,
     selection: &CleanupSelection,
+    partitioned: bool,
 ) -> Result<ResolvedUniverse, AppError> {
     // Validate every root before doing anything observable: an invalid
     // invocation must not spawn a process, and the runtime capability verdict
@@ -1258,6 +1273,7 @@ fn discover_and_resolve_universe(
         &mut diagnostics,
         observer,
         selection,
+        partitioned,
     )?;
     Ok(ResolvedUniverse {
         roots,
@@ -1274,6 +1290,77 @@ fn discover_and_resolve_universe(
     })
 }
 
+/// M016/A: keep only dispatch units whose workspace root sits in a
+/// would-proceed island. Returns false when nothing may proceed — the caller
+/// then returns the whole-scope block exactly as the flag-off path.
+///
+/// Held islands never become units: they are reported on the islands axis
+/// (JSON `islands`, human island sections), never as rows.
+///
+/// Proceed means `would_proceed` — the accepted ADR 004 amendment blessed
+/// the refused-manifest passenger rule, so passengers ride along. The
+/// recorded fallback (zero-unknown islands only) is this same predicate
+/// with an added `passengers.is_empty()` conjunct, not a fork.
+fn retain_proceed_island_units(
+    units: &mut Vec<workspace::CleanupUnit>,
+    report: &mut CleanReport,
+) -> bool {
+    let Some(partition) = report.proof_partition.as_ref() else {
+        return false;
+    };
+    let mut proceed = std::collections::HashSet::new();
+    for island in &partition.islands {
+        if island.would_proceed {
+            proceed.extend(island.roots.iter().cloned());
+        }
+    }
+    if proceed.is_empty() {
+        return false;
+    }
+    units.retain(|unit| proceed.contains(&unit.root));
+    report.units_considered = units.len();
+    true
+}
+
+/// M016/C: additive suffix on a scan-time block message when a partitioned
+/// run acted on islands. Counts only — no paths, so the JSON scope_reason,
+/// the log line, and the human report all stay bounded and ASCII-safe.
+/// A run with no acted-on island keeps the original message untouched.
+fn append_partitioned_suffix(report: &mut CleanReport) {
+    let Some(partition) = report.proof_partition.as_ref() else {
+        return;
+    };
+    let acted = partition
+        .islands
+        .iter()
+        .filter(|island| {
+            report.results.iter().any(|result| {
+                island.roots.contains(&result.display_path)
+                    && matches!(
+                        result.outcome,
+                        CleanOutcome::Cleaned
+                            | CleanOutcome::Previewed
+                            | CleanOutcome::Simulated
+                            | CleanOutcome::Failed
+                    )
+            })
+        })
+        .count();
+    if acted == 0 {
+        return;
+    }
+    let held = partition.islands.len().saturating_sub(acted);
+    if let Some(block) = report.scope_blocked.as_mut() {
+        block.message.push_str(&format!(
+            "; partitioned {}: {} of {} island(s) acted on, {} held",
+            report.mode.as_str(),
+            acted,
+            partition.islands.len(),
+            held
+        ));
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn clean_with_roots_policy_selector_guarded(
     roots: &[PathBuf],
@@ -1286,6 +1373,7 @@ pub fn clean_with_roots_policy_selector_guarded(
     selector: Option<CleanupSelector>,
     premise: Option<AdmissionPremise>,
     selection: &CleanupSelection,
+    partitioned: bool,
 ) -> Result<CleanReport, AppError> {
     let includes = compile_policy_globs(&policy.include)?;
     let excludes = compile_policy_globs(&policy.exclude)?;
@@ -1294,8 +1382,15 @@ pub fn clean_with_roots_policy_selector_guarded(
     } else {
         CargoCleanCapabilities::default()
     };
-    let universe =
-        discover_and_resolve_universe(roots, recency_seconds, mode, runner, observer, selection)?;
+    let universe = discover_and_resolve_universe(
+        roots,
+        recency_seconds,
+        mode,
+        runner,
+        observer,
+        selection,
+        partitioned,
+    )?;
     let ResolvedUniverse {
         roots,
         cleanup_phase,
@@ -1305,7 +1400,7 @@ pub fn clean_with_roots_policy_selector_guarded(
         manifests,
         initial_manifests,
         workspaces,
-        units,
+        mut units,
         unselected,
         unresolved_ownership,
     } = universe;
@@ -1353,7 +1448,12 @@ pub fn clean_with_roots_policy_selector_guarded(
             &holes,
             unnamed,
         ));
-        return Ok(report);
+        // M016/A: a partitioned run dispatches proceed-islands instead of
+        // returning here; discovery holes merge, so this path almost always
+        // still holds everything and returns exactly as the flag-off path.
+        if !partitioned || !retain_proceed_island_units(&mut units, &mut report) {
+            return Ok(report);
+        }
     }
 
     if !unresolved_ownership.is_empty() {
@@ -1381,7 +1481,10 @@ pub fn clean_with_roots_policy_selector_guarded(
         ));
         report.unresolved_ownership = unresolved_ownership;
         report.resolved_workspaces = workspaces.len();
-        return Ok(report);
+        // M016/A: same dispatch-or-return shape as the discovery site above.
+        if !partitioned || !retain_proceed_island_units(&mut units, &mut report) {
+            return Ok(report);
+        }
     }
 
     // Cleanup phase is determinate only after complete ownership coverage is
@@ -1419,7 +1522,35 @@ pub fn clean_with_roots_policy_selector_guarded(
     // Filled on the first candidate that reaches the final proof; shared by
     // every later candidate in this run (H3/O1).
     let mut hoisted: Option<ProofUniverse> = None;
-    for unit in &units {
+    // M016/B: the active partition for per-island environment
+    // re-verification (§4 rule 4). Present only on a partitioned run that
+    // passed a scan-time block with proceed islands; a clean run never
+    // partitions, so nothing is re-verified there.
+    let active_partition: Option<ProofPartition> = if partitioned {
+        report.proof_partition.clone()
+    } else {
+        None
+    };
+    // Island membership per dispatch unit. Every unit root sits in exactly
+    // one island by construction (both derive from the same `workspaces`).
+    let island_of_unit: Vec<Option<usize>> = units
+        .iter()
+        .map(|unit| {
+            active_partition.as_ref().and_then(|partition| {
+                partition
+                    .islands
+                    .iter()
+                    .position(|island| island.roots.contains(&unit.root))
+            })
+        })
+        .collect();
+    #[cfg(debug_assertions)]
+    if active_partition.is_some() {
+        debug_assert!(island_of_unit.iter().all(|slot| slot.is_some()));
+    }
+    let mut env_verified_islands: std::collections::HashSet<usize> =
+        std::collections::HashSet::new();
+    for (unit_index, unit) in units.iter().enumerate() {
         let skipped = |report: &mut CleanReport,
                        detail: String,
                        disposition: Option<PolicyDisposition>,
@@ -1582,7 +1713,18 @@ pub fn clean_with_roots_policy_selector_guarded(
         // on the first candidate that reaches the proof. Lazy so a run where
         // every unit is skipped by policy still spawns nothing.
         let hoisted = hoisted.get_or_insert_with(|| {
-            ProofUniverse::refresh(&workspaces, &roots, runner, &mut counters)
+            // M016/A: the refresh tolerates exactly the manifests already
+            // unresolved at scan time (the partition accounted for them);
+            // anything newly unresolvable still invalidates the run.
+            // Flag-off runs never reach this point with unresolved present
+            // (scan-time block returns first) and clean runs carry none, so
+            // this preserves today's behavior exactly where the flag is off.
+            let tolerated: Vec<PathBuf> = report
+                .unresolved_ownership
+                .iter()
+                .map(|participant| participant.manifest.clone())
+                .collect();
+            ProofUniverse::refresh(&workspaces, &roots, runner, &mut counters, &tolerated)
         });
         // M-2: a universe that could not be re-proven invalidates every
         // candidate, like scan-time incompleteness (exit 1 via scope_blocked),
@@ -1707,6 +1849,27 @@ pub fn clean_with_roots_policy_selector_guarded(
                     return Ok(report);
                 }
             }
+        }
+
+        // M016/B §4 rule 4: the partition was computed under one output
+        // environment; re-verify per island before its first dispatch. Any
+        // mismatch merges the remaining islands into one blocked scope —
+        // the same direction as every other mid-run block — before any
+        // further spawn. Simulate rehearses the same check so it predicts
+        // Execute instead of diverging from it.
+        if let Some(partition) = active_partition.as_ref()
+            && let Some(island) = island_of_unit.get(unit_index).copied().flatten()
+            && !env_verified_islands.contains(&island)
+        {
+            if !output_env_matches(&partition.provenance, &|key| std::env::var_os(key)) {
+                report.scope_blocked = Some(ScopeBlock::new(
+                    ScopeBlockReason::OwnershipUnproven,
+                    "output environment changed after partition; remaining islands merged and blocked; no further cleanup commands were run".into(),
+                ));
+                report.counters = counters.clone();
+                return Ok(report);
+            }
+            env_verified_islands.insert(island);
         }
 
         match mode {
@@ -1882,6 +2045,13 @@ pub fn clean_with_roots_policy_selector_guarded(
     }
     // Include diagnostics from discovery/resolution in count (already set).
     report.counters = counters;
+    // M016/C: name the acted-on islands on the scan-time block message when
+    // the flag ran commands. The pinned substrings stay verbatim (additive
+    // suffix only); a run that acted on nothing keeps today's message, which
+    // is still true.
+    if partitioned {
+        append_partitioned_suffix(&mut report);
+    }
     Ok(report)
 }
 
@@ -2187,6 +2357,36 @@ const PARTITION_MAX_ISLANDS: usize = 5;
 const PARTITION_MAX_ROWS: usize = 5;
 const PARTITION_MAX_FIELD_CHARS: usize = 200;
 
+/// M016/§9: one merge/held reason in `partition_section` vocabulary for the
+/// JSON `islands[].cause` field. Same strings as the human section — never a
+/// new reason-code axis. `None` is unreachable today (every variant renders)
+/// and exists so a future variant fails closed instead of silently dropping.
+pub fn partition_merge_cause_label(cause: &PartitionMergeCause) -> Option<String> {
+    fn field(text: &str) -> String {
+        text.chars()
+            .filter(|ch| !ch.is_control())
+            .take(PARTITION_MAX_FIELD_CHARS)
+            .collect()
+    }
+    match cause {
+        PartitionMergeCause::UnnamedDiscoveryHoles(count) => Some(format!(
+            "merged by {count} unnamed discovery hole(s): counted but unlocatable"
+        )),
+        PartitionMergeCause::UnprovenUnknown(path) => Some(format!(
+            "merged by unproven unknown: {}",
+            field(&escaped_path(path))
+        )),
+        PartitionMergeCause::DiscoveryHole(path) => Some(format!(
+            "merged by discovery hole: {}",
+            field(&escaped_path(path))
+        )),
+        PartitionMergeCause::UnresolvableOutput(path) => Some(format!(
+            "merged by unresolvable output of: {}",
+            field(&escaped_path(path))
+        )),
+    }
+}
+
 /// Bounded human-only rendering of the proof-island partition (M015/D).
 ///
 /// Advisory: the scope block above still applies and the engine enforces it.
@@ -2321,6 +2521,105 @@ fn partition_section(partition: &ProofPartition) -> String {
     out
 }
 
+/// M016/F: per-island outcome lines for a partitioned run with results.
+///
+/// Bounded like `partition_section`. Counts only, plus reclaimed bytes for
+/// cleaned rows: paths identify the island, never individual held
+/// manifests (those stay in the participant listing above).
+fn partition_outcome_section(partition: &ProofPartition, results: &[CleanResult]) -> String {
+    fn field(text: &str) -> String {
+        text.chars()
+            .filter(|ch| !ch.is_control())
+            .take(PARTITION_MAX_FIELD_CHARS)
+            .collect()
+    }
+    let islands = partition.islands.len();
+    let mut out = String::new();
+    out.push_str("  island outcomes (partitioned run):\n");
+    for (index, island) in partition
+        .islands
+        .iter()
+        .take(PARTITION_MAX_ISLANDS)
+        .enumerate()
+    {
+        let mut cleaned = 0usize;
+        let mut reclaimed = 0u64;
+        let mut simulated = 0usize;
+        let mut previewed = 0usize;
+        let mut failed = 0usize;
+        let mut skipped = 0usize;
+        for result in results {
+            if !island.roots.contains(&result.display_path) {
+                continue;
+            }
+            match result.outcome {
+                CleanOutcome::Cleaned => {
+                    cleaned += 1;
+                    reclaimed = reclaimed.saturating_add(result.observed_decrease.unwrap_or(0));
+                }
+                CleanOutcome::Simulated => simulated += 1,
+                CleanOutcome::Previewed => previewed += 1,
+                CleanOutcome::Failed => failed += 1,
+                CleanOutcome::Skipped => skipped += 1,
+            }
+        }
+        let mut parts: Vec<String> = Vec::new();
+        if cleaned > 0 {
+            parts.push(format!(
+                "{cleaned} cleaned ({} reclaimed)",
+                crate::report::format_bytes(reclaimed)
+            ));
+        }
+        if simulated > 0 {
+            parts.push(format!("{simulated} simulated"));
+        }
+        if previewed > 0 {
+            parts.push(format!("{previewed} previewed"));
+        }
+        if failed > 0 {
+            parts.push(format!("{failed} failed"));
+        }
+        if skipped > 0 {
+            parts.push(format!("{skipped} skipped"));
+        }
+        let outcome = if parts.is_empty() {
+            "no rows".to_string()
+        } else {
+            parts.join(", ")
+        };
+        let verdict = if island.would_proceed {
+            "proceeded"
+        } else {
+            "held"
+        };
+        if island.roots.len() == 1 {
+            let root = island
+                .roots
+                .first()
+                .map(|path| escaped_path(path))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "  island {} of {islands}: {} -- {verdict}: {outcome}\n",
+                index + 1,
+                field(&root),
+            ));
+        } else {
+            out.push_str(&format!(
+                "  island {} of {islands}: {} workspaces -- {verdict}: {outcome}\n",
+                index + 1,
+                island.roots.len(),
+            ));
+        }
+    }
+    if islands > PARTITION_MAX_ISLANDS {
+        out.push_str(&format!(
+            "  … {} more island(s)\n",
+            islands - PARTITION_MAX_ISLANDS
+        ));
+    }
+    out
+}
+
 /// H-2 universe-stability predicate: the rediscovered manifest set must equal
 /// the hoisted snapshot exactly — growth, shrinkage, or any difference blocks
 /// the remaining scope instead of proceeding against a stale claimant set.
@@ -2348,6 +2647,11 @@ pub struct CandidateListing {
     /// Discovery diagnostics observed while listing; also the reason a block may
     /// exist.
     pub diagnostics: usize,
+    /// Held islands as non-selectable context (M016/D): rendered lines naming
+    /// blocked islands, never offered as rows. Empty on flag-off runs and on
+    /// all-proceed partitions; the merged case refuses before offering, so
+    /// these lines surface in the refusal detail.
+    pub held_context: Vec<String>,
 }
 
 /// Resolve the cleanup units a selection may choose from, without cleaning any
@@ -2369,10 +2673,40 @@ pub fn list_cleanup_candidates(
     runner: &dyn CleanupRunner,
     observer: &dyn ProgressObserver,
     selection: &CleanupSelection,
+    partitioned: bool,
 ) -> Result<CandidateListing, AppError> {
-    let universe =
-        discover_and_resolve_universe(roots, recency_seconds, mode, runner, observer, selection)?;
-    let scope_blocked = if universe.discovery_diagnostic_count > 0 {
+    let universe = discover_and_resolve_universe(
+        roots,
+        recency_seconds,
+        mode,
+        runner,
+        observer,
+        selection,
+        partitioned,
+    )?;
+    // M016/D: on a partitioned run the listing applies the identical
+    // gates — candidates come from proceed-islands only, held islands are
+    // context, never rows. A merged (single held) island keeps the refusal
+    // exactly as today; an all-proceed partition offers rows with no block.
+    let partition: Option<ProofPartition> = if partitioned
+        && (universe.discovery_diagnostic_count > 0 || !universe.unresolved_ownership.is_empty())
+    {
+        let (holes, unnamed) =
+            discovery_holes(&universe.diagnostics, universe.discovery_diagnostic_count);
+        Some(compute_proof_partition(
+            &universe.workspaces,
+            &universe.unresolved_ownership,
+            &holes,
+            unnamed,
+        ))
+    } else {
+        None
+    };
+    let held_exists = partition
+        .as_ref()
+        .is_some_and(|partition| partition.islands.iter().any(|island| !island.would_proceed));
+    let scope_blocked = if universe.discovery_diagnostic_count > 0 && (!partitioned || held_exists)
+    {
         Some(ScopeBlock::new(
             ScopeBlockReason::IncompleteDiscovery,
             format!(
@@ -2382,7 +2716,7 @@ pub fn list_cleanup_candidates(
                 universe.units.len()
             ),
         ))
-    } else if !universe.unresolved_ownership.is_empty() {
+    } else if !universe.unresolved_ownership.is_empty() && (!partitioned || held_exists) {
         let unresolved = universe.unresolved_ownership.len();
         Some(ScopeBlock::new(
             ScopeBlockReason::OwnershipUnproven,
@@ -2398,15 +2732,36 @@ pub fn list_cleanup_candidates(
     } else {
         None
     };
+    let proceed_roots: std::collections::HashSet<&PathBuf> = partition
+        .as_ref()
+        .map(|partition| {
+            partition
+                .islands
+                .iter()
+                .filter(|island| island.would_proceed)
+                .flat_map(|island| island.roots.iter())
+                .collect()
+        })
+        .unwrap_or_default();
     let candidates = universe
         .units
         .iter()
+        .filter(|unit| !partitioned || proceed_roots.contains(&unit.root))
         .map(|unit| CleanupCandidate {
             root: unit.root.clone(),
             bytes: unit.bytes,
             ownership: unit_blocking_class(unit),
         })
         .collect();
+    let mut held_context = Vec::new();
+    if let Some(partition) = partition.as_ref() {
+        for island in island_held_view(partition) {
+            held_context.push(island);
+            if held_context.len() >= PARTITION_MAX_ISLANDS {
+                break;
+            }
+        }
+    }
     Ok(CandidateListing {
         candidates,
         scope_blocked,
@@ -2414,7 +2769,40 @@ pub fn list_cleanup_candidates(
         selected_roots: universe.roots,
         resolved_workspaces: universe.workspaces.len(),
         diagnostics: universe.diagnostics.len(),
+        held_context,
     })
+}
+
+/// M016/D: one context line per held island, bounded and sanitized like the
+/// human partition section. Held islands never become candidates; these
+/// lines are what the `-i` refusal shows instead.
+fn island_held_view(partition: &ProofPartition) -> Vec<String> {
+    fn field(text: &str) -> String {
+        text.chars()
+            .filter(|ch| !ch.is_control())
+            .take(PARTITION_MAX_FIELD_CHARS)
+            .collect()
+    }
+    let mut lines = Vec::new();
+    for island in partition.islands.iter().filter(|i| !i.would_proceed) {
+        let roots = island
+            .roots
+            .iter()
+            .take(PARTITION_MAX_ROWS)
+            .map(|root| field(&escaped_path(root)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let cause = partition
+            .merge_causes
+            .first()
+            .and_then(partition_merge_cause_label)
+            .unwrap_or_else(|| "blocked".to_string());
+        lines.push(format!(
+            "held island ({} workspace(s)): {roots} -- {cause}",
+            island.roots.len(),
+        ));
+    }
+    lines
 }
 
 fn compile_policy_globs(patterns: &[String]) -> Result<globset::GlobSet, AppError> {
@@ -2545,6 +2933,7 @@ fn resolve_cleanup_scope(
     diagnostics: &mut Vec<ScanDiagnostic>,
     observer: &dyn ProgressObserver,
     selection: &CleanupSelection,
+    partitioned: bool,
 ) -> Result<CleanupScope, AppError> {
     // Workspace resolution (cached, sequential).
     let adapter = WorkspaceCleanupAdapter { runner };
@@ -2558,7 +2947,12 @@ fn resolve_cleanup_scope(
     let unresolved = coverage.unresolved;
     counters.unresolved_ownership = unresolved.len() as u64;
     let workspaces = coverage.workspaces;
-    if !unresolved.is_empty() {
+    // Flag-off (M015 contract): any unresolved manifest means no unit even
+    // exists. Flag-on (M016): grouping, classification, and unit
+    // construction still run whole-universe over the resolved workspaces, so
+    // the engine can dispatch proceed-islands; filtering to islands happens
+    // at the block sites, never here.
+    if !unresolved.is_empty() && !partitioned {
         return Ok(CleanupScope {
             workspaces,
             units: Vec::new(),
@@ -2966,8 +3360,15 @@ impl ProofUniverse {
         clean_roots: &[PathBuf],
         runner: &dyn CleanupRunner,
         counters: &mut ScanCounters,
+        tolerated_unresolved: &[PathBuf],
     ) -> Self {
-        match refresh_combined_universe(universe, clean_roots, runner, counters) {
+        match refresh_combined_universe(
+            universe,
+            clean_roots,
+            runner,
+            counters,
+            tolerated_unresolved,
+        ) {
             Ok(fresh) => Self {
                 fresh: Some(fresh),
                 failure: None,
@@ -3002,6 +3403,7 @@ fn refresh_combined_universe(
     roots: &[PathBuf],
     runner: &dyn CleanupRunner,
     counters: &mut ScanCounters,
+    tolerated_unresolved: &[PathBuf],
 ) -> Result<Vec<ResolvedWorkspace>, ProofFailure> {
     let policy = crate::domain::EffectiveScanPolicy {
         recency: Duration::ZERO,
@@ -3044,13 +3446,34 @@ fn refresh_combined_universe(
         .proof_cargo_locate_nanos
         .saturating_add(refreshed_counters.cargo_locate_nanos);
     if !coverage.unresolved.is_empty() {
-        return Err(ProofFailure::new(
-            CleanupReasonCode::SkippedOwnershipUnproven,
-            format!(
-                "ownership could not be re-proven: combined selected-root universe has {} unresolved manifest(s); a workspace did not re-resolve",
-                coverage.unresolved.len()
-            ),
-        ));
+        // M016/A: manifests already unresolved at scan time are not news —
+        // the partition accounted for them and the engine dispatches around
+        // them. Only newly-unresolvable manifests invalidate the refresh.
+        // Comparison is canonical so a symlinked-prefix rediscovery still
+        // matches the scan-time spelling.
+        let tolerated: std::collections::HashSet<PathBuf> = tolerated_unresolved
+            .iter()
+            .map(|manifest| fs::canonicalize(manifest).unwrap_or_else(|_| manifest.clone()))
+            .collect();
+        let fresh_unresolved: Vec<&UnresolvedOwnershipParticipant> = coverage
+            .unresolved
+            .iter()
+            .filter(|participant| {
+                !tolerated.contains(
+                    &fs::canonicalize(&participant.manifest)
+                        .unwrap_or_else(|_| participant.manifest.clone()),
+                )
+            })
+            .collect();
+        if !fresh_unresolved.is_empty() {
+            return Err(ProofFailure::new(
+                CleanupReasonCode::SkippedOwnershipUnproven,
+                format!(
+                    "ownership could not be re-proven: combined selected-root universe has {} unresolved manifest(s); a workspace did not re-resolve",
+                    fresh_unresolved.len()
+                ),
+            ));
+        }
     }
     let fresh = coverage.workspaces;
     let ids: std::collections::HashSet<_> = fresh.iter().map(|w| w.id.clone()).collect();
@@ -3194,7 +3617,7 @@ pub fn final_cleanup_proof(
     let clean_roots = std::slice::from_ref(&clean_root_owned);
     // A single candidate *is* the universe here, and the refresh below already
     // re-resolved it, so no extra per-candidate refresh is needed.
-    let hoisted = ProofUniverse::refresh(universe, clean_roots, runner, counters);
+    let hoisted = ProofUniverse::refresh(universe, clean_roots, runner, counters, &[]);
     final_cleanup_proof_roots(
         unit,
         universe,
@@ -4471,6 +4894,7 @@ mod tests {
             &SystemCleanupRunner,
             &noop,
             &CleanupSelection::All,
+            false,
         )
         .unwrap();
         assert!(all.scope_blocked.is_none(), "{:?}", all.scope_blocked);
@@ -4507,6 +4931,7 @@ mod tests {
             None,
             None,
             &CleanupSelection::All,
+            false,
         )
         .unwrap();
 
@@ -4548,6 +4973,7 @@ mod tests {
             &SystemCleanupRunner,
             &noop,
             &narrowed,
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -4569,6 +4995,7 @@ mod tests {
             None,
             None,
             &narrowed,
+            false,
         )
         .unwrap();
         let considered: Vec<&PathBuf> = engine_narrow
@@ -4608,6 +5035,7 @@ mod tests {
             &SystemCleanupRunner,
             &NoopObserver,
             &CleanupSelection::All,
+            false,
         )
         .unwrap();
         assert_eq!(listing.candidates.len(), 3);
@@ -4637,6 +5065,7 @@ mod tests {
             &runner,
             &noop,
             &CleanupSelection::All,
+            false,
         )
         .unwrap();
 
@@ -5384,6 +5813,899 @@ mod tests {
             runner.clean_calls().len(),
             1,
             "exactly one spawn: the growth stopped the run"
+        );
+    }
+
+    /// M016 kennel: two output-disjoint staged workspaces plus a refused
+    /// orphan — the live G1 shape as a repo-owned fixture. The orphan's
+    /// locate fails, so it owns no bytes (scope note), while A and B stay
+    /// output-disjoint: two would-proceed islands and one scope note.
+    fn island_pair(d: &tempfile::TempDir) -> (PathBuf, PathBuf, PathBuf) {
+        // macOS: TMPDIR's /var is a symlink; discovery canonicalizes.
+        let base = d.path().canonicalize().unwrap();
+        let root_a = ws_root(&base, "island-a");
+        let root_b = ws_root(&base, "island-b");
+        cargo_output(&root_a.join("target"), 4096);
+        cargo_output(&root_b.join("target"), 4096);
+        backdate(&base, SystemTime::now() - Duration::from_secs(3600));
+        let orphan = base.join("orphan/Cargo.toml");
+        std::fs::create_dir_all(orphan.parent().unwrap()).unwrap();
+        std::fs::write(&orphan, "").unwrap();
+        (root_a, root_b, orphan)
+    }
+
+    /// M016: run the guarded engine with the flag on.
+    fn clean_partitioned(root: &Path, mode: CleanMode, runner: &StagedCargo) -> CleanReport {
+        clean_with_roots_policy_selector_guarded(
+            std::slice::from_ref(&root.to_path_buf()),
+            0,
+            &[],
+            mode,
+            runner,
+            &NoopObserver,
+            &CleanupPolicy::default(),
+            None,
+            None,
+            &CleanupSelection::All,
+            true,
+        )
+        .unwrap()
+    }
+
+    /// M016/§6E: flag-off parity. The G1-shaped fixture through the flag-off
+    /// guarded path behaves exactly like the unpartitioned engine: same
+    /// block, same empty results, zero spawns, no partitioned suffix — in
+    /// all three modes. Fails if the flag leaks into defaults.
+    #[test]
+    fn partitioned_flag_off_matches_unpartitioned_engine() {
+        for mode in [
+            CleanMode::Simulate,
+            CleanMode::CargoPreview,
+            CleanMode::Execute,
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let (root_a, root_b, _orphan) = island_pair(&d);
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, root_a.join("target"), None);
+            runner.add(&root_b, root_b.join("target"), None);
+            let plain = clean_with(d.path(), 0, &[], mode, &runner, &NoopObserver).unwrap();
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, root_a.join("target"), None);
+            runner.add(&root_b, root_b.join("target"), None);
+            let flagged_off = clean_with_roots_policy_selector_guarded(
+                std::slice::from_ref(&d.path().to_path_buf()),
+                0,
+                &[],
+                mode,
+                &runner,
+                &NoopObserver,
+                &CleanupPolicy::default(),
+                None,
+                None,
+                &CleanupSelection::All,
+                false,
+            )
+            .unwrap();
+            assert_eq!(
+                plain.scope_blocked.as_ref().map(|block| block.reason),
+                flagged_off.scope_blocked.as_ref().map(|block| block.reason),
+                "{mode:?}"
+            );
+            assert_eq!(
+                plain.scope_blocked.as_ref().map(|block| &block.message),
+                flagged_off
+                    .scope_blocked
+                    .as_ref()
+                    .map(|block| &block.message),
+                "{mode:?}"
+            );
+            assert!(plain.results.is_empty(), "{mode:?}");
+            assert!(flagged_off.results.is_empty(), "{mode:?}");
+            assert_eq!(
+                plain.units_considered, flagged_off.units_considered,
+                "{mode:?}"
+            );
+            assert_eq!(plain.failed, flagged_off.failed, "{mode:?}");
+            assert!(runner.clean_calls().is_empty(), "{mode:?}");
+            assert!(
+                !flagged_off
+                    .scope_blocked
+                    .as_ref()
+                    .is_some_and(|block| block.message.contains("; partitioned ")),
+                "{mode:?}: no partitioned suffix without the flag"
+            );
+            // The report-only partition is identical with the flag off.
+            assert_eq!(
+                plain.proof_partition.as_ref().map(|p| p.islands.len()),
+                Some(2),
+                "{mode:?}"
+            );
+            assert_eq!(
+                flagged_off
+                    .proof_partition
+                    .as_ref()
+                    .map(|p| p.islands.len()),
+                Some(2),
+                "{mode:?}"
+            );
+        }
+    }
+
+    /// M016/B+C: partitioned Execute cleans every provable island and holds
+    /// nothing else. Two islands proceed (real spawns with the whole-scope
+    /// argv shape), the scope note is reported, the block is retained with
+    /// the additive suffix, and the exit aggregation still sees the block.
+    #[test]
+    fn partitioned_execute_cleans_every_provable_island() {
+        let d = tempfile::tempdir().unwrap();
+        let (root_a, root_b, _orphan) = island_pair(&d);
+        let mut runner = StagedCargo::new();
+        runner.add(&root_a, root_a.join("target"), None);
+        runner.add(&root_b, root_b.join("target"), None);
+        runner.removes_on_clean(vec![
+            root_a.join("target").join("artifact.bin"),
+            root_b.join("target").join("artifact.bin"),
+        ]);
+        let report = clean_partitioned(d.path(), CleanMode::Execute, &runner);
+        assert_eq!(
+            report.scope_blocked.as_ref().map(|block| block.reason),
+            Some(ScopeBlockReason::OwnershipUnproven),
+            "the block is retained: {:?}",
+            report.scope_blocked
+        );
+        let block = report.scope_blocked.as_ref().unwrap();
+        assert!(
+            block
+                .message
+                .contains("cleanup ownership could not be proven"),
+            "pinned substring survives: {}",
+            block.message
+        );
+        assert!(
+            block
+                .message
+                .contains("; partitioned execute: 2 of 2 island(s) acted on, 0 held"),
+            "additive suffix names the acted-on islands: {}",
+            block.message
+        );
+        assert_eq!(report.results.len(), 2, "{:?}", report.results);
+        for root in [&root_a, &root_b] {
+            let row = row_for(&report, root);
+            assert_eq!(row.outcome, CleanOutcome::Cleaned, "{root:?}");
+            assert_eq!(row.reason_code, CleanupReasonCode::Cleaned);
+        }
+        // removes_on_clean is global to the fake: the first unit's clean
+        // reclaims both artifacts, so the reclaimed total lands on
+        // whichever unit ran first. The sum is order-independent.
+        let total_decrease: u64 = report
+            .results
+            .iter()
+            .map(|row| row.observed_decrease.unwrap_or(0))
+            .sum();
+        assert_eq!(total_decrease, 4096, "{report:?}");
+        assert!(!root_a.join("target").join("artifact.bin").exists());
+        assert!(!root_b.join("target").join("artifact.bin").exists());
+        // Same argv and cwd the whole-scope engine would have used: one
+        // `cargo clean` per workspace CleanupUnit over its complete OutputSet.
+        let cleans = runner.clean_calls();
+        assert_eq!(cleans.len(), 2, "{cleans:?}");
+        for (cwd, args, _env) in &cleans {
+            assert!(
+                *cwd == root_a || *cwd == root_b,
+                "spawn cwd is a proven workspace root: {cwd:?}"
+            );
+            let argv: Vec<String> = args
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            assert!(argv.contains(&"--offline".to_string()), "{argv:?}");
+            assert!(argv.contains(&"--locked".to_string()), "{argv:?}");
+            assert!(!argv.iter().any(|a| a == "--dry-run"), "{argv:?}");
+        }
+        assert_eq!(report.units_considered, 2);
+        assert_eq!(report.resolved_workspaces, 2);
+        assert_eq!(report.discovered_manifests, 3);
+        assert_eq!(report.failed, 0);
+        // Certificate still says go: two would-proceed islands, one note.
+        let partition = report.proof_partition.as_ref().expect("partition carried");
+        assert_eq!(partition.islands.len(), 2);
+        assert!(partition.islands.iter().all(|i| i.would_proceed));
+        assert_eq!(partition.scope_notes.len(), 1);
+        // JSON joins units to islands on the workspace-root path.
+        let value = serde_json::to_value(crate::output::cleanup(&report, "routine", None)).unwrap();
+        let islands = value["result"]["islands"].as_array().unwrap();
+        assert_eq!(islands.len(), 2, "{value}");
+        for island in islands {
+            assert_eq!(island["verdict"], "proceeded", "{island}");
+            assert!(island["cause"].is_null(), "{island}");
+            let roots = island["roots"].as_array().unwrap();
+            assert_eq!(roots.len(), 1, "{island}");
+            let root = roots[0].as_str().unwrap();
+            assert!(
+                value["result"]["units"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|u| u["workspace_root"] == root && u["outcome"] == "cleaned"),
+                "island root joins to a cleaned unit: {value}"
+            );
+        }
+        // Human render: rows, block, per-island outcomes.
+        let text = report.render();
+        assert!(
+            text.contains("cleanup ownership could not be proven"),
+            "{text}"
+        );
+        assert!(text.contains("2 of 2 island(s) acted on"), "{text}");
+        assert!(
+            text.contains("island outcomes (partitioned run):"),
+            "{text}"
+        );
+        assert!(text.contains("-- proceeded: 1 cleaned"), "{text}");
+        // Log line: blocked with counts, no paths.
+        let line = crate::output::log::cleanup(&report, "routine");
+        assert!(
+            line.contains("status=blocked") || line.contains("blocked"),
+            "{line}"
+        );
+        assert!(
+            !line.contains("island-a"),
+            "no paths on the log line: {line}"
+        );
+    }
+
+    /// M016: Simulate predicts the spawns without spawning; CargoPreview runs
+    /// Cargo's own dry-run per proven unit. Both keep the block and the
+    /// acted-on suffix, with zero real cleans.
+    #[test]
+    fn partitioned_simulate_and_preview_predict_without_spawning() {
+        for (mode, expected_outcome) in [
+            (CleanMode::Simulate, CleanOutcome::Simulated),
+            (CleanMode::CargoPreview, CleanOutcome::Previewed),
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let (root_a, root_b, _orphan) = island_pair(&d);
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, root_a.join("target"), None);
+            runner.add(&root_b, root_b.join("target"), None);
+            let report = clean_partitioned(d.path(), mode, &runner);
+            assert_eq!(
+                report.scope_blocked.as_ref().map(|block| block.reason),
+                Some(ScopeBlockReason::OwnershipUnproven),
+                "{mode:?}"
+            );
+            assert_eq!(report.results.len(), 2, "{mode:?}: {report:?}");
+            for root in [&root_a, &root_b] {
+                let row = row_for(&report, root);
+                assert_eq!(row.outcome, expected_outcome, "{mode:?} {root:?}");
+            }
+            if mode == CleanMode::Simulate {
+                assert!(runner.clean_calls().is_empty(), "{mode:?}");
+            } else {
+                assert_eq!(runner.dry_run_calls().len(), 2, "{mode:?}");
+            }
+            assert!(
+                root_a.join("target").join("artifact.bin").exists(),
+                "{mode:?}"
+            );
+            let suffix = format!(
+                "; partitioned {}: 2 of 2 island(s) acted on, 0 held",
+                mode.as_str()
+            );
+            assert!(
+                report
+                    .scope_blocked
+                    .as_ref()
+                    .is_some_and(|block| block.message.contains(&suffix)),
+                "{mode:?}: {}",
+                report.scope_blocked.as_ref().unwrap().message
+            );
+        }
+    }
+
+    /// M016/§4 rule 3 (ADR 004 item (b)): a refused orphan naming a resolved
+    /// parent rides along as a passenger without merging. The island
+    /// proceeds with the passenger named; the machine side carries it on
+    /// the island axis, never as a unit row.
+    #[test]
+    fn partitioned_passenger_rides_along_without_merging() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().canonicalize().unwrap();
+        let root_a = ws_root(&base, "host-a");
+        let root_b = ws_root(&base, "host-b");
+        cargo_output(&root_a.join("target"), 4096);
+        cargo_output(&root_b.join("target"), 4096);
+        backdate(&base, SystemTime::now() - Duration::from_secs(3600));
+        let orphan = base.join("orphan/Cargo.toml");
+        std::fs::create_dir_all(orphan.parent().unwrap()).unwrap();
+        std::fs::write(&orphan, "").unwrap();
+        let reason = format!(
+            "error: current package believes it's in a workspace when it's not: current: {} workspace: {}",
+            orphan.display(),
+            root_a.join("Cargo.toml").display(),
+        );
+        let mut runner = StagedCargo::new();
+        runner.add(&root_a, root_a.join("target"), None);
+        runner.add(&root_b, root_b.join("target"), None);
+        runner.refuse_locate(&orphan, &reason);
+        let report = clean_partitioned(d.path(), CleanMode::Execute, &runner);
+        assert_eq!(
+            report.scope_blocked.as_ref().map(|block| block.reason),
+            Some(ScopeBlockReason::OwnershipUnproven)
+        );
+        // Both islands proceed with real spawns; nothing merges.
+        assert_eq!(runner.clean_calls().len(), 2, "{report:?}");
+        for root in [&root_a, &root_b] {
+            assert_eq!(row_for(&report, root).outcome, CleanOutcome::Cleaned);
+        }
+        let partition = report.proof_partition.as_ref().expect("partition carried");
+        assert_eq!(partition.islands.len(), 2);
+        let host = partition
+            .islands
+            .iter()
+            .find(|island| island.roots == vec![root_a.clone()])
+            .expect("host island");
+        assert_eq!(host.passengers.len(), 1, "{host:?}");
+        assert_eq!(host.passengers[0].manifest, orphan, "{host:?}");
+        assert!(partition.scope_notes.is_empty(), "{partition:?}");
+        // JSON carries the passenger on the island axis.
+        let value = serde_json::to_value(crate::output::cleanup(&report, "routine", None)).unwrap();
+        let islands = value["result"]["islands"].as_array().unwrap();
+        let host_json = islands
+            .iter()
+            .find(|i| {
+                i["roots"].as_array().unwrap().len() == 1
+                    && i["roots"][0].as_str().unwrap().ends_with("host-a")
+            })
+            .expect("host island in JSON");
+        assert_eq!(host_json["verdict"], "proceeded");
+        let passengers = host_json["passengers"].as_array().unwrap();
+        assert_eq!(passengers.len(), 1, "{host_json}");
+        assert!(
+            passengers[0]
+                .as_str()
+                .unwrap()
+                .ends_with("orphan/Cargo.toml")
+        );
+    }
+
+    /// M016 hostile twins, flag-on, all three modes. Each mirrors an M015
+    /// certificate control on the identical shape and asserts the engine
+    /// holds everything with zero spawns. The M015 tests already prove the
+    /// naive splits these shapes; these prove the engine does not — a twin
+    /// that would also pass against a dispatch-everything naive is
+    /// decoration and is not shipped here.
+    #[test]
+    fn partitioned_redirected_outputs_merge_and_block_with_zero_spawns() {
+        for mode in [
+            CleanMode::Simulate,
+            CleanMode::CargoPreview,
+            CleanMode::Execute,
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let base = d.path().canonicalize().unwrap();
+            let root_a = ws_root(&base, "redirect-a");
+            let root_b = ws_root(&base, "redirect-b");
+            let shared = cargo_output(&root_a.join("target"), 4096);
+            backdate(&base, SystemTime::now() - Duration::from_secs(3600));
+            let orphan = base.join("orphan/Cargo.toml");
+            std::fs::create_dir_all(orphan.parent().unwrap()).unwrap();
+            std::fs::write(&orphan, "").unwrap();
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, shared.clone(), None);
+            runner.add(&root_b, shared, None);
+            let report = clean_partitioned(d.path(), mode, &runner);
+            assert_eq!(
+                report.scope_blocked.as_ref().map(|block| block.reason),
+                Some(ScopeBlockReason::OwnershipUnproven),
+                "{mode:?}"
+            );
+            // One island (shared bytes cannot be separated), held at the
+            // unit gate — never dispatched, never cleaned. A
+            // dispatch-everything naive would clean both sides of the shared
+            // bytes; the zero-spawn assertion is what fails against it.
+            assert_eq!(report.results.len(), 2, "{mode:?}: {report:?}");
+            for root in [&root_a, &root_b] {
+                let row = row_for(&report, root);
+                assert_eq!(row.outcome, CleanOutcome::Skipped, "{mode:?} {root:?}");
+                assert_eq!(
+                    row.reason_code,
+                    CleanupReasonCode::SkippedShared,
+                    "{mode:?} {root:?}"
+                );
+            }
+            assert!(runner.clean_calls().is_empty(), "{mode:?}");
+            let partition = report.proof_partition.as_ref().expect("partition");
+            assert_eq!(partition.islands.len(), 1, "{mode:?}");
+            assert!(partition.islands[0].would_proceed, "{mode:?}");
+            assert!(
+                !report
+                    .scope_blocked
+                    .as_ref()
+                    .is_some_and(|block| block.message.contains("; partitioned ")),
+                "{mode:?}: nothing acted, so no suffix"
+            );
+        }
+    }
+
+    /// M016 hostile twin: nested-output prefix overlap merges under the
+    /// certificate and the engine holds with zero spawns.
+    #[test]
+    fn partitioned_nested_outputs_merge_and_block_with_zero_spawns() {
+        for mode in [
+            CleanMode::Simulate,
+            CleanMode::CargoPreview,
+            CleanMode::Execute,
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let base = d.path().canonicalize().unwrap();
+            let root_a = ws_root(&base, "nest-a");
+            let root_b = ws_root(&base, "nest-b");
+            let outer = cargo_output(&root_a.join("target"), 2048);
+            // B's target nested inside A's: prefix overlap, shared bytes.
+            let nested = cargo_output(&outer.join("nested"), 1024);
+            backdate(&base, SystemTime::now() - Duration::from_secs(3600));
+            let orphan = base.join("orphan/Cargo.toml");
+            std::fs::create_dir_all(orphan.parent().unwrap()).unwrap();
+            std::fs::write(&orphan, "").unwrap();
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, outer.clone(), None);
+            runner.add(&root_b, nested, None);
+            let report = clean_partitioned(d.path(), mode, &runner);
+            assert_eq!(
+                report.scope_blocked.as_ref().map(|block| block.reason),
+                Some(ScopeBlockReason::OwnershipUnproven),
+                "{mode:?}"
+            );
+            // One island (prefix overlap cannot be separated), held at the
+            // unit gate with zero spawns — same shape as the redirect twin.
+            assert_eq!(report.results.len(), 2, "{mode:?}: {report:?}");
+            for root in [&root_a, &root_b] {
+                let row = row_for(&report, root);
+                assert_eq!(row.outcome, CleanOutcome::Skipped, "{mode:?} {root:?}");
+            }
+            assert!(runner.clean_calls().is_empty(), "{mode:?}");
+            let partition = report.proof_partition.as_ref().expect("partition");
+            assert_eq!(partition.islands.len(), 1, "{mode:?}: {partition:?}");
+            assert!(partition.islands[0].would_proceed, "{mode:?}");
+        }
+    }
+
+    /// M016 hostile twin: a metadata failure is byte-capable (MergeAll), so
+    /// the scope merges and the engine asserts zero spawns in every mode —
+    /// the engine-level half of the M015 overlap control.
+    #[test]
+    fn partitioned_metadata_failure_merges_and_engine_blocks_with_zero_spawns() {
+        for mode in [
+            CleanMode::Simulate,
+            CleanMode::CargoPreview,
+            CleanMode::Execute,
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let base = d.path().canonicalize().unwrap();
+            let root_a = ws_root(&base, "overlap-a");
+            let root_b = ws_root(&base, "overlap-b");
+            cargo_output(&root_a.join("target"), 4096);
+            cargo_output(&root_b.join("target"), 2048);
+            backdate(&base, SystemTime::now() - Duration::from_secs(3600));
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, root_a.join("target"), None);
+            runner.add(&root_b, root_b.join("target"), None);
+            runner.fail_metadata_from(1, 1);
+            let report = clean_partitioned(d.path(), mode, &runner);
+            assert_eq!(
+                report.scope_blocked.as_ref().map(|block| block.reason),
+                Some(ScopeBlockReason::OwnershipUnproven),
+                "{mode:?}"
+            );
+            assert!(report.results.is_empty(), "{mode:?}: {report:?}");
+            assert!(runner.clean_calls().is_empty(), "{mode:?}");
+            let partition = report.proof_partition.as_ref().expect("partition");
+            assert_eq!(partition.islands.len(), 1, "{mode:?}");
+            assert!(!partition.islands[0].would_proceed, "{mode:?}");
+        }
+    }
+
+    /// M016 hostile twin (unix): a symlinked output has no provable physical
+    /// identity, so it merges globally and the engine holds with zero spawns.
+    #[cfg(unix)]
+    #[test]
+    fn partitioned_symlinked_output_merges_and_blocks_with_zero_spawns() {
+        for mode in [
+            CleanMode::Simulate,
+            CleanMode::CargoPreview,
+            CleanMode::Execute,
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let base = d.path().canonicalize().unwrap();
+            let root_a = ws_root(&base, "link-a");
+            let root_b = ws_root(&base, "link-b");
+            let real = cargo_output(&base.join("real-target"), 4096);
+            std::os::unix::fs::symlink(&real, root_a.join("target")).unwrap();
+            cargo_output(&root_b.join("target"), 2048);
+            backdate(&base, SystemTime::now() - Duration::from_secs(3600));
+            let orphan = base.join("orphan/Cargo.toml");
+            std::fs::create_dir_all(orphan.parent().unwrap()).unwrap();
+            std::fs::write(&orphan, "").unwrap();
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, root_a.join("target"), None);
+            runner.add(&root_b, root_b.join("target"), None);
+            let report = clean_partitioned(d.path(), mode, &runner);
+            assert_eq!(
+                report.scope_blocked.as_ref().map(|block| block.reason),
+                Some(ScopeBlockReason::OwnershipUnproven),
+                "{mode:?}"
+            );
+            assert!(report.results.is_empty(), "{mode:?}: {report:?}");
+            assert!(runner.clean_calls().is_empty(), "{mode:?}");
+        }
+    }
+
+    /// M016 hostile twin, end to end: a manifest planted by A's own cleanup
+    /// is visible to B's H-2 rediscovery, which blocks the remaining scope.
+    /// Partial success: A cleaned, B never dispatched, the suffix names the
+    /// acted-on island.
+    #[test]
+    fn partitioned_mid_run_manifest_growth_blocks_remaining_scope() {
+        let d = tempfile::tempdir().unwrap();
+        let (root_a, root_b, _orphan) = island_pair(&d);
+        let mut runner = StagedCargo::new();
+        runner.add(&root_a, root_a.join("target"), None);
+        runner.add(&root_b, root_b.join("target"), None);
+        let planted = d.path().join("planted");
+        runner.on_clean(move || {
+            std::fs::create_dir_all(planted.join("src")).unwrap();
+            std::fs::write(
+                planted.join("Cargo.toml"),
+                "[package]\nname='planted'\nversion='0.1.0'\n",
+            )
+            .unwrap();
+        });
+        let report = clean_partitioned(d.path(), CleanMode::Execute, &runner);
+        assert_eq!(
+            report.scope_blocked.as_ref().map(|block| block.reason),
+            Some(ScopeBlockReason::IncompleteDiscovery),
+            "post-clean growth blocks the remaining scope"
+        );
+        assert_eq!(row_for(&report, &root_a).outcome, CleanOutcome::Cleaned);
+        assert!(
+            report
+                .results
+                .iter()
+                .all(|row| row.display_path != canonical(&root_b)),
+            "B never ran against the stale universe: {:?}",
+            report
+                .results
+                .iter()
+                .map(|row| &row.display_path)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(runner.clean_calls().len(), 1);
+        // The scan-time block is replaced by the accurate mid-run message
+        // ("no FURTHER cleanup commands were run" stays true), so no
+        // acted-on suffix is appended — the island outcomes below carry it.
+        assert!(
+            !report
+                .scope_blocked
+                .as_ref()
+                .is_some_and(|block| block.message.contains("; partitioned ")),
+            "{:?}",
+            report.scope_blocked
+        );
+        // The human render carries rows, block, and island outcomes together.
+        let text = report.render();
+        assert!(
+            text.contains("island outcomes (partitioned run):"),
+            "{text}"
+        );
+        assert!(text.contains("-- proceeded: 1 cleaned"), "{text}");
+    }
+
+    /// M016/§4 rule 4 + §10 gate-8 control: B's target moves under A's after
+    /// the scan, so the certificate still reports two would-proceed islands —
+    /// but the per-unit proof reads the fresh combined universe and refuses
+    /// both. A per-island-stale-universe skip would clean A (and maybe B);
+    /// this test distinguishes the plan from the naive skip at the proof
+    /// level, not just the partition level.
+    #[test]
+    fn partitioned_proof_refuses_where_partition_would_proceed() {
+        for mode in [
+            CleanMode::Simulate,
+            CleanMode::CargoPreview,
+            CleanMode::Execute,
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let (root_a, root_b, _orphan) = island_pair(&d);
+            let target_a = root_a.join("target");
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, target_a.clone(), None);
+            runner.add(&root_b, root_b.join("target"), None);
+            // From the second metadata call (the ownership-universe refresh)
+            // B points at A's target.
+            runner.stage(1, 2, target_a.clone(), None);
+            let report = clean_partitioned(d.path(), mode, &runner);
+            assert!(
+                runner.clean_calls().is_empty(),
+                "{mode:?}: no clean at all: {:?}",
+                runner.clean_calls()
+            );
+            for root in [&root_a, &root_b] {
+                let row = row_for(&report, root);
+                assert_eq!(
+                    row.outcome,
+                    CleanOutcome::Skipped,
+                    "{mode:?} {root:?}: {}",
+                    row.detail
+                );
+            }
+            assert!(
+                row_for(&report, &root_b).detail.contains("changed")
+                    || row_for(&report, &root_b).detail.contains("shared")
+                    || row_for(&report, &root_b).detail.contains("overlap"),
+                "{mode:?}: B refused for the move: {}",
+                row_for(&report, &root_b).detail
+            );
+            assert!(
+                row_for(&report, &root_a).detail.contains("overlap")
+                    || row_for(&report, &root_a).detail.contains("shared"),
+                "{mode:?}: A's gate 8 saw B's fresh overlap: {}",
+                row_for(&report, &root_a).detail
+            );
+            // The certificate is stale-advisory only: it still says go.
+            let partition = report.proof_partition.as_ref().expect("partition");
+            assert_eq!(partition.islands.len(), 2, "{mode:?}");
+            assert!(
+                partition.islands.iter().all(|i| i.would_proceed),
+                "{mode:?}"
+            );
+            // Nothing acted, so no suffix.
+            assert!(
+                !report
+                    .scope_blocked
+                    .as_ref()
+                    .is_some_and(|block| block.message.contains("; partitioned ")),
+                "{mode:?}"
+            );
+        }
+    }
+
+    /// M016 passenger + TOCTOU: A's target moves under B's after the scan
+    /// while A carries a refused passenger. Neither island may clean — in
+    /// particular the passenger island must never clean alone on a stale
+    /// attribution — and the passenger stays named.
+    #[test]
+    fn partitioned_passenger_island_never_cleans_alone_after_redirect() {
+        for mode in [
+            CleanMode::Simulate,
+            CleanMode::CargoPreview,
+            CleanMode::Execute,
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let base = d.path().canonicalize().unwrap();
+            let root_a = ws_root(&base, "host-a");
+            let root_b = ws_root(&base, "host-b");
+            cargo_output(&root_a.join("target"), 4096);
+            let target_b = cargo_output(&root_b.join("target"), 4096);
+            backdate(&base, SystemTime::now() - Duration::from_secs(3600));
+            let orphan = base.join("orphan/Cargo.toml");
+            std::fs::create_dir_all(orphan.parent().unwrap()).unwrap();
+            std::fs::write(&orphan, "").unwrap();
+            let reason = format!(
+                "error: current package believes it's in a workspace when it's not: current: {} workspace: {}",
+                orphan.display(),
+                root_a.join("Cargo.toml").display(),
+            );
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, root_a.join("target"), None);
+            runner.add(&root_b, target_b.clone(), None);
+            runner.refuse_locate(&orphan, &reason);
+            // From the refresh on, A's target sits under B's.
+            runner.stage(0, 2, target_b, None);
+            let report = clean_partitioned(d.path(), mode, &runner);
+            assert!(
+                runner.clean_calls().is_empty(),
+                "{mode:?}: no clean at all: {:?}",
+                runner.clean_calls()
+            );
+            for root in [&root_a, &root_b] {
+                assert_eq!(
+                    row_for(&report, root).outcome,
+                    CleanOutcome::Skipped,
+                    "{mode:?} {root:?}"
+                );
+            }
+            let partition = report.proof_partition.as_ref().expect("partition");
+            let host = partition
+                .islands
+                .iter()
+                .find(|island| island.roots == vec![root_a.clone()])
+                .expect("host island still named");
+            assert_eq!(host.passengers.len(), 1, "{host:?}");
+        }
+    }
+
+    /// M016/B §4 rule 4, engine level: an output-environment change between
+    /// partition and dispatch merges the remaining islands before any
+    /// further spawn.
+    ///
+    /// The check reads the real process environment, which parallel tests
+    /// share — mutating it in-process would race the real-Cargo tests (the
+    /// repo never sets these vars in tests for exactly this reason). So the
+    /// mutation runs in a CHILD process: this test spawns the current test
+    /// binary filtered to the probe below with the arming marker set. The
+    /// child has its own environment; the parent never mutates its own.
+    /// Premise check: the child must report exactly 1 passed, proving the
+    /// probe executed rather than the filter missing.
+    #[test]
+    fn partitioned_environment_change_merges_remaining_islands() {
+        let exe = std::env::current_exe().unwrap();
+        let out = std::process::Command::new(exe)
+            .args([
+                "cleanup::tests::partitioned_environment_change_probe",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("M016_ENV_PROBE_ARMED", "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "probe child failed: {stdout}");
+        assert!(
+            stdout.contains("1 passed"),
+            "probe must execute exactly once (filter premise): {stdout}"
+        );
+    }
+
+    /// Probe for the test above. Passes vacuously without the arming marker
+    /// so a direct `cargo test` run can never poison the shared parallel-test
+    /// environment. With the marker (child process only), poisons
+    /// `CARGO_TARGET_DIR` after resolution and asserts the engine merges
+    /// before the first dispatch with zero spawns.
+    #[test]
+    fn partitioned_environment_change_probe() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct EnvPoisonRunner<'a> {
+            inner: &'a dyn CleanupRunner,
+            calls: AtomicUsize,
+            poison: Option<OsString>,
+        }
+        impl CleanupRunner for EnvPoisonRunner<'_> {
+            fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput> {
+                // Resolution is exactly 3 locates + 2 metadatas; poison from
+                // the 6th runner call on, i.e. after the partition snapshot
+                // and before the first dispatch.
+                let n = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+                if n >= 6
+                    && let Some(value) = &self.poison
+                {
+                    // SAFETY: this probe only reaches this line in a
+                    // marker-armed child process running exactly this one
+                    // test, so no other thread can observe the mutation.
+                    // A direct `cargo test` run returns before this point.
+                    unsafe {
+                        std::env::set_var("CARGO_TARGET_DIR", value);
+                    }
+                }
+                self.inner.run(cwd, args)
+            }
+            fn run_with_env(
+                &self,
+                cwd: &Path,
+                args: &[OsString],
+                env: &[(OsString, OsString)],
+            ) -> io::Result<ProcessOutput> {
+                self.inner.run_with_env(cwd, args, env)
+            }
+        }
+        if std::env::var("M016_ENV_PROBE_ARMED").is_err() {
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        let (root_a, root_b, _orphan) = island_pair(&d);
+        let mut staged = StagedCargo::new();
+        staged.add(&root_a, root_a.join("target"), None);
+        staged.add(&root_b, root_b.join("target"), None);
+        let poison = match std::env::var_os("CARGO_TARGET_DIR") {
+            Some(current) => {
+                let mut poisoned = current;
+                poisoned.push("-m016-poisoned");
+                poisoned
+            }
+            None => OsString::from("/m016-poisoned-target"),
+        };
+        let runner = EnvPoisonRunner {
+            inner: &staged,
+            calls: AtomicUsize::new(0),
+            poison: Some(poison),
+        };
+        let report = clean_with_roots_policy_selector_guarded(
+            std::slice::from_ref(&d.path().to_path_buf()),
+            0,
+            &[],
+            CleanMode::Execute,
+            &runner,
+            &NoopObserver,
+            &CleanupPolicy::default(),
+            None,
+            None,
+            &CleanupSelection::All,
+            true,
+        )
+        .unwrap();
+        assert!(
+            staged.clean_calls().is_empty(),
+            "merge before the first spawn: {:?}",
+            staged.clean_calls()
+        );
+        assert!(report.results.is_empty(), "{report:?}");
+        let block = report.scope_blocked.as_ref().expect("scan block retained");
+        assert_eq!(block.reason, ScopeBlockReason::OwnershipUnproven);
+        assert!(
+            block.message.contains("output environment changed"),
+            "merge names the cause: {}",
+            block.message
+        );
+    }
+
+    /// M016/D: a partitioned listing offers proceed-island rows, sets no
+    /// block when nothing is held, and carries no held context. The session
+    /// can offer exactly what the engine would act on.
+    #[test]
+    fn partitioned_listing_offers_proceed_rows_with_no_block() {
+        let d = tempfile::tempdir().unwrap();
+        let (root_a, root_b, _orphan) = island_pair(&d);
+        let mut runner = StagedCargo::new();
+        runner.add(&root_a, root_a.join("target"), None);
+        runner.add(&root_b, root_b.join("target"), None);
+        let listing = list_cleanup_candidates(
+            std::slice::from_ref(&d.path().to_path_buf()),
+            0,
+            CleanMode::Simulate,
+            &runner,
+            &NoopObserver,
+            &CleanupSelection::All,
+            true,
+        )
+        .unwrap();
+        assert!(listing.scope_blocked.is_none(), "{listing:?}");
+        assert!(listing.held_context.is_empty(), "{listing:?}");
+        let mut offered: Vec<PathBuf> = listing.candidates.iter().map(|c| c.root.clone()).collect();
+        offered.sort();
+        assert_eq!(offered, vec![root_a, root_b], "{listing:?}");
+    }
+
+    /// M016/D: a merged universe offers nothing, keeps the refusal exactly
+    /// as today, and names the held island as context — never as rows.
+    /// Selection can remove candidates, never add proof: the held island
+    /// stays unofferable.
+    #[test]
+    fn partitioned_listing_refuses_merged_universe_with_held_context() {
+        let d = tempfile::tempdir().unwrap();
+        let (root_a, root_b, _orphan) = island_pair(&d);
+        let mut runner = StagedCargo::new();
+        runner.add(&root_a, root_a.join("target"), None);
+        runner.add(&root_b, root_b.join("target"), None);
+        // B's metadata fails: byte-capable unknown, merges everything.
+        runner.fail_metadata_from(1, 1);
+        let listing = list_cleanup_candidates(
+            std::slice::from_ref(&d.path().to_path_buf()),
+            0,
+            CleanMode::Simulate,
+            &runner,
+            &NoopObserver,
+            &CleanupSelection::All,
+            true,
+        )
+        .unwrap();
+        assert!(listing.candidates.is_empty(), "{listing:?}");
+        let block = listing.scope_blocked.as_ref().expect("refusal as today");
+        assert_eq!(block.reason, ScopeBlockReason::OwnershipUnproven);
+        assert_eq!(listing.held_context.len(), 1, "{listing:?}");
+        assert!(
+            listing.held_context[0].contains("held island")
+                && listing.held_context[0].contains("merged by"),
+            "{}",
+            listing.held_context[0]
         );
     }
 
@@ -6295,6 +7617,7 @@ mod tests {
             &mut diags,
             &noop,
             &CleanupSelection::All,
+            false,
         )
         .unwrap();
         assert_eq!(scope.units.len(), 1);
@@ -6438,6 +7761,7 @@ mod tests {
                 omitted: vec![crate::policy::AutomaticOmission::NotFound(absent.clone())],
             }),
             &CleanupSelection::All,
+            false,
         )
         .unwrap();
         assert!(ok.scope_blocked.is_none());
@@ -6461,6 +7785,7 @@ mod tests {
                 omitted: vec![crate::policy::AutomaticOmission::NotFound(absent.clone())],
             }),
             &CleanupSelection::All,
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -7097,6 +8422,7 @@ mod tests {
             &mut diags,
             &noop,
             &CleanupSelection::All,
+            false,
         )
         .unwrap();
         let workspaces = scope.workspaces;
@@ -7904,6 +9230,15 @@ mod tests {
         fail_metadata_from: Option<usize>,
     }
 
+    /// M016: a locate refusal with a Cargo-shaped reason, matched by
+    /// canonical manifest path. Lets engine tests build refused unknowns
+    /// with parent-naming reasons (passengers) instead of only the generic
+    /// lookup failure (scope notes).
+    struct LocateRefusal {
+        manifest: PathBuf,
+        reason: String,
+    }
+
     /// Multi-workspace Cargo fixture with per-workspace output staging,
     /// metadata failure injection, and observable `cargo clean` effects.
     struct StagedCargo {
@@ -7912,6 +9247,7 @@ mod tests {
         metadata_calls: Mutex<Vec<usize>>,
         clean_removes: Mutex<Vec<PathBuf>>,
         clean_hook: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+        refusals: Vec<LocateRefusal>,
     }
 
     fn cargo_ok(json: serde_json::Value) -> ProcessOutput {
@@ -7940,6 +9276,7 @@ mod tests {
                 metadata_calls: Mutex::new(Vec::new()),
                 clean_removes: Mutex::new(Vec::new()),
                 clean_hook: Mutex::new(None),
+                refusals: Vec::new(),
             }
         }
 
@@ -7968,6 +9305,19 @@ mod tests {
 
         fn fail_metadata_from(&mut self, index: usize, from_call: usize) {
             self.ws[index].fail_metadata_from = Some(from_call);
+        }
+
+        /// Refuse `locate-project` for one manifest with a Cargo-shaped
+        /// reason (matched by canonical path). A reason naming a resolved
+        /// parent workspace produces a passenger; anything else a scope
+        /// note — the same attribution real Cargo failures take.
+        fn refuse_locate(&mut self, manifest: &Path, reason: &str) -> &mut Self {
+            let key = fs::canonicalize(manifest).unwrap_or_else(|_| manifest.to_path_buf());
+            self.refusals.push(LocateRefusal {
+                manifest: key,
+                reason: reason.to_string(),
+            });
+            self
         }
 
         fn on_clean(&mut self, hook: impl Fn() + Send + Sync + 'static) {
@@ -8026,6 +9376,11 @@ mod tests {
         fn dispatch(&self, args: &[OsString]) -> io::Result<ProcessOutput> {
             if args.first().is_some_and(|a| a == "locate-project") {
                 let manifest = args.last().unwrap();
+                let key = fs::canonicalize(Path::new(manifest))
+                    .unwrap_or_else(|_| PathBuf::from(manifest));
+                if let Some(refusal) = self.refusals.iter().find(|r| r.manifest == key) {
+                    return Ok(cargo_fail(&refusal.reason));
+                }
                 return Ok(match self.find_ws(manifest) {
                     Some(i) => cargo_ok(serde_json::json!({
                         "root": self.ws[i].root.join("Cargo.toml")

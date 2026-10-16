@@ -448,6 +448,7 @@ fn run_cleanup(
         selector.clone(),
         Some(premise),
         &selection,
+        request.partitioned,
     );
     renderer.finish_and_clear();
     let report = cleanup?;
@@ -560,16 +561,26 @@ fn resolve_candidate_selection(
         &cargo_cleanme::cleanup::SystemCleanupRunner,
         &silent,
         &anchor,
+        request.partitioned,
     )?;
     if let Some(block) = listing.scope_blocked {
         // Offering rows from an unproven universe would be the ADR 006 shape in
         // a new costume: the operator would be picking from a list whose
         // classification is exactly what failed.
-        let detail =
+        let mut detail =
             cargo_cleanme::cleanup::blocked_listing_detail(&block, &listing.unresolved_ownership);
+        for line in &listing.held_context {
+            detail.push_str(&format!("\n{line}"));
+        }
         return Err(AppError::Config(format!(
             "cannot present an interactive selection: {detail}"
         )));
+    }
+    // M016/D: held islands are non-selectable context, never rows. Printed
+    // before the session so the operator sees what is held back; empty on
+    // flag-off runs and on all-proceed partitions.
+    for line in &listing.held_context {
+        eprintln!("{line}");
     }
     match cargo_cleanme::interactive::run_interactive(listing.candidates) {
         Ok(cargo_cleanme::interactive::SessionResult::Selected(roots)) => Ok(
@@ -600,6 +611,7 @@ fn run_engine_guarded(
     selector: Option<cargo_cleanme::cleanup::CleanupSelector>,
     premise: Option<cargo_cleanme::cleanup::AdmissionPremise>,
     selection: &cargo_cleanme::cleanup::CleanupSelection,
+    partitioned: bool,
 ) -> Result<cargo_cleanme::cleanup::CleanReport, AppError> {
     let attempt = |roots: &[std::path::PathBuf],
                    premise: Option<cargo_cleanme::cleanup::AdmissionPremise>| {
@@ -614,6 +626,7 @@ fn run_engine_guarded(
             selector.clone(),
             premise,
             selection,
+            partitioned,
         )
     };
     match attempt(&resolved.roots, premise.clone()) {

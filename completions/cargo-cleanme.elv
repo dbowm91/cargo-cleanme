@@ -111,6 +111,7 @@ set edit:completion:arg-completer[cargo] = {|@words|
             cand --full 'Complete Full reconciliation before cleaning its learned roots'
             cand --dry-run 'Application simulation: run the full decision/proof/report path but invoke no Cargo clean command. The default mode is Execute'
             cand --cargo-preview 'Cargo preview: after the same complete final proof, invoke Cargo''s own `clean --dry-run --verbose`. Never removes anything'
+            cand --partitioned 'Partition a blocked scope into proof islands and clean each provable island independently; hold the rest with typed reasons. Default off: without it a single unprovable manifest blocks the whole scope. Composes with `--dry-run` (predicts per-island spawns, spawns nothing) and never changes default behavior'
             cand --yes 'Historical spelling of the (now default) Execute mode; retained as a hidden alias'
             cand --dryrun 'Historical spelling of `--dry-run`; retained as a hidden alias'
             cand --no-progress 'Disable transient progress UI (useful for benchmarks and debugging)'

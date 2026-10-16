@@ -8,6 +8,17 @@ command-line, JSON, and release-asset contracts are the stable surface.
 
 ## [Unreleased]
 
+### Added
+
+- **`clean --partitioned`: per-island cleanup activation behind an explicit
+  opt-in flag.** A scope blocked by unprovable manifests partitions into
+  proof islands; each provable island is cleaned independently while the rest
+  is held with typed reasons, and the exit code stays nonzero while anything
+  is held or failed. Default behavior is unchanged: without the flag a single
+  unprovable manifest still blocks the whole scope. The machine surface gains
+  one additive field (`result.islands` with per-island roots, verdict,
+  cause, and passengers); reason codes and exit codes are unchanged.
+
 ## [0.2.8] - 2026-10-15
 
 ### Added
