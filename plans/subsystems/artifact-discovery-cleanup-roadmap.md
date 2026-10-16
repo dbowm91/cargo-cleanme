@@ -1043,9 +1043,16 @@ a retained block (believed-orphan case) — so activation has a real target when
 ADR 004 is decided. An in-tree enforcement pass-through found during the work
 was removed rather than shipped (see closure record §"Plan §2 disposition").
 
-## Post-M015 proposed (gates cleared, ready) — M016 per-island cleanup activation
+## Post-M015 proposed (conditionally closed) — M016 per-island cleanup activation
 
-Status: **proposed, gates cleared, ready for implementation**.
+Status: **conditionally closed** — see
+`plans/closure/artifact-discovery-cleanup/m016-status.md`. Implemented and
+verified behind `--partitioned` (flag-off parity pinned, combined-evidence
+proof, additive JSON islands axis, `-i` partial offer); hosted lanes green
+modulo one carried pre-existing toolchain-drift failure. Tree at 0.2.9
+unpublished; the ADR 004 item (e) distinct release gate runs at release
+time.
+
 Implementation plan:
 
 - `plans/implementation/artifact-discovery-cleanup/m016-per-island-cleanup-activation.md`
