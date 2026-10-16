@@ -227,3 +227,19 @@ Any discovered manifest that remains uncovered is an unresolved ownership partic
 Therefore Preview, Simulate, and Execute fail closed for the entire cleanup scope while unresolved ownership participants remain. No cargo clean command, including cargo clean --dry-run, may run in that state.
 
 Read-only scan remains partial-result tolerant; this completeness requirement is specific to destructive ownership qualification.
+
+
+## C004/C006 clarification — bounded per-island activation under partial discovery
+
+Clarification date: 2026-10-16 (ADR 004 accepted).
+
+C004's whole-scope block and C006's single combined ownership universe remain the default: with no explicit opt-in, any unresolved ownership participant blocks Preview, Simulate, and Execute for the entire selected scope.
+
+Amended behavior, only behind the explicit `--partitioned` opt-in on `clean`:
+
+- The scope may proceed per island — connected components of the independence-certificate partition, merging on any uncertain cross-component relationship — where an island satisfies all of: component completeness over the island's roots; resolved non-overlap computed from the combined graph; no unknowns except `RefusedByCargo`-capability passengers attributed to a resolved in-island workspace Cargo itself named; environment provenance match before the island's first spawn.
+- Partitioning applies at the spawn decision only. Grouping, classification, overlap evidence, and the twelve-gate final proof still read the full combined universe including held islands. Every spawn remains one workspace CleanupUnit over its complete OutputSet via `cargo clean`, and all policy and capability gates apply per unit exactly as today.
+- Every other island is held with its typed reason and the run reports partial success. Flag absence is byte-identical to the pre-amendment behavior and is the kill-switch and rollback: not passing the flag rolls back.
+- Full rule text, soundness basis, contract, and release gate live in ADR 004's accepted amendment section.
+
+This clarifies the operational consequence of C004/C006 under partial discovery; it does not authorize new external/shared cleanup behavior beyond the stated rule, and it does not reinterpret the existing guarantees.
