@@ -2,17 +2,19 @@
 
 Plan: `plans/implementation/artifact-discovery-cleanup/m015-proof-island-certificate-and-partition-report.md`
 
-Disposition: **conditionally closed.** Implementation, local verification, and
-live-data collection are complete. Landed as commit `0c68c37` (see
-"Implementation" below); one item remains open: hosted Linux/macOS/Windows +
-MSRV 1.89 lanes for the fixture-bearing packages (plan §10; local runs are
-Linux-only). Unlike behavior correctives, **no publication is required to
-close**: M015 changes zero dispositions by construction (parity test + JSON
-key-set lock below), so no release must carry it.
+Disposition: **closed.** Implementation, local verification, live-data
+collection, and hosted OS/MSRV lanes are complete. Landed as commit
+`49bcab1` (fix commits `eb82ad2`, `1993301` below); the one remaining
+red is the pre-existing profile-selector environment failure, which fails
+identically on pristine HEAD, is unrelated to M015, and is carried as an
+unresolved finding with its own corrective need. Unlike behavior
+correctives, **no publication is required to close**: M015 changes zero
+dispositions by construction (parity test + JSON key-set lock below), so no
+release must carry it. M015 closure clears M016 §2 gate 1 (gate 2 cleared
+by ADR 004 acceptance `1c56e9f`; gate 3 was already satisfied).
 
 Implementation (working tree atop baseline `0a5a6e6`, release 0.2.8;
-`git status` showed 13 modified files + 2 new files (this record and the
-plan itself), `2390 insertions(+), 71 deletions(-)`; landed in `0c68c37`):
+landed in `49bcab1`, plus `eb82ad2` and `1993301` on the closure PR):
 
 - `src/domain.rs` — `UnknownCapability` (`RefusedByCargo` vs `Unproven`) on
   `UnresolvedOwnershipParticipant`, recorded where each failure is classified.
@@ -111,17 +113,31 @@ pass-through — was removed above).
 | `python3 scripts/check-fixture-portability.py --self-test` + run | Self-test passed; 37 files clean. |
 | `python3 scripts/check-doc-citations.py --self-test` + run | Self-test passed; 17 documents clean. |
 | `cargo run --quiet --features dev-tools --bin generate-docs -- --check` | 13 artifacts match the clap model (CLI surface unchanged). |
-| Hosted Linux/macOS/Windows + MSRV 1.89 lanes | **Not run** (local Linux only) — outstanding, hence conditional closure. |
+| Hosted lanes, PR #14 (`plans/m015-proof-island-certificate-and-partition-report`), post-fix tree `eb82ad2` + CI fix `1993301` | `checks` lib target per OS: **ubuntu 450 passed + 1 failed, macOS 447 passed + 1 failed, Windows 413 passed + 1 failed** — the single failure on every OS is the same pre-existing `real_temp_project_preview_and_execute_with_redirected_target` environment failure (below). fmt, clippy, and all other lib tests — including every M015 certificate/partition/hostile-control test — green on all three OSes. `msrv` job green on hosted ubuntu. `installers`, `generated-docs`, `benchmark` green. |
+| MSRV 1.89 lane (`cargo +1.89 check/test --locked --all-targets`, exact CI commands, local) | check clean; **lib 451 passed, 0 failed; cli_contract 56 passed; end_to_end 4 passed.** The allowlist covers 1.89.0, so the pre-existing failure passes here — confirming it is pure toolchain drift, not product behavior. |
+| macOS canonicalization defect found by the hosted lane (M015-owned) | Pre-fix macOS run: 445 passed, 3 failed — two M015 tests (`partition_reports_islands_…`, `unresolved_manifest_overlap_…`) asserted raw-TMPDIR paths while discovery canonicalizes (`/var` vs `/private/var`). Fixed in `eb82ad2` (canonicalize the tempdir base, established repo pattern); reproduced on Linux with a symlinked TMPDIR (fail before, pass after); post-fix macOS lane shows only the pre-existing failure. Product code needed no change (canonical throughout). |
+| CI structural finding + fix (`1993301`) | The `checks` matrix ran with default fail-fast, so the first red lane (ubuntu, fastest) cancelled macOS/Windows before they reported — repeated cancellations made hosted evidence unobtainable on any branch while any lane is red. `fail-fast: false` added to the `checks` matrix with rationale comment (installers matrix untouched). Post-fix, all three OS lanes report independently. |
 | `scripts/release-check.sh` | Not run (requires clean tree + `eggpack` + 1.89; not routine verification). |
 
 ## Known limitations
 
-- Landed in `0c68c37` (local branch `main`, not pushed); hosted
-  OS/MSRV qualification is outstanding (above).
+- Landed in `49bcab1` on closure PR #14 (branch
+  `plans/m015-proof-island-certificate-and-partition-report`, unmerged);
+  fix commits `eb82ad2` (macOS canonicalization) and `1993301` (CI
+  fail-fast) ride the same PR.
+- The one red test on every hosted lane is carried, not fixed: the
+  profile-selector allowlist does not qualify host stable cargo, so
+  `real_temp_project_preview_and_execute_with_redirected_target` skips
+  where it expects preview. Fail-closed direction; needs its own
+  corrective (below). Because CI stops at the lib-target failure,
+  `cli_contract`/`end_to_end` did not execute on hosted lanes; they are
+  green locally on stable and MSRV 1.89 (56 + 4).
 - The operator's original single-bad-manifest case (e.g. the codegg
   `fuzz/Cargo.toml` shape, reproduced as G1c) **still blocks by design**:
   the partition shows the would-proceed island and names the passenger, but
-  the engine does not act on it. Relief requires ADR 004 acceptance + M016.
+  the engine does not act on it. Relief is now authorized (ADR 004
+  accepted `1c56e9f`) and designed (M016 plan `b55a5e9`); all three M016
+  gates are cleared.
 - Live fixtures lived in `/tmp` (ephemeral); their outputs are captured in
   the table above, not re-runnable from the repo.
 - `09-cleanup.md` group-table rows older than the M015 row still cite
@@ -131,14 +147,20 @@ pass-through — was removed above).
 ## Unresolved findings by severity
 
 - **Low (test-env/toolchain drift, pre-existing):** profile-selector version
-  allowlist does not qualify host cargo 1.99.1, so one real-Cargo test
+  allowlist does not qualify host stable cargo, so one real-Cargo test
   skips where it expects preview. Fail-closed direction (skip, zero spawns);
-  product behavior safe. Needs its own corrective (qualify 1.99.1 with
-  hosted evidence) — explicitly out of M015 scope; M015 neither fixes nor
-  masks it (recorded, not reclassified).
-- **None medium or higher.** No defect found in M015's own code; per the
-  corrective-pass rule, any future material defect gets a new plan, not an
-  edit to this record.
+  product behavior safe. Needs its own corrective (qualify current stable
+  with hosted evidence) — explicitly out of M015 scope; M015 neither fixes
+  nor masks it (recorded, not reclassified).
+- **Low (M015-owned, found and fixed pre-closure):** two M015 tests
+  asserted raw-TMPDIR paths and failed on the macOS hosted lane
+  (`/var` vs `/private/var`). Fixed in `eb82ad2` by canonicalizing the
+  tempdir base; root cause was test-side only (product canonicalizes
+  throughout), reproduced on Linux with a symlinked TMPDIR, and the
+  post-fix macOS lane confirms. No corrective needed — the milestone was
+  still open, and the hosted lane did exactly the job plan §10 required.
+- **None medium or higher.** Per the corrective-pass rule, any future
+  material defect gets a new plan, not an edit to this record.
 
 ## Deferred enforcement (for a future ADR-004-gated corrective, not authorized here)
 

@@ -1006,13 +1006,18 @@ Rootless `scan` remains attempted exhaustive read-only Full with accurate partia
 
  Completion requires separate `plans/closure/artifact-discovery-cleanup/c032-status.md`, `c033-status.md`, `c034-status.md`, with implementation SHA, baseline failure, counterexample-negative fixtures that actually fail against v0.2.5, subprocess+real-Cargo fixture evidence, fmt/clippy/tests/checker self-tests and hosted OS/MSRV results. The specifically reported mixed-root no-clean case must either be demonstrably solved under accepted proof or transparently retained as a blocked limitation, not converted into a false green.
 
-## Post-v0.2.8 — M015 proof-island certificate and partition report (conditionally closed)
+## Post-v0.2.8 — M015 proof-island certificate and partition report (closed)
 
-Status: **conditionally closed** — see
+Status: **closed** — see
 `plans/closure/artifact-discovery-cleanup/m015-status.md`. Research +
-reporting milestone; no destructive behavior change and no ADR amendment.
-Hosted OS/MSRV lanes and VCS landing are outstanding; no publication is
-required (zero disposition change).
+reporting milestone; no destructive behavior change. Landed `49bcab1`
+plus fix commits `eb82ad2` (macOS-only test canonicalization defect
+found by the hosted lane, fixed pre-closure) and `1993301` (CI
+fail-fast fix). Hosted lanes complete: lib green on Linux (450),
+macOS (447), Windows (413) modulo one carried pre-existing
+toolchain-drift failure; MSRV 1.89 fully green (451+56+4); no
+publication required (zero disposition change). ADR 004 accepted with
+C004/C006 amendment (`1c56e9f`); all three M016 gates cleared.
 
 Plan:
 
@@ -1038,10 +1043,10 @@ a retained block (believed-orphan case) — so activation has a real target when
 ADR 004 is decided. An in-tree enforcement pass-through found during the work
 was removed rather than shipped (see closure record §"Plan §2 disposition").
 
-## Post-M015 proposed (blocked) — M016 per-island cleanup activation
+## Post-M015 proposed (gates cleared, ready) — M016 per-island cleanup activation
 
-Status: **proposed, blocked**. Implementation plan (design only, no
-authority to implement):
+Status: **proposed, gates cleared, ready for implementation**.
+Implementation plan:
 
 - `plans/implementation/artifact-discovery-cleanup/m016-per-island-cleanup-activation.md`
 
