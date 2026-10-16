@@ -1090,9 +1090,14 @@ proof with overlap evidence still read from the full combined universe;
 partitioning touches the spawn decision, never the graph. Stop
 conditions S1–S4; S3 (ADR refusal) ends the line with the block retained.
 
-## M017 — scoped proof default (active, owner-directed)
+## M017 — scoped proof default (conditionally closed; publication + release gate + hosted integration evidence outstanding)
 
-Status: **active** — see
+Status: **conditionally closed** — see
+`plans/closure/artifact-discovery-cleanup/m017-status.md` for the evidence.
+Implementation, local verification, and hosted OS/MSRV lanes are complete
+(modulo the carried pre-existing toolchain-drift failure, which also
+suppresses hosted integration-suite execution); publication and the
+item (e) release gate run at release time. Plan:
 `plans/implementation/artifact-discovery-cleanup/m017-scoped-proof-default.md`
 (plan; ADR 007 accepted 2026-10-16). Single mechanism, no coexistence with
 the M016 flag or C035 config scopes (both superseded before any publication):
