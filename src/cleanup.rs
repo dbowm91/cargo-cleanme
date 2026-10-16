@@ -5025,11 +5025,14 @@ mod tests {
     #[test]
     fn partition_reports_islands_but_engine_still_blocks_with_zero_spawns_in_every_mode() {
         let d = tempfile::tempdir().unwrap();
-        let root_a = ws_root(d.path(), "island-a");
-        let root_b = ws_root(d.path(), "island-b");
+        // macOS: TMPDIR's /var is a symlink to /private/var, while discovery
+        // canonicalizes every manifest, so expectations must use the base.
+        let base = d.path().canonicalize().unwrap();
+        let root_a = ws_root(&base, "island-a");
+        let root_b = ws_root(&base, "island-b");
         // A third manifest no staged workspace claims: locate refuses it, so
         // it owns no bytes (scope note), while A and B stay output-disjoint.
-        let orphan = d.path().join("orphan/Cargo.toml");
+        let orphan = base.join("orphan/Cargo.toml");
         std::fs::create_dir_all(orphan.parent().unwrap()).unwrap();
         std::fs::write(&orphan, "").unwrap();
         for mode in [
@@ -5151,11 +5154,14 @@ mod tests {
     #[test]
     fn unresolved_manifest_overlap_merges_and_engine_blocks_with_zero_spawns_in_every_mode() {
         let d = tempfile::tempdir().unwrap();
-        let root_a = ws_root(d.path(), "overlap-a");
-        let root_b = ws_root(d.path(), "overlap-b");
+        // macOS: TMPDIR's /var is a symlink to /private/var, while discovery
+        // canonicalizes every manifest, so expectations must use the base.
+        let base = d.path().canonicalize().unwrap();
+        let root_a = ws_root(&base, "overlap-a");
+        let root_b = ws_root(&base, "overlap-b");
         let target_a = cargo_output(&root_a.join("target"), 4096);
         let target_b = cargo_output(&root_b.join("target"), 2048);
-        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        backdate(&base, SystemTime::now() - Duration::from_secs(3600));
         for mode in [
             CleanMode::CargoPreview,
             CleanMode::Simulate,
