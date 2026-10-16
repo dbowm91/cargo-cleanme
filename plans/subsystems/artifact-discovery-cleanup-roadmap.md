@@ -1,6 +1,6 @@
 ## Artifact Discovery and Cleanup Roadmap
 
-Status: Phase 12 implementation remains **closed** under ADR 003. Its first published realization, immutable v0.2.0, carried two destructive defects; **C023 is closed** — its last open criterion, a green **automatic** `release: published` five-lane smoke, was met by the v0.2.2 release (run `37561575727`). Both defects are fixed and shipped in v0.2.1, and crates.io 0.2.0 is yanked and disclosed. **C024** — Windows glob canonicalization — is **closed and shipped in v0.2.2**: the canonical-glob rewrite now runs on Windows, and the hosted Windows lane observed the fix. **C025** is closed. **C026 is closed** — a cross-subsystem planning/architecture/repository-hygiene corrective that changed no cleanup or matching semantics. **C028 is closed and shipped in v0.2.4**: provenance admission for automatic roots, late admission rechecks, Full-generation freshness, and Full-only absence pruning fix the stale-learned-root abort; hosted lanes green, automatic five-target smoke green (`37850582892`), release record `r024-status.md`. Historical Phase 12, C023–C026 closures are unchanged. **C029–C031 safe tracks are closed**: corrected-head hosted run `37953997910` is green on Ubuntu, Windows, macOS, MSRV, generated docs, benchmark, and Linux/Windows/macOS installers. C031's proposed ADR 004 still blocks independent partial-scope Execute.
+Status: Phase 12 implementation remains **closed** under ADR 003. Its first published realization, immutable v0.2.0, carried two destructive defects; **C023 is closed** — its last open criterion, a green **automatic** `release: published` five-lane smoke, was met by the v0.2.2 release (run `37561575727`). Both defects are fixed and shipped in v0.2.1, and crates.io 0.2.0 is yanked and disclosed. **C024** — Windows glob canonicalization — is **closed and shipped in v0.2.2**: the canonical-glob rewrite now runs on Windows, and the hosted Windows lane observed the fix. **C025** is closed. **C026 is closed** — a cross-subsystem planning/architecture/repository-hygiene corrective that changed no cleanup or matching semantics. **C028 is closed and shipped in v0.2.4**: provenance admission for automatic roots, late admission rechecks, Full-generation freshness, and Full-only absence pruning fix the stale-learned-root abort; hosted lanes green, automatic five-target smoke green (`37850582892`), release record `r024-status.md`. Historical Phase 12, C023–C026 closures are unchanged. **C029–C031 safe tracks are closed**: corrected-head hosted run `37953997910` is green on Ubuntu, Windows, macOS, MSRV, generated docs, benchmark, and Linux/Windows/macOS installers. C031's partial-scope research is answered for the narrowed rule: ADR 004 was accepted 2026-10-16 with the C004/C006 amendment and M016 implements per-island activation behind `--partitioned` (see Post-M015/M016 sections below). General automatic partition beyond that rule remains out of scope; the operator-declared-scopes route (C035, separate branch) needs a scope decision against M016.
 
 
 Repository audit baseline: 3ee9699a0b0d987287d08e427195284e08d079f7
@@ -980,7 +980,7 @@ Reported Linux reproduction: `cargo cleanme scan` produced 1,102+ individually b
 
 ## Post-v0.2.5 corrective sequence — C032–C034 Cargo failures, learned-root liveness, real default cleanup
 
-Status: **C032 conditionally closed pending publication; C033 active for admission/reporting, proposed ADR 005 gates negative state persistence; C034 active for existing-proof qualification, destructive partition blocked by unaccepted ADR 004**. C032 implementation and hosted qualification are complete; its corrective remains open until a release carries it. C033 has a local safe implementation slice; C034 also has a Unix real-Cargo default-Routine positive control. C032's current-head hosted run `38021809640` is green on Linux, macOS, Windows, MSRV 1.89, generated docs, benchmark, and installer lanes. C033/C034 acceptance and closure records remain outstanding.
+Status: **C032 conditionally closed pending publication; C033 active for admission/reporting, proposed ADR 005 gates negative state persistence; C034 active safe-track, its §D partition research answered for the M016 rule by accepted ADR 004 (2026-10-16, as amended)**. C032 implementation and hosted qualification are complete; its corrective remains open until a release carries it. C033 has a local safe implementation slice; C034 also has a Unix real-Cargo default-Routine positive control. C032's current-head hosted run `38021809640` is green on Linux, macOS, Windows, MSRV 1.89, generated docs, benchmark, and installer lanes. C033/C034 acceptance and closure records remain outstanding.
 
 Planning baseline: `7c874ab7998bdac28a6236ec21ae59ec24b915f8` (`main`, 2026-10-09, v0.2.5). Branch: `plans/c032-c034-routine-cleanup-reliability`.
 
@@ -997,7 +997,7 @@ Planning baseline: `7c874ab7998bdac28a6236ec21ae59ec24b915f8` (`main`, 2026-10-0
 
 1. **C032 — conditionally closed, awaiting publication:** `plans/implementation/artifact-discovery-cleanup/c032-cargo-workspace-resolution-diagnostics-and-noise-corrective.md`; evidence in `plans/closure/artifact-discovery-cleanup/c032-status.md`. Implementation and hosted qualification are complete. Keep it open until a published release carries the corrective; C032 does not authorize a release.
 2. **C033 — active / partial decision gate:** `plans/implementation/artifact-discovery-cleanup/c033-learned-root-reconciliation-and-unavailable-noise-corrective.md`. Admission summaries group omissions by exact typed reason with a count and bounded path samples. A two-invocation fixture over 100 missing hints proves bounded repeat output, unchanged state bytes, healthy sibling admission, and zero-clean simulation. Persistent advisory-hint retirement requires acceptance of `plans/adr/005-proposed-targeted-learned-root-retirement.md`, a forward exception to ADR 002 Full-only expiry. Until accepted, no Routine negative state write.
-3. **C034 — active safe proof, independent execution blocked:** `plans/implementation/artifact-discovery-cleanup/c034-default-routine-cleanup-live-happy-path-and-ownership-corrective.md`. `tests/cli_contract.rs::routine_bare_dry_run_and_execute_use_real_cargo_on_default_seed` now proves a staged `cargo cleanme` with no configured `scan.root` resolves isolated `$HOME/projects` as Routine; a real Cargo build provides output, dry-run selects one unit without clean spawn or byte mutation, and Execute invokes real `cargo clean` once and reclaims bytes. Still outstanding: installed v0.2.5 stage capture, heterogeneous Full→Routine and blocked-scope controls, Linux/macOS/Windows/MSRV hosted results, and complete operator docs. Work that executes in one apparently healthy partition despite unknown/unresolved sources is not authorized by ADR 001/C004/C006: `plans/adr/004-proposed-bounded-independent-cleanup-proof-islands.md` remains **proposed**, with redirect/overlap/TOCTOU safety negative controls still required before acceptance.
+3. **C034 — active safe proof; §D partition research answered for the M016 rule:** `plans/implementation/artifact-discovery-cleanup/c034-default-routine-cleanup-live-happy-path-and-ownership-corrective.md`. `tests/cli_contract.rs::routine_bare_dry_run_and_execute_use_real_cargo_on_default_seed` now proves a staged `cargo cleanme` with no configured `scan.root` resolves isolated `$HOME/projects` as Routine; a real Cargo build provides output, dry-run selects one unit without clean spawn or byte mutation, and Execute invokes real `cargo clean` once and reclaims bytes. Still outstanding: installed v0.2.5 stage capture, heterogeneous Full→Routine and blocked-scope controls, Linux/macOS/Windows/MSRV hosted results, and complete operator docs. 2026-10-16 update: ADR 004 is accepted with the C004/C006 amendment and M016 implements the narrowed per-island activation behind `--partitioned`; C034 implements no partition itself and broader automatic partition stays out of scope.
 4. **Publication qualification (future, not yet a numbered plan):** only after C032–C034 acceptance and hosted Linux/macOS/Windows/MSRV verification, stage and inspect *released binary behavior*, real mixed-home fixtures, and the five-target automatic published-release smoke. Do not tag on planning evidence alone.
 
 **Cross-cutting invariants and closure gates**
@@ -1005,6 +1005,32 @@ Planning baseline: `7c874ab7998bdac28a6236ec21ae59ec24b915f8` (`main`, 2026-10-0
 Rootless `scan` remains attempted exhaustive read-only Full with accurate partial coverage; `scan ROOT` is strict Explicit; bare `cargo cleanme` is Routine Execute and `--dry-run` is Simulate with zero Cargo cleans. Learned state remains advisory and can never authorize bytes. No direct deletion. Every Cargo-mediated clean remains one workspace's full OutputSet; physical shared/external/unproven output is inventory-only, and successful fresh complete ownership proof across the selected source universe remains mandatory. A new CLI/JSON/log contract change requires its own explicit decision, regenerated completions/man pages and machine-contract tests; `--format log` stays <=384 ASCII bytes without paths. All correctives retain Rust 1.89 support and full state-schema forward compatibility.
 
  Completion requires separate `plans/closure/artifact-discovery-cleanup/c032-status.md`, `c033-status.md`, `c034-status.md`, with implementation SHA, baseline failure, counterexample-negative fixtures that actually fail against v0.2.5, subprocess+real-Cargo fixture evidence, fmt/clippy/tests/checker self-tests and hosted OS/MSRV results. The specifically reported mixed-root no-clean case must either be demonstrably solved under accepted proof or transparently retained as a blocked limitation, not converted into a false green.
+
+## M014 — CWD-scoped default and interactive selection (closed, shipped in v0.2.8)
+
+Status: **closed** — see
+`plans/closure/artifact-discovery-cleanup/m014-status.md`. PR #13
+implemented the CWD-anchored default (`CleanupSelection::WorkingDirectory`),
+`scan --all`/`-a`, and the `-i` selection TUI over the engine's own
+candidate listing; hosted CI, drift guard, and selector qualification were
+all green on the merge head, and v0.2.8 carries it (tag `v0.2.8` at
+`0a5a6e6`, CHANGELOG `[0.2.8]`). No `r028` distribution receipt was written;
+that is distribution-line debt.
+
+## C035 — operator-declared independent maintenance scopes (open on branch)
+
+Status: **open, unmerged — needs a rebase plus a scope decision against
+M016 before anyone merges it.** Branch
+`plans/c035-operator-scoped-cleanup` (baseline `6bad266`, v0.2.6-era)
+implements operator-declared `[maintenance] scopes` with a closure draft on
+the branch (hosted CI green at the time, run `38513116448`). The branch
+predates the M014 merge — merged as-is it would delete `src/interactive.rs`
+and the CWD anchor — and predates ADR 004 acceptance and M016, so its
+"ADR 004 proposed" premise is stale and its mechanism overlaps M016's
+automatic `--partitioned` islands with a second partition scheme. Eligible
+next step is a planning decision (operator-declared scopes vs/plus
+automatic per-island activation), then a rebase onto current `main`; no code
+merges until then.
 
 ## Post-v0.2.8 — M015 proof-island certificate and partition report (closed)
 

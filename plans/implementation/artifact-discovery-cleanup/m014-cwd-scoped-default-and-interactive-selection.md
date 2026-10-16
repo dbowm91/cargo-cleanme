@@ -1,8 +1,7 @@
 # M014 — Working-Directory-Scoped Default and Interactive Workspace Selection
 
-Status: **implemented, unpublished.** Work packages A–F are complete and the
-verification ladder is green. The milestone stays **open** until a published
-release carries it — compilation is not closure (M012A, C032).
+Status: **closed** — see `plans/closure/artifact-discovery-cleanup/m014-status.md`.
+Implemented in PR #13, hosted-qualified on its merge head, shipped in v0.2.8.
 Baseline: `ba44927` (`main`, v0.2.7 published).
 Roadmap: `plans/subsystems/artifact-discovery-cleanup-roadmap.md`.
 Decision record: `plans/adr/006-accepted-working-directory-anchored-selection.md`.

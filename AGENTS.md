@@ -10,9 +10,9 @@ Cargo**, never by deleting directories. One binary over one library of 16
 modules, 18 source files, 30,483 lines in `src/`. No async runtime of its own.
 `cargo metadata` is the only binary dependency that matters for safety.
 
-Fourteen releases are published (v0.1.0 through v0.1.6, then 0.2.0, 0.2.1, 0.2.2,
-0.2.3, 0.2.4, 0.2.5, 0.2.6).
-**v0.2.0 is yanked; the other thirteen are not.**
+Sixteen releases are published (v0.1.0 through v0.1.6, then 0.2.0, 0.2.1, 0.2.2,
+0.2.3, 0.2.4, 0.2.5, 0.2.6, 0.2.7, 0.2.8).
+**v0.2.0 is yanked; the other fifteen are not.**
 
 ## Read this before your first change
 

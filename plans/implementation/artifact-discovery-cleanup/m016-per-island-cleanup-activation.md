@@ -1,9 +1,14 @@
-# M016 — Per-Island Cleanup Activation (active implementation plan)
+# M016 — Per-Island Cleanup Activation (conditionally closed)
 
-Status: **active**. All three §2 gates cleared 2026-10-16: M015 closed
-(`plans/closure/artifact-discovery-cleanup/m015-status.md`), ADR 004
-accepted with C004/C006 amendment (`1c56e9f`), islands occur live. This
-plan now authorizes implementation of exactly what §1–§12 specify.
+Status: **conditionally closed** — see
+`plans/closure/artifact-discovery-cleanup/m016-status.md`. Implementation,
+local verification, live-shape fixtures, and hosted OS/MSRV lanes are
+complete (all three §2 gates were cleared 2026-10-16: M015 closed,
+`plans/closure/artifact-discovery-cleanup/m015-status.md`; ADR 004
+accepted with C004/C006 amendment, `1c56e9f`; islands occur live). The
+milestone stays conditionally closed until a published release carries the
+flag and the ADR 004 item (e) distinct release gate runs at release time.
+This plan now authorizes implementation of exactly what §1–§12 specify.
 
 Baseline: `0a5a6e6` (`main`, release 0.2.8) **plus M015 landed**. M015 is
 currently conditionally closed with an uncommitted tree (see
