@@ -1,9 +1,9 @@
-# M016 — Per-Island Cleanup Activation (blocked implementation plan)
+# M016 — Per-Island Cleanup Activation (active implementation plan)
 
-Status: **proposed**. This plan is written but **must not be implemented**
-until the activation gates in §2 clear. Until then its only sanctioned
-existence is this document (per M015 §12, now superseded by this plan as
-the vehicle, still gated the same way).
+Status: **active**. All three §2 gates cleared 2026-10-16: M015 closed
+(`plans/closure/artifact-discovery-cleanup/m015-status.md`), ADR 004
+accepted with C004/C006 amendment (`1c56e9f`), islands occur live. This
+plan now authorizes implementation of exactly what §1–§12 specify.
 
 Baseline: `0a5a6e6` (`main`, release 0.2.8) **plus M015 landed**. M015 is
 currently conditionally closed with an uncommitted tree (see

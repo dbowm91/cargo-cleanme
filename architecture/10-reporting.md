@@ -381,17 +381,18 @@ match on.
 | `inventory_bytes` | `u64` | Saturating sum of group bytes; **observed, not recovered** |
 | `diagnostic_count` | `usize` | `diagnostics.len()` |
 
-### `CleanupV1` — `output.rs:48-64`
+### `CleanupV1` — `output.rs:48-77`
 
 | Field | Type | Meaning |
 |---|---|---|
 | `discovered_manifests` | `usize` | Note `usize` here vs `u64` in `ScanV1` |
 | `resolved_workspaces` | `usize` | Workspaces that resolved authoritatively |
-| `units_considered` | `usize` | CleanupUnits sized, **before** per-unit outcomes |
-| `scope_blocked` | `bool` | Whole-scope block; from `Option::is_some()` |
-| `scope_reason` | `Option<String>` | Prose reason for the block, cloned from `ScopeBlock.message` |
+| `units_considered` | `usize` | CleanupUnits sized, **before** per-unit outcomes; on a partitioned run, proceed-island units only |
+| `scope_blocked` | `bool` | Whole-scope block; from `Option::is_some()`. Stays set on partitioned partial success (exit 1 falls out structurally) |
+| `scope_reason` | `Option<String>` | Prose reason for the block, cloned from `ScopeBlock.message`, plus the additive partitioned suffix when islands acted |
 | `unresolved_ownership` | `usize` | Count of unresolved manifests |
 | `unresolved_participants` | `Vec<UnresolvedParticipantV1>` | Per-manifest detail |
+| `islands` | `Vec<IslandV1>` | **M016, additive.** One entry per proof island: `roots`, `verdict` (`"proceeded"`/`"held"`), `cause` (merge/held reason in partition-section vocabulary, `None` for proceeded), `passengers` (refused manifests, also present in `unresolved_participants`). Per-unit rows join to islands on the workspace-root path |
 | `selected_roots` | `Vec<String>` | Bounded cleanup roots in effect |
 | `effective_policy` | `Option<PolicyV1>` | Policy after CLI-over-config merge |
 | `selector_kind` | `Option<&'static str>` | `profile` or `package` |

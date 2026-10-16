@@ -862,6 +862,71 @@ control. Activation (per-island proof and spawn) is explicitly deferred to
 M016, gated on ADR 004 acceptance; live island-hit data for that decision is
 attached to the M015 closure record, not to this section.
 
+### Per-island activation (M016)
+
+`clean --partitioned` (`cli.rs:149`, `CleanupRequest.partitioned` `:260`,
+threaded through `run_engine_guarded` into
+`clean_with_roots_policy_selector_guarded` `:1365`) dispatches
+proceed-islands instead of returning at the scan-time block sites
+(`:1454`, `:1485`, via `retain_proceed_island_units` `:1304`).
+Everything else is unchanged: grouping, classification, overlap evidence,
+the twelve-gate final proof, and the hoisted combined universe — which
+still contains held islands' workspaces — read the full universe, and the
+refresh still re-proves against it. Only the spawn decision partitions.
+
+Three load-bearing details:
+
+1. **Merge still means hold.** The certificate semantics are M015's: any
+   merge cause collapses to one blocked island, so a held island is always
+   the merged one and proceed islands never overlap. Shared-output
+   workspaces merge into one *proceed* island whose units the unit gate
+   then skips (`SkippedShared`): the island says go, the gate says no, zero
+   spawns. Held islands never become units or rows; they live on the
+   islands axis (JSON `islands`, human island sections).
+2. **The scan-time unknowns are tolerated by the refresh, not forgotten.**
+   `refresh_combined_universe` (`:3406`) tolerates exactly the manifests
+   already unresolved at scan time (`:3454`); anything newly unresolvable
+   still fails the run. Flag-off runs never reach the refresh with
+   unresolved present, so the tolerance preserves today's behavior exactly.
+3. **The environment is re-verified per island before its first dispatch.**
+   The partition's provenance snapshot is re-compared
+   (`output_env_matches` `:370`, check at `:1860-1872`); any mismatch
+   merges the remaining islands into one blocked scope before any further
+   spawn, in every mode (Simulate rehearses the check so it predicts
+   Execute).
+
+The scan-time block message keeps its pinned substrings with an additive
+counts-only suffix naming acted-on islands
+(`append_partitioned_suffix` `:1329`, applied at `:2053`). The human
+render shows completed rows, the block, and per-island outcomes together
+(`:571`, `partition_outcome_section` `:2529`). The machine surface gains
+one additive field (`CleanupV1.islands`, `output.rs:57`; `IslandV1`
+`output.rs:70` with roots/verdict/cause/passengers, cause rendered in
+`partition_section` vocabulary via `partition_merge_cause_label`
+`:2364`). Exit aggregation is untouched: `scope_blocked` stays set, so
+exit 1 falls out structurally. `-i` offers proceed-island rows with held
+islands as non-selectable context (`list_cleanup_candidates` `:2669`,
+`held_context`, `island_held_view` `:2779`); a merged universe refuses
+exactly as before.
+
+Tests (all `#[test]` in `cleanup.rs` unless noted): flag-off parity
+`partitioned_flag_off_matches_unpartitioned_engine` (`:5860`); the
+activation kennel `partitioned_execute_cleans_every_provable_island`
+(`:5939`) plus Simulate/CargoPreview twins; the passenger rule
+(`partitioned_passenger_rides_along_without_merging`); hostile twins
+(redirect, nested, metadata-failure, symlinked-output unix, mid-run
+growth); the gate-8 control
+(`partitioned_proof_refuses_where_partition_would_proceed`); the
+passenger-redirect control; the environment child-process probe
+(`partitioned_environment_change_merges_remaining_islands` `:6540`,
+which spawns the test binary so the process-env mutation cannot race
+parallel tests); the listing pair (offer + refusal with held context);
+the JSON key-set update (deliberate, `output.rs`); the log-line contract
+test; subprocess G1/G1c surfaces (`tests/cli_contract.rs:2008`,
+`:2083`, `run_island_scenario` `:1373`). Every engine twin asserts zero
+cross-island cleans and exact per-island verdicts, and each fails against
+a dispatch-everything naive by construction.
+
 ### What happens when the proof detects a mid-transaction change?
 
 The candidate is skipped; the run continues to the next unit.
@@ -1026,11 +1091,11 @@ safety hole.
 
 ## 10. Testing
 
-**Numbers (verified by grep):** 118 `#[test]` functions; the test module opens at
-`cleanup.rs:3872` (`#[cfg(test)]` at `:3871`), so production is lines 1-3870 and tests 3871-9868 — 5998 lines, 61% of the file. No fixture files are
-needed: workspaces are built on disk (`ws_root` `:8229`, `cargo_output` `:8242`,
-`sibling_ws_fixture` `:8277`, `valid_fixture` `:4191`) and mtimes backdated
-(`backdate` `:4223`, `touch_future` `:6987`) so recency gates run without
+**Numbers (verified by grep):** 133 `#[test]` functions; the test module opens at
+`cleanup.rs:4295` (`#[cfg(test)]` at `:4294`), so production is lines 1-4293 and tests 4295-11229 — 6936 lines, 62% of the file. No fixture files are
+needed: workspaces are built on disk (`ws_root` `:9590`, `cargo_output` `:9603`,
+`sibling_ws_fixture` `:9638`, `valid_fixture` `:4614`) and mtimes backdated
+(`backdate` `:4646`, `touch_future` `:8318`) so recency gates run without
 sleeping.
 
 Line numbers in the group table below were re-derived for the M015 row only.
@@ -1054,7 +1119,8 @@ closure record, not silently claimed here.
 | Real Cargo integration | 3 | `real_temp_project_preview_and_execute_with_redirected_target` `:3785`; `real_cargo_package_selector_preserves_sibling_workspace_artifacts` `:3920`; `multi_member_private_workspace_can_be_cleaned` `:4034` |
 | Root validation / frozen env | 3 | `clean_requires_absolute_root` `:3480`; `frozen_env_sets_target_and_build_dir` `:3425`; `frozen_env_pins_the_build_directory_so_an_inherited_redirect_cannot_apply` `:6363` |
 | Misc | 9 | `cleanup_reason_codes_have_stable_contract_names` `:2807`; `source_tree_as_output_root_is_never_cleaned` `:6242`; `one_invocation_one_result_progress_total_and_no_sibling_row` `:5453`; `distinct_private_target_and_build_is_one_cleanable_unit` `:5403`; `equal_and_nested_target_build_are_one_unit_and_one_invocation` `:5787`; `proof_failures_distinguish_a_change_from_an_unproven_ownership` `:6334`; `cross_workspace_overlap_race_into_target_skips_candidate` `:5829`; `cross_workspace_overlap_race_into_distinct_build_skips_candidate` `:5873`; `another_workspaces_source_tree_inside_the_cleaned_region_is_never_cleaned` `:6196` |
-| Proof-island partition, report-only (M015) | 23 | Pure partition: `proof_partition_splits_disjoint_workspaces_with_no_unknowns` `:5509`; `proof_partition_merges_equal_targets_into_one_island` `:5527`; `proof_partition_merges_nested_outputs_by_prefix_overlap` `:5544`; `proof_partition_does_not_merge_string_prefix_siblings` `:5565`; `proof_partition_is_deterministic_across_input_orders` `:5581`; `proof_partition_merges_unproven_unknown_globally_with_named_cause` `:5601`; `proof_partition_assigns_refused_believed_manifest_as_passenger_without_merging` `:5632`; `proof_partition_reports_refused_manifest_without_owner_as_scope_note` `:5661`; `proof_partition_merges_discovery_holes_globally` `:5680`; `proof_partition_with_only_notes_has_no_islands` `:5704`; `proof_partition_merges_pathless_holes_with_counted_cause` `:5767`; holes extractor `discovery_holes_takes_discovery_prefix_with_pathless_remainder` `:5720`; render `partition_section_renders_islands_passengers_notes_and_provenance` `:4936`, `partition_section_bounds_islands_and_causes` `:4984`; parity `partition_reports_islands_but_engine_still_blocks_with_zero_spawns_in_every_mode` `:5026`; hostile controls `redirect_outputs_merge_under_certificate_but_split_under_naive_skip` `:5078`, `nested_outputs_merge_under_certificate_but_split_under_equality_naive` `:5114`, `unresolved_manifest_overlap_merges_and_engine_blocks_with_zero_spawns_in_every_mode` `:5152`, `symlinked_output_merges_under_certificate_but_splits_under_naive_skip` `:5211` (unix), `build_dir_move_detected_by_full_env_check_but_missed_by_target_only_naive` `:5256`, `universe_stability_predicate_detects_growth_that_naive_stub_misses` `:5297`, `mid_run_manifest_growth_blocks_remaining_scope` `:5326`; documented non-control `target_nested_under_foreign_sources_splits_under_both_and_is_not_a_control` `:5392` |
+| Proof-island partition, report-only (M015) | 23 | Pure partition: `proof_partition_splits_disjoint_workspaces_with_no_unknowns` `:5509`; `proof_partition_merges_equal_targets_into_one_island` `:5527`; `proof_partition_merges_nested_outputs_by_prefix_overlap` `:5544`; `proof_partition_does_not_merge_string_prefix_siblings` `:5565`; `proof_partition_is_deterministic_across_input_orders` `:5581`; `proof_partition_merges_unproven_unknown_globally_with_named_cause` `:5601`; `proof_partition_assigns_refused_believed_manifest_as_passenger_without_merging` `:5632`; `proof_partition_reports_refused_manifest_without_owner_as_scope_note` `:5661`; `proof_partition_merges_discovery_holes_globally` `:5680`; `proof_partition_with_only_notes_has_no_islands` `:5704`; `proof_partition_merges_pathless_holes_with_counted_cause` `:5767`; holes extractor `discovery_holes_takes_discovery_prefix_with_pathless_remainder` `:5720`; render `partition_section_renders_islands_passengers_notes_and_provenance` `:4936`, `partition_section_bounds_islands_and_causes` `:4984`; parity `partition_reports_islands_but_engine_still_blocks_with_zero_spawns_in_every_mode` `:5026`; hostile controls `redirect_outputs_merge_under_certificate_but_split_under_naive_skip` `:5078`, `nested_outputs_merge_under_certificate_but_split_under_equality_naive` `:5114`, `unresolved_manifest_overlap_merges_and_engine_blocks_with_zero_spawns_in_every_mode` `:5152`, `symlinked_output_merges_under_certificate_but_splits_under_naive_skip` `:5211` (unix), `build_dir_move_detected_by_full_env_check_but_missed_by_target_only_naive` `:5256`, `universe_stability_predicate_detects_growth_that_naive_stub_misses` `:5297`, `mid_run_manifest_growth_blocks_remaining_scope` `:5326`; documented non-control `target_nested_under_foreign_sources_splits_under_both_and_is_not_a_control` `:5392` (pre-M016 numbering; the module grew ~1300 lines under M016, mostly tests) |
+| Per-island activation (M016) | 15 | flag-off parity `partitioned_flag_off_matches_unpartitioned_engine`; activation kennel `partitioned_execute_cleans_every_provable_island` + Simulate/CargoPreview twins `partitioned_simulate_and_predict_without_spawning`; passenger rule `partitioned_passenger_rides_along_without_merging`; hostile twins (redirect, nested, metadata-failure, symlinked-output unix, mid-run growth `partitioned_mid_run_manifest_growth_blocks_remaining_scope`); gate-8 control `partitioned_proof_refuses_where_partition_would_proceed`; passenger-redirect control `partitioned_passenger_island_never_cleans_alone_after_redirect`; environment child-process probe `partitioned_environment_change_merges_remaining_islands` + `partitioned_environment_change_probe`; listing pair (offer + refusal with held context). Subprocess surfaces in `tests/cli_contract.rs`: G1 Execute/Simulate/human + G1c passenger + `-i` refusal. |
 
 ### What each fake runner exists to catch
 

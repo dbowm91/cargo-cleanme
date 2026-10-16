@@ -194,6 +194,7 @@ modes are disjoint sets by construction.
 | `--cargo-preview` | `bool` | `false` | `--dry-run`, `--yes`, `--dryrun` | `CleanMode::CargoPreview` |
 | `--yes` (hidden) | `bool` | `false` | `--dry-run`, `--cargo-preview`, `--dryrun` | nothing — Execute is already the default |
 | `--dryrun` (hidden) | `bool` | `false` | `--dry-run`, `--cargo-preview`, `--yes` | `CleanMode::Simulate` |
+| `--partitioned` | `bool` | `false` | — (orthogonal; composes with every mode) | `CleanupRequest.partitioned` → per-island dispatch behind the flag; absent means today's whole-scope block |
 
 - **Advanced flags live only on `clean`,** deliberately. Bare invocation carries
   `CleanupOverrides::default()` (`src/cli.rs:260`), so the front door uses the

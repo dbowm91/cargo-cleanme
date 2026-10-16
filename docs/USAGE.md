@@ -27,6 +27,7 @@ quickstart; this document has the detail.
 | `cargo cleanme scan ROOT` | One explicit read-only scope |
 | `cargo cleanme scan --known` | Routine read-only inventory of the maintenance scope |
 | `cargo cleanme clean [ROOT] [--known\|--full]` | advanced cleanup: execute (default), simulate, or Cargo preview |
+| `cargo cleanme clean [ROOT] --partitioned` | clean each provable proof island independently; hold the rest with typed reasons (default off: one unprovable manifest blocks the whole scope) |
 | `cargo cleanme config path\|show\|edit` | locate, print, or edit the config |
 | `cargo cleanme update [--dry-run]` | self-update to the latest stable release |
 
@@ -111,6 +112,7 @@ cargo cleanme -i --dry-run                        # choose units, simulate, clea
 cargo cleanme clean ~/projects                    # explicit root (Execute)
 cargo cleanme clean ~/projects --dry-run          # simulation, no cargo clean
 cargo cleanme clean ~/projects --cargo-preview    # Cargo's own dry-run, after the same proof
+cargo cleanme clean ~/projects --partitioned      # clean provable islands, hold the rest with reasons
 cargo cleanme clean --known --dry-run             # $PWD-anchored selection, simulated
 cargo cleanme clean --full --dry-run              # reconcile Full, then simulate
 cargo cleanme clean ~/projects --min-reclaimable-bytes 104857600

@@ -380,8 +380,11 @@ and `misconfigured_member_with_unresolved_parent_still_blocks`
 `resolution_records_refused_capability_for_cargo_refused_locate`
 (`src/workspace.rs:4018`) and
 `resolution_records_unproven_capability_for_metadata_failure`
-(`src/workspace.rs:4063`). Any future enforcement of the passenger shape
-belongs to ADR-004-gated activation (M016), not to resolution.
+(`src/workspace.rs:4063`). Enforcement of the passenger shape arrived with
+M016 under the accepted ADR 004 amendment: `clean --partitioned` dispatches
+a passenger-carrying island while the passenger stays named on the island
+axis (never a unit row); see [Cleanup](09-cleanup.md) § "Per-island
+activation (M016)". Resolution itself is unchanged — still report-only.
 
 ### Progress
 
