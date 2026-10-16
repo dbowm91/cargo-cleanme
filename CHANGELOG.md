@@ -8,16 +8,21 @@ command-line, JSON, and release-asset contracts are the stable surface.
 
 ## [Unreleased]
 
-### Added
+### Changed
 
-- **`clean --partitioned`: per-island cleanup activation behind an explicit
-  opt-in flag.** A scope blocked by unprovable manifests partitions into
-  proof islands; each provable island is cleaned independently while the rest
-  is held with typed reasons, and the exit code stays nonzero while anything
-  is held or failed. Default behavior is unchanged: without the flag a single
-  unprovable manifest still blocks the whole scope. The machine surface gains
-  one additive field (`result.islands` with per-island roots, verdict,
-  cause, and passengers); reason codes and exit codes are unchanged.
+- **Scoped proof is the default; out-of-scope blocking was a product
+  defect.** The ownership proof now covers the selected scope — the working
+  directory anchor for bare/`--known` cleanup, the explicit roots for
+  `clean ROOT`, the full system for `clean --full` (which keeps
+  whole-system fail-closed blocking). Discovery and grouping still cover
+  the whole scope, so cross-boundary output claims still force shared
+  output. An unresolvable manifest outside the scope is reported in
+  diagnostics and never blocks; an in-scope manifest Cargo itself refused
+  is reported, never blocking. Only in-scope byte-capable unknowns block,
+  and a scope that proves zero units against any unproven participant
+  fails closed. Exits are boundary-scoped: 0 when the boundary is fully
+  cleaned, 1 when it is blocked or a unit fails. The never-published
+  `--partitioned` flag and the `result.islands` field are removed.
 
 ## [0.2.8] - 2026-10-15
 

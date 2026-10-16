@@ -72,6 +72,9 @@ pub enum DiagnosticCategory {
     InvalidEntry,
     PlatformRoot,
     CandidateUncertain,
+    /// ADR 007: an unprovable participant outside the selected proof
+    /// boundary. Reported, never blocking. Informational by construction.
+    OutOfScope,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScanDiagnostic {

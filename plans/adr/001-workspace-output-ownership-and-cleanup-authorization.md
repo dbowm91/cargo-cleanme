@@ -243,3 +243,23 @@ Amended behavior, only behind the explicit `--partitioned` opt-in on `clean`:
 - Full rule text, soundness basis, contract, and release gate live in ADR 004's accepted amendment section.
 
 This clarifies the operational consequence of C004/C006 under partial discovery; it does not authorize new external/shared cleanup behavior beyond the stated rule, and it does not reinterpret the existing guarantees.
+
+## C004/C006 clarification — scoped proof boundary (ADR 007, supersedes the per-island opt-in above)
+
+Clarification date: 2026-10-16 (ADR 007 accepted, owner-directed product change).
+
+Out-of-scope blocking of healthy in-scope units by unprovable participants
+is a core product defect. The completeness requirement above now applies
+*within the selected proof boundary*: the working-directory anchor for
+bare/`--known` cleanup, the explicit roots for `clean ROOT`, the full
+system for `clean --full` (which keeps whole-system fail-closed blocking).
+Discovery and grouping still cover the whole system so cross-boundary
+output claims stay visible; an unresolved participant outside the boundary
+is a bounded diagnostic, never a block.
+
+The `--partitioned` opt-in and the per-island rule above are superseded
+before any publication: scoped proof is the default, not a flag. The
+refused-manifest passenger rule and the per-dispatch environment
+re-verification carry forward unchanged. In-boundary poison still blocks
+the boundary. Full rule text lives in ADR 007. History above is preserved;
+this note records what changed.

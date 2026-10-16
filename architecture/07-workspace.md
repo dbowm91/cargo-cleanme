@@ -381,10 +381,11 @@ and `misconfigured_member_with_unresolved_parent_still_blocks`
 (`src/workspace.rs:4018`) and
 `resolution_records_unproven_capability_for_metadata_failure`
 (`src/workspace.rs:4063`). Enforcement of the passenger shape arrived with
-M016 under the accepted ADR 004 amendment: `clean --partitioned` dispatches
-a passenger-carrying island while the passenger stays named on the island
-axis (never a unit row); see [Cleanup](09-cleanup.md) § "Per-island
-activation (M016)". Resolution itself is unchanged — still report-only.
+M016 under the accepted ADR 004 amendment and became the default under
+M017/ADR 007: a refused passenger rides along while staying named in
+`unresolved_ownership` (never a unit row); see [Cleanup](09-cleanup.md)
+§ "Scoped proof is the default (M017)". Resolution itself is unchanged —
+still report-only.
 
 ### Progress
 

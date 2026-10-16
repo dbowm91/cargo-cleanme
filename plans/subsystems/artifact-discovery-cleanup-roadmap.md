@@ -1017,20 +1017,15 @@ all green on the merge head, and v0.2.8 carries it (tag `v0.2.8` at
 `0a5a6e6`, CHANGELOG `[0.2.8]`). No `r028` distribution receipt was written;
 that is distribution-line debt.
 
-## C035 — operator-declared independent maintenance scopes (open on branch)
+## C035 — operator-declared independent maintenance scopes (superseded; do not merge)
 
-Status: **open, unmerged — needs a rebase plus a scope decision against
-M016 before anyone merges it.** Branch
-`plans/c035-operator-scoped-cleanup` (baseline `6bad266`, v0.2.6-era)
-implements operator-declared `[maintenance] scopes` with a closure draft on
-the branch (hosted CI green at the time, run `38513116448`). The branch
-predates the M014 merge — merged as-is it would delete `src/interactive.rs`
-and the CWD anchor — and predates ADR 004 acceptance and M016, so its
-"ADR 004 proposed" premise is stale and its mechanism overlaps M016's
-automatic `--partitioned` islands with a second partition scheme. Eligible
-next step is a planning decision (operator-declared scopes vs/plus
-automatic per-island activation), then a rebase onto current `main`; no code
-merges until then.
+Status: **superseded as a mechanism by owner direction 2026-10-16 (ADR 007);
+the branch stays as the record of the rejected route.** No coexistence:
+C035's *premise* (poison blocks only its own scope) is adopted by M017;
+its *mechanism* (config-declared `[maintenance] scopes`, a second partition
+scheme) is abandoned. No rebase, no merge. (The branch predates the M014
+merge — merged as-is it would delete `src/interactive.rs` and the CWD
+anchor — and predates ADR 004 acceptance and M016.)
 
 ## Post-v0.2.8 — M015 proof-island certificate and partition report (closed)
 
@@ -1071,13 +1066,14 @@ was removed rather than shipped (see closure record §"Plan §2 disposition").
 
 ## Post-M015 proposed (conditionally closed) — M016 per-island cleanup activation
 
-Status: **conditionally closed** — see
-`plans/closure/artifact-discovery-cleanup/m016-status.md`. Implemented and
-verified behind `--partitioned` (flag-off parity pinned, combined-evidence
-proof, additive JSON islands axis, `-i` partial offer); hosted lanes green
-modulo one carried pre-existing toolchain-drift failure. Tree at 0.2.9
-unpublished; the ADR 004 item (e) distinct release gate runs at release
-time.
+Status: **conditionally closed; design superseded by M017 before any
+publication (0.2.9 unreleased, no users)** — see
+`plans/closure/artifact-discovery-cleanup/m016-status.md` for the
+implementation evidence. Owner-directed 2026-10-16 (ADR 007): the opt-in
+flag, the `islands` axis, and the partition report were removed; the
+hoisted refresh, env re-verification, and passenger rule carry forward
+into M017. The ADR 004 item (e) distinct release gate transfers to M017's
+release.
 
 Implementation plan:
 
@@ -1093,3 +1089,16 @@ occur (already shown). Per-island proof reuses the twelve-gate final
 proof with overlap evidence still read from the full combined universe;
 partitioning touches the spawn decision, never the graph. Stop
 conditions S1–S4; S3 (ADR refusal) ends the line with the block retained.
+
+## M017 — scoped proof default (active, owner-directed)
+
+Status: **active** — see
+`plans/implementation/artifact-discovery-cleanup/m017-scoped-proof-default.md`
+(plan; ADR 007 accepted 2026-10-16). Single mechanism, no coexistence with
+the M016 flag or C035 config scopes (both superseded before any publication):
+the proof boundary is the selected scope (CWD anchor for bare/`--known`,
+explicit roots for `clean ROOT`, full system for `clean --full` which keeps
+whole-system fail-closed blocking); out-of-boundary unprovables are reported,
+never blocking; in-boundary passengers/notes never block; exits are
+boundary-scoped with a zero-unit fail-closed edge. No publication authorized
+here; the ADR 004 item (e) distinct release gate transfers to M017's release.

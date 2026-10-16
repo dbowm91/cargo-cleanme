@@ -113,7 +113,7 @@ _cargo() {
             return 0
             ;;
         cargo__subcmd__cargo__subcmd__cleanme__subcmd__clean)
-            opts="-i -h --known --full --min-reclaimable-bytes --older-than --include --exclude --profile --package --dry-run --cargo-preview --partitioned --yes --dryrun --config --no-progress --stats --format --interactive --help"
+            opts="-i -h --known --full --min-reclaimable-bytes --older-than --include --exclude --profile --package --dry-run --cargo-preview --yes --dryrun --config --no-progress --stats --format --interactive --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

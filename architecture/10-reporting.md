@@ -387,12 +387,11 @@ match on.
 |---|---|---|
 | `discovered_manifests` | `usize` | Note `usize` here vs `u64` in `ScanV1` |
 | `resolved_workspaces` | `usize` | Workspaces that resolved authoritatively |
-| `units_considered` | `usize` | CleanupUnits sized, **before** per-unit outcomes; on a partitioned run, proceed-island units only |
-| `scope_blocked` | `bool` | Whole-scope block; from `Option::is_some()`. Stays set on partitioned partial success (exit 1 falls out structurally) |
-| `scope_reason` | `Option<String>` | Prose reason for the block, cloned from `ScopeBlock.message`, plus the additive partitioned suffix when islands acted |
-| `unresolved_ownership` | `usize` | Count of unresolved manifests |
-| `unresolved_participants` | `Vec<UnresolvedParticipantV1>` | Per-manifest detail |
-| `islands` | `Vec<IslandV1>` | **M016, additive.** One entry per proof island: `roots`, `verdict` (`"proceeded"`/`"held"`), `cause` (merge/held reason in partition-section vocabulary, `None` for proceeded), `passengers` (refused manifests, also present in `unresolved_participants`). Per-unit rows join to islands on the workspace-root path |
+| `units_considered` | `usize` | CleanupUnits sized, **before** per-unit outcomes |
+| `scope_blocked` | `bool` | Boundary-scoped block; from `Option::is_some()`. Set when the selected scope cannot be proven (in-boundary poison, zero-unit edge) or a mid-run gate fires; out-of-boundary poison never sets it, so exit 1 falls out structurally only for the boundary |
+| `scope_reason` | `Option<String>` | Prose reason for the block, cloned from `ScopeBlock.message` |
+| `unresolved_ownership` | `usize` | Count of boundary-relevant unresolved manifests; out-of-boundary unprovables travel in `diagnostics` as `out_of_scope` |
+| `unresolved_participants` | `Vec<UnresolvedParticipantV1>` | Per-manifest detail (boundary-relevant only) |
 | `selected_roots` | `Vec<String>` | Bounded cleanup roots in effect |
 | `effective_policy` | `Option<PolicyV1>` | Policy after CLI-over-config merge |
 | `selector_kind` | `Option<&'static str>` | `profile` or `package` |

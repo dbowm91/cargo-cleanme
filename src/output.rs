@@ -54,7 +54,6 @@ pub struct CleanupV1 {
     pub scope_reason: Option<String>,
     pub unresolved_ownership: usize,
     pub unresolved_participants: Vec<UnresolvedParticipantV1>,
-    pub islands: Vec<IslandV1>,
     pub selected_roots: Vec<String>,
     pub effective_policy: Option<PolicyV1>,
     pub selector_kind: Option<&'static str>,
@@ -63,24 +62,8 @@ pub struct CleanupV1 {
     pub units: Vec<CleanupUnitV1>,
     pub summary: CleanupSummaryV1,
 }
-/// One proof island on a partitioned run (M016/§9): the proceed/held axis,
-/// never a reason code. Per-unit rows join to islands on the workspace-root
-/// path, so no unit field changes.
-#[derive(Serialize)]
-pub struct IslandV1 {
-    pub roots: Vec<String>,
-    /// `"proceeded"` when the certificate lets the island dispatch on its
-    /// own, `"held"` when it was merged and blocked.
-    pub verdict: &'static str,
-    /// The merge/held reason in `partition_section` vocabulary for held
-    /// islands; `None` for islands that proceeded. Held islands have no
-    /// unit rows, so this is where their reason lives on the machine side.
-    pub cause: Option<String>,
-    /// Byte-incapable unknowns Cargo refused, already present in
-    /// `unresolved_participants`; repeated here so an island is
-    /// self-describing.
-    pub passengers: Vec<String>,
-}
+/// One unproven ownership participant (ADR 007: boundary-relevant only;
+/// out-of-boundary unprovables travel in `diagnostics` as `out_of_scope`).
 #[derive(Serialize)]
 pub struct UnresolvedParticipantV1 {
     pub manifest: String,
@@ -148,6 +131,7 @@ pub fn scan(report: &ScanReport, scope: impl Into<String>) -> EnvelopeV1<ScanV1>
                 crate::domain::DiagnosticCategory::InvalidEntry => "invalid_entry",
                 crate::domain::DiagnosticCategory::PlatformRoot => "platform_root",
                 crate::domain::DiagnosticCategory::CandidateUncertain => "candidate_uncertain",
+                crate::domain::DiagnosticCategory::OutOfScope => "out_of_scope",
             }
             .into(),
             path: d.path.as_deref().map(path),
@@ -224,37 +208,6 @@ pub fn cleanup(
         *slot += 1;
     }
     let mode = report.mode.as_str();
-    let islands = report
-        .proof_partition
-        .as_ref()
-        .map(|partition| {
-            partition
-                .islands
-                .iter()
-                .map(|island| IslandV1 {
-                    roots: island.roots.iter().map(|p| path(p)).collect(),
-                    verdict: if island.would_proceed {
-                        "proceeded"
-                    } else {
-                        "held"
-                    },
-                    cause: if island.would_proceed {
-                        None
-                    } else {
-                        partition
-                            .merge_causes
-                            .first()
-                            .and_then(crate::cleanup::partition_merge_cause_label)
-                    },
-                    passengers: island
-                        .passengers
-                        .iter()
-                        .map(|p| path(&p.manifest))
-                        .collect(),
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
     EnvelopeV1 {
         schema_version: 1,
         cargo_cleanme_version: env!("CARGO_PKG_VERSION"),
@@ -277,7 +230,6 @@ pub fn cleanup(
                     reason: p.reason.clone(),
                 })
                 .collect(),
-            islands,
             selected_roots: report.selected_roots.iter().map(|p| path(p)).collect(),
             effective_policy: report.effective_policy.as_ref().map(|p| PolicyV1 {
                 min_reclaimable_bytes: p.min_reclaimable_bytes,
@@ -573,13 +525,13 @@ pub mod log {
                 counters: ScanCounters::default(),
                 scope_blocked: None,
                 unresolved_ownership: Vec::new(),
+                out_of_scope_unresolved: 0,
                 selected_roots: Vec::new(),
                 discovered_manifests: 0,
                 resolved_workspaces: 0,
                 units_considered: 0,
                 effective_policy: None,
                 selector: None,
-                proof_partition: None,
             }
         }
 
@@ -701,13 +653,12 @@ pub mod log {
             assert_ascii_and_bounded(&line);
         }
 
-        /// M015/E: the partition is human-only. If a field is ever added to
-        /// the machine result, this fails and forces a conscious contract
-        /// decision — not a quiet schema drift.
-        ///
-        /// M016/§9: `islands` is that conscious decision — one additive
-        /// field carrying the proceed/held axis, no new reason code, no
-        /// envelope bump. This list is updated deliberately, not deleted.
+        /// M015/E: the partition was human-only; M016 added `islands` by
+        /// conscious decision; M017/ADR 007 removes it again with scoped
+        /// proof as the default (it never shipped: 0.2.9 unpublished). This
+        /// list is updated deliberately, not deleted: if a field is ever
+        /// added to the machine result, this fails and forces a conscious
+        /// contract decision — not a quiet schema drift.
         #[test]
         fn cleanup_json_result_key_set_is_stable() {
             let report = empty_report();
@@ -725,7 +676,6 @@ pub mod log {
                 [
                     "discovered_manifests",
                     "effective_policy",
-                    "islands",
                     "resolved_workspaces",
                     "scope_blocked",
                     "scope_reason",
@@ -765,18 +715,17 @@ pub mod log {
             assert_ascii_and_bounded(&line);
         }
 
-        /// M016/§9: a partial partitioned run logs blocked with counts and
-        /// no paths. The acted-on suffix lives in the JSON scope_reason and
+        /// M017/ADR 007: a boundary-blocked run logs blocked with counts and
+        /// no paths. The block message lives in the JSON scope_reason and
         /// the human block message only — prose never reaches a retained
-        /// history line, and island detail is a path the contract forbids
-        /// here.
+        /// history line.
         #[test]
-        fn cleanup_line_reports_partial_partitioned_run_as_blocked_with_counts() {
+        fn cleanup_line_reports_blocked_run_with_counts() {
             let mut report = empty_report();
             report.mode = CleanMode::Execute;
             report.scope_blocked = Some(ScopeBlock::new(
                 ScopeBlockReason::OwnershipUnproven,
-                "cleanup ownership could not be proven: 1 discovered Cargo manifest did not resolve; no cleanup commands were run; partitioned execute: 1 of 2 island(s) acted on, 1 held".into(),
+                "cleanup ownership could not be proven: 1 discovered Cargo manifest did not resolve; no cleanup commands were run".into(),
             ));
             report.results.push(crate::cleanup::CleanResult {
                 display_path: PathBuf::from("/ws/provable"),
@@ -798,10 +747,6 @@ pub mod log {
                 !line.contains("/ws/provable"),
                 "no paths on the log line: {line}"
             );
-            assert!(
-                !line.contains("partitioned"),
-                "prose stays out of the retained line: {line}"
-            );
             assert_ascii_and_bounded(&line);
         }
 
@@ -810,7 +755,7 @@ pub mod log {
             let mut report = empty_report();
             report.scope_blocked = Some(ScopeBlock::new(
                 ScopeBlockReason::IncompleteDiscovery,
-                "combined cleanup ownership universe is incomplete: 3 discovery diagnostic(s); no cleanup commands were run".into(),
+                "cleanup ownership universe is incomplete in the selected scope: 3 discovery diagnostic(s); no cleanup commands were run".into(),
             ));
             let line = super::cleanup(&report, "routine");
             assert!(line.contains("reason=incomplete_discovery"), "{line}");

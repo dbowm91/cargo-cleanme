@@ -155,7 +155,6 @@ log\:"One bounded ASCII summary line per report, for unattended schedulers that 
 '(--known)--full[Complete Full reconciliation before cleaning its learned roots]' \
 '(--cargo-preview --yes --dryrun)--dry-run[Application simulation\: run the full decision/proof/report path but invoke no Cargo clean command. The default mode is Execute]' \
 '(--dry-run --yes --dryrun)--cargo-preview[Cargo preview\: after the same complete final proof, invoke Cargo'\''s own \`clean --dry-run --verbose\`. Never removes anything]' \
-'--partitioned[Partition a blocked scope into proof islands and clean each provable island independently; hold the rest with typed reasons. Default off\: without it a single unprovable manifest blocks the whole scope. Composes with \`--dry-run\` (predicts per-island spawns, spawns nothing) and never changes default behavior]' \
 '(--dry-run --cargo-preview --dryrun)--yes[Historical spelling of the (now default) Execute mode; retained as a hidden alias]' \
 '(--dry-run --cargo-preview --yes)--dryrun[Historical spelling of \`--dry-run\`; retained as a hidden alias]' \
 '--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \

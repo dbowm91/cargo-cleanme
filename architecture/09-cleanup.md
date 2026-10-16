@@ -819,113 +819,98 @@ correct and consistent; the reporting is inconsistent with case (a). A run where
 the universe cannot be re-proven and nothing was cleaned is reported like a run
 where every workspace was legitimately inactive, and exits 0.
 
-### The report-only proof-island partition (M015)
+### The proof-island certificate (M015, superseded by M017)
 
-Both scan-time block sites also compute a proof-island partition
-(`:1350-1355`, `:1376-1381`) and carry it on the report
-(`CleanReport.proof_partition`, `:446`), rendered as a bounded advisory section
-(`partition_section`, `:2196-2322`) after the participant listing. The machine
-surfaces never see it: no JSON field, no log-line field, no exit-code change
-(locked by `cleanup_json_result_key_set_is_stable`, `src/output.rs:658`, and the
-subprocess case `tests/cli_contract.rs:1930`).
+M015 designed a report-only proof-island partition answering ADR 004's
+question — *what constitutes independently proven non-overlap?* — without
+enforcing any answer, and M016 activated it behind `--partitioned`. Both
+were removed before any publication by M017/ADR 007 (scoped proof is the
+default; the flag and the `islands` axis never shipped). What carries
+forward is the certificate's load-bearing remainder, now the default rule:
 
-The partition answers ADR 004's question — *what constitutes independently
-proven non-overlap?* — without enforcing any answer. Its sharp edge is
-byte-capability (`domain.rs:178-195`): only unknowns Cargo itself refused
-(`locate` exit nonzero) own provably no bytes and merge nothing; every other
-class (transport, unparseable output, lost workers, metadata, identity,
-discovery holes) merges every island, because unproven outputs could overlap
-any island's. Attribution (`workspace::attribute_unknown`, `:419-438` in
-`workspace.rs`) assigns a refused manifest to the island of the workspace Cargo
-named, or to a scope-level note when nothing resolved was named; the union-find
-(`compute_proof_partition`, `:2023-2159`) merges islands on proven physical
-output overlap (equality or canonical-prefix, component-wise) and collapses to
-one blocked island on any merge cause (`PartitionMergeCause`, `:380-394`). The
-environment relevant to output placement is snapshotted with the partition
-(`snapshot_output_env`, `:357-362`); the mismatch detector is proven by tests
-(`output_env_matches`, `:367-372`) for M016 to wire as a merge.
+- Byte-capability is still the sharp edge (`domain.rs`, `UnknownCapability`;
+  only unknowns Cargo itself refused own provably no bytes). Attribution
+  (`workspace::attribute_unknown`, `:419` in `workspace.rs`) still assigns a
+  refused manifest to a passenger (Cargo named a resolved owner) or a scope
+  note (no resolved owner named); every other class is `MergeAll`.
+- In-boundary `MergeAll` unknowns block the boundary. In-boundary
+  passengers and scope notes are reported, never blocking. Out-of-boundary
+  unknowns are `out_of_scope` informational diagnostics, never blocking.
+  The zero-unit edge fails closed: zero proven units plus any unproven
+  participant blocks with the standard unproven-ownership message (the
+  M012A silent no-op would otherwise return).
+- The environment snapshot and mismatch detector
+  (`snapshot_output_env`, `:357`; `output_env_matches`, `:370`) are still
+  re-verified before every unit dispatch.
+- History (M015 parity proof, hostile controls, live island-hit data)
+  stands in the M015/M016 closure records; the computation, the flag, and
+  the human/JSON island sections are gone. The render tests that pinned
+  them were deleted with the mechanism, not converted.
 
-Parity is the load-bearing test:
-`partition_reports_islands_but_engine_still_blocks_with_zero_spawns_in_every_mode`
-(`:5026`) stages two output-disjoint workspaces plus a refused orphan — the
-certificate reports two would-proceed islands — and asserts the engine still
-blocks with empty results and zero clean spawns in all three modes. The hostile
-controls (`:5078-5390`) each fail against a naive skip (no union edges,
-unknowns dropped): cross-root redirect, nested-output prefix overlap,
-metadata-failure overlap with a zero-spawn engine assertion, symlinked output
-(unix), build-dir-only env moves, and H-2 growth both as predicate
-(`universe_manifests_stable`, `:2330`) and end to end
-(`mid_run_manifest_growth_blocks_remaining_scope`, `:5326`). The one listed
-shape that is *not* hostile — a target nested under another workspace's
-*sources* — splits under both and ships as a documented positive case, not a
-control. Activation (per-island proof and spawn) is explicitly deferred to
-M016, gated on ADR 004 acceptance; live island-hit data for that decision is
-attached to the M015 closure record, not to this section.
+### Scoped proof is the default (M017, ADR 007)
 
-### Per-island activation (M016)
+Out-of-scope blocking was the product defect, so the proof boundary is the
+selected scope and there is no opt-in. Discovery, resolution, grouping, and
+unit construction still run combined over the whole selected-root scope
+(M014 measurement: narrowing discovery would promote `Shared` to
+`PrivateBounded`); cross-boundary claims still force `Shared`/skip at
+grouping time. Only the block decision is boundary-scoped.
 
-`clean --partitioned` (`cli.rs:149`, `CleanupRequest.partitioned` `:260`,
-threaded through `run_engine_guarded` into
-`clean_with_roots_policy_selector_guarded` `:1365`) dispatches
-proceed-islands instead of returning at the scan-time block sites
-(`:1454`, `:1485`, via `retain_proceed_island_units` `:1304`).
-Everything else is unchanged: grouping, classification, overlap evidence,
-the twelve-gate final proof, and the hoisted combined universe — which
-still contains held islands' workspaces — read the full universe, and the
-refresh still re-proves against it. Only the spawn decision partitions.
+Mechanically, in `clean_with_roots_policy_selector_guarded` (`:1289`):
 
-Three load-bearing details:
+1. `resolve_cleanup_scope` (`:2370`) splits every unresolved participant
+   three ways (`split_unresolved_for_boundary`, `:2291`, over
+   `boundary_admits`, `:2263`): out-of-boundary manifests become
+   informational `out_of_scope` diagnostics; in-boundary passengers and
+   scope notes join `unresolved_ownership` as reported-but-never-blocking;
+   only in-boundary `MergeAll` participants early-return the run with the
+   existing typed block. Grouping still sees every resolved workspace.
+2. The scan-time block sites check only the in-boundary counts
+   (`boundary_discovery_diagnostics`, `blocking_unresolved` on the
+   universe): discovery uncertainty and MergeAll unknowns inside the
+   boundary block; everything out-of-boundary is already a diagnostic.
+   A run that proves zero units while anything is unproven fails closed
+   with the standard message (zero-unit edge, above).
+3. `refresh_combined_universe` (`:2856`) re-applies the boundary rule
+   against the fresh workspaces instead of carrying a scan-time tolerated
+   list: out-of-boundary and in-boundary passenger/note unknowns stay
+   tolerated; only a fresh in-boundary `MergeAll` invalidates the refresh.
+   H-2 rediscovery stays combined (mid-run change detection is not poison
+   reporting).
+4. The output environment is re-verified before every unit dispatch
+   (per-dispatch check in the unit loop); any mismatch blocks the remaining
+   units before any further spawn, in every mode (Simulate rehearses it).
 
-1. **Merge still means hold.** The certificate semantics are M015's: any
-   merge cause collapses to one blocked island, so a held island is always
-   the merged one and proceed islands never overlap. Shared-output
-   workspaces merge into one *proceed* island whose units the unit gate
-   then skips (`SkippedShared`): the island says go, the gate says no, zero
-   spawns. Held islands never become units or rows; they live on the
-   islands axis (JSON `islands`, human island sections).
-2. **The scan-time unknowns are tolerated by the refresh, not forgotten.**
-   `refresh_combined_universe` (`:3406`) tolerates exactly the manifests
-   already unresolved at scan time (`:3454`); anything newly unresolvable
-   still fails the run. Flag-off runs never reach the refresh with
-   unresolved present, so the tolerance preserves today's behavior exactly.
-3. **The environment is re-verified per island before its first dispatch.**
-   The partition's provenance snapshot is re-compared
-   (`output_env_matches` `:370`, check at `:1860-1872`); any mismatch
-   merges the remaining islands into one blocked scope before any further
-   spawn, in every mode (Simulate rehearses the check so it predicts
-   Execute).
+The human render shows rows plus the block as today; out-of-boundary
+poison gets one bounded line (`:520`), and unblocked runs with reported
+in-boundary notes name them under a "reported, not blocking" header with
+the same bounded participant listing (`append_unresolved_listing`, `:456`).
+The machine surface *lost* a field: `CleanupV1.islands`/`IslandV1` are
+gone (key-set test updated deliberately, `output.rs`); `unresolved_ownership`
+is boundary-relevant only and out-of-boundary poison travels in
+`diagnostics` as `out_of_scope` (`DiagnosticCategory::OutOfScope`,
+`domain.rs`). Exit aggregation is untouched: `scope_blocked` stays set, so
+exit 1 falls out structurally. `-i` lists the selected units and refuses on
+a boundary block exactly as before (no held context anymore).
 
-The scan-time block message keeps its pinned substrings with an additive
-counts-only suffix naming acted-on islands
-(`append_partitioned_suffix` `:1329`, applied at `:2053`). The human
-render shows completed rows, the block, and per-island outcomes together
-(`:571`, `partition_outcome_section` `:2529`). The machine surface gains
-one additive field (`CleanupV1.islands`, `output.rs:57`; `IslandV1`
-`output.rs:70` with roots/verdict/cause/passengers, cause rendered in
-`partition_section` vocabulary via `partition_merge_cause_label`
-`:2364`). Exit aggregation is untouched: `scope_blocked` stays set, so
-exit 1 falls out structurally. `-i` offers proceed-island rows with held
-islands as non-selectable context (`list_cleanup_candidates` `:2669`,
-`held_context`, `island_held_view` `:2779`); a merged universe refuses
-exactly as before.
-
-Tests (all `#[test]` in `cleanup.rs` unless noted): flag-off parity
-`partitioned_flag_off_matches_unpartitioned_engine` (`:5860`); the
-activation kennel `partitioned_execute_cleans_every_provable_island`
-(`:5939`) plus Simulate/CargoPreview twins; the passenger rule
-(`partitioned_passenger_rides_along_without_merging`); hostile twins
-(redirect, nested, metadata-failure, symlinked-output unix, mid-run
-growth); the gate-8 control
-(`partitioned_proof_refuses_where_partition_would_proceed`); the
+Tests (all `#[test]` in `cleanup.rs` unless noted): the boundary rule
+`scope_note_does_not_block_in_boundary_execute` plus Simulate/Preview
+twins; the passenger rule `refused_passenger_rides_along_without_blocking`;
+hostile twins (redirect and nested skip without blocking, metadata-failure
+blocks, symlinked-output unix produces no unit while the sibling cleans,
+mid-run growth blocks the remainder); the gate-8 control
+(`proof_refuses_where_stale_universe_would_proceed`); the
 passenger-redirect control; the environment child-process probe
-(`partitioned_environment_change_merges_remaining_islands` `:6540`,
-which spawns the test binary so the process-env mutation cannot race
-parallel tests); the listing pair (offer + refusal with held context);
-the JSON key-set update (deliberate, `output.rs`); the log-line contract
-test; subprocess G1/G1c surfaces (`tests/cli_contract.rs:2008`,
-`:2083`, `run_island_scenario` `:1373`). Every engine twin asserts zero
-cross-island cleans and exact per-island verdicts, and each fails against
-a dispatch-everything naive by construction.
+(`environment_change_blocks_remaining_units`, which spawns the test binary
+so the process-env mutation cannot race parallel tests); the listing pair
+(offer + refusal on a blocked boundary); the zero-unit edge
+(`empty_proof_universe_blocks_listing`); the flagship out-of-anchor twin
+`out_of_anchor_poison_does_not_block_anchor` (fails pre-change as a
+whole-scope block); the key-set and log-line contract tests (`output.rs`);
+subprocess G1/G1c/human surfaces in `tests/cli_contract.rs` (exit 0 with
+reported notes, no islands). Every twin asserts zero forbidden spawns, and
+each fails against the old whole-scope rule or a dispatch-everything naive
+by construction.
 
 ### What happens when the proof detects a mid-transaction change?
 
@@ -1119,8 +1104,8 @@ closure record, not silently claimed here.
 | Real Cargo integration | 3 | `real_temp_project_preview_and_execute_with_redirected_target` `:3785`; `real_cargo_package_selector_preserves_sibling_workspace_artifacts` `:3920`; `multi_member_private_workspace_can_be_cleaned` `:4034` |
 | Root validation / frozen env | 3 | `clean_requires_absolute_root` `:3480`; `frozen_env_sets_target_and_build_dir` `:3425`; `frozen_env_pins_the_build_directory_so_an_inherited_redirect_cannot_apply` `:6363` |
 | Misc | 9 | `cleanup_reason_codes_have_stable_contract_names` `:2807`; `source_tree_as_output_root_is_never_cleaned` `:6242`; `one_invocation_one_result_progress_total_and_no_sibling_row` `:5453`; `distinct_private_target_and_build_is_one_cleanable_unit` `:5403`; `equal_and_nested_target_build_are_one_unit_and_one_invocation` `:5787`; `proof_failures_distinguish_a_change_from_an_unproven_ownership` `:6334`; `cross_workspace_overlap_race_into_target_skips_candidate` `:5829`; `cross_workspace_overlap_race_into_distinct_build_skips_candidate` `:5873`; `another_workspaces_source_tree_inside_the_cleaned_region_is_never_cleaned` `:6196` |
-| Proof-island partition, report-only (M015) | 23 | Pure partition: `proof_partition_splits_disjoint_workspaces_with_no_unknowns` `:5509`; `proof_partition_merges_equal_targets_into_one_island` `:5527`; `proof_partition_merges_nested_outputs_by_prefix_overlap` `:5544`; `proof_partition_does_not_merge_string_prefix_siblings` `:5565`; `proof_partition_is_deterministic_across_input_orders` `:5581`; `proof_partition_merges_unproven_unknown_globally_with_named_cause` `:5601`; `proof_partition_assigns_refused_believed_manifest_as_passenger_without_merging` `:5632`; `proof_partition_reports_refused_manifest_without_owner_as_scope_note` `:5661`; `proof_partition_merges_discovery_holes_globally` `:5680`; `proof_partition_with_only_notes_has_no_islands` `:5704`; `proof_partition_merges_pathless_holes_with_counted_cause` `:5767`; holes extractor `discovery_holes_takes_discovery_prefix_with_pathless_remainder` `:5720`; render `partition_section_renders_islands_passengers_notes_and_provenance` `:4936`, `partition_section_bounds_islands_and_causes` `:4984`; parity `partition_reports_islands_but_engine_still_blocks_with_zero_spawns_in_every_mode` `:5026`; hostile controls `redirect_outputs_merge_under_certificate_but_split_under_naive_skip` `:5078`, `nested_outputs_merge_under_certificate_but_split_under_equality_naive` `:5114`, `unresolved_manifest_overlap_merges_and_engine_blocks_with_zero_spawns_in_every_mode` `:5152`, `symlinked_output_merges_under_certificate_but_splits_under_naive_skip` `:5211` (unix), `build_dir_move_detected_by_full_env_check_but_missed_by_target_only_naive` `:5256`, `universe_stability_predicate_detects_growth_that_naive_stub_misses` `:5297`, `mid_run_manifest_growth_blocks_remaining_scope` `:5326`; documented non-control `target_nested_under_foreign_sources_splits_under_both_and_is_not_a_control` `:5392` (pre-M016 numbering; the module grew ~1300 lines under M016, mostly tests) |
-| Per-island activation (M016) | 15 | flag-off parity `partitioned_flag_off_matches_unpartitioned_engine`; activation kennel `partitioned_execute_cleans_every_provable_island` + Simulate/CargoPreview twins `partitioned_simulate_and_predict_without_spawning`; passenger rule `partitioned_passenger_rides_along_without_merging`; hostile twins (redirect, nested, metadata-failure, symlinked-output unix, mid-run growth `partitioned_mid_run_manifest_growth_blocks_remaining_scope`); gate-8 control `partitioned_proof_refuses_where_partition_would_proceed`; passenger-redirect control `partitioned_passenger_island_never_cleans_alone_after_redirect`; environment child-process probe `partitioned_environment_change_merges_remaining_islands` + `partitioned_environment_change_probe`; listing pair (offer + refusal with held context). Subprocess surfaces in `tests/cli_contract.rs`: G1 Execute/Simulate/human + G1c passenger + `-i` refusal. |
+| Proof-island partition, report-only (M015, removed by M017) | 0 | Mechanism deleted before any publication: the compute/render/parity/hostile partition tests listed here were removed with it (history in the M015/M016 closure records). Surviving M015-lineage coverage: env-mismatch detector `build_dir_move_detected_by_full_env_check_but_missed_by_target_only_naive`, TOCTOU predicate `universe_manifests_stable`, H-2 growth `mid_run_manifest_growth_blocks_remaining_scope`. |
+| Scoped proof default (M017) | 17 | Boundary rule `scope_note_does_not_block_in_boundary_execute` + Simulate/Preview twins + flagship out-of-anchor twin `out_of_anchor_poison_does_not_block_anchor` (fails pre-change as a whole-scope block); passenger rule `refused_passenger_rides_along_without_blocking`; hostile twins (redirect and nested skip without blocking, metadata-failure blocks, symlinked-output unix produces no unit while the sibling cleans, mid-run growth blocks the remainder); gate-8 control `proof_refuses_where_stale_universe_would_proceed`; passenger-redirect control; environment child-process probe `environment_change_blocks_remaining_units` + `environment_change_probe`; listing pair (offer + refusal on a blocked boundary); zero-unit edge `empty_proof_universe_blocks_listing`. Subprocess surfaces in `tests/cli_contract.rs`: G1 Execute/Simulate/human (exit 0, note reported) + G1c passenger + `-i` no-terminal usage error. |
 
 ### What each fake runner exists to catch
 

@@ -140,13 +140,6 @@ pub enum Command {
         /// own `clean --dry-run --verbose`. Never removes anything.
         #[arg(long, conflicts_with_all = ["dry_run", "yes_legacy", "dryrun_legacy"])]
         cargo_preview: bool,
-        /// Partition a blocked scope into proof islands and clean each
-        /// provable island independently; hold the rest with typed reasons.
-        /// Default off: without it a single unprovable manifest blocks the
-        /// whole scope. Composes with `--dry-run` (predicts per-island
-        /// spawns, spawns nothing) and never changes default behavior.
-        #[arg(long)]
-        partitioned: bool,
         /// Historical spelling of the (now default) Execute mode; retained as a
         /// hidden alias.
         #[arg(long = "yes", hide = true, conflicts_with_all = ["dry_run", "cargo_preview", "dryrun_legacy"])]
@@ -254,10 +247,6 @@ pub struct CleanupRequest {
     /// all — and because the interactive selection can only be resolved once a
     /// terminal exists, which argv parsing must not do.
     pub interactive: bool,
-    /// `--partitioned` (clean subcommand only): partition a blocked scope
-    /// into proof islands and clean each provable island independently.
-    /// Absent (including bare maintenance) means today's whole-scope block.
-    pub partitioned: bool,
 }
 
 /// The resolved operation, scope, and mode for one invocation.
@@ -326,7 +315,6 @@ impl Cli {
                 overrides: CleanupOverrides::default(),
                 selection: CleanupSelection::WorkingDirectory,
                 interactive: self.interactive,
-                partitioned: false,
             }),
             Some(Command::Scan {
                 root,
@@ -364,7 +352,6 @@ impl Cli {
                 dry_run,
                 cargo_preview,
                 dryrun_legacy,
-                partitioned,
                 min_reclaimable_bytes,
                 older_than,
                 include,
@@ -406,7 +393,6 @@ impl Cli {
                     },
                     selection,
                     interactive: self.interactive,
-                    partitioned: *partitioned,
                 })
             }
         }
@@ -517,7 +503,6 @@ mod tests {
             overrides: CleanupOverrides::default(),
             selection,
             interactive: false,
-            partitioned: false,
         }
     }
     #[test]
@@ -945,35 +930,15 @@ mod tests {
     }
 
     #[test]
-    fn partitioned_parses_on_clean_only_and_defaults_off() {
-        // Advertised, not hidden: the flag is the documented opt-in.
-        let clean_help = Cli::command()
-            .find_subcommand_mut("clean")
-            .expect("clean subcommand")
-            .render_long_help()
-            .to_string();
-        assert!(clean_help.contains("--partitioned"), "{clean_help}");
-        // clean --partitioned opts in.
-        let partitioned = Cli::try_parse_from(["cargo-cleanme", "clean", "/x", "--partitioned"])
-            .unwrap()
-            .invocation();
-        assert!(
-            matches!(partitioned, Invocation::Cleanup(ref request) if request.partitioned),
-            "{partitioned:?}"
-        );
-        // Everything else defaults off: bare maintenance, plain clean, and
-        // --partitioned is not a root-level flag.
-        assert!(
-            matches!(Cli::try_parse_from(["cargo-cleanme"]).unwrap().invocation(), Invocation::Cleanup(ref request) if !request.partitioned)
-        );
-        assert!(
-            matches!(Cli::try_parse_from(["cargo-cleanme", "clean", "/x"]).unwrap().invocation(), Invocation::Cleanup(ref request) if !request.partitioned)
-        );
+    fn partitioned_flag_is_gone_scoped_proof_is_the_only_behavior() {
+        // ADR 007: the flag was never published (0.2.9 unreleased), so
+        // removal is total — no alias, no deprecation path. Unknown flags
+        // are a clap usage error, and scoped proof needs no opt-in.
         assert!(Cli::try_parse_from(["cargo-cleanme", "--partitioned"]).is_err());
-        // Orthogonal to modes: composes with --dry-run.
+        assert!(Cli::try_parse_from(["cargo-cleanme", "clean", "/x", "--partitioned"]).is_err());
         assert!(matches!(
-            Cli::try_parse_from(["cargo-cleanme", "clean", "/x", "--partitioned", "--dry-run"]).unwrap().invocation(),
-            Invocation::Cleanup(ref request) if request.partitioned && request.mode == CleanMode::Simulate
+            Cli::try_parse_from(["cargo-cleanme"]).unwrap().invocation(),
+            Invocation::Cleanup(_)
         ));
     }
 
@@ -1077,7 +1042,6 @@ mod tests {
                 },
                 selection: CleanupSelection::WorkingDirectory,
                 interactive: false,
-                partitioned: false,
             }),
             "advanced policy overrides travel with the intent, not beside it"
         );
