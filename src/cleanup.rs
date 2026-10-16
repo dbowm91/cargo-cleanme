@@ -1280,11 +1280,10 @@ fn discover_and_resolve_universe(
     })
 }
 
-/// M016/A removed by M017/ADR 007 with the island it filtered to (see the
-/// note where the partition types lived). Dispatch needs no filtering:
-/// `resolve_cleanup_scope` already emits only in-boundary units, and the
-/// block sites return before dispatch when in-boundary poison exists.
-
+// M016/A removed by M017/ADR 007 with the island it filtered to (see the
+// note where the partition types lived). Dispatch needs no filtering:
+// `resolve_cleanup_scope` already emits only in-boundary units, and the
+// block sites return before dispatch when in-boundary poison exists.
 #[allow(clippy::too_many_arguments)]
 pub fn clean_with_roots_policy_selector_guarded(
     roots: &[PathBuf],
