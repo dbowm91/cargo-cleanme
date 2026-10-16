@@ -348,15 +348,44 @@ vector, which is exactly why the doc comment at `:544-547` says its
 partial-result behaviour is "intentionally unchanged" and the read-only scan
 stays tolerant.
 
-**Documented fragility:** `stage` is not carried by the diagnostic. It is
-re-inferred by substring-matching the message (`:799-806`): contains
-`"locate-project"` → `locate`, contains `"metadata"` → `metadata`, else
-`identity`. Today every message that should classify correctly does (e.g.
-`"cannot establish physical workspace member source root for …"` contains
-neither and correctly yields `identity`), but the field is coupled to human
-strings. A copy edit that drops a subcommand name silently reclassifies a
-participant's stage. `stage` is a display/labelling convenience only — the
-fail-closed decision keys on `unresolved.is_empty()`, not on `stage`.
+**Failure-class attribution is report-only (M015); there is no enforcement
+pass-through.** A manifest Cargo refuses with `current package believes it's
+in a workspace when it's not` stays an unresolved participant and still
+blocks the whole scope under ADR 001 C004/C006 — withholding it from
+`unresolved` would narrow the block without ADR cover, which is exactly what
+M015's non-goals forbid (`src/workspace.rs:976-985`). What M015 adds is a
+pure decision function over the failure classes,
+`attribute_unknown` (`src/workspace.rs:419-438`), returning
+`UnknownDisposition` (`src/workspace.rs:400-409`): only `RefusedByCargo`
+unknowns (Cargo ran and refused the manifest, so it owns no bytes) avoid the
+merge — as a passenger of the island Cargo named
+(`believed_workspace_manifest`, `src/workspace.rs:372-387`) when that
+workspace resolved here, else a scope-level note. Every other class
+(transport, unparseable output, lost workers, metadata, identity) is
+`MergeAll`, today's block; the capability is recorded where the failure is
+classified, never re-parsed from message text. Permission, transport, parse,
+and metadata failures are untouched. Pinned by
+`misconfigured_member_with_resolved_parent_still_blocks_but_attributes_as_passenger`
+and `misconfigured_member_with_unresolved_parent_still_blocks`
+(`src/workspace.rs:3678-3784`), the per-class table
+`attribute_unknown_merges_every_unproven_class` (`src/workspace.rs:3860`),
+`attribute_unknown_reports_refused_manifest_as_scope_note_without_naming_evidence`
+(`src/workspace.rs:3911`),
+`attribute_unknown_assigns_refused_believed_manifest_to_resolved_island`
+(`src/workspace.rs:3934`),
+`attribute_unknown_with_unresolved_named_parent_is_scope_note_not_passenger`
+(`src/workspace.rs:3983`),
+`attribute_unknown_truncated_believed_reason_is_scope_note`
+(`src/workspace.rs:3999`), and the resolution-level capability pins
+`resolution_records_refused_capability_for_cargo_refused_locate`
+(`src/workspace.rs:4018`) and
+`resolution_records_unproven_capability_for_metadata_failure`
+(`src/workspace.rs:4063`). Enforcement of the passenger shape arrived with
+M016 under the accepted ADR 004 amendment and became the default under
+M017/ADR 007: a refused passenger rides along while staying named in
+`unresolved_ownership` (never a unit row); see [Cleanup](09-cleanup.md)
+§ "Scoped proof is the default (M017)". Resolution itself is unchanged —
+still report-only.
 
 ### Progress
 

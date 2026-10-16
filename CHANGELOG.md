@@ -8,6 +8,22 @@ command-line, JSON, and release-asset contracts are the stable surface.
 
 ## [Unreleased]
 
+### Changed
+
+- **Scoped proof is the default; out-of-scope blocking was a product
+  defect.** The ownership proof now covers the selected scope — the working
+  directory anchor for bare/`--known` cleanup, the explicit roots for
+  `clean ROOT`, the full system for `clean --full` (which keeps
+  whole-system fail-closed blocking). Discovery and grouping still cover
+  the whole scope, so cross-boundary output claims still force shared
+  output. An unresolvable manifest outside the scope is reported in
+  diagnostics and never blocks; an in-scope manifest Cargo itself refused
+  is reported, never blocking. Only in-scope byte-capable unknowns block,
+  and a scope that proves zero units against any unproven participant
+  fails closed. Exits are boundary-scoped: 0 when the boundary is fully
+  cleaned, 1 when it is blocked or a unit fails. The never-published
+  `--partitioned` flag and the `result.islands` field are removed.
+
 ## [0.2.8] - 2026-10-15
 
 ### Added

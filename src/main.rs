@@ -372,6 +372,7 @@ fn run_cleanup(
             counters: Default::default(),
             scope_blocked: Some(block),
             unresolved_ownership: Vec::new(),
+            out_of_scope_unresolved: 0,
             selected_roots: resolved.roots.clone(),
             discovered_manifests: 0,
             resolved_workspaces: 0,
@@ -396,6 +397,7 @@ fn run_cleanup(
             counters: Default::default(),
             scope_blocked: None,
             unresolved_ownership: Vec::new(),
+            out_of_scope_unresolved: 0,
             selected_roots: Vec::new(),
             discovered_manifests: 0,
             resolved_workspaces: 0,
@@ -495,11 +497,14 @@ enum SelectionOutcome {
 /// universe, so output shared with a workspace outside the anchor stays
 /// `Shared`. Narrowing root selection here instead would be the ADR 006 defect.
 ///
-/// With `-i` the operator's choice replaces it. The interactive path resolves
-/// candidates through the *same* [`cargo_cleanme::cleanup::list_cleanup_candidates`]
-/// pipeline the engine uses, so the offered rows are the engine's own units,
-/// and the result is a strictly narrower `Roots` selection — never a way to
-/// add, reclassify, or unblock one.
+/// With `-i` the operator's choice narrows it further. The interactive path
+/// resolves candidates through the *same*
+/// [`cargo_cleanme::cleanup::list_cleanup_candidates`] pipeline the engine
+/// uses, so the offered rows are the engine's own units, and the result is a
+/// strictly narrower `Roots` selection — never a way to add, reclassify, or
+/// unblock one. For maintenance scopes the listing is already anchored to the
+/// working directory, so `-i` is bounded by where it runs; `clean ROOT` and
+/// `clean --full` stay unfiltered because their roots already bound them.
 fn resolve_candidate_selection(
     request: &CleanupRequest,
     resolved: &ResolvedCleanup,
@@ -541,24 +546,29 @@ fn resolve_candidate_selection(
     // Progress bars would fight the repainting list, so the listing runs
     // silent. It is a read-only resolution: `cargo metadata` only.
     let silent = cargo_cleanme::progress::IndicatifRenderer::new(true);
+    // M014/ADR 006: the working directory anchors selection, not discovery.
+    // Resolve the declared selection first so `-i` on a maintenance scope
+    // offers only anchor-matching units. The proof universe stays wide —
+    // `resolved.roots` still carry the full Routine set — so shared output
+    // stays `Shared`. `clean ROOT`/`--full` resolve to `All` and stay
+    // unfiltered because their roots already bound them.
+    let anchor = request.selection.resolved()?;
     let listing = cargo_cleanme::cleanup::list_cleanup_candidates(
         &resolved.roots,
         config.scan.recency_seconds,
         mode,
         &cargo_cleanme::cleanup::SystemCleanupRunner,
         &silent,
-        // Offer every unit in scope. The operator is choosing, and a list that
-        // hid the units their anchor excluded would just move the surprise to
-        // the report.
-        &cargo_cleanme::cleanup::CleanupSelection::All,
+        &anchor,
     )?;
     if let Some(block) = listing.scope_blocked {
         // Offering rows from an unproven universe would be the ADR 006 shape in
         // a new costume: the operator would be picking from a list whose
         // classification is exactly what failed.
+        let detail =
+            cargo_cleanme::cleanup::blocked_listing_detail(&block, &listing.unresolved_ownership);
         return Err(AppError::Config(format!(
-            "cannot present an interactive selection: {}",
-            block.message
+            "cannot present an interactive selection: {detail}"
         )));
     }
     match cargo_cleanme::interactive::run_interactive(listing.candidates) {
@@ -635,6 +645,7 @@ fn run_engine_guarded(
                             counters: Default::default(),
                             scope_blocked: None,
                             unresolved_ownership: Vec::new(),
+                            out_of_scope_unresolved: 0,
                             selected_roots: Vec::new(),
                             discovered_manifests: 0,
                             resolved_workspaces: 0,
@@ -659,6 +670,7 @@ fn run_engine_guarded(
                         ),
                     )),
                     unresolved_ownership: Vec::new(),
+                    out_of_scope_unresolved: 0,
                     selected_roots: resolved.roots.clone(),
                     discovered_manifests: 0,
                     resolved_workspaces: 0,

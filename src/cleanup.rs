@@ -338,6 +338,54 @@ impl ScopeBlock {
     }
 }
 
+/// Output-placement environment a partition was computed under (M015
+/// certificate §4.4).
+///
+/// A change to either variable between discovery and spawn moves output
+/// placement out from under the partition, so activation (M016) must treat a
+/// mismatch as a merge. M015 records the snapshot as evidence and proves the
+/// detector ([`output_env_matches`]) with tests.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OutputProvenanceSnapshot {
+    pub cargo_target_dir: Option<OsString>,
+    pub cargo_build_build_dir: Option<OsString>,
+}
+
+/// Capture the output-placement environment through an injectable getter so
+/// tests can vary it without touching the process environment (parallel-test
+/// safe: no `std::env::set_var` anywhere near this code).
+fn snapshot_output_env(get: &dyn Fn(&str) -> Option<OsString>) -> OutputProvenanceSnapshot {
+    OutputProvenanceSnapshot {
+        cargo_target_dir: get("CARGO_TARGET_DIR"),
+        cargo_build_build_dir: get("CARGO_BUILD_BUILD_DIR"),
+    }
+}
+
+/// True when the current output-placement environment still matches a
+/// snapshot. Absent and empty are distinct: unsetting a variable is a change.
+///
+/// M016/B wires this as the §4-rule-4 merge detector: the partition's
+/// provenance snapshot is re-compared before each island's first dispatch,
+/// and any mismatch merges the remaining islands into one blocked scope.
+fn output_env_matches(
+    snapshot: &OutputProvenanceSnapshot,
+    get: &dyn Fn(&str) -> Option<OsString>,
+) -> bool {
+    *snapshot == snapshot_output_env(get)
+}
+
+// The M015/M016 proof-island machinery (`PartitionMergeCause`,
+// `ProofIsland`, `ProofPartition`, `compute_proof_partition`,
+// `retain_proceed_island_units`, `append_partitioned_suffix`,
+// `partition_section`, `partition_outcome_section`) was removed by
+// M017/ADR 007: scoped proof is the default, so there are no islands to
+// compute or report. The certificate's load-bearing remainder —
+// `UnknownCapability` classification with `attribute_unknown`, the
+// refused-manifest passenger rule, and per-dispatch environment
+// re-verification — lives on in the boundary split above. History:
+// M015 designed the certificate, M016 activated it behind a flag; both
+// records stand, and neither shipped to users (0.2.9 unpublished).
+
 /// The complete outcome of one cleanup run.
 ///
 /// `Default` is intentionally not derived: a report must always state its
@@ -351,9 +399,19 @@ pub struct CleanReport {
     pub mode: CleanMode,
     pub counters: ScanCounters,
     /// Whole-scope safety block raised before sizing or per-unit proof.
+    /// ADR 007: the block is boundary-scoped — only in-boundary unprovables
+    /// raise it. Out-of-boundary poison arrives as `out_of_scope`
+    /// diagnostics and never blocks.
     pub scope_blocked: Option<ScopeBlock>,
     /// Structured participants retained for diagnostics and audit consumers.
+    /// ADR 007: boundary-relevant only; out-of-boundary unprovables travel
+    /// in `diagnostics` with the `out_of_scope` category.
     pub unresolved_ownership: Vec<UnresolvedOwnershipParticipant>,
+    /// Count of manifests that did not resolve outside the selected scope.
+    /// Reported, never blocking. Rendered as one bounded human line so the
+    /// operator can distinguish "the boundary is clean" from "the system is
+    /// clean".
+    pub out_of_scope_unresolved: usize,
     pub selected_roots: Vec<PathBuf>,
     pub discovered_manifests: usize,
     pub resolved_workspaces: usize,
@@ -390,6 +448,55 @@ pub struct CleanupPolicy {
     pub exclude: Vec<String>,
 }
 
+/// Bounded human listing of retained ownership participants, shared by the
+/// blocked path (under the block message) and the unblocked path (under a
+/// "reported, not blocking" header). Same bound, same overflow line, same
+/// workspace hint in both places: the rows are facts about the run, not
+/// about the block.
+fn append_unresolved_listing(out: &mut String, unresolved: &[UnresolvedOwnershipParticipant]) {
+    const MAX_LISTED: usize = 5;
+    const MAX_FIELD_CHARS: usize = 200;
+    let mut listed = 0usize;
+    let mut workspace_hint = false;
+    for participant in unresolved.iter().take(MAX_LISTED) {
+        let manifest = participant
+            .manifest
+            .display()
+            .to_string()
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(MAX_FIELD_CHARS)
+            .collect::<String>();
+        let reason = participant
+            .reason
+            .replace('\n', " ")
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(MAX_FIELD_CHARS)
+            .collect::<String>();
+        out.push_str(&format!(
+            "  unresolved [{}] {}: {}\n",
+            participant.stage, manifest, reason
+        ));
+        listed += 1;
+        if participant
+            .reason
+            .contains("believes it's in a workspace when it's not")
+        {
+            workspace_hint = true;
+        }
+    }
+    let remaining = unresolved.len().saturating_sub(listed);
+    if remaining > 0 {
+        out.push_str(&format!("  … {remaining} more unresolved participant(s)\n"));
+    }
+    if workspace_hint {
+        out.push_str(
+            "  hint: a nested crate that believes it is in a workspace needs an empty `[workspace]` table or a parent `workspace.exclude` entry; otherwise clean a healthy workspace explicitly, e.g. `cargo cleanme clean ROOT`\n",
+        );
+    }
+}
+
 impl CleanReport {
     pub fn render(&self) -> String {
         let mut out = String::new();
@@ -402,6 +509,16 @@ impl CleanReport {
                 self.resolved_workspaces,
                 self.units_considered,
                 self.unresolved_ownership.len(),
+            ));
+        }
+        // ADR 007: poison outside the selected scope never blocks, but
+        // silence about it would recreate the M012A defect in a new place —
+        // "boundary clean" must not read as "system clean". Renders on both
+        // the blocked and the clean path.
+        if self.out_of_scope_unresolved > 0 {
+            out.push_str(&format!(
+                "  … {} out-of-scope unprovable participant(s) reported in diagnostics, not blocking: outside the selected scope\n",
+                self.out_of_scope_unresolved
             ));
         }
         if let Some(block) = &self.scope_blocked {
@@ -418,49 +535,17 @@ impl CleanReport {
             if block.reason == ScopeBlockReason::OwnershipUnproven
                 && !self.unresolved_ownership.is_empty()
             {
-                const MAX_LISTED: usize = 5;
-                const MAX_FIELD_CHARS: usize = 200;
-                let mut listed = 0usize;
-                let mut workspace_hint = false;
-                for participant in self.unresolved_ownership.iter().take(MAX_LISTED) {
-                    let manifest = participant
-                        .manifest
-                        .display()
-                        .to_string()
-                        .chars()
-                        .filter(|ch| !ch.is_control())
-                        .take(MAX_FIELD_CHARS)
-                        .collect::<String>();
-                    let reason = participant
-                        .reason
-                        .replace('\n', " ")
-                        .chars()
-                        .filter(|ch| !ch.is_control())
-                        .take(MAX_FIELD_CHARS)
-                        .collect::<String>();
-                    out.push_str(&format!(
-                        "  unresolved [{}] {}: {}\n",
-                        participant.stage, manifest, reason
-                    ));
-                    listed += 1;
-                    if participant
-                        .reason
-                        .contains("believes it's in a workspace when it's not")
-                    {
-                        workspace_hint = true;
-                    }
-                }
-                let remaining = self.unresolved_ownership.len().saturating_sub(listed);
-                if remaining > 0 {
-                    out.push_str(&format!("  … {remaining} more unresolved participant(s)\n"));
-                }
-                if workspace_hint {
-                    out.push_str(
-                        "  hint: a nested crate that believes it is in a workspace needs an empty `[workspace]` table or a parent `workspace.exclude` entry; otherwise clean a healthy workspace explicitly, e.g. `cargo cleanme clean ROOT`\n",
-                    );
-                }
+                append_unresolved_listing(&mut out, &self.unresolved_ownership);
             }
-            return out;
+            if self.results.is_empty() {
+                return out;
+            }
+        } else if !self.unresolved_ownership.is_empty() {
+            // ADR 007: reported-but-never-blocking participants (in-boundary
+            // passengers and scope notes) are still named on the clean path,
+            // or "boundary clean" would read as "nothing unproven".
+            out.push_str("  reported unprovable participant(s), not blocking:\n");
+            append_unresolved_listing(&mut out, &self.unresolved_ownership);
         }
         let mut previewed = 0usize;
         let mut simulated = 0usize;
@@ -1075,7 +1160,10 @@ struct ResolvedUniverse {
     cleanup_phase: ScanPhase,
     counters: ScanCounters,
     diagnostics: Vec<ScanDiagnostic>,
-    discovery_diagnostic_count: usize,
+    /// Discovery-phase diagnostics inside the proof boundary (ADR 007).
+    /// Pathless diagnostics count as inside (fail-closed: unattributable
+    /// incompleteness blocks). Only this count can raise a block.
+    boundary_discovery_diagnostics: usize,
     manifests: Vec<PathBuf>,
     /// H-2 snapshot of the manifest set the universe was built from, taken
     /// before the first candidate reaches its final proof.
@@ -1084,6 +1172,12 @@ struct ResolvedUniverse {
     units: Vec<workspace::CleanupUnit>,
     unselected: Vec<workspace::CleanupUnit>,
     unresolved_ownership: Vec<UnresolvedOwnershipParticipant>,
+    /// In-boundary `MergeAll` participants (ADR 007). Only these block;
+    /// `unresolved_ownership` also carries reported passengers and notes.
+    blocking_unresolved: usize,
+    /// Out-of-boundary unresolved manifests, carried in `diagnostics` as
+    /// informational `out_of_scope` entries. Reported, never blocking.
+    out_of_scope_unresolved: usize,
 }
 
 /// Root validation, manifest discovery, and full ownership resolution.
@@ -1161,21 +1255,35 @@ fn discover_and_resolve_universe(
         observer,
         selection,
     )?;
+    let blocking_unresolved =
+        blocking_unresolved_count(&scope.unresolved, &scope.workspaces, selection);
+    let out_of_scope_unresolved = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.category == crate::domain::DiagnosticCategory::OutOfScope)
+        .count();
+    let boundary_discovery_diagnostics =
+        boundary_discovery_diagnostic_count(&diagnostics, discovery_diagnostic_count, selection);
     Ok(ResolvedUniverse {
         roots,
         cleanup_phase,
         counters,
         diagnostics,
-        discovery_diagnostic_count,
+        boundary_discovery_diagnostics,
         manifests,
         initial_manifests,
         workspaces: scope.workspaces,
         units: scope.units,
         unselected: scope.unselected,
         unresolved_ownership: scope.unresolved,
+        blocking_unresolved,
+        out_of_scope_unresolved,
     })
 }
 
+// M016/A removed by M017/ADR 007 with the island it filtered to (see the
+// note where the partition types lived). Dispatch needs no filtering:
+// `resolve_cleanup_scope` already emits only in-boundary units, and the
+// block sites return before dispatch when in-boundary poison exists.
 #[allow(clippy::too_many_arguments)]
 pub fn clean_with_roots_policy_selector_guarded(
     roots: &[PathBuf],
@@ -1203,13 +1311,15 @@ pub fn clean_with_roots_policy_selector_guarded(
         cleanup_phase,
         mut counters,
         diagnostics,
-        discovery_diagnostic_count,
+        boundary_discovery_diagnostics,
         manifests,
         initial_manifests,
         workspaces,
         units,
         unselected,
         unresolved_ownership,
+        blocking_unresolved,
+        out_of_scope_unresolved,
     } = universe;
 
     let mut report = CleanReport {
@@ -1220,6 +1330,7 @@ pub fn clean_with_roots_policy_selector_guarded(
         counters: ScanCounters::default(),
         scope_blocked: None,
         unresolved_ownership: unresolved_ownership.clone(),
+        out_of_scope_unresolved,
         selected_roots: roots.clone(),
         discovered_manifests: manifests.len(),
         resolved_workspaces: workspaces.len(),
@@ -1230,16 +1341,21 @@ pub fn clean_with_roots_policy_selector_guarded(
     // The blocked report carries the counters measured up to the point the
     // block was raised, exactly as the successful path does at the end.
     report.counters = counters.clone();
+    // Output-placement environment snapshot for per-dispatch re-verification
+    // (M016 mechanism, retained). Taken once up front; compared before every
+    // unit dispatch below.
+    let provenance = snapshot_output_env(&|key| std::env::var_os(key));
 
-    // Discovery uncertainty still blocks the complete cleanup scope, but
-    // report the actual read-only resolution outcome instead of returning
+    // ADR 007: only in-boundary discovery uncertainty blocks. Out-of-scope
+    // diagnostics stay visible in the diagnostics list; they never block.
+    // Report the actual read-only resolution outcome instead of returning
     // misleading zero workspace/unit counts before Cargo was attempted.
-    if discovery_diagnostic_count > 0 {
+    if boundary_discovery_diagnostics > 0 {
         report.scope_blocked = Some(ScopeBlock::new(
             ScopeBlockReason::IncompleteDiscovery,
             format!(
-                "combined cleanup ownership universe is incomplete: {} discovery diagnostic(s); resolved {} workspace(s), considered {} cleanup unit(s); no cleanup commands were run",
-                discovery_diagnostic_count,
+                "cleanup ownership universe is incomplete in the selected scope: {} discovery diagnostic(s); resolved {} workspace(s), considered {} cleanup unit(s); no cleanup commands were run",
+                boundary_discovery_diagnostics,
                 workspaces.len(),
                 units.len()
             ),
@@ -1247,7 +1363,7 @@ pub fn clean_with_roots_policy_selector_guarded(
         return Ok(report);
     }
 
-    if !unresolved_ownership.is_empty() {
+    if blocking_unresolved > 0 {
         let unresolved = unresolved_ownership.len();
         report.scope_blocked = Some(ScopeBlock::new(
             ScopeBlockReason::OwnershipUnproven,
@@ -1260,7 +1376,30 @@ pub fn clean_with_roots_policy_selector_guarded(
                 }
             ),
         ));
-        report.unresolved_ownership = unresolved_ownership;
+        report.resolved_workspaces = workspaces.len();
+        return Ok(report);
+    }
+
+    // ADR 007 edge: reported notes never block proceeding units — but a run
+    // that proves zero units against unproven participants proves nothing.
+    // Exiting 0 there would be the M012A silent no-op: no rows, no block, no
+    // failure, and an operator script reading "success". Fail closed with
+    // the standard unproven-ownership block. Units merely unselected
+    // (outside the anchor) do not count: the M014 elsewhere case reports
+    // skipped rows and stays exit 0.
+    if units.is_empty() && unselected.is_empty() && !unresolved_ownership.is_empty() {
+        let unresolved = unresolved_ownership.len();
+        report.scope_blocked = Some(ScopeBlock::new(
+            ScopeBlockReason::OwnershipUnproven,
+            format!(
+                "cleanup ownership could not be proven: {unresolved} discovered Cargo {} did not resolve; no cleanup commands were run",
+                if unresolved == 1 {
+                    "manifest"
+                } else {
+                    "manifests"
+                }
+            ),
+        ));
         report.resolved_workspaces = workspaces.len();
         return Ok(report);
     }
@@ -1300,7 +1439,13 @@ pub fn clean_with_roots_policy_selector_guarded(
     // Filled on the first candidate that reaches the final proof; shared by
     // every later candidate in this run (H3/O1).
     let mut hoisted: Option<ProofUniverse> = None;
-    for unit in &units {
+    // M017/ADR 007: the output environment is re-verified before every unit
+    // dispatch (M016 verified per island first-dispatch; without islands the
+    // same check runs per unit — a few environment reads, no spawns). A
+    // mismatch blocks the remaining units in the fail-closed direction,
+    // before any further spawn. Simulate rehearses the same check so it
+    // predicts Execute instead of diverging from it.
+    for unit in units.iter() {
         let skipped = |report: &mut CleanReport,
                        detail: String,
                        disposition: Option<PolicyDisposition>,
@@ -1463,7 +1608,11 @@ pub fn clean_with_roots_policy_selector_guarded(
         // on the first candidate that reaches the proof. Lazy so a run where
         // every unit is skipped by policy still spawns nothing.
         let hoisted = hoisted.get_or_insert_with(|| {
-            ProofUniverse::refresh(&workspaces, &roots, runner, &mut counters)
+            // ADR 007: the refresh re-applies the boundary rule against the
+            // fresh workspaces. Scan-time out-of-boundary and passenger
+            // unknowns stay tolerated; only a fresh in-boundary `MergeAll`
+            // invalidates the run.
+            ProofUniverse::refresh(&workspaces, &roots, runner, &mut counters, selection)
         });
         // M-2: a universe that could not be re-proven invalidates every
         // candidate, like scan-time incompleteness (exit 1 via scope_blocked),
@@ -1570,7 +1719,7 @@ pub fn clean_with_roots_policy_selector_guarded(
                 Ok(fresh) if fresh.diagnostics.is_empty() => {
                     let mut now = fresh.manifests;
                     now.sort();
-                    if now != initial_manifests {
+                    if !universe_manifests_stable(&initial_manifests, &now) {
                         report.scope_blocked = Some(ScopeBlock::new(
                             ScopeBlockReason::IncompleteDiscovery,
                             "cleanup ownership universe changed: manifest set differs after proof; no further cleanup commands were run".into(),
@@ -1588,6 +1737,20 @@ pub fn clean_with_roots_policy_selector_guarded(
                     return Ok(report);
                 }
             }
+        }
+
+        // The output environment was snapshotted when the proof universe was
+        // built; re-verify before each dispatch. Any mismatch blocks the
+        // remaining units — the same direction as every other mid-run block —
+        // before any further spawn. Simulate rehearses the same check so it
+        // predicts Execute instead of diverging from it.
+        if !output_env_matches(&provenance, &|key| std::env::var_os(key)) {
+            report.scope_blocked = Some(ScopeBlock::new(
+                ScopeBlockReason::OwnershipUnproven,
+                "output environment changed after proof; remaining units blocked; no further cleanup commands were run".into(),
+            ));
+            report.counters = counters.clone();
+            return Ok(report);
         }
 
         match mode {
@@ -1798,6 +1961,82 @@ impl CleanupCandidate {
     }
 }
 
+/// Human detail for a blocked interactive listing, with bounded participant
+/// paths and the workspace-membership hint when it applies.
+///
+/// This is the listing counterpart of the engine's blocked-report rendering in
+/// `CleanReport::render`: the block message alone carries a count, which never
+/// told the operator which manifest to fix or which healthy workspace to clean
+/// explicitly instead. Paths are sanitized (no control characters, bounded
+/// length, at most five) because this surfaces on a human terminal; JSON and
+/// log consumers read `unresolved_ownership` / counts instead.
+pub fn blocked_listing_detail(
+    block: &ScopeBlock,
+    unresolved: &[UnresolvedOwnershipParticipant],
+) -> String {
+    let mut detail = block.message.clone();
+    const MAX_LISTED: usize = 5;
+    const MAX_FIELD_CHARS: usize = 200;
+    let mut listed = 0usize;
+    let mut workspace_hint = false;
+    for participant in unresolved.iter().take(MAX_LISTED) {
+        let manifest = participant
+            .manifest
+            .display()
+            .to_string()
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(MAX_FIELD_CHARS)
+            .collect::<String>();
+        let reason = participant
+            .reason
+            .replace('\n', " ")
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(MAX_FIELD_CHARS)
+            .collect::<String>();
+        detail.push_str(&format!(
+            "\n  unresolved [{}] {}: {}",
+            participant.stage, manifest, reason
+        ));
+        listed += 1;
+        if participant
+            .reason
+            .contains("believes it's in a workspace when it's not")
+        {
+            workspace_hint = true;
+        }
+    }
+    let remaining = unresolved.len().saturating_sub(listed);
+    if remaining > 0 {
+        detail.push_str(&format!("\n  … {remaining} more unresolved participant(s)"));
+    }
+    if workspace_hint {
+        detail.push_str(
+            "\n  hint: a nested crate that believes it is in a workspace needs an empty `[workspace]` table or a parent `workspace.exclude` entry; otherwise clean a healthy workspace explicitly, e.g. `cargo cleanme clean ROOT`",
+        );
+    }
+    detail
+}
+
+// M017/ADR 007 removed `physical_outputs` with the partition (its only
+// caller): grouping classifies unprovable physical identity without it.
+// M017/ADR 007 removed the proof-island machinery that lived here
+// (`compute_proof_partition` through `partition_outcome_section`, plus
+// `outputs_overlap` which only the partition used): scoped proof is the
+// default, so there are no islands to compute or report. See the note where
+// the partition types lived for what carried forward.
+
+/// H-2 universe-stability predicate: the rediscovered manifest set must equal
+/// the hoisted snapshot exactly — growth, shrinkage, or any difference blocks
+/// the remaining scope instead of proceeding against a stale claimant set.
+///
+/// Extracted pure (M015/F) so the TOCTOU control can prove the detector
+/// carries the detection: the naive always-stable stub passes growth through.
+fn universe_manifests_stable(initial: &[PathBuf], fresh_sorted: &[PathBuf]) -> bool {
+    initial == fresh_sorted
+}
+
 /// The read-only result of listing cleanup candidates.
 #[derive(Clone, Debug, Default)]
 pub struct CandidateListing {
@@ -1839,17 +2078,39 @@ pub fn list_cleanup_candidates(
 ) -> Result<CandidateListing, AppError> {
     let universe =
         discover_and_resolve_universe(roots, recency_seconds, mode, runner, observer, selection)?;
-    let scope_blocked = if universe.discovery_diagnostic_count > 0 {
+    // ADR 007: the listing applies the identical boundary gates as the
+    // engine — candidates are the selected units, and the scope blocks only
+    // on in-boundary poison. Out-of-scope poison never blocks the offer.
+    let scope_blocked = if universe.boundary_discovery_diagnostics > 0 {
         Some(ScopeBlock::new(
             ScopeBlockReason::IncompleteDiscovery,
             format!(
-                "combined cleanup ownership universe is incomplete: {} discovery diagnostic(s); resolved {} workspace(s), considered {} cleanup unit(s); nothing can be selected",
-                universe.discovery_diagnostic_count,
+                "cleanup ownership universe is incomplete in the selected scope: {} discovery diagnostic(s); resolved {} workspace(s), considered {} cleanup unit(s); nothing can be selected",
+                universe.boundary_discovery_diagnostics,
                 universe.workspaces.len(),
                 universe.units.len()
             ),
         ))
-    } else if !universe.unresolved_ownership.is_empty() {
+    } else if universe.blocking_unresolved > 0 {
+        let unresolved = universe.unresolved_ownership.len();
+        Some(ScopeBlock::new(
+            ScopeBlockReason::OwnershipUnproven,
+            format!(
+                "cleanup ownership could not be proven: {unresolved} discovered Cargo {} did not resolve; nothing can be selected",
+                if unresolved == 1 {
+                    "manifest"
+                } else {
+                    "manifests"
+                }
+            ),
+        ))
+    } else if universe.units.is_empty()
+        && universe.unselected.is_empty()
+        && !universe.unresolved_ownership.is_empty()
+    {
+        // Same edge as the engine: offering nothing from an unproven
+        // universe without a block would read as success. The refusal
+        // carries the block, never rows.
         let unresolved = universe.unresolved_ownership.len();
         Some(ScopeBlock::new(
             ScopeBlockReason::OwnershipUnproven,
@@ -1883,6 +2144,11 @@ pub fn list_cleanup_candidates(
         diagnostics: universe.diagnostics.len(),
     })
 }
+
+// `island_held_view` was removed by M017/ADR 007 with the islands: without
+// islands there is no held context. The `-i` refusal carries the block
+// detail only; out-of-scope poison is visible in the human report line and
+// the JSON diagnostics of any run, not in the picker.
 
 fn compile_policy_globs(patterns: &[String]) -> Result<globset::GlobSet, AppError> {
     let mut builder = globset::GlobSetBuilder::new();
@@ -1981,6 +2247,103 @@ fn observe_unit_groups(observer: &dyn ProgressObserver, unit: &workspace::Cleanu
     }
 }
 
+/// ADR 007: the proof boundary is the selected scope, not the discovered
+/// universe. Discovery still covers everything (narrowing it would promote
+/// `Shared` to `PrivateBounded` per ADR 006), but only unprovable
+/// participants *inside* the boundary can block a dispatch.
+///
+/// `All` selects everything (explicit roots and `--full` keep today's
+/// behavior exactly). `Ancestry`/`Roots` admit the anchor/roots; matching is
+/// bidirectional like [`CleanupSelection::admits`] (an unresolvable parent
+/// manifest above the anchor could own the anchor's output) and therefore
+/// fail-closed. Comparison is canonical-or-raw on both sides so a symlinked
+/// prefix (macOS `/var` vs `/private/var`) cannot fail open. An unresolved
+/// selection never reaches the engine and is treated as blocking everything.
+fn boundary_admits(selection: &CleanupSelection, manifest: &Path) -> bool {
+    fn under(path: &Path, root: &Path) -> bool {
+        let canon_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let canon_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        canon_path.starts_with(&canon_root) || canon_root.starts_with(&canon_path)
+    }
+    match selection {
+        CleanupSelection::All => true,
+        CleanupSelection::WorkingDirectory => true,
+        CleanupSelection::Ancestry(anchor) => under(manifest, anchor),
+        CleanupSelection::Roots(roots) => roots.iter().any(|root| under(manifest, root)),
+    }
+}
+
+/// ADR 007 three-way split of unresolved participants.
+///
+/// - Out-of-boundary: reported as `out_of_scope` diagnostics, never blocks.
+///   Cleaning a healthy boundary while poison exists elsewhere is the
+///   corrected behavior; a test asserting the old whole-scope block here
+///   names the defect this decision fixes.
+/// - In-boundary `PassengerOf`/`ScopeNote`: reported, never blocks. Cargo
+///   named the owner (refused manifest) or the scope (believed member), so
+///   there is no unknown owner to merge — the M016 passenger rule, now the
+///   default.
+/// - In-boundary `MergeAll`: blocks the boundary. Unknown ownership inside
+///   the boundary still fails closed.
+///
+/// Returns `(blocking, reported_in_boundary, out_of_boundary)`.
+fn split_unresolved_for_boundary(
+    unresolved: &[UnresolvedOwnershipParticipant],
+    workspaces: &[ResolvedWorkspace],
+    selection: &CleanupSelection,
+) -> (
+    Vec<UnresolvedOwnershipParticipant>,
+    Vec<UnresolvedOwnershipParticipant>,
+    Vec<UnresolvedOwnershipParticipant>,
+) {
+    let mut blocking = Vec::new();
+    let mut reported = Vec::new();
+    let mut out_of_scope = Vec::new();
+    for participant in unresolved {
+        if !boundary_admits(selection, &participant.manifest) {
+            out_of_scope.push(participant.clone());
+            continue;
+        }
+        match workspace::attribute_unknown(participant, workspaces) {
+            workspace::UnknownDisposition::MergeAll => blocking.push(participant.clone()),
+            workspace::UnknownDisposition::PassengerOf { .. }
+            | workspace::UnknownDisposition::ScopeNote => reported.push(participant.clone()),
+        }
+    }
+    (blocking, reported, out_of_scope)
+}
+
+/// Count of unresolved participants that block the boundary under ADR 007.
+/// Single predicate shared by the early return, the block sites, the
+/// listing, and the refresh, so the four cannot disagree about what blocks.
+fn blocking_unresolved_count(
+    unresolved: &[UnresolvedOwnershipParticipant],
+    workspaces: &[ResolvedWorkspace],
+    selection: &CleanupSelection,
+) -> usize {
+    split_unresolved_for_boundary(unresolved, workspaces, selection)
+        .0
+        .len()
+}
+
+/// Count of discovery-phase diagnostics inside the boundary. Pathless
+/// diagnostics cannot be attributed and count as in-boundary (fail-closed,
+/// the C035 kill-switch direction).
+fn boundary_discovery_diagnostic_count(
+    diagnostics: &[ScanDiagnostic],
+    discovery_diagnostic_count: usize,
+    selection: &CleanupSelection,
+) -> usize {
+    diagnostics
+        .iter()
+        .take(discovery_diagnostic_count)
+        .filter(|diagnostic| match &diagnostic.path {
+            None => true,
+            Some(path) => boundary_admits(selection, path),
+        })
+        .count()
+}
+
 /// Resolve the cleanup candidate set for one scope: the bounded ownership
 /// universe (every resolved workspace) plus one CleanupUnit per workspace that
 /// has reportable affected output (C003 §7.1).
@@ -2022,16 +2385,40 @@ fn resolve_cleanup_scope(
         diagnostics,
         observer,
     );
-    let unresolved = coverage.unresolved;
-    counters.unresolved_ownership = unresolved.len() as u64;
+    let coverage_unresolved = coverage.unresolved;
+    counters.unresolved_ownership = coverage_unresolved.len() as u64;
     let workspaces = coverage.workspaces;
-    if !unresolved.is_empty() {
-        return Ok(CleanupScope {
-            workspaces,
-            units: Vec::new(),
-            unselected: Vec::new(),
-            unresolved,
-        });
+    // ADR 007: only in-boundary `MergeAll` participants block. Out-of-scope
+    // poison becomes `out_of_scope` informational diagnostics; in-boundary
+    // passengers and scope notes are reported, never blocking. Grouping,
+    // classification, and unit construction still run whole-universe over
+    // the resolved workspaces, so a cross-boundary claim still forces
+    // `Shared` at grouping time.
+    let unresolved: Vec<UnresolvedOwnershipParticipant>;
+    {
+        let (blocking, reported, out_of_scope) =
+            split_unresolved_for_boundary(&coverage_unresolved, &workspaces, selection);
+        for participant in &out_of_scope {
+            diagnostics.push(ScanDiagnostic {
+                severity: crate::domain::DiagnosticSeverity::Info,
+                category: crate::domain::DiagnosticCategory::OutOfScope,
+                path: Some(participant.manifest.clone()),
+                message: format!(
+                    "manifest did not resolve outside the selected scope; reported without blocking: {}",
+                    participant.reason.replace('\n', " "),
+                ),
+            });
+        }
+        if !blocking.is_empty() {
+            unresolved = blocking.into_iter().chain(reported).collect();
+            return Ok(CleanupScope {
+                workspaces,
+                units: Vec::new(),
+                unselected: Vec::new(),
+                unresolved,
+            });
+        }
+        unresolved = reported;
     }
     let groups = workspace::build_groups(&workspaces);
     // Fail-fast analysis (cheap gates before deep sizing).
@@ -2433,8 +2820,9 @@ impl ProofUniverse {
         clean_roots: &[PathBuf],
         runner: &dyn CleanupRunner,
         counters: &mut ScanCounters,
+        selection: &CleanupSelection,
     ) -> Self {
-        match refresh_combined_universe(universe, clean_roots, runner, counters) {
+        match refresh_combined_universe(universe, clean_roots, runner, counters, selection) {
             Ok(fresh) => Self {
                 fresh: Some(fresh),
                 failure: None,
@@ -2469,6 +2857,7 @@ fn refresh_combined_universe(
     roots: &[PathBuf],
     runner: &dyn CleanupRunner,
     counters: &mut ScanCounters,
+    selection: &CleanupSelection,
 ) -> Result<Vec<ResolvedWorkspace>, ProofFailure> {
     let policy = crate::domain::EffectiveScanPolicy {
         recency: Duration::ZERO,
@@ -2511,13 +2900,25 @@ fn refresh_combined_universe(
         .proof_cargo_locate_nanos
         .saturating_add(refreshed_counters.cargo_locate_nanos);
     if !coverage.unresolved.is_empty() {
-        return Err(ProofFailure::new(
-            CleanupReasonCode::SkippedOwnershipUnproven,
-            format!(
-                "ownership could not be re-proven: combined selected-root universe has {} unresolved manifest(s); a workspace did not re-resolve",
-                coverage.unresolved.len()
-            ),
-        ));
+        // ADR 007: the refresh re-applies the boundary rule against the
+        // fresh workspaces instead of carrying a scan-time tolerated list.
+        // Out-of-boundary unknowns stay ignored; in-boundary passengers and
+        // scope notes stay reported; only a fresh in-boundary `MergeAll`
+        // invalidates the refresh. Recomputing (rather than tolerating
+        // scan-time manifests by path) also fails closed when a scan-time
+        // passenger's owner disappears mid-run — the fresh disposition is
+        // `MergeAll`, which blocks.
+        let (blocking, _, _) =
+            split_unresolved_for_boundary(&coverage.unresolved, &coverage.workspaces, selection);
+        if !blocking.is_empty() {
+            return Err(ProofFailure::new(
+                CleanupReasonCode::SkippedOwnershipUnproven,
+                format!(
+                    "ownership could not be re-proven: combined selected-root universe has {} unresolved manifest(s); a workspace did not re-resolve",
+                    blocking.len()
+                ),
+            ));
+        }
     }
     let fresh = coverage.workspaces;
     let ids: std::collections::HashSet<_> = fresh.iter().map(|w| w.id.clone()).collect();
@@ -2660,8 +3061,16 @@ pub fn final_cleanup_proof(
     let clean_root_owned = clean_root.to_path_buf();
     let clean_roots = std::slice::from_ref(&clean_root_owned);
     // A single candidate *is* the universe here, and the refresh below already
-    // re-resolved it, so no extra per-candidate refresh is needed.
-    let hoisted = ProofUniverse::refresh(universe, clean_roots, runner, counters);
+    // re-resolved it, so no extra per-candidate refresh is needed. The
+    // boundary is the candidate's own roots (`All` over that narrow scope),
+    // which preserves the old fail-closed behavior exactly on this path.
+    let hoisted = ProofUniverse::refresh(
+        universe,
+        clean_roots,
+        runner,
+        counters,
+        &CleanupSelection::All,
+    );
     final_cleanup_proof_roots(
         unit,
         universe,
@@ -3342,6 +3751,62 @@ mod tests {
     use std::ffi::OsStr;
     use std::sync::Mutex;
     use tempfile::TempDir;
+
+    #[test]
+    fn blocked_listing_detail_names_participants_and_hints_workspace_membership() {
+        // The `-i` block used to carry only a count ("1 ... did not resolve"),
+        // so the operator could not tell which manifest to fix. A test that
+        // only asserted "it blocked" would pass against that shape too.
+        let block = ScopeBlock::new(
+            ScopeBlockReason::OwnershipUnproven,
+            "cleanup ownership could not be proven: 1 discovered Cargo manifest did not resolve; nothing can be selected".into(),
+        );
+        let unresolved = vec![UnresolvedOwnershipParticipant {
+            manifest: PathBuf::from("/work/a/fuzz/Cargo.toml"),
+            stage: "locate",
+            reason: "cargo locate-project failed: error: current package believes it's in a workspace when it's not".into(),
+            capability: UnknownCapability::RefusedByCargo,
+        }];
+        let detail = blocked_listing_detail(&block, &unresolved);
+        assert!(
+            detail.contains("/work/a/fuzz/Cargo.toml"),
+            "the manifest path must be named: {detail}"
+        );
+        assert!(
+            detail.contains("unresolved [locate]"),
+            "the stage must be named: {detail}"
+        );
+        assert!(
+            detail.contains("empty `[workspace]` table"),
+            "the workspace-membership hint must be present for this reason: {detail}"
+        );
+        // A generic failure must not carry that hint.
+        let generic = vec![UnresolvedOwnershipParticipant {
+            manifest: PathBuf::from("/work/b/Cargo.toml"),
+            stage: "metadata",
+            reason: "cargo metadata failed: broken pipe".into(),
+            capability: UnknownCapability::Unproven,
+        }];
+        let generic_detail = blocked_listing_detail(&block, &generic);
+        assert!(
+            generic_detail.contains("/work/b/Cargo.toml"),
+            "generic participants are still named: {generic_detail}"
+        );
+        assert!(
+            !generic_detail.contains("empty `[workspace]` table"),
+            "the hint is specific to the workspace-belief reason: {generic_detail}"
+        );
+        // A discovery block with no participants stays count-only.
+        let discovery = ScopeBlock::new(
+            ScopeBlockReason::IncompleteDiscovery,
+            "combined cleanup ownership universe is incomplete: 2 discovery diagnostic(s); nothing can be selected".into(),
+        );
+        let empty = blocked_listing_detail(&discovery, &[]);
+        assert!(
+            !empty.contains("unresolved ["),
+            "no participants means no rows: {empty}"
+        );
+    }
 
     #[test]
     fn ancestry_selection_matches_in_both_directions() {
@@ -4031,11 +4496,15 @@ mod tests {
         }
     }
 
+    /// ADR 007 edge: a refused root manifest names no owner (scope note),
+    /// so it never blocks *proceeding* units — but here there are no units
+    /// at all. Offering nothing from an unproven universe without a block
+    /// would read as success (the M012A silent no-op), so the listing
+    /// refuses. The note stays named in `unresolved_ownership`.
     #[test]
-    fn an_unproven_universe_blocks_the_listing_rather_than_offering_rows() {
-        // Offering a selection from a universe whose ownership could not be
-        // proven would be the ADR 006 shape in a new costume: the operator would
-        // be choosing from a list whose classification is exactly what failed.
+    fn empty_proof_universe_blocks_listing() {
+        // Zero resolved units plus an unproven participant is not a clean
+        // bill of health: refusing is what keeps the empty offer honest.
         let (_d, root, target) = valid_fixture(1);
         let mut runner = FakeCleanupRunner::new(&root, &target, 1);
         runner.unresolved_manifest = Some(root.join("Cargo.toml"));
@@ -4053,11 +4522,12 @@ mod tests {
 
         let block = listing
             .scope_blocked
-            .expect("an unresolved manifest must block the listing");
+            .as_ref()
+            .expect("an empty proof against unproven participants refuses");
         assert_eq!(block.reason, ScopeBlockReason::OwnershipUnproven);
         assert!(
             !listing.unresolved_ownership.is_empty(),
-            "the block must name the participant, not only count it"
+            "the refusal must name the participant, not only count it"
         );
         assert!(
             listing.candidates.is_empty(),
@@ -4145,8 +4615,13 @@ mod tests {
         assert!(!report.render().contains("recovered"));
     }
 
+    /// ADR 007: an in-boundary scope note never blocks. A nested manifest
+    /// Cargo cannot resolve inside an otherwise healthy workspace is
+    /// reported, never blocking: the healthy unit proceeds in every mode.
+    /// Fails against the old whole-scope rule, which blocked everything on
+    /// the note and reported zero cleanable bytes.
     #[test]
-    fn unresolved_discovered_manifest_blocks_every_cleanup_mode_before_clean() {
+    fn unresolved_scope_note_is_reported_without_blocking_any_mode() {
         for mode in [
             CleanMode::CargoPreview,
             CleanMode::Simulate,
@@ -4179,32 +4654,45 @@ mod tests {
                     .contains("unresolved_ownership=1")
             );
             assert!(
-                report.results.is_empty(),
-                "blocked scope must report no cleanable bytes: {mode:?}"
+                report.results.len() == 1,
+                "the healthy unit still proceeds: {mode:?} {report:?}"
             );
             assert_eq!(
-                report.scope_blocked.as_ref().map(|b| b.message.as_str()),
-                Some(
-                    "cleanup ownership could not be proven: 1 discovered Cargo manifest did not resolve; no cleanup commands were run"
-                ),
-                "{mode:?}"
+                report.scope_blocked, None,
+                "a scope note never blocks the boundary: {mode:?}"
+            );
+            assert!(
+                report
+                    .render()
+                    .contains("reported unprovable participant(s), not blocking"),
+                "the note is named on the human report: {mode:?}"
+            );
+            assert!(
+                report.render().contains("unresolved [locate]"),
+                "the participant row is bounded and staged: {mode:?} {}",
+                report.render()
             );
             assert_eq!(
                 report.diagnostics, 1,
-                "participant diagnostic retained: {mode:?}"
+                "the resolution diagnostic is retained alongside the report: {mode:?}"
             );
-            assert!(
-                runner.clean_calls().is_empty(),
-                "{mode:?}: zero clean and dry-run invocations"
-            );
-            assert_eq!(
-                report
-                    .render()
-                    .matches("cleanup ownership could not be proven")
-                    .count(),
-                1
-            );
-            assert!(report.render().contains("no cleanup commands were run"));
+            let row = row_for(&report, &root);
+            match mode {
+                CleanMode::Simulate => {
+                    assert_eq!(row.outcome, CleanOutcome::Simulated, "{mode:?}");
+                    assert!(
+                        runner.clean_calls().is_empty(),
+                        "{mode:?}: simulation spawns nothing"
+                    );
+                }
+                CleanMode::CargoPreview => {
+                    assert_eq!(row.outcome, CleanOutcome::Previewed, "{mode:?}");
+                }
+                CleanMode::Execute => {
+                    assert_eq!(row.outcome, CleanOutcome::Cleaned, "{mode:?}");
+                    assert_eq!(runner.clean_calls().len(), 1, "{mode:?}");
+                }
+            }
         }
     }
 
@@ -4228,11 +4716,13 @@ mod tests {
                     manifest: PathBuf::from("/work/a/website/Cargo.toml"),
                     stage: "locate",
                     reason: "cargo locate-project failed: error: current package believes it's in a workspace when it's not: current: /work/a/website/Cargo.toml".into(),
+                    capability: UnknownCapability::RefusedByCargo,
                 },
                 UnresolvedOwnershipParticipant {
                     manifest: PathBuf::from("/work/b/Cargo.toml"),
                     stage: "metadata",
                     reason: "cargo metadata failed: something else".into(),
+                    capability: UnknownCapability::Unproven,
                 },
             ],
             selected_roots: vec![PathBuf::from("/work")],
@@ -4241,6 +4731,7 @@ mod tests {
             units_considered: 0,
             effective_policy: None,
             selector: None,
+            out_of_scope_unresolved: 0,
         };
         let text = report.render();
         assert!(
@@ -4276,6 +4767,7 @@ mod tests {
                 manifest: PathBuf::from(format!("/work/p{i}/Cargo.toml")),
                 stage: "locate",
                 reason: "cargo locate-project failed".into(),
+                capability: UnknownCapability::RefusedByCargo,
             })
             .collect();
         let report = CleanReport {
@@ -4295,6 +4787,7 @@ mod tests {
             units_considered: 0,
             effective_policy: None,
             selector: None,
+            out_of_scope_unresolved: 0,
         };
         let text = report.render();
         assert_eq!(
@@ -4310,6 +4803,925 @@ mod tests {
             !text.contains("empty `[workspace]` table"),
             "no workspace hint without the workspace-belief reason: {text}"
         );
+    }
+
+    /// M015/F, environment: a build-dir move between discovery and spawn is
+    /// caught by the full snapshot check and missed by a target-only naive
+    /// check. The detector — not the wiring, which is M016 — is proven here.
+    #[test]
+    fn build_dir_move_detected_by_full_env_check_but_missed_by_target_only_naive() {
+        use std::ffi::OsString;
+        let disco = |key: &str| match key {
+            "CARGO_TARGET_DIR" => Some(OsString::from("/cache/target")),
+            _ => None,
+        };
+        let snapshot = snapshot_output_env(&disco);
+        assert!(output_env_matches(&snapshot, &disco));
+        let moved_build = |key: &str| match key {
+            "CARGO_TARGET_DIR" => Some(OsString::from("/cache/target")),
+            "CARGO_BUILD_BUILD_DIR" => Some(OsString::from("/cache/build")),
+            _ => None,
+        };
+        assert!(
+            !output_env_matches(&snapshot, &moved_build),
+            "a build-dir move is an output-placement change"
+        );
+        fn naive_env_matches(
+            snapshot: &OutputProvenanceSnapshot,
+            get: &dyn Fn(&str) -> Option<OsString>,
+        ) -> bool {
+            snapshot.cargo_target_dir == get("CARGO_TARGET_DIR")
+        }
+        assert!(
+            naive_env_matches(&snapshot, &moved_build),
+            "target-only naive misses build-dir moves: the control fails against it"
+        );
+        let emptied_target = |key: &str| match key {
+            "CARGO_TARGET_DIR" => Some(OsString::from("")),
+            _ => None,
+        };
+        assert!(
+            !output_env_matches(&snapshot, &emptied_target),
+            "empty is not absent"
+        );
+    }
+
+    /// M015/F, TOCTOU predicate: growth and shrinkage both fail the
+    /// stability check the H-2 gate runs, while the naive always-stable stub
+    /// passes growth through. Fails if the wired check ever stops comparing.
+    #[test]
+    fn universe_stability_predicate_detects_growth_that_naive_stub_misses() {
+        let before = vec![PathBuf::from("/w/a/Cargo.toml")];
+        let grown = vec![
+            PathBuf::from("/w/a/Cargo.toml"),
+            PathBuf::from("/w/b/Cargo.toml"),
+        ];
+        assert!(universe_manifests_stable(&before, &before));
+        assert!(
+            !universe_manifests_stable(&before, &grown),
+            "a planted manifest must fail the check"
+        );
+        assert!(
+            !universe_manifests_stable(&grown, &before),
+            "shrinkage fails the check too"
+        );
+        fn naive_stable(_: &[PathBuf], _: &[PathBuf]) -> bool {
+            true
+        }
+        assert!(
+            naive_stable(&before, &grown),
+            "no rediscovery passes growth through: the control fails against it"
+        );
+    }
+
+    /// M015/F, TOCTOU engine: a manifest planted by A's own cleanup (via the
+    /// clean hook) is visible to B's H-2 rediscovery, which blocks the
+    /// remaining scope instead of cleaning against a stale claimant set.
+    /// Without the rediscovery, B would clean.
+    #[test]
+    fn mid_run_manifest_growth_blocks_remaining_scope() {
+        let d = tempfile::tempdir().unwrap();
+        let root_a = ws_root(d.path(), "growth-a");
+        let root_b = ws_root(d.path(), "growth-b");
+        let target_a = cargo_output(&root_a.join("target"), 4096);
+        let target_b = cargo_output(&root_b.join("target"), 4096);
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        let mut runner = StagedCargo::new();
+        runner.add(&root_a, target_a.clone(), None);
+        runner.add(&root_b, target_b.clone(), None);
+        let planted = d.path().join("planted");
+        runner.on_clean(move || {
+            std::fs::create_dir_all(planted.join("src")).unwrap();
+            std::fs::write(
+                planted.join("Cargo.toml"),
+                "[package]\nname='planted'\nversion='0.1.0'\n",
+            )
+            .unwrap();
+        });
+        let report =
+            clean_with(d.path(), 0, &[], CleanMode::Execute, &runner, &NoopObserver).unwrap();
+        assert_eq!(
+            report.scope_blocked.as_ref().map(|block| block.reason),
+            Some(ScopeBlockReason::IncompleteDiscovery),
+            "post-proof growth blocks the remaining scope"
+        );
+        assert!(
+            report
+                .scope_blocked
+                .as_ref()
+                .is_some_and(|block| block.message.contains("universe changed")),
+            "the block names the cause: {:?}",
+            report.scope_blocked
+        );
+        assert_eq!(
+            row_for(&report, &root_a).outcome,
+            CleanOutcome::Cleaned,
+            "A cleaned before the growth existed"
+        );
+        assert!(
+            report
+                .results
+                .iter()
+                .all(|row| row.display_path != canonical(&root_b)),
+            "B never ran against the stale universe: {:?}",
+            report
+                .results
+                .iter()
+                .map(|row| &row.display_path)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            runner.clean_calls().len(),
+            1,
+            "exactly one spawn: the growth stopped the run"
+        );
+    }
+
+    /// M016 kennel: two output-disjoint staged workspaces plus a refused
+    /// orphan — the live G1 shape as a repo-owned fixture. The orphan's
+    /// locate fails, so it owns no bytes (scope note), while A and B stay
+    /// output-disjoint: two would-proceed islands and one scope note.
+    fn island_pair(d: &tempfile::TempDir) -> (PathBuf, PathBuf, PathBuf) {
+        // macOS: TMPDIR's /var is a symlink; discovery canonicalizes.
+        let base = d.path().canonicalize().unwrap();
+        let root_a = ws_root(&base, "island-a");
+        let root_b = ws_root(&base, "island-b");
+        cargo_output(&root_a.join("target"), 4096);
+        cargo_output(&root_b.join("target"), 4096);
+        backdate(&base, SystemTime::now() - Duration::from_secs(3600));
+        let orphan = base.join("orphan/Cargo.toml");
+        std::fs::create_dir_all(orphan.parent().unwrap()).unwrap();
+        std::fs::write(&orphan, "").unwrap();
+        (root_a, root_b, orphan)
+    }
+
+    /// M017: run the guarded engine the one way it runs now — scoped proof
+    /// is the default, no flag.
+    fn clean_default(root: &Path, mode: CleanMode, runner: &StagedCargo) -> CleanReport {
+        clean_with_roots_policy_selector_guarded(
+            std::slice::from_ref(&root.to_path_buf()),
+            0,
+            &[],
+            mode,
+            runner,
+            &NoopObserver,
+            &CleanupPolicy::default(),
+            None,
+            None,
+            &CleanupSelection::All,
+        )
+        .unwrap()
+    }
+
+    /// M017/ADR 007: an in-boundary scope note never blocked the boundary —
+    /// the defect fix. Two output-disjoint workspaces plus a refused orphan:
+    /// both clean with real spawns, the note is reported in
+    /// `unresolved_ownership`, and there is no block (exit 0). Fails against
+    /// the old whole-scope rule, which blocked everything on the note.
+    #[test]
+    fn scope_note_does_not_block_in_boundary_execute() {
+        let d = tempfile::tempdir().unwrap();
+        let (root_a, root_b, _orphan) = island_pair(&d);
+        let mut runner = StagedCargo::new();
+        runner.add(&root_a, root_a.join("target"), None);
+        runner.add(&root_b, root_b.join("target"), None);
+        runner.removes_on_clean(vec![
+            root_a.join("target").join("artifact.bin"),
+            root_b.join("target").join("artifact.bin"),
+        ]);
+        let report = clean_default(d.path(), CleanMode::Execute, &runner);
+        assert!(
+            report.scope_blocked.is_none(),
+            "no block: the note is reported, never blocking: {:?}",
+            report.scope_blocked
+        );
+        assert_eq!(report.out_of_scope_unresolved, 0, "{report:?}");
+        assert_eq!(report.unresolved_ownership.len(), 1, "{report:?}");
+        assert!(
+            report.unresolved_ownership.iter().any(|participant| {
+                participant
+                    .manifest
+                    .ends_with(std::path::Path::new("orphan").join("Cargo.toml"))
+            }),
+            "the refused orphan is still named: {report:?}"
+        );
+        assert_eq!(report.results.len(), 2, "{:?}", report.results);
+        for root in [&root_a, &root_b] {
+            let row = row_for(&report, root);
+            assert_eq!(row.outcome, CleanOutcome::Cleaned, "{root:?}");
+            assert_eq!(row.reason_code, CleanupReasonCode::Cleaned);
+        }
+        // removes_on_clean is global to the fake: the first unit's clean
+        // reclaims both artifacts, so the reclaimed total lands on
+        // whichever unit ran first. The sum is order-independent.
+        let total_decrease: u64 = report
+            .results
+            .iter()
+            .map(|row| row.observed_decrease.unwrap_or(0))
+            .sum();
+        assert_eq!(total_decrease, 4096, "{report:?}");
+        assert!(!root_a.join("target").join("artifact.bin").exists());
+        assert!(!root_b.join("target").join("artifact.bin").exists());
+        // Same argv and cwd the whole-scope engine would have used: one
+        // `cargo clean` per workspace CleanupUnit over its complete OutputSet.
+        let cleans = runner.clean_calls();
+        assert_eq!(cleans.len(), 2, "{cleans:?}");
+        for (cwd, args, _env) in &cleans {
+            assert!(
+                *cwd == root_a || *cwd == root_b,
+                "spawn cwd is a proven workspace root: {cwd:?}"
+            );
+            let argv: Vec<String> = args
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            assert!(argv.contains(&"--offline".to_string()), "{argv:?}");
+            assert!(argv.contains(&"--locked".to_string()), "{argv:?}");
+            assert!(!argv.iter().any(|a| a == "--dry-run"), "{argv:?}");
+        }
+        assert_eq!(report.units_considered, 2);
+        assert_eq!(report.resolved_workspaces, 2);
+        assert_eq!(report.discovered_manifests, 3);
+        assert_eq!(report.failed, 0);
+        // JSON carries the note on `unresolved_participants`; there is no
+        // islands axis anymore.
+        let value = serde_json::to_value(crate::output::cleanup(&report, "routine", None)).unwrap();
+        assert!(
+            value["result"]["islands"].is_null(),
+            "no islands axis: {value}"
+        );
+        let noted = value["result"]["unresolved_participants"]
+            .as_array()
+            .unwrap();
+        assert_eq!(noted.len(), 1, "{value}");
+        // Human render: rows, no block, no island outcomes.
+        let text = report.render();
+        assert!(
+            !text.contains("cleanup ownership could not be proven"),
+            "{text}"
+        );
+        assert!(!text.contains("island outcomes"), "{text}");
+        assert!(text.contains("Cleaned"), "{text}");
+        // Log line: ok with counts, no paths.
+        let line = crate::output::log::cleanup(&report, "routine");
+        assert!(line.contains("status=ok"), "{line}");
+        assert!(
+            !line.contains("island-a"),
+            "no paths on the log line: {line}"
+        );
+    }
+
+    /// M017 flagship: the codified defect. Poison outside the
+    /// working-directory anchor must not block cleaning inside it.
+    /// Discovery still sees the whole scope (grouping is combined), but the
+    /// out-of-anchor orphan becomes an `out_of_scope` diagnostic, never a
+    /// block. Fails pre-change as a whole-scope block.
+    #[test]
+    fn out_of_anchor_poison_does_not_block_anchor() {
+        let d = tempfile::tempdir().unwrap();
+        let (root_a, root_b, _orphan) = island_pair(&d);
+        let mut runner = StagedCargo::new();
+        runner.add(&root_a, root_a.join("target"), None);
+        runner.add(&root_b, root_b.join("target"), None);
+        runner.removes_on_clean(vec![root_a.join("target").join("artifact.bin")]);
+        // Discovery over the whole scope; selection anchored at A only.
+        let report = clean_with_roots_policy_selector_guarded(
+            std::slice::from_ref(&d.path().to_path_buf()),
+            0,
+            &[],
+            CleanMode::Execute,
+            &runner,
+            &NoopObserver,
+            &CleanupPolicy::default(),
+            None,
+            None,
+            &CleanupSelection::Ancestry(root_a.clone()),
+        )
+        .unwrap();
+        assert!(
+            report.scope_blocked.is_none(),
+            "out-of-anchor poison never blocks: {report:?}"
+        );
+        assert_eq!(report.out_of_scope_unresolved, 1, "{report:?}");
+        assert!(
+            report.unresolved_ownership.is_empty(),
+            "nothing in-boundary to report: {report:?}"
+        );
+        assert_eq!(
+            row_for(&report, &root_a).outcome,
+            CleanOutcome::Cleaned,
+            "the anchor cleans: {report:?}"
+        );
+        assert_eq!(
+            row_for(&report, &root_b).reason_code,
+            CleanupReasonCode::SkippedOutsideSelection,
+            "the out-of-anchor workspace is reported, not cleaned: {report:?}"
+        );
+        assert_eq!(runner.clean_calls().len(), 1, "{report:?}");
+        assert!(!root_a.join("target").join("artifact.bin").exists());
+        let text = report.render();
+        assert!(
+            text.contains(
+                "out-of-scope unprovable participant(s) reported in diagnostics, not blocking"
+            ),
+            "the human report names the held-back poison: {text}"
+        );
+    }
+
+    /// M017: Simulate predicts the spawns without spawning; CargoPreview runs
+    /// Cargo's own dry-run per proven unit. Neither blocks on the note, with
+    /// zero real cleans.
+    #[test]
+    fn simulate_and_preview_predict_without_spawning_or_blocking() {
+        for (mode, expected_outcome) in [
+            (CleanMode::Simulate, CleanOutcome::Simulated),
+            (CleanMode::CargoPreview, CleanOutcome::Previewed),
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let (root_a, root_b, _orphan) = island_pair(&d);
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, root_a.join("target"), None);
+            runner.add(&root_b, root_b.join("target"), None);
+            let report = clean_default(d.path(), mode, &runner);
+            assert!(
+                report.scope_blocked.is_none(),
+                "{mode:?}: no block: {report:?}"
+            );
+            assert_eq!(report.results.len(), 2, "{mode:?}: {report:?}");
+            for root in [&root_a, &root_b] {
+                let row = row_for(&report, root);
+                assert_eq!(row.outcome, expected_outcome, "{mode:?} {root:?}");
+            }
+            if mode == CleanMode::Simulate {
+                assert!(runner.clean_calls().is_empty(), "{mode:?}");
+            } else {
+                assert_eq!(runner.dry_run_calls().len(), 2, "{mode:?}");
+            }
+            assert!(
+                root_a.join("target").join("artifact.bin").exists(),
+                "{mode:?}"
+            );
+        }
+    }
+
+    /// M017/ADR 007 passenger rule (carried forward from ADR 004): a refused
+    /// orphan naming a resolved parent rides along without blocking. Both
+    /// units proceed with real spawns; the passenger is named in
+    /// `unresolved_participants`, never as a unit row.
+    #[test]
+    fn refused_passenger_rides_along_without_blocking() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().canonicalize().unwrap();
+        let root_a = ws_root(&base, "host-a");
+        let root_b = ws_root(&base, "host-b");
+        cargo_output(&root_a.join("target"), 4096);
+        cargo_output(&root_b.join("target"), 4096);
+        backdate(&base, SystemTime::now() - Duration::from_secs(3600));
+        let orphan = base.join("orphan/Cargo.toml");
+        std::fs::create_dir_all(orphan.parent().unwrap()).unwrap();
+        std::fs::write(&orphan, "").unwrap();
+        let reason = format!(
+            "error: current package believes it's in a workspace when it's not: current: {} workspace: {}",
+            orphan.display(),
+            root_a.join("Cargo.toml").display(),
+        );
+        let mut runner = StagedCargo::new();
+        runner.add(&root_a, root_a.join("target"), None);
+        runner.add(&root_b, root_b.join("target"), None);
+        runner.refuse_locate(&orphan, &reason);
+        let report = clean_default(d.path(), CleanMode::Execute, &runner);
+        assert!(
+            report.scope_blocked.is_none(),
+            "no block: the passenger rides along: {report:?}"
+        );
+        // Both units proceed with real spawns; nothing merges.
+        assert_eq!(runner.clean_calls().len(), 2, "{report:?}");
+        for root in [&root_a, &root_b] {
+            assert_eq!(row_for(&report, root).outcome, CleanOutcome::Cleaned);
+        }
+        assert!(
+            report.unresolved_ownership.iter().any(|participant| {
+                participant
+                    .manifest
+                    .ends_with(std::path::Path::new("orphan").join("Cargo.toml"))
+            }),
+            "the refused passenger is still named (component-wise: symlinked TMPDIR on macOS, separators on Windows): {report:?}"
+        );
+        // JSON carries the passenger on `unresolved_participants`.
+        let value = serde_json::to_value(crate::output::cleanup(&report, "routine", None)).unwrap();
+        let noted = value["result"]["unresolved_participants"]
+            .as_array()
+            .unwrap();
+        assert_eq!(noted.len(), 1, "{value}");
+        assert!(
+            std::path::Path::new(noted[0]["manifest"].as_str().unwrap())
+                .ends_with(std::path::Path::new("orphan").join("Cargo.toml")),
+            "component-wise: backslash separators on Windows: {value}"
+        );
+    }
+
+    /// M017 hostile twin: cross-root redirect through resolution. A shares
+    /// B's proven target, so both units skip as shared with zero spawns —
+    /// and, with the in-boundary orphan a scope note, nothing blocks.
+    /// A dispatch-everything naive would clean both sides of the shared
+    /// bytes; the zero-spawn assertion is what fails against it.
+    #[test]
+    fn redirected_outputs_skip_both_sides_without_blocking() {
+        for mode in [
+            CleanMode::Simulate,
+            CleanMode::CargoPreview,
+            CleanMode::Execute,
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let base = d.path().canonicalize().unwrap();
+            let root_a = ws_root(&base, "redirect-a");
+            let root_b = ws_root(&base, "redirect-b");
+            let shared = cargo_output(&root_a.join("target"), 4096);
+            backdate(&base, SystemTime::now() - Duration::from_secs(3600));
+            let orphan = base.join("orphan/Cargo.toml");
+            std::fs::create_dir_all(orphan.parent().unwrap()).unwrap();
+            std::fs::write(&orphan, "").unwrap();
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, shared.clone(), None);
+            runner.add(&root_b, shared, None);
+            let report = clean_default(d.path(), mode, &runner);
+            assert!(
+                report.scope_blocked.is_none(),
+                "{mode:?}: shared units skip, nothing blocks: {report:?}"
+            );
+            // Shared bytes are never dispatched, never cleaned. A
+            // dispatch-everything naive would clean both sides of the shared
+            // bytes; the zero-spawn assertion is what fails against it.
+            assert_eq!(report.results.len(), 2, "{mode:?}: {report:?}");
+            for root in [&root_a, &root_b] {
+                let row = row_for(&report, root);
+                assert_eq!(row.outcome, CleanOutcome::Skipped, "{mode:?} {root:?}");
+                assert_eq!(
+                    row.reason_code,
+                    CleanupReasonCode::SkippedShared,
+                    "{mode:?} {root:?}"
+                );
+            }
+            assert!(runner.clean_calls().is_empty(), "{mode:?}");
+        }
+    }
+
+    /// M017 hostile twin: nested-output prefix overlap skips at the unit gate
+    /// with zero spawns — same shape as the redirect twin.
+    #[test]
+    fn nested_outputs_skip_at_unit_gate_with_zero_spawns() {
+        for mode in [
+            CleanMode::Simulate,
+            CleanMode::CargoPreview,
+            CleanMode::Execute,
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let base = d.path().canonicalize().unwrap();
+            let root_a = ws_root(&base, "nest-a");
+            let root_b = ws_root(&base, "nest-b");
+            let outer = cargo_output(&root_a.join("target"), 2048);
+            // B's target nested inside A's: prefix overlap, shared bytes.
+            let nested = cargo_output(&outer.join("nested"), 1024);
+            backdate(&base, SystemTime::now() - Duration::from_secs(3600));
+            let orphan = base.join("orphan/Cargo.toml");
+            std::fs::create_dir_all(orphan.parent().unwrap()).unwrap();
+            std::fs::write(&orphan, "").unwrap();
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, outer.clone(), None);
+            runner.add(&root_b, nested, None);
+            let report = clean_default(d.path(), mode, &runner);
+            assert!(
+                report.scope_blocked.is_none(),
+                "{mode:?}: shared units skip, nothing blocks: {report:?}"
+            );
+            // Prefix overlap cannot be separated: held at the unit gate with
+            // zero spawns — same shape as the redirect twin.
+            assert_eq!(report.results.len(), 2, "{mode:?}: {report:?}");
+            for root in [&root_a, &root_b] {
+                let row = row_for(&report, root);
+                assert_eq!(row.outcome, CleanOutcome::Skipped, "{mode:?} {root:?}");
+            }
+            assert!(runner.clean_calls().is_empty(), "{mode:?}");
+        }
+    }
+
+    /// M017 hostile twin: a metadata failure is byte-capable (MergeAll), so
+    /// the boundary still blocks with zero spawns in every mode.
+    #[test]
+    fn metadata_failure_blocks_boundary_with_zero_spawns() {
+        for mode in [
+            CleanMode::Simulate,
+            CleanMode::CargoPreview,
+            CleanMode::Execute,
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let base = d.path().canonicalize().unwrap();
+            let root_a = ws_root(&base, "overlap-a");
+            let root_b = ws_root(&base, "overlap-b");
+            cargo_output(&root_a.join("target"), 4096);
+            cargo_output(&root_b.join("target"), 2048);
+            backdate(&base, SystemTime::now() - Duration::from_secs(3600));
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, root_a.join("target"), None);
+            runner.add(&root_b, root_b.join("target"), None);
+            runner.fail_metadata_from(1, 1);
+            let report = clean_default(d.path(), mode, &runner);
+            assert_eq!(
+                report.scope_blocked.as_ref().map(|block| block.reason),
+                Some(ScopeBlockReason::OwnershipUnproven),
+                "{mode:?}: byte-capable unknown blocks the boundary"
+            );
+            assert!(report.results.is_empty(), "{mode:?}: {report:?}");
+            assert!(runner.clean_calls().is_empty(), "{mode:?}");
+        }
+    }
+
+    /// M017 hostile twin (unix): a symlinked output has no provable physical
+    /// identity, so its workspace produces no unit at all (pre-existing
+    /// grouping behavior: unmeasurable groups are not units, same as empty
+    /// outputs) — while the healthy sibling still cleans. No whole-scope
+    /// block: the unprovable identity is contained, so blocking everything
+    /// would be the old defect, not safety.
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_output_produces_no_unit_while_sibling_cleans() {
+        for mode in [
+            CleanMode::Simulate,
+            CleanMode::CargoPreview,
+            CleanMode::Execute,
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let base = d.path().canonicalize().unwrap();
+            let root_a = ws_root(&base, "link-a");
+            let root_b = ws_root(&base, "link-b");
+            let real = cargo_output(&base.join("real-target"), 4096);
+            std::os::unix::fs::symlink(&real, root_a.join("target")).unwrap();
+            cargo_output(&root_b.join("target"), 2048);
+            backdate(&base, SystemTime::now() - Duration::from_secs(3600));
+            let orphan = base.join("orphan/Cargo.toml");
+            std::fs::create_dir_all(orphan.parent().unwrap()).unwrap();
+            std::fs::write(&orphan, "").unwrap();
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, root_a.join("target"), None);
+            runner.add(&root_b, root_b.join("target"), None);
+            let report = clean_default(d.path(), mode, &runner);
+            assert!(
+                report.scope_blocked.is_none(),
+                "{mode:?}: the unprovable identity is contained, not blocking: {report:?}"
+            );
+            assert!(
+                report.results.iter().all(|row| row.display_path != root_a),
+                "{mode:?}: the symlinked workspace produces no unit row: {report:?}"
+            );
+            assert_eq!(
+                row_for(&report, &root_b).outcome,
+                if mode == CleanMode::Execute {
+                    CleanOutcome::Cleaned
+                } else if mode == CleanMode::Simulate {
+                    CleanOutcome::Simulated
+                } else {
+                    CleanOutcome::Previewed
+                },
+                "{mode:?}: the healthy sibling still proceeds: {report:?}"
+            );
+            if mode == CleanMode::Simulate {
+                assert!(runner.clean_calls().is_empty(), "{mode:?}");
+            } else if mode == CleanMode::CargoPreview {
+                assert_eq!(runner.dry_run_calls().len(), 1, "{mode:?}");
+            } else {
+                assert_eq!(runner.clean_calls().len(), 1, "{mode:?}");
+            }
+        }
+    }
+
+    /// M017 hostile twin, end to end: a manifest planted by A's own cleanup
+    /// is visible to B's H-2 rediscovery, which blocks the remaining scope.
+    /// Partial success: A cleaned, B never dispatched.
+    #[test]
+    fn mid_run_growth_blocks_remaining_scope_with_reported_note() {
+        let d = tempfile::tempdir().unwrap();
+        let (root_a, root_b, _orphan) = island_pair(&d);
+        let mut runner = StagedCargo::new();
+        runner.add(&root_a, root_a.join("target"), None);
+        runner.add(&root_b, root_b.join("target"), None);
+        let planted = d.path().join("planted");
+        runner.on_clean(move || {
+            std::fs::create_dir_all(planted.join("src")).unwrap();
+            std::fs::write(
+                planted.join("Cargo.toml"),
+                "[package]\nname='planted'\nversion='0.1.0'\n",
+            )
+            .unwrap();
+        });
+        let report = clean_default(d.path(), CleanMode::Execute, &runner);
+        assert_eq!(
+            report.scope_blocked.as_ref().map(|block| block.reason),
+            Some(ScopeBlockReason::IncompleteDiscovery),
+            "post-clean growth blocks the remaining scope"
+        );
+        assert_eq!(row_for(&report, &root_a).outcome, CleanOutcome::Cleaned);
+        assert!(
+            report
+                .results
+                .iter()
+                .all(|row| row.display_path != canonical(&root_b)),
+            "B never ran against the stale universe: {:?}",
+            report
+                .results
+                .iter()
+                .map(|row| &row.display_path)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(runner.clean_calls().len(), 1);
+        // The human render carries rows and the block together; there are
+        // no island outcomes anymore.
+        let text = report.render();
+        assert!(!text.contains("island outcomes"), "{text}");
+        assert!(text.contains("universe changed"), "{text}");
+    }
+
+    /// M017 gate-8 control (carried forward from M016): B's target moves under
+    /// A's after the scan, so the per-unit proof reads the fresh combined
+    /// universe and refuses both. A stale-universe skip would clean A (and
+    /// maybe B); this test distinguishes the engine from the naive skip at
+    /// the proof level.
+    #[test]
+    fn proof_refuses_where_stale_universe_would_proceed() {
+        for mode in [
+            CleanMode::Simulate,
+            CleanMode::CargoPreview,
+            CleanMode::Execute,
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let (root_a, root_b, _orphan) = island_pair(&d);
+            let target_a = root_a.join("target");
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, target_a.clone(), None);
+            runner.add(&root_b, root_b.join("target"), None);
+            // From the second metadata call (the ownership-universe refresh)
+            // B points at A's target.
+            runner.stage(1, 2, target_a.clone(), None);
+            let report = clean_default(d.path(), mode, &runner);
+            assert!(
+                runner.clean_calls().is_empty(),
+                "{mode:?}: no clean at all: {:?}",
+                runner.clean_calls()
+            );
+            for root in [&root_a, &root_b] {
+                let row = row_for(&report, root);
+                assert_eq!(
+                    row.outcome,
+                    CleanOutcome::Skipped,
+                    "{mode:?} {root:?}: {}",
+                    row.detail
+                );
+            }
+            assert!(
+                row_for(&report, &root_b).detail.contains("changed")
+                    || row_for(&report, &root_b).detail.contains("shared")
+                    || row_for(&report, &root_b).detail.contains("overlap"),
+                "{mode:?}: B refused for the move: {}",
+                row_for(&report, &root_b).detail
+            );
+            assert!(
+                row_for(&report, &root_a).detail.contains("overlap")
+                    || row_for(&report, &root_a).detail.contains("shared"),
+                "{mode:?}: A's gate 8 saw B's fresh overlap: {}",
+                row_for(&report, &root_a).detail
+            );
+        }
+    }
+
+    /// M017 passenger + TOCTOU (carried forward from M016): A's target moves
+    /// under B's after the scan while A carries a refused passenger. Neither
+    /// unit may clean — in particular the passenger's host must never clean
+    /// alone on a stale attribution — and the passenger stays named in
+    /// `unresolved_ownership`.
+    #[test]
+    fn passenger_host_never_cleans_alone_after_redirect() {
+        for mode in [
+            CleanMode::Simulate,
+            CleanMode::CargoPreview,
+            CleanMode::Execute,
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let base = d.path().canonicalize().unwrap();
+            let root_a = ws_root(&base, "host-a");
+            let root_b = ws_root(&base, "host-b");
+            cargo_output(&root_a.join("target"), 4096);
+            let target_b = cargo_output(&root_b.join("target"), 4096);
+            backdate(&base, SystemTime::now() - Duration::from_secs(3600));
+            let orphan = base.join("orphan/Cargo.toml");
+            std::fs::create_dir_all(orphan.parent().unwrap()).unwrap();
+            std::fs::write(&orphan, "").unwrap();
+            let reason = format!(
+                "error: current package believes it's in a workspace when it's not: current: {} workspace: {}",
+                orphan.display(),
+                root_a.join("Cargo.toml").display(),
+            );
+            let mut runner = StagedCargo::new();
+            runner.add(&root_a, root_a.join("target"), None);
+            runner.add(&root_b, target_b.clone(), None);
+            runner.refuse_locate(&orphan, &reason);
+            // From the refresh on, A's target sits under B's.
+            runner.stage(0, 2, target_b, None);
+            let report = clean_default(d.path(), mode, &runner);
+            assert!(
+                runner.clean_calls().is_empty(),
+                "{mode:?}: no clean at all: {:?}",
+                runner.clean_calls()
+            );
+            for root in [&root_a, &root_b] {
+                assert_eq!(
+                    row_for(&report, root).outcome,
+                    CleanOutcome::Skipped,
+                    "{mode:?} {root:?}"
+                );
+            }
+            assert!(
+                report
+                    .unresolved_ownership
+                    .iter()
+                    .any(|participant| participant.manifest == orphan),
+                "{mode:?}: the passenger stays named: {report:?}"
+            );
+        }
+    }
+
+    /// M017 §4 rule 4, engine level: an output-environment change before
+    /// dispatch blocks the remaining units before any further spawn.
+    ///
+    /// The check reads the real process environment, which parallel tests
+    /// share — mutating it in-process would race the real-Cargo tests (the
+    /// repo never sets these vars in tests for exactly this reason). So the
+    /// mutation runs in a CHILD process: this test spawns the current test
+    /// binary filtered to the probe below with the arming marker set. The
+    /// child has its own environment; the parent never mutates its own.
+    /// Premise check: the child must report exactly 1 passed, proving the
+    /// probe executed rather than the filter missing.
+    #[test]
+    fn environment_change_blocks_remaining_units() {
+        let exe = std::env::current_exe().unwrap();
+        let out = std::process::Command::new(exe)
+            .args([
+                "cleanup::tests::environment_change_probe",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("M017_ENV_PROBE_ARMED", "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "probe child failed: {stdout}");
+        assert!(
+            stdout.contains("1 passed"),
+            "probe must execute exactly once (filter premise): {stdout}"
+        );
+    }
+
+    /// Probe for the test above. Passes vacuously without the arming marker
+    /// so a direct `cargo test` run can never poison the shared parallel-test
+    /// environment. With the marker (child process only), poisons
+    /// `CARGO_TARGET_DIR` after resolution and asserts the engine blocks
+    /// before the first dispatch with zero spawns.
+    #[test]
+    fn environment_change_probe() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct EnvPoisonRunner<'a> {
+            inner: &'a dyn CleanupRunner,
+            calls: AtomicUsize,
+            poison: Option<OsString>,
+        }
+        impl CleanupRunner for EnvPoisonRunner<'_> {
+            fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput> {
+                // Resolution is exactly 3 locates + 2 metadatas; poison from
+                // the 6th runner call on, i.e. after the partition snapshot
+                // and before the first dispatch.
+                let n = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+                if n >= 6
+                    && let Some(value) = &self.poison
+                {
+                    // SAFETY: this probe only reaches this line in a
+                    // marker-armed child process running exactly this one
+                    // test, so no other thread can observe the mutation.
+                    // A direct `cargo test` run returns before this point.
+                    unsafe {
+                        std::env::set_var("CARGO_TARGET_DIR", value);
+                    }
+                }
+                self.inner.run(cwd, args)
+            }
+            fn run_with_env(
+                &self,
+                cwd: &Path,
+                args: &[OsString],
+                env: &[(OsString, OsString)],
+            ) -> io::Result<ProcessOutput> {
+                self.inner.run_with_env(cwd, args, env)
+            }
+        }
+        if std::env::var("M017_ENV_PROBE_ARMED").is_err() {
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        let (root_a, root_b, _orphan) = island_pair(&d);
+        let mut staged = StagedCargo::new();
+        staged.add(&root_a, root_a.join("target"), None);
+        staged.add(&root_b, root_b.join("target"), None);
+        let poison = match std::env::var_os("CARGO_TARGET_DIR") {
+            Some(current) => {
+                let mut poisoned = current;
+                poisoned.push("-m017-poisoned");
+                poisoned
+            }
+            None => OsString::from("/m017-poisoned-target"),
+        };
+        let runner = EnvPoisonRunner {
+            inner: &staged,
+            calls: AtomicUsize::new(0),
+            poison: Some(poison),
+        };
+        let report = clean_with_roots_policy_selector_guarded(
+            std::slice::from_ref(&d.path().to_path_buf()),
+            0,
+            &[],
+            CleanMode::Execute,
+            &runner,
+            &NoopObserver,
+            &CleanupPolicy::default(),
+            None,
+            None,
+            &CleanupSelection::All,
+        )
+        .unwrap();
+        assert!(
+            staged.clean_calls().is_empty(),
+            "block before the first spawn: {:?}",
+            staged.clean_calls()
+        );
+        assert!(report.results.is_empty(), "{report:?}");
+        let block = report.scope_blocked.as_ref().expect("block retained");
+        assert_eq!(block.reason, ScopeBlockReason::OwnershipUnproven);
+        assert!(
+            block.message.contains("output environment changed"),
+            "merge names the cause: {}",
+            block.message
+        );
+    }
+
+    /// M017: the listing offers the selected rows and sets no block when
+    /// nothing in-boundary is held. The session can offer exactly what the
+    /// engine would act on.
+    #[test]
+    fn listing_offers_rows_with_no_block() {
+        let d = tempfile::tempdir().unwrap();
+        let (root_a, root_b, _orphan) = island_pair(&d);
+        let mut runner = StagedCargo::new();
+        runner.add(&root_a, root_a.join("target"), None);
+        runner.add(&root_b, root_b.join("target"), None);
+        let listing = list_cleanup_candidates(
+            std::slice::from_ref(&d.path().to_path_buf()),
+            0,
+            CleanMode::Simulate,
+            &runner,
+            &NoopObserver,
+            &CleanupSelection::All,
+        )
+        .unwrap();
+        assert!(listing.scope_blocked.is_none(), "{listing:?}");
+        let mut offered: Vec<PathBuf> = listing.candidates.iter().map(|c| c.root.clone()).collect();
+        offered.sort();
+        assert_eq!(offered, vec![root_a, root_b], "{listing:?}");
+    }
+
+    /// M017: a boundary-blocked universe keeps the refusal exactly as today.
+    /// Candidates are still listed (the engine's own units); the refusal
+    /// carries the block, never the rows. Selection can remove candidates,
+    /// never add proof.
+    #[test]
+    fn listing_refuses_blocked_boundary() {
+        let d = tempfile::tempdir().unwrap();
+        let (root_a, root_b, _orphan) = island_pair(&d);
+        let mut runner = StagedCargo::new();
+        runner.add(&root_a, root_a.join("target"), None);
+        runner.add(&root_b, root_b.join("target"), None);
+        // B's metadata fails: byte-capable unknown, blocks the boundary.
+        runner.fail_metadata_from(1, 1);
+        let listing = list_cleanup_candidates(
+            std::slice::from_ref(&d.path().to_path_buf()),
+            0,
+            CleanMode::Simulate,
+            &runner,
+            &NoopObserver,
+            &CleanupSelection::All,
+        )
+        .unwrap();
+        let block = listing.scope_blocked.as_ref().expect("refusal as today");
+        assert_eq!(block.reason, ScopeBlockReason::OwnershipUnproven);
+        // No rows may be offered from a blocked boundary: resolve emits no
+        // units past a blocking participant. The `-i` path refuses on the
+        // block, never on the rows.
+        assert!(listing.candidates.is_empty(), "{listing:?}");
     }
 
     #[test]
@@ -5016,8 +6428,12 @@ mod tests {
         );
     }
 
+    /// ADR 007: an empty manifest Cargo itself refuses is byte-incapable —
+    /// a scope note, not a MergeAll unknown. The healthy sibling simulates
+    /// normally; the refused manifest is reported, never blocking. Fails
+    /// against the old whole-scope rule, which is the codified defect.
     #[test]
-    fn unresolved_cargo_manifest_blocks_entire_cleanup_scope() {
+    fn refused_empty_manifest_is_reported_without_blocking_scope() {
         struct PerPathFailRunner {
             good_root: PathBuf,
             good_target: PathBuf,
@@ -5112,11 +6528,30 @@ mod tests {
         // ROOT is tempdir (contains good + bad). Good target inside ROOT.
         let report = clean_with(d.path(), 0, &[], CleanMode::Simulate, &runner, &noop).unwrap();
         assert_eq!(report.counters.unresolved_ownership, 1);
-        assert!(report.results.is_empty());
+        assert!(
+            report.scope_blocked.is_none(),
+            "the refused manifest is reported, never blocking: {report:?}"
+        );
+        assert_eq!(report.results.len(), 1, "{report:?}");
+        assert_eq!(
+            row_for(&report, &good).outcome,
+            CleanOutcome::Simulated,
+            "the healthy sibling simulates: {report:?}"
+        );
+        assert!(
+            report.unresolved_ownership.iter().any(|participant| {
+                participant
+                    .manifest
+                    .ends_with(std::path::Path::new("bad").join("Cargo.toml"))
+            }),
+            "the refused manifest is named (component-wise: symlinked TMPDIR on macOS, separators on Windows): {report:?}"
+        );
         assert!(
             report
                 .render()
-                .contains("cleanup ownership could not be proven")
+                .contains("reported unprovable participant(s), not blocking"),
+            "the note is named on the human report: {}",
+            report.render()
         );
     }
 
@@ -5136,6 +6571,7 @@ mod tests {
             units_considered: 0,
             effective_policy: None,
             selector: None,
+            out_of_scope_unresolved: 0,
         };
         for i in 0..7 {
             report.results.push(CleanResult {
@@ -6426,6 +7862,15 @@ mod tests {
         fail_metadata_from: Option<usize>,
     }
 
+    /// M016: a locate refusal with a Cargo-shaped reason, matched by
+    /// canonical manifest path. Lets engine tests build refused unknowns
+    /// with parent-naming reasons (passengers) instead of only the generic
+    /// lookup failure (scope notes).
+    struct LocateRefusal {
+        manifest: PathBuf,
+        reason: String,
+    }
+
     /// Multi-workspace Cargo fixture with per-workspace output staging,
     /// metadata failure injection, and observable `cargo clean` effects.
     struct StagedCargo {
@@ -6434,6 +7879,7 @@ mod tests {
         metadata_calls: Mutex<Vec<usize>>,
         clean_removes: Mutex<Vec<PathBuf>>,
         clean_hook: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+        refusals: Vec<LocateRefusal>,
     }
 
     fn cargo_ok(json: serde_json::Value) -> ProcessOutput {
@@ -6462,6 +7908,7 @@ mod tests {
                 metadata_calls: Mutex::new(Vec::new()),
                 clean_removes: Mutex::new(Vec::new()),
                 clean_hook: Mutex::new(None),
+                refusals: Vec::new(),
             }
         }
 
@@ -6490,6 +7937,19 @@ mod tests {
 
         fn fail_metadata_from(&mut self, index: usize, from_call: usize) {
             self.ws[index].fail_metadata_from = Some(from_call);
+        }
+
+        /// Refuse `locate-project` for one manifest with a Cargo-shaped
+        /// reason (matched by canonical path). A reason naming a resolved
+        /// parent workspace produces a passenger; anything else a scope
+        /// note — the same attribution real Cargo failures take.
+        fn refuse_locate(&mut self, manifest: &Path, reason: &str) -> &mut Self {
+            let key = fs::canonicalize(manifest).unwrap_or_else(|_| manifest.to_path_buf());
+            self.refusals.push(LocateRefusal {
+                manifest: key,
+                reason: reason.to_string(),
+            });
+            self
         }
 
         fn on_clean(&mut self, hook: impl Fn() + Send + Sync + 'static) {
@@ -6548,6 +8008,11 @@ mod tests {
         fn dispatch(&self, args: &[OsString]) -> io::Result<ProcessOutput> {
             if args.first().is_some_and(|a| a == "locate-project") {
                 let manifest = args.last().unwrap();
+                let key = fs::canonicalize(Path::new(manifest))
+                    .unwrap_or_else(|_| PathBuf::from(manifest));
+                if let Some(refusal) = self.refusals.iter().find(|r| r.manifest == key) {
+                    return Ok(cargo_fail(&refusal.reason));
+                }
                 return Ok(match self.find_ws(manifest) {
                     Some(i) => cargo_ok(serde_json::json!({
                         "root": self.ws[i].root.join("Cargo.toml")
@@ -7975,8 +9440,12 @@ mod tests {
         }
     }
 
+    /// ADR 007: a scope note nested in the second root never blocks the
+    /// first. Both healthy units proceed in every mode; the note is
+    /// reported. Fails against the old whole-scope rule, which held a
+    /// healthy root hostage to junk nested in a sibling.
     #[test]
-    fn unresolved_manifest_in_second_root_blocks_first_root_for_all_modes() {
+    fn scope_note_in_second_root_does_not_block_first_root() {
         let d = tempfile::tempdir().unwrap();
         let root_a = ws_root(d.path(), "coverage-a");
         let root_b = ws_root(d.path(), "coverage-b");
@@ -8008,9 +9477,29 @@ mod tests {
             )
             .unwrap();
             assert_eq!(report.unresolved_ownership.len(), 1, "{mode:?}");
-            assert!(report.results.is_empty(), "{mode:?}");
+            assert!(
+                report.scope_blocked.is_none(),
+                "{mode:?}: the note is reported, never blocking: {report:?}"
+            );
+            assert_eq!(report.results.len(), 2, "{mode:?}: {report:?}");
+            for root in [&root_a, &root_b] {
+                let expected = match mode {
+                    CleanMode::Simulate => CleanOutcome::Simulated,
+                    CleanMode::CargoPreview => CleanOutcome::Previewed,
+                    CleanMode::Execute => CleanOutcome::Cleaned,
+                };
+                assert_eq!(
+                    row_for(&report, root).outcome,
+                    expected,
+                    "{mode:?} {root:?}"
+                );
+            }
             assert!(report.render().contains("2 root(s)"), "{mode:?}");
-            assert!(runner.clean_calls().is_empty(), "{mode:?}");
+            if mode == CleanMode::Simulate {
+                assert!(runner.clean_calls().is_empty(), "{mode:?}");
+            } else {
+                assert_eq!(runner.clean_calls().len(), 2, "{mode:?}");
+            }
         }
     }
 

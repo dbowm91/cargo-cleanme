@@ -789,18 +789,20 @@ most important distinction in the module.**
 
 **(a) Incomplete at scan time → the whole transaction aborts.** Two sites, both
 *before* the unit loop, both returning early with `scope_blocked` and zero
-results: discovery diagnostics `:977-988` ("combined cleanup ownership universe is
+results: discovery diagnostics `:1336-1356` ("combined cleanup ownership universe is
 incomplete: N discovery diagnostic(s); resolved W workspace(s), considered U
 cleanup unit(s); no cleanup commands were run") and
-unresolved manifests `:990-1006` ("cleanup ownership could not be proven: N
+unresolved manifests `:1359-1384` ("cleanup ownership could not be proven: N
 discovered Cargo manifest(s) did not resolve; no cleanup commands were run", with
-the full participant list retained at `:1003` and rendered bounded at
-`:290-340`). Neither proceeds partially:
+the full participant list retained and rendered bounded at `:510-560`).
+Neither proceeds partially:
 `resolve_cleanup_scope` returns `units: Vec::new()` when unresolved is non-empty
-(`:1493-1499`), so no unit even exists. Pinned by
-`unresolved_discovered_manifest_blocks_every_cleanup_mode_before_clean` (`:2934`,
-all three modes) and `unresolved_cargo_manifest_blocks_entire_cleanup_scope`
-(`:3636`).
+(`:2561-2568`), so no unit even exists. Pinned by
+`unresolved_discovered_manifest_blocks_every_cleanup_mode_before_clean` (`:4738`,
+all three modes), `unresolved_cargo_manifest_blocks_entire_cleanup_scope`
+(`:6491`), `combined_roots_classify_cross_root_output_as_shared_in_every_mode`
+(`:9408`) and `unresolved_manifest_in_second_root_blocks_first_root_for_all_modes`
+(`:9451`).
 
 **(b) Incomplete at proof time → the transaction does *not* abort; every
 candidate is skipped instead, and the run exits 0.** The hoisted universe is
@@ -816,6 +818,99 @@ safety fully preserved, the *signal* is a normal-looking skip. Fail-closed is
 correct and consistent; the reporting is inconsistent with case (a). A run where
 the universe cannot be re-proven and nothing was cleaned is reported like a run
 where every workspace was legitimately inactive, and exits 0.
+
+### The proof-island certificate (M015, superseded by M017)
+
+M015 designed a report-only proof-island partition answering ADR 004's
+question — *what constitutes independently proven non-overlap?* — without
+enforcing any answer, and M016 activated it behind `--partitioned`. Both
+were removed before any publication by M017/ADR 007 (scoped proof is the
+default; the flag and the `islands` axis never shipped). What carries
+forward is the certificate's load-bearing remainder, now the default rule:
+
+- Byte-capability is still the sharp edge (`domain.rs`, `UnknownCapability`;
+  only unknowns Cargo itself refused own provably no bytes). Attribution
+  (`workspace::attribute_unknown`, `:419` in `workspace.rs`) still assigns a
+  refused manifest to a passenger (Cargo named a resolved owner) or a scope
+  note (no resolved owner named); every other class is `MergeAll`.
+- In-boundary `MergeAll` unknowns block the boundary. In-boundary
+  passengers and scope notes are reported, never blocking. Out-of-boundary
+  unknowns are `out_of_scope` informational diagnostics, never blocking.
+  The zero-unit edge fails closed: zero proven units plus any unproven
+  participant blocks with the standard unproven-ownership message (the
+  M012A silent no-op would otherwise return).
+- The environment snapshot and mismatch detector
+  (`snapshot_output_env`, `:357`; `output_env_matches`, `:370`) are still
+  re-verified before every unit dispatch.
+- History (M015 parity proof, hostile controls, live island-hit data)
+  stands in the M015/M016 closure records; the computation, the flag, and
+  the human/JSON island sections are gone. The render tests that pinned
+  them were deleted with the mechanism, not converted.
+
+### Scoped proof is the default (M017, ADR 007)
+
+Out-of-scope blocking was the product defect, so the proof boundary is the
+selected scope and there is no opt-in. Discovery, resolution, grouping, and
+unit construction still run combined over the whole selected-root scope
+(M014 measurement: narrowing discovery would promote `Shared` to
+`PrivateBounded`); cross-boundary claims still force `Shared`/skip at
+grouping time. Only the block decision is boundary-scoped.
+
+Mechanically, in `clean_with_roots_policy_selector_guarded` (`:1289`):
+
+1. `resolve_cleanup_scope` (`:2370`) splits every unresolved participant
+   three ways (`split_unresolved_for_boundary`, `:2291`, over
+   `boundary_admits`, `:2263`): out-of-boundary manifests become
+   informational `out_of_scope` diagnostics; in-boundary passengers and
+   scope notes join `unresolved_ownership` as reported-but-never-blocking;
+   only in-boundary `MergeAll` participants early-return the run with the
+   existing typed block. Grouping still sees every resolved workspace.
+2. The scan-time block sites check only the in-boundary counts
+   (`boundary_discovery_diagnostics`, `blocking_unresolved` on the
+   universe): discovery uncertainty and MergeAll unknowns inside the
+   boundary block; everything out-of-boundary is already a diagnostic.
+   A run that proves zero units while anything is unproven fails closed
+   with the standard message (zero-unit edge, above).
+3. `refresh_combined_universe` (`:2856`) re-applies the boundary rule
+   against the fresh workspaces instead of carrying a scan-time tolerated
+   list: out-of-boundary and in-boundary passenger/note unknowns stay
+   tolerated; only a fresh in-boundary `MergeAll` invalidates the refresh.
+   H-2 rediscovery stays combined (mid-run change detection is not poison
+   reporting).
+4. The output environment is re-verified before every unit dispatch
+   (per-dispatch check in the unit loop); any mismatch blocks the remaining
+   units before any further spawn, in every mode (Simulate rehearses it).
+
+The human render shows rows plus the block as today; out-of-boundary
+poison gets one bounded line (`:520`), and unblocked runs with reported
+in-boundary notes name them under a "reported, not blocking" header with
+the same bounded participant listing (`append_unresolved_listing`, `:456`).
+The machine surface *lost* a field: `CleanupV1.islands`/`IslandV1` are
+gone (key-set test updated deliberately, `output.rs`); `unresolved_ownership`
+is boundary-relevant only and out-of-boundary poison travels in
+`diagnostics` as `out_of_scope` (`DiagnosticCategory::OutOfScope`,
+`domain.rs`). Exit aggregation is untouched: `scope_blocked` stays set, so
+exit 1 falls out structurally. `-i` lists the selected units and refuses on
+a boundary block exactly as before (no held context anymore).
+
+Tests (all `#[test]` in `cleanup.rs` unless noted): the boundary rule
+`scope_note_does_not_block_in_boundary_execute` plus Simulate/Preview
+twins; the passenger rule `refused_passenger_rides_along_without_blocking`;
+hostile twins (redirect and nested skip without blocking, metadata-failure
+blocks, symlinked-output unix produces no unit while the sibling cleans,
+mid-run growth blocks the remainder); the gate-8 control
+(`proof_refuses_where_stale_universe_would_proceed`); the
+passenger-redirect control; the environment child-process probe
+(`environment_change_blocks_remaining_units`, which spawns the test binary
+so the process-env mutation cannot race parallel tests); the listing pair
+(offer + refusal on a blocked boundary); the zero-unit edge
+(`empty_proof_universe_blocks_listing`); the flagship out-of-anchor twin
+`out_of_anchor_poison_does_not_block_anchor` (fails pre-change as a
+whole-scope block); the key-set and log-line contract tests (`output.rs`);
+subprocess G1/G1c/human surfaces in `tests/cli_contract.rs` (exit 0 with
+reported notes, no islands). Every twin asserts zero forbidden spawns, and
+each fails against the old whole-scope rule or a dispatch-everything naive
+by construction.
 
 ### What happens when the proof detects a mid-transaction change?
 
@@ -981,13 +1076,18 @@ safety hole.
 
 ## 10. Testing
 
-**Numbers (verified by grep):** 75 `#[test]` functions; the test module opens at
-`cleanup.rs:2994` (`#[cfg(test)] mod tests {` at `:2534`), so production is lines
-1-2532 and tests 2533-6730 — 4198 lines, 62% of the file. No fixture files are
-needed: workspaces are built on disk (`ws_root` `:5338`, `cargo_output` `:5351`,
-`sibling_ws_fixture` `:5386`, `valid_fixture` `:2697`) and mtimes backdated
-(`backdate` `:2729`, `touch_future` `:4131`) so recency gates run without
+**Numbers (verified by grep):** 133 `#[test]` functions; the test module opens at
+`cleanup.rs:4295` (`#[cfg(test)]` at `:4294`), so production is lines 1-4293 and tests 4295-11229 — 6936 lines, 62% of the file. No fixture files are
+needed: workspaces are built on disk (`ws_root` `:9590`, `cargo_output` `:9603`,
+`sibling_ws_fixture` `:9638`, `valid_fixture` `:4614`) and mtimes backdated
+(`backdate` `:4646`, `touch_future` `:8318`) so recency gates run without
 sleeping.
+
+Line numbers in the group table below were re-derived for the M015 row only.
+Older rows still cite pre-M015 numbering (the module grew ~490 production
+lines under M015 plus the uncommitted delta beneath it); a full
+re-derivation pass over this dive is recorded as follow-up work in the M015
+closure record, not silently claimed here.
 
 ### Grouped by invariant protected
 
@@ -1004,6 +1104,8 @@ sleeping.
 | Real Cargo integration | 3 | `real_temp_project_preview_and_execute_with_redirected_target` `:3785`; `real_cargo_package_selector_preserves_sibling_workspace_artifacts` `:3920`; `multi_member_private_workspace_can_be_cleaned` `:4034` |
 | Root validation / frozen env | 3 | `clean_requires_absolute_root` `:3480`; `frozen_env_sets_target_and_build_dir` `:3425`; `frozen_env_pins_the_build_directory_so_an_inherited_redirect_cannot_apply` `:6363` |
 | Misc | 9 | `cleanup_reason_codes_have_stable_contract_names` `:2807`; `source_tree_as_output_root_is_never_cleaned` `:6242`; `one_invocation_one_result_progress_total_and_no_sibling_row` `:5453`; `distinct_private_target_and_build_is_one_cleanable_unit` `:5403`; `equal_and_nested_target_build_are_one_unit_and_one_invocation` `:5787`; `proof_failures_distinguish_a_change_from_an_unproven_ownership` `:6334`; `cross_workspace_overlap_race_into_target_skips_candidate` `:5829`; `cross_workspace_overlap_race_into_distinct_build_skips_candidate` `:5873`; `another_workspaces_source_tree_inside_the_cleaned_region_is_never_cleaned` `:6196` |
+| Proof-island partition, report-only (M015, removed by M017) | 0 | Mechanism deleted before any publication: the compute/render/parity/hostile partition tests listed here were removed with it (history in the M015/M016 closure records). Surviving M015-lineage coverage: env-mismatch detector `build_dir_move_detected_by_full_env_check_but_missed_by_target_only_naive`, TOCTOU predicate `universe_manifests_stable`, H-2 growth `mid_run_manifest_growth_blocks_remaining_scope`. |
+| Scoped proof default (M017) | 17 | Boundary rule `scope_note_does_not_block_in_boundary_execute` + Simulate/Preview twins + flagship out-of-anchor twin `out_of_anchor_poison_does_not_block_anchor` (fails pre-change as a whole-scope block); passenger rule `refused_passenger_rides_along_without_blocking`; hostile twins (redirect and nested skip without blocking, metadata-failure blocks, symlinked-output unix produces no unit while the sibling cleans, mid-run growth blocks the remainder); gate-8 control `proof_refuses_where_stale_universe_would_proceed`; passenger-redirect control; environment child-process probe `environment_change_blocks_remaining_units` + `environment_change_probe`; listing pair (offer + refusal on a blocked boundary); zero-unit edge `empty_proof_universe_blocks_listing`. Subprocess surfaces in `tests/cli_contract.rs`: G1 Execute/Simulate/human (exit 0, note reported) + G1c passenger + `-i` no-terminal usage error. |
 
 ### What each fake runner exists to catch
 
@@ -1038,7 +1140,8 @@ anything here: no PATH is built, no shebang is used, all fixtures are constructe
 through `std::fs` in Rust.
 
 Within `cleanup.rs` the platform guards are narrow and correct: `#[cfg(unix)]`
-appears five times — `:3352`, `:4898`, `:5637`, `:5910`, `:5984` — all on
+appears eight times — `:5209` (the M015 symlinked-output control), `:6038`,
+`:6183`, `:6258`, `:7789`, `:8529`, `:8802`, `:8876` — all on
 symlink-manipulating tests, which is right since creating a symlink and
 asserting `symlink_metadata(...).file_type().is_symlink()` are the
 platform-sensitive operations. `symlink_allowed_root_rejected_and_shared_forbidden`

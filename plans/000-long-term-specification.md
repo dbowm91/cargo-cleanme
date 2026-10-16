@@ -353,6 +353,16 @@ Before cleaning a candidate it MUST:
 11. produce one cleanup result and one deduplicated pre/post union measurement per Cargo workspace cleanup invocation;
 12. establish complete cleanup-scope ownership coverage: every Cargo manifest discovered under the explicit clean root MUST either be authoritatively covered by a successfully resolved Cargo workspace or remain an unresolved ownership participant, and any unresolved participant MUST block all Cargo cleanup commands for that scope.
 
+> Clarification (2026-10-16, ADR 007, owner-directed product change): "that
+> scope" is the selected proof boundary — the working-directory anchor for
+> bare/`--known` cleanup, the explicit roots for `clean ROOT`, the full
+> system for `clean --full`. Discovery still covers the whole system so
+> cross-boundary output claims stay visible at grouping time. An unresolved
+> participant *outside* the proof boundary MUST NOT block cleaning inside
+> it; out-of-scope blocking is a core product defect. Unresolved
+> participants *inside* the boundary still block, and `clean --full` keeps
+> whole-system fail-closed blocking.
+
 Canonical `--dry-run` simulation MUST exercise discovery, resolution, filtering, sizing, authorization, revalidation, progress/reporting, and final proof while prohibiting every `cargo clean` subprocess. The historical `--dryrun` spelling may remain only as a compatibility alias. Simulation output is estimated/would-clean space, not recovered bytes.
 
 Cargo's own `cargo clean --dry-run --verbose` MAY remain available through an explicitly named Cargo-preview mode, but it does not replace ownership validation and it is not the canonical meaning of cargo-cleanme `--dry-run`.

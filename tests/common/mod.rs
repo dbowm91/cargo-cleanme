@@ -188,10 +188,28 @@ for arg in "$@"; do printf '%s\n' "$arg" >> "$CARGO_ARGS_LOG"; done
 dry=no
 for arg in "$@"; do [ "$arg" = "--dry-run" ] && dry=yes; done
 case "$1" in
-  locate-project|metadata)
+    locate-project|metadata)
     if [ "$1" = "locate-project" ] && [ -n "$CARGO_FAIL_LOCATE" ]; then
       printf 'error: failed searching for potential workspace\nCaused by: fixture lookup failure\n' >&2
       exit 101
+    fi
+    # M016: selective refusal for island fixtures. When
+    # CARGO_FAIL_LOCATE_FOR names a manifest substring, only matching locate
+    # calls fail; everything else resolves. With CARGO_FAIL_LOCATE_BELIEVES
+    # the refusal names the fixture workspace as the believed parent,
+    # producing a passenger instead of a note.
+    if [ "$1" = "locate-project" ] && [ -n "$CARGO_FAIL_LOCATE_FOR" ]; then
+      for arg in "$@"; do
+        case "$arg" in
+          *"$CARGO_FAIL_LOCATE_FOR"*)
+            if [ -n "$CARGO_FAIL_LOCATE_BELIEVES" ]; then
+              printf 'error: current package believes it'"'"'s in a workspace when it is not\ncurrent: %s\nworkspace: %s/Cargo.toml\n' "$arg" "$FIXTURE_ROOT" >&2
+            else
+              printf 'error: failed searching for potential workspace\nCaused by: fixture lookup failure\n' >&2
+            fi
+            exit 101 ;;
+        esac
+      done
     fi
     # Real Cargo refuses a manifest it cannot parse. Without this check the
     # stub would answer every query, and a fixture built on an unresolvable

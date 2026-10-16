@@ -1296,6 +1296,29 @@ impl MaintenanceFixture {
         self.run_with_format(args, "human")
     }
 
+    /// Human format with locate failure: the blocked human report path.
+    fn run_human_with_locate_failure(&self, args: &[&str]) -> std::process::Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args([
+            "--config",
+            self.config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "human",
+        ]);
+        command.args(args);
+        command
+            .env("PATH", path_with(&self.bin))
+            .env("FIXTURE_ROOT", &self.root)
+            .env("FIXTURE_TARGET", &self.target)
+            .env("CARGO_LOG", &self.log)
+            .env("CARGO_ARGS_LOG", &self.args_log)
+            .env("CARGO_FAIL_LOCATE", "1")
+            .current_dir(&self.root)
+            .output()
+            .unwrap()
+    }
+
     /// Run cargo-cleanme with the stub on PATH and return its output.
     fn run(&self, args: &[&str]) -> std::process::Output {
         self.run_with_locate_failure(args, false)
@@ -1330,6 +1353,49 @@ impl MaintenanceFixture {
 
     fn clean_calls(&self) -> usize {
         common::cargo_calls(&self.log, "clean")
+    }
+
+    /// M017 scoped-proof scenario: the clean root is the fixture temp dir,
+    /// holding the resolving workspace plus a refused orphan. Returns the
+    /// orphan manifest path for assertions.
+    fn refused_orphan(&self) -> PathBuf {
+        let orphan = self.temp.path().join("refused-orphan/Cargo.toml");
+        fs::create_dir_all(orphan.parent().unwrap()).unwrap();
+        fs::write(&orphan, "[package]\nname='orphan'\nversion='0.1.0'\n").unwrap();
+        orphan
+    }
+
+    /// M017: run cleanup over the scoped-proof scenario with an explicit
+    /// format. `believes` selects the parent-naming refusal (passenger)
+    /// over the generic one (scope note). Unix-gated like the POSIX stub
+    /// knobs it sets.
+    #[cfg(unix)]
+    fn run_island_scenario(
+        &self,
+        args: &[&str],
+        format: &str,
+        believes: bool,
+    ) -> std::process::Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args([
+            "--config",
+            self.config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            format,
+        ]);
+        command.args(args);
+        command
+            .env("PATH", path_with(&self.bin))
+            .env("FIXTURE_ROOT", &self.root)
+            .env("FIXTURE_TARGET", &self.target)
+            .env("CARGO_LOG", &self.log)
+            .env("CARGO_ARGS_LOG", &self.args_log)
+            .env("CARGO_FAIL_LOCATE_FOR", "refused-orphan");
+        if believes {
+            command.env("CARGO_FAIL_LOCATE_BELIEVES", "1");
+        }
+        command.current_dir(&self.root).output().unwrap()
     }
 
     /// Run the same argv through Cargo's external-subcommand entry point.
@@ -1896,6 +1962,185 @@ fn bare_cleanup_with_unresolved_ownership_blocks_and_runs_no_cargo_clean() {
             "blocked {mode} must spawn no Cargo clean"
         );
     }
+}
+
+/// The blocked human report names the blocking manifests while the JSON
+/// surface stays exactly one object: two renderings of one result.
+/// Unix-gated like the locate-failure case it extends: the fixture
+/// substitutes a POSIX shell stub for Cargo.
+#[cfg(unix)]
+#[test]
+fn blocked_human_cleanup_report_names_manifests_and_json_stays_one_object() {
+    let fixture = MaintenanceFixture::new(true);
+    let human = fixture.run_human_with_locate_failure(&[]);
+    assert_eq!(human.status.code(), Some(1), "{human:?}");
+    let text = String::from_utf8_lossy(&human.stdout);
+    assert!(
+        text.contains("cleanup ownership could not be proven"),
+        "block message retained: {text}"
+    );
+    // Nothing resolved (the only manifest was refused), so no unit exists
+    // and the zero-unit edge blocks — while the refused manifest is still
+    // named as a scope note, not a partition.
+    assert!(
+        text.contains("unresolved [locate]"),
+        "the refused manifest is listed with stage: {text}"
+    );
+    assert!(
+        !text.contains("proof-island partition"),
+        "no partition section anymore: {text}"
+    );
+    assert_eq!(
+        fixture.clean_calls(),
+        0,
+        "a refused-only scope spawns nothing"
+    );
+    let json_out = fixture.run_with_locate_failure(&[], true);
+    let json: serde_json::Value = serde_json::from_slice(&json_out.stdout).unwrap();
+    assert_eq!(json["result"]["scope_blocked"], true, "{json}");
+}
+
+/// M017: the repo-owned G1 shape — one provable workspace plus one refused
+/// manifest under the same clean root. Scoped proof cleans the unit and
+/// reports the note without blocking: exit 0. Unix-gated: POSIX shell stub
+/// with selective refusal.
+#[cfg(unix)]
+#[test]
+fn scoped_execute_cleans_provable_unit_and_reports_refused_orphan() {
+    let fixture = MaintenanceFixture::new(false);
+    let _orphan = fixture.refused_orphan();
+    let root = fixture.temp.path().to_str().unwrap().to_string();
+    let json_out = fixture.run_island_scenario(&["clean", &root], "json", false);
+    assert_eq!(
+        json_out.status.code(),
+        Some(0),
+        "a scope note never blocks: {}",
+        String::from_utf8_lossy(&json_out.stderr)
+    );
+    // Exactly one JSON object: parsing consumes all of stdout.
+    let json: serde_json::Value = serde_json::from_slice(&json_out.stdout).unwrap();
+    assert_eq!(json["result"]["scope_blocked"], false, "{json}");
+    let units = json["result"]["units"].as_array().unwrap();
+    assert_eq!(units.len(), 1, "{json}");
+    assert_eq!(units[0]["outcome"], "cleaned", "{json}");
+    assert!(
+        json["result"]["unresolved_participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["manifest"]
+                .as_str()
+                .unwrap()
+                .ends_with("refused-orphan/Cargo.toml")),
+        "the refused orphan is named: {json}"
+    );
+    assert_eq!(fixture.clean_calls(), 1, "exactly one Cargo clean ran");
+    assert!(
+        !fixture.artifact().exists(),
+        "the proven unit was really cleaned"
+    );
+}
+
+/// M017: the Simulate twin predicts the unit spawn with zero spawns and no
+/// block.
+#[cfg(unix)]
+#[test]
+fn scoped_simulate_predicts_unit_spawn_with_zero_spawns() {
+    let fixture = MaintenanceFixture::new(false);
+    let _orphan = fixture.refused_orphan();
+    let root = fixture.temp.path().to_str().unwrap().to_string();
+    let json_out = fixture.run_island_scenario(&["clean", &root, "--dry-run"], "json", false);
+    assert_eq!(
+        json_out.status.code(),
+        Some(0),
+        "a scope note never blocks: {json_out:?}"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&json_out.stdout).unwrap();
+    assert_eq!(json["result"]["scope_blocked"], false, "{json}");
+    let units = json["result"]["units"].as_array().unwrap();
+    assert_eq!(units.len(), 1, "{json}");
+    assert_eq!(units[0]["outcome"], "simulated", "{json}");
+    assert_eq!(fixture.clean_calls(), 0, "simulation spawns nothing");
+    assert!(fixture.artifact().exists(), "simulation touches nothing");
+}
+
+/// M017 G1c shape: a refusal naming the resolved workspace rides along as
+/// a passenger. The unit proceeds with the passenger named in the
+/// unresolved participants — and exit 0.
+#[cfg(unix)]
+#[test]
+fn scoped_execute_carries_parent_naming_refusal_as_passenger() {
+    let fixture = MaintenanceFixture::new(false);
+    let _orphan = fixture.refused_orphan();
+    let root = fixture.temp.path().to_str().unwrap().to_string();
+    let json_out = fixture.run_island_scenario(&["clean", &root], "json", true);
+    assert_eq!(json_out.status.code(), Some(0), "{json_out:?}");
+    let json: serde_json::Value = serde_json::from_slice(&json_out.stdout).unwrap();
+    assert_eq!(json["result"]["scope_blocked"], false, "{json}");
+    let passengers = json["result"]["unresolved_participants"]
+        .as_array()
+        .unwrap();
+    assert_eq!(passengers.len(), 1, "{json}");
+    assert!(
+        passengers[0]["manifest"]
+            .as_str()
+            .unwrap()
+            .ends_with("refused-orphan/Cargo.toml"),
+        "the refused orphan is named: {json}"
+    );
+    let units = json["result"]["units"].as_array().unwrap();
+    assert_eq!(units.len(), 1, "{json}");
+    assert_eq!(units[0]["outcome"], "cleaned", "{json}");
+    assert_eq!(fixture.clean_calls(), 1);
+}
+
+/// M017: the human render carries completed rows and the reported note
+/// together — two renderings of one result, with no block and no island
+/// outcomes.
+#[cfg(unix)]
+#[test]
+fn scoped_human_report_carries_rows_and_reported_note_without_block() {
+    let fixture = MaintenanceFixture::new(false);
+    let _orphan = fixture.refused_orphan();
+    let root = fixture.temp.path().to_str().unwrap().to_string();
+    let human = fixture.run_island_scenario(&["clean", &root], "human", false);
+    assert_eq!(human.status.code(), Some(0), "{human:?}");
+    let text = String::from_utf8_lossy(&human.stdout);
+    assert!(
+        !text.contains("cleanup ownership could not be proven"),
+        "no block: {text}"
+    );
+    assert!(
+        text.contains("reported unprovable participant(s), not blocking"),
+        "the note is named on the human report: {text}"
+    );
+    assert!(text.contains("Cleaned"), "the completed row: {text}");
+    assert!(!text.contains("island outcomes"), "{text}");
+    assert_eq!(fixture.clean_calls(), 1);
+}
+
+/// -i refuses without a terminal before any listing — the terminal
+/// precondition precedes the candidate listing, so nothing is ever offered
+/// without a session to choose in. The positive offer path (proceed rows)
+/// is covered at the listing level, where a TTY is not required.
+#[cfg(unix)]
+#[test]
+fn interactive_clean_root_without_a_terminal_is_a_usage_error() {
+    let fixture = MaintenanceFixture::new(true);
+    let root = fixture.temp.path().to_str().unwrap().to_string();
+    let output = fixture.run_human(&["clean", &root, "-i"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a missing terminal is a usage error: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("requires a terminal"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fixture.clean_calls(), 0);
 }
 
 /// Advanced cleanup defaults to Execute, and Cargo's own preview is reachable
@@ -3223,6 +3468,37 @@ impl StaleLearnedFixture {
             .unwrap()
     }
 
+    /// The same argv with one manifest substring refused by the stub's
+    /// selective-refusal knob. Used for poison that must genuinely fail
+    /// resolution (the stub otherwise answers every query from
+    /// `FIXTURE_ROOT`, which would absorb the poison instead of refusing
+    /// it — the stub-is-not-the-tool defect in a new costume).
+    fn run_with_refused(&self, args: &[&str], needle: &str) -> std::process::Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args([
+            "--config",
+            self.config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "json",
+        ]);
+        command.args(args);
+        command
+            .env("HOME", &self.home)
+            .env("XDG_STATE_HOME", &self.state_home)
+            .env("PATH", path_with(&self.bin))
+            .env("FIXTURE_ROOT", &self.sibling)
+            .env("FIXTURE_TARGET", &self.target)
+            .env("CARGO_LOG", &self.log)
+            .env("CARGO_ARGS_LOG", &self.args_log)
+            .env("CARGO_FAIL_LOCATE_FOR", needle)
+            // M014: the bare invocation anchors its selection to the
+            // working directory; this fixture root is the scenario's.
+            .current_dir(&self.home)
+            .output()
+            .unwrap()
+    }
+
     /// The same argv through Cargo's external-subcommand entry point, with the
     /// premise asserted the C012 way: the staged binary must provably be the
     /// one Cargo resolves.
@@ -3531,6 +3807,47 @@ fn automatic_file_root_is_omitted_and_symlink_root_blocks_without_traversal() {
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["result"]["scope_blocked"], true, "{json}");
     assert_eq!(fixture.clean_calls(), 0);
+}
+
+/// M017 flagship at the CLI surface: poison in an admitted learned root
+/// outside the working-directory anchor must not block cleaning the
+/// anchored scope. The anchor is the fixture home (the run's cwd); the
+/// poisoned root is a separate existing directory, so it is admitted to
+/// the scope but outside the selection. Fails pre-change as a whole-scope
+/// block (exit 1, zero cleaned) — the codified defect.
+#[cfg(unix)]
+#[test]
+fn out_of_anchor_poison_does_not_block_bare_routine_cleanup() {
+    let fixture = StaleLearnedFixture::new();
+    assert!(fixture.artifact().exists(), "premise: artifact exists");
+    let poison = fixture._temp.path().join("poisoned-elsewhere");
+    std::fs::create_dir(&poison).unwrap();
+    std::fs::write(
+        poison.join("Cargo.toml"),
+        "this is not valid cargo manifest [\n",
+    )
+    .unwrap();
+    fixture.write_state(std::slice::from_ref(&poison));
+    let output = fixture.run_with_refused(&[], "poisoned-elsewhere");
+    assert!(
+        output.status.success(),
+        "out-of-anchor poison must not block: stdout: {} stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["result"]["summary"]["cleaned"], 1, "{json}");
+    assert_eq!(json["result"]["scope_blocked"], false, "{json}");
+    assert_eq!(fixture.clean_calls(), 1, "{json}");
+    assert!(
+        !fixture.artifact().exists(),
+        "the anchored scope was cleaned: {json}"
+    );
+    let diagnostics = json["result"]["summary"]["diagnostics"].as_u64().unwrap();
+    assert!(
+        diagnostics >= 1,
+        "the poison is counted in the machine summary (paths are visible via `scan --all`, whose diagnostics array carries them): {json}"
+    );
 }
 
 /// An unreadable automatic root is indeterminate coverage, not absence: block

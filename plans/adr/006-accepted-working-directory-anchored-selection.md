@@ -72,6 +72,15 @@ shared bytes to `PrivateBounded`, the only class that authorizes deletion.
   verdict reachable behind an Enter key.
 - **Keep the wide default, add `--here`.** Rejected: it leaves the footgun in
   place as the default and adds a spelling, which is what ADR 004 criticised.
-- **Partition the universe (ADR 004).** Still proposed and still unaccepted.
+- **Partition the universe (ADR 004).** Still proposed and still unaccepted
+  *at the time of this decision*.
   M014 deliberately does not require it: filtering the selection achieves the
   operator goal without partitioning the proof at all.
+
+> 2026-10-16 amendment: ADR 004 has since been **accepted** with an explicit
+> C004/C006 amendment (per-island activation; refused manifests ride as
+> passengers), recorded in ADR 001 and implemented by M016 behind the
+> `--partitioned` opt-in flag. The rejected alternative above stays rejected —
+> M014 never narrows the discovery universe — and partitioning the proof is
+> now a governed opt-in rather than an unaccepted proposal. The history above
+> is preserved; this note records what changed.

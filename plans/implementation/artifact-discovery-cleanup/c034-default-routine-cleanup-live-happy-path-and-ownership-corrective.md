@@ -1,11 +1,11 @@
 # C034 — Default Routine Cleanup Live Happy-Path and Ownership Corrective
 
-Status: **active** — a disposable Unix real-Cargo default-Routine positive control now proves dry-run parity and real byte reclamation. Remaining heterogeneous Full→Routine qualification, blocked-scope controls, installed v0.2.5 stage capture, cross-platform/MSRV hosted evidence, and closure are outstanding. **Blocked** for independent partial-scope destructive execution unless proposed ADR 004 is accepted with a concrete safety proof.
+Status: **active** — a disposable Unix real-Cargo default-Routine positive control now proves dry-run parity and real byte reclamation. Remaining heterogeneous Full→Routine qualification, blocked-scope controls, installed v0.2.5 stage capture, cross-platform/MSRV hosted evidence, and closure are outstanding. **2026-10-16 update:** independent partial-scope destructive execution now has an accepted decision — ADR 004 accepted with the C004/C006 amendment (per-island activation, refused-manifest passenger rule), implemented by M016 behind the `--partitioned` opt-in flag. C034's §D research gate is therefore answered for exactly the M016 rule; C034 itself implements no partition, and any broader automatic partition remains out of scope. Read the pre-acceptance §D text below with that amendment.
 Planning-only branch: `plans/c032-c034-routine-cleanup-reliability`.
 Baseline: `7c874ab7998bdac28a6236ec21ae59ec24b915f8` (`main`, v0.2.5, 2026-10-09).
 Roadmap: `plans/subsystems/artifact-discovery-cleanup-roadmap.md`.
 Corrects forward: M007 and C006 combined-universe cleanup, M012A canonical bare Execute, C028 admission, C029–C031's **closed** safe line; original closure records remain historical.
-Hard dependency: interface/fixture outputs from C032 and C033 for final integrated qualification. Partial-cleanup execution additionally requires accepted forward ADR 004 and any corresponding ADR 001/C004/C006 amendment.
+Hard dependency: C032 (failure taxonomy), C033 (effective Routine root hygiene) interface/fixture outputs for final integrated qualification. Partial-cleanup execution additionally required an accepted forward ADR 004 and corresponding ADR 001/C004/C006 amendment — **satisfied 2026-10-16** (ADR 004 accepted as amended; M016 implements the narrowed activation behind `--partitioned`).
 Skills: planning-and-closure; discovery-and-ownership; cleanup-safety; test-evidence; json-and-exit-contract.
 
 ## Incident and why existing evidence is insufficient
@@ -80,5 +80,14 @@ Update `docs/USAGE.md`, `TROUBLESHOOTING.md`, `AUTOMATION.md`, relevant architec
 Run fmt, Clippy with `-D warnings`, all-target/all-feature tests, fixture-portability and doc-citation checker self-tests/checks, `git diff --check`, release drift check if docs generation changes, hosted Linux/macOS/Windows/Rust 1.89 and a real non-root Linux run. Record which test commands actually ran with observed results; a green hosted suite without the positive real-clean fixture **does not qualify this plan**.
 
 **Stop** if the only offered fix deletes checks from C004/C006, admits unresolved manifests as harmless, accepts arbitrary `PermissionDenied` as absence, converts 'no clean' into a successful report without a true eligibility proof, changes the JSON/log schema without decision, or modifies actual user build trees in tests. If ADR 004 remains unaccepted, close only the safe existing-proof track, classify general partial-universe cleaning as blocked, and record the live residual problem.
+
+> 2026-10-16 note: ADR 004 is now accepted **as amended** (C004/C006
+> per-island activation + refused-manifest passenger rule), and M016
+> implements exactly that narrowed activation behind `--partitioned`. The
+> §D research above is therefore answered for the M016 rule — not
+> re-litigated here. C034 still closes only its safe existing-proof track;
+> general automatic partition beyond the M016 rule remains out of scope,
+> and the operator-declared-scopes route (C035, separate branch) needs its
+> own scope decision against M016 before anyone merges it.
 
 Acceptance: A real, reproducible and safe bare `cargo cleanme` invocation cleans at least one qualifying workspace on the meaningful default selected scope, plus clear deterministic reporting for all remaining no-clean blockers. Closure receipt: `plans/closure/artifact-discovery-cleanup/c034-status.md`, including real Cargo argv, recovered bytes, hosted runs and any remaining ADR 004 block. No release authorized here.

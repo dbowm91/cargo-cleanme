@@ -381,17 +381,17 @@ match on.
 | `inventory_bytes` | `u64` | Saturating sum of group bytes; **observed, not recovered** |
 | `diagnostic_count` | `usize` | `diagnostics.len()` |
 
-### `CleanupV1` — `output.rs:48-64`
+### `CleanupV1` — `output.rs:48-77`
 
 | Field | Type | Meaning |
 |---|---|---|
 | `discovered_manifests` | `usize` | Note `usize` here vs `u64` in `ScanV1` |
 | `resolved_workspaces` | `usize` | Workspaces that resolved authoritatively |
 | `units_considered` | `usize` | CleanupUnits sized, **before** per-unit outcomes |
-| `scope_blocked` | `bool` | Whole-scope block; from `Option::is_some()` |
+| `scope_blocked` | `bool` | Boundary-scoped block; from `Option::is_some()`. Set when the selected scope cannot be proven (in-boundary poison, zero-unit edge) or a mid-run gate fires; out-of-boundary poison never sets it, so exit 1 falls out structurally only for the boundary |
 | `scope_reason` | `Option<String>` | Prose reason for the block, cloned from `ScopeBlock.message` |
-| `unresolved_ownership` | `usize` | Count of unresolved manifests |
-| `unresolved_participants` | `Vec<UnresolvedParticipantV1>` | Per-manifest detail |
+| `unresolved_ownership` | `usize` | Count of boundary-relevant unresolved manifests; out-of-boundary unprovables travel in `diagnostics` as `out_of_scope` |
+| `unresolved_participants` | `Vec<UnresolvedParticipantV1>` | Per-manifest detail (boundary-relevant only) |
 | `selected_roots` | `Vec<String>` | Bounded cleanup roots in effect |
 | `effective_policy` | `Option<PolicyV1>` | Policy after CLI-over-config merge |
 | `selector_kind` | `Option<&'static str>` | `profile` or `package` |

@@ -236,8 +236,9 @@ pub struct CleanupRequest {
     /// `WorkingDirectory` here is *unresolved intent*. `main.rs` must call
     /// [`CleanupSelection::resolved`] before the engine runs.
     ///
-    /// `-i` overrides this: the interactive session replaces it with the
-    /// operator's choice, which is a strictly narrower `Roots` selection.
+    /// `-i` narrows this further: the interactive session offers only
+    /// anchor-matching units and replaces them with the operator's choice,
+    /// which is a strictly narrower `Roots` subset of the anchor.
     pub selection: CleanupSelection,
     /// `-i`/`--interactive`: present the selection list before cleaning.
     ///
@@ -926,6 +927,19 @@ mod tests {
         assert!(!clean_help.contains("--dryrun"), "{clean_help}");
         assert!(clean_help.contains("--cargo-preview"), "{clean_help}");
         assert!(clean_help.contains("--dry-run"), "{clean_help}");
+    }
+
+    #[test]
+    fn partitioned_flag_is_gone_scoped_proof_is_the_only_behavior() {
+        // ADR 007: the flag was never published (0.2.9 unreleased), so
+        // removal is total — no alias, no deprecation path. Unknown flags
+        // are a clap usage error, and scoped proof needs no opt-in.
+        assert!(Cli::try_parse_from(["cargo-cleanme", "--partitioned"]).is_err());
+        assert!(Cli::try_parse_from(["cargo-cleanme", "clean", "/x", "--partitioned"]).is_err());
+        assert!(matches!(
+            Cli::try_parse_from(["cargo-cleanme"]).unwrap().invocation(),
+            Invocation::Cleanup(_)
+        ));
     }
 
     #[test]

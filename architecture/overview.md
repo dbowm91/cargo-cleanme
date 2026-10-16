@@ -6,10 +6,10 @@ per-component deep dives that follow.
 - **What it is:** a Cargo subcommand (`cargo cleanme`) that finds inactive Cargo
   build artifacts on a machine and either reports or safely reclaims them.
 - **Shape:** one binary (`src/main.rs`) over one library (`src/lib.rs`) of 16
-  modules, 18 source files, 30,483 lines of Rust in `src/`, no async runtime
-  of its own, and exactly one binary dependency that matters for safety
-  (`cargo metadata`).
-- **Version:** 0.2.7 (published) · **Edition:** 2024 · **MSRV:** 1.89
+modules, 18 source files, 32,677 lines of Rust in `src/`, no async runtime
+of its own, and exactly one binary dependency that matters for safety
+(`cargo metadata`).
+- **Version:** 0.2.8 (published; tree at 0.2.9, unreleased) · **Edition:** 2024 · **MSRV:** 1.89
 - **Deep dives:** 16 documents, one per component, linked from §3 and §9.
 
 ---
@@ -92,9 +92,9 @@ it.**
 ## 3. Module index
 
 Line counts are `total`; where a module carries an inline `#[cfg(test)]`
-module, the `prod` half of the split is given. The crate has **417 inline
-`#[test]` functions**, and **38.1% of them live in the two largest modules**
-(`cleanup.rs` 94 + `workspace.rs` 65). Three modules have **zero** tests:
+module, the `prod` half of the split is given. The crate has **450 inline
+#[test]` functions, and **42.0% of them live in the two largest modules**
+(`cleanup.rs` 113 + `workspace.rs` 76). Three modules have **zero** tests:
 `main.rs`, `error.rs`, `lib.rs`.
 
 Test counts in this table are **declared**, not "how many ran on my machine",
@@ -116,20 +116,20 @@ not as a claim that the ordering is verified.
 
 | Module | Lines | Role | Deep dive |
 |---|---:|---|---|
-| [`main.rs`](13-orchestration.md) | 1361 | Binary entry: argv → resolved invocation → dispatch → exit code. The only place the scan and cleanup pipelines are stitched together. | [Orchestration](13-orchestration.md) |
-| [`cli.rs`](02-cli.md) | 1259 / 480 | Clap surface, resolved-invocation model, `cargo`-subcommand argv normalization, scan-root absolutization. | [CLI](02-cli.md) |
+| [`main.rs`](13-orchestration.md) | 1373 | Binary entry: argv → resolved invocation → dispatch → exit code. The only place the scan and cleanup pipelines are stitched together. | [Orchestration](13-orchestration.md) |
+| [`cli.rs`](02-cli.md) | 1273 / 481 | Clap surface, resolved-invocation model, `cargo`-subcommand argv normalization, scan-root absolutization. | [CLI](02-cli.md) |
 | [`config.rs`](03-config-and-editor.md) | 1499 / 613 | Load/create/validate `config.toml`; embedded template; path resolution. | [Config & editor](03-config-and-editor.md) |
 | [`policy.rs`](04-policy-and-scope.md) | 1184 / 702 | Turns a `ScanRequest` + config into an `EffectiveScanPolicy` — the Routine/Full scope decision — plus C028 provenance admission, C030 maintenance-root hygiene, and bounded C033 omission summaries. | [Policy & scope](04-policy-and-scope.md) |
 | [`discovery.rs`](05-discovery.md) | 2363 / 1000 | Finds `Cargo.toml` manifests across a bounded walk, with bounded attribution for traversal coverage loss. | [Discovery](05-discovery.md) |
 | [`discovery_state.rs`](06-discovery-state.md) | 1129 / 580 | Persisted learned roots, complete-coverage reconciliation, C030 provenance hygiene, and atomic publish. | [Discovery state](06-discovery-state.md) |
-| [`workspace.rs`](07-workspace.md) | 5489 / 2000 | `cargo metadata` resolution (bulk-parallel locate plus grouped metadata with sequential emulation), bounded Cargo failure causes, capability probing, physical grouping, cleanup-unit construction. | [Workspace](07-workspace.md) |
+| [`workspace.rs`](07-workspace.md) | 6068 / 2093 | `cargo metadata` resolution (bulk-parallel locate plus grouped metadata with sequential emulation), bounded Cargo failure causes, failure-class attribution for the proof-island certificate, capability probing, physical grouping, cleanup-unit construction. | [Workspace](07-workspace.md) |
 | [`traverse.rs`](08-traverse.md) | 624 / 494 | Parallel size/recency measurement and source-activity classification. | [Traverse](08-traverse.md) |
-| [`cleanup.rs`](09-cleanup.md) | 8396 / 3337 | Authorization, ownership proof, pre-spawn decision, three clean modes, the admission-premise late recheck. The heart of the safety story. | [Cleanup](09-cleanup.md) |
+| [`cleanup.rs`](09-cleanup.md) | 9882 / 3747 | Authorization, ownership proof, pre-spawn decision, three clean modes, the admission-premise late recheck, scoped proof within the selected boundary (ADR 007). The heart of the safety story. | [Cleanup](09-cleanup.md) |
 | [`report.rs`](10-reporting.md) | 195 / 71 | Human-readable rendering of a `ScanReport`; byte formatting. | [Reporting](10-reporting.md) |
-| [`output.rs`](10-reporting.md) | 986 / 269 | Versioned machine-readable DTOs (`EnvelopeV1`); the stable JSON contract, including the non-envelope `update` document and its stdout stream; the bounded `--format log` line renderer. | [Reporting](10-reporting.md) |
+| [`output.rs`](10-reporting.md) | 1065 / 274 | Versioned machine-readable DTOs (`EnvelopeV1`); the stable JSON contract, including the non-envelope `update` document and its stdout stream; the bounded `--format log` line renderer; boundary-scoped blocks and the out-of-scope diagnostic category. | [Reporting](10-reporting.md) |
 | [`progress.rs`](11-progress.md) | 873 / 533 | `ProgressObserver` trait + indicatif renderer; terminal capability detection. | [Progress](11-progress.md) |
 | [`update.rs`](12-self-update.md) | 2886 / 1289 | Eggup-based self-update: provenance classification, version authority, staged replace. | [Self-update](12-self-update.md) |
-| [`domain.rs`](01-domain-and-errors.md) | 411 / 382 | The shared vocabulary: reports, ownership classes, counters, diagnostics. Pure data. | [Domain & errors](01-domain-and-errors.md) |
+| [`domain.rs`](01-domain-and-errors.md) | 435 / 406 | The shared vocabulary: reports, ownership classes, unknown capability, counters, diagnostics. Pure data. | [Domain & errors](01-domain-and-errors.md) |
 | [`error.rs`](01-domain-and-errors.md) | 16 | `AppError` — the six variants the binary can fail with. | [Domain & errors](01-domain-and-errors.md) |
 | [`lib.rs`](01-domain-and-errors.md) | 16 | Module manifest. | [Domain & errors](01-domain-and-errors.md) |
 | [`editor.rs`](03-config-and-editor.md) | 215 / 155 | Resolves `$EDITOR`/`$VISUAL` for `config edit`. | [Config & editor](03-config-and-editor.md) |

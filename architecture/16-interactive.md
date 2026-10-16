@@ -65,11 +65,15 @@ version of this test, and it survived its own mutation.
 
 ## 4. The safety boundary
 
-The listing resolves candidates with `CleanupSelection::All`
-(`src/main.rs:553-553`), deliberately offering every unit in scope. The operator
-is choosing; a list that hid the units their anchor excluded would just move
-the surprise into the report. What the operator *gets* is always narrower than
-what they *saw* — `Roots` can only remove.
+The listing resolves candidates with the invocation's resolved selection
+(`src/main.rs:553-562`): maintenance scopes offer only anchor-matching units,
+so `-i` is bounded by the working directory it runs in; `clean ROOT` and
+`clean --full` resolve to `CleanupSelection::All` and stay unfiltered because
+their roots already bound them. The proof universe stays wide in every case —
+`resolved.roots` still carry the full Routine set — so shared output stays
+`Shared`. What the operator *gets* is always narrower than what they *saw* —
+`Roots` can only remove, and for maintenance it can only remove within the
+anchor.
 
 Two refusals happen before any Cargo process is spawned
 (`src/main.rs:510-512`), in this order:
@@ -87,9 +91,13 @@ Two refusals happen before any Cargo process is spawned
    a bad trade for a better error message.
 
 An unproven universe blocks the listing outright rather than offering rows
-(`src/main.rs:555-563`). Offering a selection from a universe whose ownership
+(`src/main.rs:562-602`). Offering a selection from a universe whose ownership
 could not be proven would be ADR 006 in a new costume: the operator would be
-choosing from a list whose classification is exactly what failed.
+choosing from a list whose classification is exactly what failed. The block
+names the unresolved participants (bounded, human surface only) with the same
+workspace-membership hint the engine's blocked report carries, so the operator
+knows which manifest to fix or which healthy workspace to clean explicitly
+with `clean ROOT` instead.
 
 ## 5. Raw mode, and why rendering is inline
 

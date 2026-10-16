@@ -26,7 +26,7 @@ quickstart; this document has the detail.
 | `cargo cleanme scan --all` | Full read-only reconciliation |
 | `cargo cleanme scan ROOT` | One explicit read-only scope |
 | `cargo cleanme scan --known` | Routine read-only inventory of the maintenance scope |
-| `cargo cleanme clean [ROOT] [--known\|--full]` | advanced cleanup: execute (default), simulate, or Cargo preview |
+| `cargo cleanme clean [ROOT] [--known\|--full]` | advanced cleanup: execute (default), simulate, or Cargo preview, proven within the selected scope (unprovable manifests outside the scope are reported, never blocking) |
 | `cargo cleanme config path\|show\|edit` | locate, print, or edit the config |
 | `cargo cleanme update [--dry-run]` | self-update to the latest stable release |
 
@@ -208,8 +208,10 @@ is never guessed from path ancestry or TOML.
 Full discovery can find manifests Cargo cannot resolve as workspaces, such as
 an orphaned member or a broken manifest. Such a manifest stays in the
 read-only inventory as unresolved; it does not become a learned maintenance
-root. Cleanup remains blocked while any discovered manifest is unresolved,
-because its Cargo-configured output ownership is unknown. To reproduce the
+root. Cleanup remains blocked while any discovered manifest *inside the selected scope* is unresolved,
+because its Cargo-configured output ownership is unknown. A manifest outside
+the scope (for example, outside the working-directory anchor) is reported in
+diagnostics and never blocks. To reproduce the
 underlying Cargo error for one path, run from its parent directory:
 
 ```sh
@@ -222,8 +224,10 @@ Cargo's exact wording can vary by version and failure type.
 Full discovery can find manifests Cargo cannot resolve as workspaces, such as
 an orphaned member or a broken manifest. Such a manifest stays in the
 read-only inventory as unresolved; it does not become a learned maintenance
-root. Cleanup remains blocked while any discovered manifest is unresolved,
-because its Cargo-configured output ownership is unknown. To reproduce the
+root. Cleanup remains blocked while any discovered manifest *inside the selected scope* is unresolved,
+because its Cargo-configured output ownership is unknown. A manifest outside
+the scope (for example, outside the working-directory anchor) is reported in
+diagnostics and never blocks. To reproduce the
 underlying Cargo error for one path, run from its parent directory:
 
 ```sh
@@ -284,17 +288,22 @@ Ownership is re-proven **immediately before each spawn**, because a workspace
 can change between scan and delete. Nothing is ever deleted on the strength of a
 timestamp.
 
-### Unresolved ownership blocks the whole scope
+### Unresolved ownership blocks its own scope
 
 Before any output analysis or cleanup qualification, every `Cargo.toml` under
-`clean ROOT` must be accounted for by either a direct successful resolution or
-successful workspace metadata listing it as a member or root. An earlier failed
-member attempt is cleared only if later authoritative metadata covers it.
+the selected scope must be accounted for by either a direct successful
+resolution or successful workspace metadata listing it as a member or root.
+An earlier failed member attempt is cleared only if later authoritative
+metadata covers it.
 
-Any remaining unresolved manifest **blocks the entire cleanup scope** in
-Preview, Simulate, and Execute, reports `unresolved_ownership` under `--stats`,
-and runs **no** `cargo clean` command — including Cargo's own preview dry-run.
-Read-only scans stay partial-result tolerant; that asymmetry is deliberate.
+Any remaining unresolved manifest **inside the selected scope** blocks that
+scope in Preview, Simulate, and Execute, reports `unresolved_ownership`
+under `--stats`, and runs **no** `cargo clean` command — including Cargo's
+own preview dry-run. A manifest Cargo itself refused (a scope note or a
+refused-manifest passenger) is reported, never blocking: it owns no bytes
+to overlap. A manifest outside the scope is reported in diagnostics and
+never blocks. Read-only scans stay partial-result tolerant; that asymmetry
+is deliberate.
 
 ### Mode semantics
 
@@ -622,7 +631,7 @@ Discovery state is machine-local JSON and is normally self-managed.
   reconciliation can change learned state.
 - A learned or seed location that is a symlink (never followed, including
   broken links) or that cannot be read is **not** omitted: the run blocks
-  with a typed whole-scope report and exit `1`, because omitting it could
+  with a typed report and exit `1`, because omitting it could
   conceal an expected scan tree. Explicit roots (`scan.root`, `scan ROOT`,
   `clean ROOT`) are never omitted; any defect in one is a fatal usage error.
 - A complete, certain Full reconciliation prunes learned directories that are

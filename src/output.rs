@@ -62,6 +62,8 @@ pub struct CleanupV1 {
     pub units: Vec<CleanupUnitV1>,
     pub summary: CleanupSummaryV1,
 }
+/// One unproven ownership participant (ADR 007: boundary-relevant only;
+/// out-of-boundary unprovables travel in `diagnostics` as `out_of_scope`).
 #[derive(Serialize)]
 pub struct UnresolvedParticipantV1 {
     pub manifest: String,
@@ -129,6 +131,7 @@ pub fn scan(report: &ScanReport, scope: impl Into<String>) -> EnvelopeV1<ScanV1>
                 crate::domain::DiagnosticCategory::InvalidEntry => "invalid_entry",
                 crate::domain::DiagnosticCategory::PlatformRoot => "platform_root",
                 crate::domain::DiagnosticCategory::CandidateUncertain => "candidate_uncertain",
+                crate::domain::DiagnosticCategory::OutOfScope => "out_of_scope",
             }
             .into(),
             path: d.path.as_deref().map(path),
@@ -522,6 +525,7 @@ pub mod log {
                 counters: ScanCounters::default(),
                 scope_blocked: None,
                 unresolved_ownership: Vec::new(),
+                out_of_scope_unresolved: 0,
                 selected_roots: Vec::new(),
                 discovered_manifests: 0,
                 resolved_workspaces: 0,
@@ -634,6 +638,7 @@ pub mod log {
                 manifest: PathBuf::from("/x/Cargo.toml"),
                 stage: "locate",
                 reason: "cargo locate-project failed".into(),
+                capability: crate::domain::UnknownCapability::RefusedByCargo,
             }];
             let line = super::cleanup(&report, "routine");
             assert!(line.contains("status=blocked"), "{line}");
@@ -646,6 +651,45 @@ pub mod log {
                 "prose must never reach a retained history line: {line}"
             );
             assert_ascii_and_bounded(&line);
+        }
+
+        /// M015/E: the partition was human-only; M016 added `islands` by
+        /// conscious decision; M017/ADR 007 removes it again with scoped
+        /// proof as the default (it never shipped: 0.2.9 unpublished). This
+        /// list is updated deliberately, not deleted: if a field is ever
+        /// added to the machine result, this fails and forces a conscious
+        /// contract decision — not a quiet schema drift.
+        #[test]
+        fn cleanup_json_result_key_set_is_stable() {
+            let report = empty_report();
+            let envelope = crate::output::cleanup(&report, "routine", None);
+            let value = serde_json::to_value(&envelope).unwrap();
+            let mut keys: Vec<&str> = value["result"]
+                .as_object()
+                .expect("result is an object")
+                .keys()
+                .map(String::as_str)
+                .collect();
+            keys.sort_unstable();
+            assert_eq!(
+                keys,
+                [
+                    "discovered_manifests",
+                    "effective_policy",
+                    "resolved_workspaces",
+                    "scope_blocked",
+                    "scope_reason",
+                    "selected_roots",
+                    "selector_kind",
+                    "selector_value",
+                    "state_generation_last_full_at",
+                    "summary",
+                    "units",
+                    "units_considered",
+                    "unresolved_ownership",
+                    "unresolved_participants",
+                ],
+            );
         }
 
         #[test]
@@ -671,12 +715,47 @@ pub mod log {
             assert_ascii_and_bounded(&line);
         }
 
+        /// M017/ADR 007: a boundary-blocked run logs blocked with counts and
+        /// no paths. The block message lives in the JSON scope_reason and
+        /// the human block message only — prose never reaches a retained
+        /// history line.
+        #[test]
+        fn cleanup_line_reports_blocked_run_with_counts() {
+            let mut report = empty_report();
+            report.mode = CleanMode::Execute;
+            report.scope_blocked = Some(ScopeBlock::new(
+                ScopeBlockReason::OwnershipUnproven,
+                "cleanup ownership could not be proven: 1 discovered Cargo manifest did not resolve; no cleanup commands were run".into(),
+            ));
+            report.results.push(crate::cleanup::CleanResult {
+                display_path: PathBuf::from("/ws/provable"),
+                workspace_roots: vec![PathBuf::from("/ws/provable")],
+                output_roots: vec![PathBuf::from("/ws/provable/target")],
+                ownership: OutputOwnershipClass::PrivateBounded,
+                outcome: CleanOutcome::Cleaned,
+                reason_code: CleanupReasonCode::Cleaned,
+                detail: "mock cargo clean success".into(),
+                policy_disposition: None,
+                before_bytes: Some(4096),
+                after_bytes: Some(0),
+                observed_decrease: Some(4096),
+            });
+            let line = super::cleanup(&report, "routine");
+            assert!(line.contains("status=blocked"), "{line}");
+            assert!(line.contains("cleaned=1"), "{line}");
+            assert!(
+                !line.contains("/ws/provable"),
+                "no paths on the log line: {line}"
+            );
+            assert_ascii_and_bounded(&line);
+        }
+
         #[test]
         fn a_blocked_scope_never_reports_reclaimed_bytes() {
             let mut report = empty_report();
             report.scope_blocked = Some(ScopeBlock::new(
                 ScopeBlockReason::IncompleteDiscovery,
-                "combined cleanup ownership universe is incomplete: 3 discovery diagnostic(s); no cleanup commands were run".into(),
+                "cleanup ownership universe is incomplete in the selected scope: 3 discovery diagnostic(s); no cleanup commands were run".into(),
             ));
             let line = super::cleanup(&report, "routine");
             assert!(line.contains("reason=incomplete_discovery"), "{line}");
