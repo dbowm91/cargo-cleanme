@@ -5200,11 +5200,12 @@ mod tests {
             assert_eq!(row_for(&report, root).outcome, CleanOutcome::Cleaned);
         }
         assert!(
-            report
-                .unresolved_ownership
-                .iter()
-                .any(|participant| participant.manifest == orphan),
-            "the refused orphan is still named: {report:?}"
+            report.unresolved_ownership.iter().any(|participant| {
+                participant
+                    .manifest
+                    .ends_with(std::path::Path::new("orphan").join("Cargo.toml"))
+            }),
+            "the refused passenger is still named (component-wise: symlinked TMPDIR on macOS, separators on Windows): {report:?}"
         );
         // JSON carries the passenger on `unresolved_participants`.
         let value = serde_json::to_value(crate::output::cleanup(&report, "routine", None)).unwrap();
@@ -6538,11 +6539,12 @@ mod tests {
             "the healthy sibling simulates: {report:?}"
         );
         assert!(
-            report
-                .unresolved_ownership
-                .iter()
-                .any(|participant| participant.manifest == bad_manifest),
-            "the refused manifest is named: {report:?}"
+            report.unresolved_ownership.iter().any(|participant| {
+                participant
+                    .manifest
+                    .ends_with(std::path::Path::new("bad").join("Cargo.toml"))
+            }),
+            "the refused manifest is named (component-wise: symlinked TMPDIR on macOS, separators on Windows): {report:?}"
         );
         assert!(
             report
