@@ -132,6 +132,14 @@ impl ClassifiedRoots {
     }
 
     /// Deterministic, bounded human diagnostics for safely omitted roots.
+    ///
+    /// Only omissions the operator can act on are reported. A root omitted
+    /// because it sits at a known-transient origin — an agent worktree, a
+    /// package cache, a temporary directory — is omitted *by design*: the
+    /// tool would never have cleaned it, so its omission narrows nothing the
+    /// operator was relying on and is not news. A durable root that has
+    /// vanished, or one that is no longer a directory, is news, and is
+    /// reported with a bounded sample of paths.
     pub fn omission_diagnostics(&self) -> Vec<String> {
         let mut groups: std::collections::BTreeMap<&str, Vec<&PathBuf>> =
             std::collections::BTreeMap::new();
@@ -139,7 +147,9 @@ impl ClassifiedRoots {
             let (reason, path) = match omission {
                 AutomaticOmission::NotFound(path) => ("unavailable", path),
                 AutomaticOmission::NonDirectory(path) => ("non-directory", path),
-                AutomaticOmission::NotMaintainable(path) => ("non-maintainable", path),
+                // By design, not a diagnostic: the origin is transient and
+                // would never have been cleaned. See the doc comment above.
+                AutomaticOmission::NotMaintainable(_) => continue,
             };
             groups.entry(reason).or_default().push(path);
         }
@@ -1180,5 +1190,49 @@ mod tests {
         assert!(diagnostics[1].contains("/home/user/.codex/worktrees/10"));
         assert!(!diagnostics[1].contains("/home/user/.codex/worktrees/11"));
         assert!(diagnostics.iter().all(|line| line.len() < 700));
+    }
+
+    /// A root omitted because it sits at a known-transient origin is omitted
+    /// *by design*: the tool would never have cleaned it, so its omission
+    /// narrows nothing the operator was relying on. Reporting it on every
+    /// Routine invocation is noise that wears the tool's error prefix, and on
+    /// a real machine it fires on essentially every run — a developer machine
+    /// keeps agent worktrees, package caches and temp directories among its
+    /// learned roots.
+    ///
+    /// A durable root that has *vanished* is different: there was a project
+    /// there, and that is news the operator can act on. It stays reported.
+    #[test]
+    fn a_by_design_transient_omission_is_not_reported_but_a_vanished_root_is() {
+        let mut classified = ClassifiedRoots::default();
+        for index in 0..15 {
+            classified
+                .omitted
+                .push(AutomaticOmission::NotMaintainable(PathBuf::from(format!(
+                    "/home/user/.codex/worktrees/{index}"
+                ))));
+        }
+        classified
+            .omitted
+            .push(AutomaticOmission::NotFound(PathBuf::from(
+                "/home/user/projects/gone",
+            )));
+
+        let diagnostics = classified.omission_diagnostics();
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "the by-design transient bucket must not reach the operator: {diagnostics:?}"
+        );
+        assert!(
+            diagnostics[0].starts_with("omitting 1 unavailable learned root(s)"),
+            "a durable root that vanished is still news: {diagnostics:?}"
+        );
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|line| line.contains("non-maintainable")),
+            "the transient bucket must not reach the operator: {diagnostics:?}"
+        );
     }
 }

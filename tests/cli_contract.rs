@@ -3987,3 +3987,64 @@ fn json_format_config_is_rejected_not_emitted_as_non_json() {
         );
     }
 }
+
+/// A run that found nothing and did nothing has one true sentence, and it is
+/// not a failure.
+///
+/// Before this, the same scope produced a scope census and a summary of
+/// zeroes: "combined roots … / combined scope: … 0 CleanupUnit(s) … / cleanup:
+/// 0 cleaned, 0 skipped, 0 failed; pre-clean estimate 0.00 B …". The operator
+/// had to read four lines to learn one fact.
+///
+/// The machine contract is deliberately unchanged: the same run in JSON form is
+/// still exactly one envelope, still naming the scope it considered, and still
+/// saying what it did. Only the human surface is shortened.
+#[test]
+fn a_cleanup_with_nothing_to_report_says_nothing_to_clean_and_exits_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args(["clean", dir.path().to_str().unwrap()])
+        .env("HOME", home.path())
+        .env("XDG_STATE_HOME", home.path().join("state"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "an empty scope is a completed run, not a failure:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "Nothing to clean.",
+        "the operator gets one plain line, not a scope census: {stdout}"
+    );
+    assert!(
+        stderr.is_empty(),
+        "a plain negative result is not a diagnostic: {stderr}"
+    );
+
+    // The machine contract is untouched by the shorter human surface.
+    let json_output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args(["clean", "--format", "json", dir.path().to_str().unwrap()])
+        .env("HOME", home.path())
+        .env("XDG_STATE_HOME", home.path().join("state"))
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json_output.stdout).unwrap();
+    assert_eq!(json["operation"], "clean", "{json}");
+    assert_eq!(json["scope"], "explicit", "{json}");
+    assert_eq!(json["result"]["summary"]["cleaned"], 0, "{json}");
+    assert_eq!(
+        json["result"]["units"].as_array().unwrap().len(),
+        0,
+        "{json}"
+    );
+    assert_eq!(
+        json["result"]["selected_roots"].as_array().unwrap().len(),
+        1,
+        "the machine contract still names the scope it considered: {json}"
+    );
+}

@@ -96,6 +96,11 @@ pub enum Outcome {
 pub enum SessionResult {
     Selected(Vec<PathBuf>),
     Cancelled,
+    /// The scope proved no cleanup unit at all, so there was nothing to
+    /// choose from. A plain negative result, not a usage error: the same
+    /// scope cleaned without `-i` reports zero units and exits 0, and the
+    /// two spellings of one scope must agree.
+    NothingToClean,
 }
 
 /// The narrow terminal seam.
@@ -766,7 +771,16 @@ fn normalize(event: crossterm::event::KeyEvent) -> Key {
 /// This is the only entry point production code needs. The TTY precondition is
 /// checked here so that a redirected `-i` fails as a typed usage error rather
 /// than driving a session whose keystrokes are going somewhere else.
+///
+/// An empty candidate set is settled *before* that precondition: there is no
+/// session to drive, so there is nothing a terminal could be needed for. It is
+/// a plain negative result, not a usage error — the same scope cleaned without
+/// `-i` reports zero units and exits 0, and the two spellings of one scope
+/// must agree.
 pub fn run_interactive(candidates: Vec<CleanupCandidate>) -> Result<SessionResult, String> {
+    if candidates.is_empty() {
+        return Ok(SessionResult::NothingToClean);
+    }
     ensure_interactive_terminal(
         std::io::stdin().is_terminal(),
         std::io::stdout().is_terminal(),
@@ -778,9 +792,6 @@ pub fn run_interactive(candidates: Vec<CleanupCandidate>) -> Result<SessionResul
              use `cargo cleanme scan --all` to inspect the same units read-only"
         )
     })?;
-    if candidates.is_empty() {
-        return Err("no cleanup units are available to select; nothing would be cleaned".into());
-    }
     drive(&mut CrosstermTerminal, candidates)
         .map_err(|e| format!("interactive selection failed: {e}"))
 }
@@ -1577,5 +1588,40 @@ mod tests {
         );
         assert_eq!(press(KeyCode::F(5), KeyModifiers::NONE), Key::Ignored);
         assert_eq!(press(KeyCode::Tab, KeyModifiers::NONE), Key::Ignored);
+    }
+
+    // --- the empty candidate set -------------------------------------------
+
+    /// An empty candidate set is a plain negative result, not a usage error.
+    ///
+    /// The same scope cleaned without `-i` reports zero units and exits 0, so
+    /// the two spellings of one scope must agree. Before this was settled
+    /// before the terminal precondition, an empty surface was a typed refusal
+    /// that exited 2 — a scope with nothing in it was reported as though the
+    /// operator had asked for something impossible.
+    ///
+    /// No terminal is needed: there is no session to drive, so there is
+    /// nothing a terminal could be needed for. That is also what makes this
+    /// case testable without a pty.
+    #[test]
+    fn an_empty_candidate_set_is_a_plain_negative_result_not_a_usage_error() {
+        assert_eq!(
+            run_interactive(Vec::new()),
+            Ok(SessionResult::NothingToClean),
+            "an empty candidate set has one true sentence, and it is not an error"
+        );
+    }
+
+    /// A non-empty candidate set still refuses to run without a terminal.
+    /// The empty case must not have weakened the headless guard: a surface
+    /// that *could* be driven still needs somewhere to drive it.
+    #[test]
+    fn a_non_empty_candidate_set_still_needs_a_terminal() {
+        // The terminal precondition is checked inside `run_interactive`, and
+        // the test process has no terminal on either stream.
+        assert!(
+            run_interactive(vec![private("/home/u/projects/alpha")]).is_err(),
+            "a headless caller must not be able to drive a session"
+        );
     }
 }

@@ -427,6 +427,15 @@ fn run_cleanup(
             );
             return Ok(0);
         }
+        SelectionOutcome::NothingToClean => {
+            // The scope resolved and proved no cleanup unit. That is a plain
+            // negative result, not a failure: the same scope cleaned without
+            // `-i` completes normally and exits 0, so the two spellings of
+            // one scope must agree. The verdict is one line, on stdout,
+            // because it is the run's result rather than a diagnostic.
+            println!("Nothing to clean.");
+            return Ok(0);
+        }
     };
     let show = options.format == OutputFormat::Human
         && cargo_cleanme::progress::should_show_progress(options.no_progress);
@@ -479,11 +488,15 @@ fn run_cleanup(
 }
 
 /// What the selection step decided.
+#[derive(Debug)]
 enum SelectionOutcome {
     /// Run the engine with this selection.
     Chosen(cargo_cleanme::cleanup::CleanupSelection),
     /// The operator quit the interactive list. Nothing runs.
     Cancelled,
+    /// The scope proved no cleanup unit at all. Nothing runs, and the
+    /// operator is told so in one plain line.
+    NothingToClean,
 }
 
 /// Resolve which resolved cleanup units are candidates for this run.
@@ -571,11 +584,27 @@ fn resolve_candidate_selection(
             "cannot present an interactive selection: {detail}"
         )));
     }
-    match cargo_cleanme::interactive::run_interactive(listing.candidates) {
+    interactive_outcome(cargo_cleanme::interactive::run_interactive(
+        listing.candidates,
+    ))
+}
+
+/// Map the interactive surface's result onto the orchestrator's outcomes.
+///
+/// The three endings are three different facts and must not be collapsed: the
+/// operator chose roots, the operator quit, or the scope proved no cleanup
+/// unit at all. Only the third is a plain negative result.
+fn interactive_outcome(
+    result: Result<cargo_cleanme::interactive::SessionResult, String>,
+) -> Result<SelectionOutcome, AppError> {
+    match result {
         Ok(cargo_cleanme::interactive::SessionResult::Selected(roots)) => Ok(
             SelectionOutcome::Chosen(cargo_cleanme::cleanup::CleanupSelection::Roots(roots)),
         ),
         Ok(cargo_cleanme::interactive::SessionResult::Cancelled) => Ok(SelectionOutcome::Cancelled),
+        Ok(cargo_cleanme::interactive::SessionResult::NothingToClean) => {
+            Ok(SelectionOutcome::NothingToClean)
+        }
         Err(reason) => Err(AppError::Config(reason)),
     }
 }
@@ -895,7 +924,15 @@ fn emit_cleanup(
             "{}",
             cargo_cleanme::output::log::cleanup(report, resolved.scope_label)
         );
-    } else if empty_note.is_empty() {
+    } else if !empty_note.is_empty() {
+        println!("{empty_note}");
+    } else if report_has_nothing_to_report(report) {
+        // A run that cleaned nothing, skipped nothing, proved no
+        // unresolvable ownership and was not blocked has said everything
+        // there is to say. The operator gets one plain line instead of a
+        // scope census and a summary of zeroes.
+        println!("Nothing to clean.");
+    } else {
         println!(
             "combined roots {}\n{}",
             roots
@@ -905,10 +942,24 @@ fn emit_cleanup(
                 .join(", "),
             report.render()
         );
-    } else {
-        println!("{empty_note}");
     }
     Ok(())
+}
+
+/// Whether a cleanup report carries nothing beyond the empty case.
+///
+/// Every term is a thing the operator would otherwise need to read: rows
+/// (cleaned, previewed, simulated, skipped, failed), ownership the run could
+/// not prove, participants it reported out of scope, a scope block, a
+/// discovery diagnostic, and a failure. A report with none of them describes
+/// a run that found nothing and did nothing, which has one true sentence.
+fn report_has_nothing_to_report(report: &cargo_cleanme::cleanup::CleanReport) -> bool {
+    report.results.is_empty()
+        && report.unresolved_ownership.is_empty()
+        && report.out_of_scope_unresolved == 0
+        && report.scope_blocked.is_none()
+        && report.failed == 0
+        && report.diagnostics == 0
 }
 
 fn collapse_roots(roots: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
@@ -1370,4 +1421,142 @@ fn run_scan(
         full_state,
         publish_ok,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cargo_cleanme::cleanup::{
+        CleanMode, CleanOutcome, CleanReport, CleanResult, CleanupReasonCode, ScopeBlock,
+        ScopeBlockReason,
+    };
+    use cargo_cleanme::domain::{OutputOwnershipClass, ScanCounters};
+
+    /// A report that says nothing at all.
+    fn empty_report() -> CleanReport {
+        CleanReport {
+            results: Vec::new(),
+            diagnostics: 0,
+            failed: 0,
+            mode: CleanMode::Execute,
+            counters: ScanCounters::default(),
+            scope_blocked: None,
+            unresolved_ownership: Vec::new(),
+            out_of_scope_unresolved: 0,
+            selected_roots: Vec::new(),
+            discovered_manifests: 0,
+            resolved_workspaces: 0,
+            units_considered: 0,
+            effective_policy: None,
+            selector: None,
+        }
+    }
+
+    /// The interactive surface has three endings, and the orchestrator keeps
+    /// them apart: a run to make, a deliberate quit, and a scope that proved
+    /// no cleanup unit at all. Collapsing the third into a usage error is the
+    /// defect this contract exists to prevent: the same scope cleaned without
+    /// `-i` completes normally and exits 0.
+    #[test]
+    fn the_three_interactive_endings_map_to_three_distinct_outcomes() {
+        let chosen = interactive_outcome(Ok(cargo_cleanme::interactive::SessionResult::Selected(
+            vec![std::path::PathBuf::from("/tmp/project")],
+        )));
+        assert!(
+            matches!(chosen, Ok(SelectionOutcome::Chosen(_))),
+            "a chosen selection is a run to make: {chosen:?}"
+        );
+
+        let cancelled =
+            interactive_outcome(Ok(cargo_cleanme::interactive::SessionResult::Cancelled));
+        assert!(
+            matches!(cancelled, Ok(SelectionOutcome::Cancelled)),
+            "a deliberate quit is not a failure: {cancelled:?}"
+        );
+
+        let nothing = interactive_outcome(Ok(
+            cargo_cleanme::interactive::SessionResult::NothingToClean,
+        ));
+        assert!(
+            matches!(nothing, Ok(SelectionOutcome::NothingToClean)),
+            "an empty surface is a plain negative result, not a usage error: {nothing:?}"
+        );
+    }
+
+    /// A surface that could not be presented at all is still a usage error:
+    /// the operator asked for something the run cannot deliver.
+    #[test]
+    fn a_surface_that_cannot_be_presented_is_still_a_usage_error() {
+        let refused = interactive_outcome(Err("interactive selection requires a terminal".into()));
+        assert!(
+            matches!(refused, Err(AppError::Config(_))),
+            "a refusal to present the surface is a usage error: {refused:?}"
+        );
+    }
+
+    /// A report with nothing in it is the empty case: one true sentence.
+    #[test]
+    fn a_report_with_nothing_in_it_is_the_empty_case() {
+        assert!(
+            report_has_nothing_to_report(&empty_report()),
+            "a run that cleaned nothing and has nothing to report has one true sentence"
+        );
+    }
+
+    /// Every term of the verdict is something the operator would otherwise have
+    /// to read. A report carrying any of them is not the empty case — in
+    /// particular a unit that was found and deliberately left alone, which must
+    /// never look like a machine with nothing to clean.
+    #[test]
+    fn a_report_that_says_anything_is_not_the_empty_case() {
+        let mut with_row = empty_report();
+        with_row.results.push(CleanResult {
+            display_path: std::path::PathBuf::from("/tmp/project"),
+            workspace_roots: Vec::new(),
+            output_roots: Vec::new(),
+            ownership: OutputOwnershipClass::PrivateBounded,
+            outcome: CleanOutcome::Skipped,
+            policy_disposition: None,
+            reason_code: CleanupReasonCode::SkippedOutsideSelection,
+            before_bytes: None,
+            after_bytes: None,
+            observed_decrease: None,
+            detail: String::new(),
+        });
+        assert!(
+            !report_has_nothing_to_report(&with_row),
+            "a skipped unit the operator must see is not the empty case"
+        );
+
+        let mut with_diagnostic = empty_report();
+        with_diagnostic.diagnostics = 1;
+        assert!(
+            !report_has_nothing_to_report(&with_diagnostic),
+            "a discovery diagnostic the operator must see is not the empty case"
+        );
+
+        let mut with_out_of_scope = empty_report();
+        with_out_of_scope.out_of_scope_unresolved = 1;
+        assert!(
+            !report_has_nothing_to_report(&with_out_of_scope),
+            "an out-of-scope unprovable is not the empty case"
+        );
+
+        let mut with_failure = empty_report();
+        with_failure.failed = 1;
+        assert!(
+            !report_has_nothing_to_report(&with_failure),
+            "a failure is not the empty case"
+        );
+
+        let mut blocked = empty_report();
+        blocked.scope_blocked = Some(ScopeBlock::new(
+            ScopeBlockReason::IncompleteDiscovery,
+            "the scope is uncertain".to_string(),
+        ));
+        assert!(
+            !report_has_nothing_to_report(&blocked),
+            "a blocked scope is not the empty case"
+        );
+    }
 }
