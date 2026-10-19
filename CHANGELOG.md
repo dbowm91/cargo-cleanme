@@ -6,7 +6,7 @@ All notable changes to cargo-cleanme are documented here. The format follows
 stance: the `0.x` line may make breaking changes in any release, and the
 command-line, JSON, and release-asset contracts are the stable surface.
 
-## [Unreleased]
+## [0.2.9] - 2026-10-19
 
 ### Changed
 
@@ -23,6 +23,34 @@ command-line, JSON, and release-asset contracts are the stable surface.
   fails closed. Exits are boundary-scoped: 0 when the boundary is fully
   cleaned, 1 when it is blocked or a unit fails. The never-published
   `--partitioned` flag and the `result.islands` field are removed.
+
+### Fixed (test and release evidence only)
+
+- **A test with an unstated host premise was failing every CI lane.** The
+  real-Cargo selector case asserted `Previewed` for a branch whose premise —
+  "this host's Cargo is profile-qualified" — it never stated, so it was
+  discovered at run time. Because the capability allowlist names exact
+  releases, the first patch release of any qualified minor fell outside it
+  and the case broke the moment the hosted `stable` moved from 1.99.0 to
+  1.99.1. The tool was never wrong: it refuses an unqualified Cargo in the
+  safe direction, without invoking a Cargo clean. The case now derives its
+  expectation from the product's own capability check and asserts a specific
+  outcome per premise, and a new host-independent case pins that a
+  `--profile`/`--package` selector reaches Cargo's command line. No product
+  behaviour changed and no Cargo version was added to the allowlist.
+
+- **Two manifest-comparison test spellings were wrong on macOS and
+  Windows.** The refused-manifest and refused-passenger cases compared
+  discovery-canonicalized participant paths against uncanonicalized fixture
+  paths with `==`, and one compared a JSON string with `ends_with` on a
+  path that carries backslashes on Windows. Both now compare component-wise,
+  which holds on every platform. The engine was correct on all lanes; only
+  the expectations were wrong.
+
+- **A 1.99 clippy lint.** A doc-comment note was not separated from the item
+  it annotated by a blank line, which clippy rejects from 1.99 onward. The
+  release builder is pinned to 1.99.0, so this would have failed the release
+  build.
 
 ## [0.2.8] - 2026-10-15
 
@@ -933,6 +961,7 @@ published yet.
 - No runtime release-artifact qualification has run; the exact release bytes
   are qualified when the first release workflow is dispatched.
 
+[0.2.9]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.9
 [0.2.8]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.8
 [0.2.7]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.7
 [0.2.6]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.6
