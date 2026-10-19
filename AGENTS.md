@@ -10,9 +10,11 @@ Cargo**, never by deleting directories. One binary over one library of 16
 modules, 18 source files, 32,680 lines in `src/`. No async runtime of its own.
 `cargo metadata` is the only binary dependency that matters for safety.
 
-Sixteen releases are published (v0.1.0 through v0.1.6, then 0.2.0, 0.2.1, 0.2.2,
-0.2.3, 0.2.4, 0.2.5, 0.2.6, 0.2.7, 0.2.8).
-**v0.2.0 is yanked; the other fifteen are not.**
+The working tree is **0.2.9, which is not published**; `CHANGELOG.md` has an
+`[Unreleased]` section. Sixteen releases are published (v0.1.0 through v0.1.6,
+then 0.2.0, 0.2.1, 0.2.2, 0.2.3, 0.2.4, 0.2.5, 0.2.6, 0.2.7, 0.2.8).
+**v0.2.0 is yanked; the other fifteen are not.** Bumping `Cargo.toml` is not a
+publication — see `docs/RELEASING.md` and `scripts/release-check.sh`.
 
 ## Read this before your first change
 
@@ -65,7 +67,7 @@ a file that is being rewritten rots immediately.
 | 7 | The cleanup pipeline | What happens on `clean`, end to end |
 | 8 | Cross-cutting invariants | The eight rules that span modules — read before changing any of them |
 | 9 | Tooling and verification surfaces | The gates, and what each one actually proves |
-| 10 | Findings from the deep dives | 57 known defects and their dispositions — **check here before adding a new one** |
+| 10 | Findings from the deep dives | 58 known defects and their dispositions — **check here before adding a new one** |
 | 11 | How the code got this way | The plan corpus |
 | 12 | Index of deep dives | The sixteen deep dives |
 | 13 | Reading order | If you read one thing, read this |
@@ -88,12 +90,12 @@ deep dives carry the *what*.
 
 > **The skills are not machine-gated.** `scripts/check-doc-citations.py` resolves
 > citations inside `architecture/` only — not in `.skills/`, `docs/`, or
-> `README.md`. Three of the six skills carried fabricated facts until this pass
-> re-derived them from source (an exit-code table for codes that do not exist,
-> four reason codes that do not exist, a `Preview` mode that does not exist, and
-> a `[package] ignore` feature that does not exist). **Re-derive a skill's
-> claims from the source; do not copy them forward.** See
-> `architecture/overview.md` §10, findings 53 and 54.
+> `README.md`. Three of the six original skills carried fabricated facts until
+> the re-derivation pass (an exit-code table for codes that do not exist, four
+> reason codes that do not exist, a `Preview` mode that does not exist, and a
+> `[package] ignore` feature that does not exist); the two newer skills were
+> written from source. **Re-derive a skill's claims from the source; do not
+> copy them forward.** See `architecture/overview.md` §10, findings 53 and 54.
 
 ## 3. Verification ladder
 
@@ -125,7 +127,44 @@ it as routine verification; the ladder above is the ordinary gate.
 **Report what actually ran.** A record claiming a gate passed when it was not
 run is worse than no record, because the next milestone trusts it.
 
-## 4. The lesson this repository keeps re-learning
+### 3.1 Gates the ladder does not cover
+
+- **MSRV.** CI runs a separate lane on toolchain **1.89**
+  (`cargo +1.89 check --locked --all-targets` and
+  `cargo +1.89 test --locked --all-targets`). A stdlib or dependency API newer
+  than 1.89 compiles on your stable toolchain and breaks that lane. `Cargo.lock`
+  is committed and the MSRV lane uses `--locked`; do not regenerate it casually.
+- **Cross-platform.** The CI matrix is ubuntu/macos/windows, and the
+  platform-specific fixtures only run there: backdating a workspace root's mtime
+  needs the `windows-sys` dev-dependency on Windows, and macOS's symlinked
+  `TMPDIR` broke path comparison until the manifests were compared
+  component-wise. A change touching path comparison, mtimes, symlinks, or
+  `TMPDIR` is **not** verified until the hosted lanes run.
+- **Release contract.** `python3 scripts/check-release-contract.py` guards the
+  `Cargo.toml` `include` allowlist: it fails if `/config.toml` is dropped or if
+  `xtask` is added. It runs in the CI `generated-docs` job, not in the ladder.
+
+## 4. Runtime facts that are not obvious from the filenames
+
+- **One spawn boundary.** Every external `cargo` invocation goes through the
+  `CargoRunner` / `CleanupRunner` traits (`src/workspace.rs:82` for
+  `cargo metadata`, `src/cleanup.rs:700` for `cargo clean`) so tests can
+  substitute fakes. Do not add a bare `Command::new("cargo")` — that seam is the
+  project's main testability mechanism and its main risk.
+- **`config.toml` is a compile-time input.** `src/config.rs:12` embeds it with
+  `include_str!("../config.toml")`, so editing the template changes what
+  first-use config creation writes. Validate with `cargo test config_template`.
+  The file is also a hard requirement of the package allowlist, so it cannot be
+  deleted or excluded.
+- **The `include` allowlist in `Cargo.toml` is deliberate.** The published crate
+  is a curated subset: `architecture/`, `plans/`, `docs/`, `scripts/`, `xtask/`,
+  and `tests/` do **not** ship. A new top-level file will not ship unless you add
+  it to the allowlist — and `check-release-contract.py` fails if `xtask` slips in.
+- **`dev-tools` is off by default.** `clap_complete` and `clap_mangen` are
+  optional, so a normal build and `cargo install` never compile the generator.
+  `--all-features` does compile it, which is why the ladder uses that form.
+
+## 5. The lesson this repository keeps re-learning
 
 > **A green test proves only that its own premises hold.**
 
@@ -160,7 +199,7 @@ Before trusting a test, ask **"what input makes this fail?"** If you cannot
 produce one, the test is decoration. See
 [14-testing-and-verification §4](architecture/14-testing-and-verification.md).
 
-## 5. Documentation conventions
+## 6. Documentation conventions
 
 `architecture/` cites source by line, which is what makes it checkable and what
 makes it rot. A fix that adds or removes lines invalidates every citation past
@@ -196,7 +235,7 @@ across three documents: they are 450 declared, 448 on Linux, 411 on Windows,
 `#[test]` finds 26 of the 35, because Rust allows `#[test]` to come first —
 nine have the gate *after* the `#[test]`.
 
-## 6. Planning and decision records
+## 7. Planning and decision records
 
 `plans/` is the decision record: canonical direction (`000`–`002`), the process
 (`003`), accepted ADRs, subsystem roadmaps, milestone plans, and per-requirement
@@ -209,7 +248,7 @@ closure records.
 - Compilation is not closure. Publication is not closure. A corrective that is
   fixed but not yet carried by a published release stays **open**.
 
-## 7. Things that are already decided — do not relitigate
+## 8. Things that are already decided — do not relitigate
 
 - Cleanup is **Cargo-mediated and fail-closed**; deletion is always
   `cargo clean`, never direct filesystem removal. It is *not* opt-in: since
@@ -217,6 +256,13 @@ closure records.
   bare `cargo cleanme` is Routine **Execute**, with `--dry-run` the canonical
   zero-mutation preview. The safety boundary is ownership proof, not user
   rememberment.
+- **Bare `cargo cleanme` and `clean --known` are anchored at the working
+  directory** (M014, shipped 0.2.8). The Routine scope is still discovered and
+  classified in full, but only units whose workspace root equals, contains, or
+  is contained by the CWD become candidates. `clean ROOT` and `clean --full`
+  keep every resolved unit. Units the anchor excludes are reported as
+  `skipped_outside_selection` rows, not dropped — "nothing was selected" must
+  never look like "nothing was eligible".
 - **Fail-closed means the proof boundary, not the discovered universe.** Under
   [ADR 007](plans/adr/007-accepted-scoped-proof-boundary.md)
   and M017, an unresolved manifest *inside* the selected boundary blocks it; an
@@ -227,9 +273,9 @@ closure records.
 - `allowed_output_roots` authorizes; it can never manufacture ownership proof.
 - `--dry-run` (hidden alias `--dryrun`) spawns nothing, not even a Cargo preview,
   and is otherwise as strict as `--yes`. Cargo's own `clean --dry-run` lives
-  behind the separate `--cargo-preview` flag (`cli::clean_mode`). The three
-  conflict pairwise **on `clean`**; a root-level `--dry-run` takes precedence
-  over `--cargo-preview`, because simulation spawns nothing.
+  behind the separate `--cargo-preview` flag (`cli::clean_mode`). The clean-mode
+  spellings conflict pairwise **on `clean`**; a root-level `--dry-run` takes
+  precedence over `--cargo-preview`, because simulation spawns nothing.
 - `ignore.unignore` is a literal absolute path, not a glob. It predates glob
   support by design; changing it needs a plan.
 - Learned state is advisory, never authority, and a persistence failure never
@@ -240,9 +286,9 @@ closure records.
   C022 pinned the machine contract with tests. Migrating it to `EnvelopeV1` is
   still a contract change needing a plan and a version bump.
 - There are **three** exit codes: `0`, `1`, `2`. Every `AppError` exits `2`,
-  usage errors included. The log-format `reason=` codes (`config`, `io`,
-  `scan`, `provenance`, `update`) are a **different** axis from the exit
-  status.
+  usage errors included (`src/main.rs:34`). The log-format `reason=` codes
+  (`config`, `io`, `scan`, `provenance`, `update`) are a **different** axis from
+  the exit status.
 - `cargo cleanme scan` with no selector is a **usage error** (exit `2`), not a
   Full scan. `scan --full` is a hidden alias of `scan --all`.
 
@@ -260,7 +306,7 @@ closure records.
   for a newly-found doc or message defect — extend it rather than opening a
   second one.
 
-## 8. Repository map
+## 9. Repository map
 
 | Path | Contents |
 |---|---|
@@ -268,11 +314,12 @@ closure records.
 | `tests/` | `cli_contract.rs` (62 tests), `end_to_end.rs` (4), `common/` |
 | `architecture/` | `overview.md` + 16 deep dives |
 | `docs/` | `USAGE.md`, `AUTOMATION.md`, `INSTALLING.md`, `RELEASING.md`, `TROUBLESHOOTING.md`, `UPDATE.md` |
-| `plans/` | decision records — see §6 |
+| `plans/` | decision records — see §7 |
 | `.skills/` | the eight skills — see §2 |
 | `scripts/` | 17 scripts; `check-doc-citations.py` also gates that `architecture/14-testing-and-verification.md` §5 table is exactly these 17, so a new checker cannot ship undocumented. **11 of the 17 implement `--self-test`; the other 6 do not** — `release-check.sh` *invokes* twelve self-tests rather than providing one, and `gen-release-workflow-shape.py`, `release-benchmark.py`, `smoke-release-candidate.py`, `validate-staged-release.py`, and `post-release-smoke.sh` have no such mode. A new guard must ship with one; the existing six are inventoried in `architecture/14-testing-and-verification.md` §5 |
 | `completions/`, `man/` | **generated** — 5 completions + 8 man pages = 13; do not hand-edit; run `generate-docs` |
 | `xtask/` | `generate-docs` source (feature `dev-tools`); excluded from the published crate |
+| `examples/` | `traversal-qualification.rs` — the M006F traversal harness, run with `cargo run --release --example traversal-qualification -- <stage>` |
 | `release/eggpack/` | `distribution.toml` is the authority for the release target matrix; the tables in `README.md` and `docs/INSTALLING.md` are hand-copied transcriptions of it |
 | `packaging/`, `release/` | installers, Eggpack policy, smoke and qualification scripts |
 | `CHANGELOG.md` | released changes, including known defects per version |
