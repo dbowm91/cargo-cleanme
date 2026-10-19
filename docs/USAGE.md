@@ -6,6 +6,7 @@ quickstart; this document has the detail.
 ## Contents
 
 - [Commands](#commands)
+- [Flags](#flags)
 - [Scope: Routine vs Full vs explicit](#scope-routine-vs-full-vs-explicit)
 - [Discovery model](#discovery-model)
 - [Cleanup safety model](#cleanup-safety-model)
@@ -33,6 +34,37 @@ quickstart; this document has the detail.
 `cargo cleanme …` and `cargo-cleanme …` are the same binary and behave
 identically. `scan --all` and `clean --full` take **no** `ROOT`; the
 scan form walks the platform roots, and the cleanup form reconciles them first.
+
+## Flags
+
+| Flag | Effect |
+|---|---|
+| `--format human\|json\|log` | interactive detail; one schema-1 JSON document; or one bounded ASCII line for an unattended scheduler |
+| `--dry-run` | simulate: the whole decision path, zero `cargo clean` processes |
+| `--no-progress` | disable the transient TTY UI (stderr only) |
+| `--stats` | counters and phase timings **on stderr**; stdout stays byte-identical |
+| `--config PATH` | use a specific `config.toml` |
+| `--min-reclaimable-bytes N` | only clean units above this measured size (`clean`) |
+| `--older-than SECONDS` | extra quiet-age requirement; never replaces the recency guard (`clean`) |
+| `--include GLOB` | include canonical workspace roots matching this glob (`clean`) |
+| `--exclude GLOB` | exclude canonical workspace roots matching this glob (`clean`) |
+| `--profile NAME` | ask Cargo to clean one named profile (`clean`) |
+| `--package SPEC` | clean one validated workspace package (`clean`) |
+| `--cargo-preview` | after the same proof, run Cargo's own `clean --dry-run --verbose` (`clean`) |
+| `--yes` | hidden alias for the default Execute mode (`clean`) |
+| `--known` | Routine roots (`clean`, `scan`) |
+| `--full` | Full reconciliation before cleanup (`clean`) |
+| `-a` / `--all` | Full machine reconciliation (`scan`; `--full` is a hidden alias) |
+| `-i` / `--interactive` | choose cleanup units from a terminal list (needs a TTY) |
+
+`--dry-run`, `--cargo-preview`, and `--yes` conflict pairwise **on `clean`**, on
+purpose: they select three different modes. A root-level `--dry-run` — the
+`cargo cleanme --dry-run clean ROOT` spelling Cargo itself passes to an
+external subcommand — is a **different flag** from the clean-level one and does
+**not** conflict with `--cargo-preview`: the root flag wins and selects
+Simulation, because simulation is the mode that spawns nothing.
+
+`--dryrun` and `--yes` are hidden aliases that print nothing.
 
 ### The maintenance scope
 

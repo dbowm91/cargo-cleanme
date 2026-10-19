@@ -13,13 +13,13 @@ Related: `plans/adr/008-proposed-canonical-full-cleanup-spelling-and-proof-scope
 
 Make every user-visible statement about the CLI **true**, and make the
 repository's operational documentation match the behaviour the code actually
-has. **Twenty-seven** defects are in scope (D1–D27); all are documentation-,
+has. **Twenty-eight** defects are in scope (D1–D28); all are documentation-,
 message-, or evidence-level. **No production behaviour change is authorised by
 this plan**, with one exception: D8 adds a bounded *diagnostic* to the
 bare-invocation path, which changes no exit code and no cleanup behaviour
 (see "Production changes" §3).
 
-D2, D5, D14–D23, and D26 were resolved by the documentation-and-skills
+D2, D5, D14–D23, D26, and D28 were resolved by the documentation-and-skills
 re-derivation pass of 2026-10-19, which re-derived the eight skills, `AGENTS.md`,
 `README.md`, and all six `docs/` files against the current source. They are
 retained in the table for the record. **Fourteen defects remain open**
@@ -70,6 +70,7 @@ a non-root Linux workstation, unless stated otherwise.
 | D25 | **Three broken anchors** in the user documentation: `docs/USAGE.md` → `#unignore-re-admitted-siblings-fixed-after-0-1-6` (the real slug strips the dots), `docs/INSTALLING.md` and `docs/UPDATE.md` → `#known-defects-by-version` (the heading is "Check this first: known defects by version"). | `docs/TROUBLESHOOTING.md:3`, `:256` |
 | D26 | **`docs/INSTALLING.md` said "Fifteen releases are published"** — self-contradictory, because `0.2.0` *is* published, just yanked. Sixteen are published; fifteen are installable. It also said man pages are "one per subcommand" (there are **eight**: root, four subcommands, and the three `config` sub-subcommands), and documented `install.ps1 -Dir` when the parameter is `-Directory`. | `git tag` → 16 tags; `man/` → 8 files; `packaging/install.ps1:27`, `:43` |
 | D27 | **Thirteen source doc comments still describe the pre-ADR 007 whole-scope block.** `src/cleanup.rs:300`, `:328`, `:1141`, `:2044`, `src/workspace.rs:394`, `:978`, and `src/main.rs:304`, `:366`, `:590`, `:831` say "whole-scope" where the behaviour is boundary-scoped; `src/cleanup.rs:315-316` says "coverage of the selected scope is unproven". `tests/cli_contract.rs:1929-1930` carries the same wording on a test whose *behaviour* is correct — its unresolved manifest is inside the anchor, so it does block. | ADR 007 §3–§4; `src/cleanup.rs:2276-2314`; `src/cleanup.rs:5080` |
+| D28 | **The README's transcripts and its blocked-shape JSON were not real output.** The old README labelled its transcripts "illustrative" and used placeholder byte counts (`8.78 MiB`) and a placeholder file count (`Removed 22 files`) that the tool had never produced. Its "blocked shape" example was worse: it showed `scope_blocked`, `scope_reason`, `unresolved_participants`, and `units_considered` at the **top level** of the document, where the real envelope nests all of them inside `result` — a consumer written from the README would look for a field the tool never emits at that level. | Verified against the release binary: the real blocked document nests the block inside `result`, adds `unresolved_ownership`, and reports `summary.diagnostics: 1` with exit `1`. The five README transcripts (dry-run, scan, real clean, JSON, log) are now captured from a build of this source tree and match byte for byte, paths abbreviated to `~/…`. |
 
 D2 is **already resolved** by the architecture documentation pass of 2026-10-19:
 `architecture/02-cli.md` was rewritten against the current source and its status
