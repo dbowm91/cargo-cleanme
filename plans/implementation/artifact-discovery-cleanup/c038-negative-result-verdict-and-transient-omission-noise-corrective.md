@@ -1,8 +1,10 @@
 # C038 — Negative-Result Verdict and Transient-Omission Noise Corrective
 
-Status: **active** — implementation landed and locally verified; hosted
-qualification and publication are outstanding, so this corrective is not yet
-closed.
+Status: **active** — implementation landed and verified, locally and on the
+hosted lanes (CI `39338559008`, all nine jobs green, plus the Release drift
+guard `39338559022`); publication is outstanding, so this corrective is not yet
+closed. Evidence in
+`plans/closure/artifact-discovery-cleanup/c038-status.md`.
 
 Repository baseline: `main` at `426cb72` (v0.2.9, published). The defect was
 reported against the published v0.2.9 binary.

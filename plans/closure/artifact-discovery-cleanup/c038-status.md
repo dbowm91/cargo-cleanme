@@ -11,6 +11,8 @@ Repository baseline: `main` at `426cb72` (v0.2.9, published).
 Implementation commit: `462a996` — *"fix(negative-result): make a nothing-to-clean run a plain result, not a refusal"*.
 Documentation re-derivation commit: `5db6ce3` — *"docs(c038): re-derive the deep dives, counts and citations for the negative-result contract"*.
 Release tag carrying the work: **none yet**. v0.2.9 predates this corrective.
+Hosted evidence: CI `39338559008` (all nine jobs **success**) and Release drift
+guard `39338559022` (**success**) against the pushed tree `859d08e`. See §6.4.
 
 ---
 
@@ -321,21 +323,41 @@ Linux. The remaining two declared cases are `#[cfg(windows)]`. Every one of the
 456 Linux-eligible names appears in Cargo's listing, and every name Cargo lists
 is one of the 456 — the sets are identical, not merely the same size.
 
+**The three hosted lanes then observed the same three numbers independently**
+(§6.4): 452 + 4 = **456** on Linux, 449 + 4 = **453** on macOS, 415 + 4 =
+**419** on Windows. The Windows lane also ran exactly **19** of the 63
+`cli_contract.rs` cases — the 19 that are not `#[cfg(unix)]`, which is the
+figure the census predicted. The derived census and the observed one agree
+exactly on every platform.
+
 Also re-derived from `src/`: **33,067** total lines, **14,981** production lines,
 `tests/cli_contract.rs` at **4,050** lines and **63** cases (44 `#[cfg(unix)]`,
 19 on every platform).
 
-### 6.4 Hosted evidence — not run
+### 6.4 Hosted evidence
 
-**The hosted lanes were not run for this corrective.** Everything above is
-local. The matrix (ubuntu/macOS/windows), the MSRV lane on 1.89, and the
-generated-docs job have not been exercised against `462a996`/`5db6ce3`.
+**The hosted lanes were run for this corrective**, against the pushed tree
+`859d08e` (implementation `462a996`, documentation `5db6ce3`).
 
-This matters because of the change's nature: `src/interactive.rs`, `src/main.rs`
-and `src/policy.rs` are exactly the files whose line numbers the deep dives
-depend on, and the platform-gated census differs per lane. The local Linux
-figures above are the Linux figures; the Windows and macOS figures are
-*derived* from the `rustc --print cfg` evaluation, not observed on those lanes.
+| Run | Job | Result |
+|---|---|---|
+| [`39338559008`](https://github.com/dbowm91/cargo-cleanme/actions/runs/39338559008) — CI | `checks (ubuntu-latest)` | **success** — 452 lib + 4 bin + 63 `cli_contract` + 4 `end_to_end` |
+| | `checks (macos-latest)` | **success** — 449 lib + 4 bin + 63 `cli_contract` + 4 `end_to_end` |
+| | `checks (windows-latest)` | **success** — 415 lib + 4 bin + 19 `cli_contract` + 4 `end_to_end` |
+| | `msrv` (toolchain 1.89, `--locked`) | **success** — 452 lib + 4 bin + 63 `cli_contract` + 4 `end_to_end` |
+| | `installers (ubuntu/macos/windows-latest)` | **success** |
+| | `generated-docs` | **success** — completions, man pages, release contract |
+| | `benchmark` | **success** |
+| [`39338559022`](https://github.com/dbowm91/cargo-cleanme/actions/runs/39338559022) — Release drift guard | `Eggpack drift + contract` | **success** |
+
+This is the evidence the change most needed, because `src/interactive.rs`,
+`src/main.rs` and `src/policy.rs` are exactly the files the deep dives' line
+numbers depend on, and because the census is platform-shaped. Both are now
+observed, not merely derived (§6.3).
+
+The MSRV lane matters separately: `cargo +1.89 test --locked --all-targets`
+passing is what rules out a stdlib or dependency API newer than 1.89 having
+been introduced.
 
 ### 6.5 A pre-existing, load-sensitive flake — not a C038 regression
 
@@ -371,8 +393,9 @@ the real-Cargo fixtures.
    noise this corrective exists to remove. Classified: **low**, deliberate, and
    consistent with ADR 006's rule that a *report* must not let "nothing was
    selected" read as "nothing was eligible".
-3. **The hosted lanes have not run.** §6.4. Classified: **medium** until run;
-   it is the condition this corrective cannot close on its own.
+3. **The hosted lanes had to be run before this record could be written.** They
+   were: CI `39338559008` and the Release drift guard `39338559022` are green on
+   all nine jobs against the pushed tree (§6.4). Classified: **none** — closed.
 4. **The `-i` path still requires a terminal for a non-empty candidate list.**
    Unchanged by this corrective, and pinned by
    `a_non_empty_candidate_set_still_needs_a_terminal`. Classified: **none** —
@@ -383,16 +406,17 @@ the real-Cargo fixtures.
 
 **Not closed. Conditionally closed on publication.**
 
-The implementation is landed and locally verified: the ladder is green, the
-pty evidence is captured, the citations and the census are re-derived, and the
-four mutations prove the repair is discriminating.
+The implementation is landed and verified on every surface the repository has:
+the local ladder is green, the hosted matrix and the MSRV 1.89 lane are green
+(§6.4), the pty evidence is captured, the citations and the census are
+re-derived and now independently confirmed by the hosted lanes, and the four
+mutations prove the repair is discriminating.
 
 What is outstanding:
 
-- the hosted lanes (matrix, MSRV 1.89, generated-docs) have not been run
-  against this tree;
 - no release carries the work, and **publication is not closure**
-  (`AGENTS.md` §7).
+  (`AGENTS.md` §7). Until a published release carries C038, this corrective
+  stays open.
 
 Per the plan's stop conditions, none of the three fired: the empty-report
 verdict suppresses no row, unproven participant, out-of-scope participant, scope

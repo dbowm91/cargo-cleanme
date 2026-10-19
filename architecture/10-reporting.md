@@ -1185,11 +1185,13 @@ editor's own status stays in the diagnostic prose, never in our exit code.
 
 One more refusal belongs in the same list, and it is not in the schema doc:
 `config show --format json` exits `2` (`config command does not support --format
-json`). The interactive path's exit codes now agree with the non-interactive
-path's: `-i` on a scope with roots but no cleanup units prints `Nothing to
-clean.` and exits `0`, the same as the same scope cleaned *without* `-i`. It
-exited `2` before C038, which made a scope with nothing in it look like an
-invalid invocation.
+json`).
+
+**One exit-code case has left the list.** The interactive path's exit codes now
+agree with the non-interactive path's: `-i` on a scope with roots but no cleanup
+units prints `Nothing to clean.` and exits `0`, the same as the same scope
+cleaned *without* `-i`. It exited `2` before C038, which made a scope with
+nothing in it look like an invalid invocation.
 
 ### The stability promise, and whether the code honours it
 
