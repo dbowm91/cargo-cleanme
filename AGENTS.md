@@ -7,7 +7,7 @@ the one architecture deep dive your change touches.
 
 A single Rust crate that finds Cargo build output and cleans it **through
 Cargo**, never by deleting directories. One binary over one library of 16
-modules, 18 source files, 32,778 lines in `src/`. No async runtime of its own.
+modules, 18 source files, 33,067 lines in `src/`. No async runtime of its own.
 `cargo metadata` is the only binary dependency that matters for safety.
 
 The working tree is **0.2.9, which is not published**; `CHANGELOG.md` has an
@@ -228,8 +228,8 @@ source of truth for module line counts and the inline-test total; verify each
 against `src/`, fix the overview first, then align the deep dives.
 
 The same rule applies to **per-platform test counts**, which have disagreed
-across three documents: they are 451 declared, 449 on Linux, 412 on Windows,
-446 on macOS. Derive them with a brace-tracking parser evaluated against
+across three documents: they are 458 declared, 456 on Linux, 419 on Windows,
+453 on macOS. Derive them with a brace-tracking parser evaluated against
 `rustc --print cfg --target <triple>`, and cross-check against
 `cargo test --lib -- --list`. A grep for `#[cfg(unix)]` immediately above
 `#[test]` finds 26 of the 35, because Rust allows `#[test]` to come first —
@@ -311,7 +311,7 @@ closure records.
 | Path | Contents |
 |---|---|
 | `src/` | the crate — 18 files; `main.rs` is the binary, `lib.rs` declares the 16 library modules |
-| `tests/` | `cli_contract.rs` (62 tests), `end_to_end.rs` (4), `common/` |
+| `tests/` | `cli_contract.rs` (63 tests), `end_to_end.rs` (4), `common/` |
 | `architecture/` | `overview.md` + 16 deep dives |
 | `docs/` | `USAGE.md`, `AUTOMATION.md`, `INSTALLING.md`, `RELEASING.md`, `TROUBLESHOOTING.md`, `UPDATE.md` |
 | `plans/` | decision records — see §7 |

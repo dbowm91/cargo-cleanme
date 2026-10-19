@@ -74,7 +74,7 @@ reconciliation command even by accident.
 | 2 | Bare `--dry-run` is Simulate with zero `cargo clean` processes | `bare_dry_run_simulates_with_zero_cargo_clean_processes` (`:893`) — `mode=simulate`, zero `clean`, `metadata` called, artifact intact |
 | 3 | Bare cleanup with no known roots is a successful no-op | `bare_cleanup_with_no_known_roots_is_a_successful_no_op` (`:935`) — exit 0, `scope=routine`, `units == []`; platform-neutral counterpart `json_scan_within_an_empty_root_is_a_successful_zero_result_report` (`:1155`) |
 | 4 | Bare cleanup with unresolved ownership blocks, exit 1, zero Cargo clean | `bare_cleanup_with_unresolved_ownership_blocks_and_runs_no_cargo_clean` (`:969`) |
-| 5 | Rootless `scan` is Full and ignores `scan.root` | `scan_scope_selection_is_full_explicit_or_maintenance` (`src/cli.rs:432`) plus `full_resolution_ignores_a_configured_root` (`src/policy.rs:326`). **Argument, not observation — see §6** |
+| 5 | Rootless `scan` is Full and ignores `scan.root` | `scan_scope_selection_is_full_explicit_or_maintenance` (`src/cli.rs:432`) plus `full_resolution_ignores_a_configured_root` (`src/policy.rs:336`). **Argument, not observation — see §6** |
 | 6 | `scan ROOT` stays Explicit | `scan_scope_selection_is_full_explicit_or_maintenance`; `log_mode_scan_reports_the_resolved_scope` (`:1189`) at process level |
 | 7 | `scan --known` is the read-only Routine inventory | `known_scan_resolves_routine_without_a_configured_root_and_explicit_with_one` (`:1098`) — `scope=routine` **and** `discovered_manifests == 1`, so the label is not vacuously right |
 | 8 | Scope conflicts fail at invocation time | `scan_scope_conflicts_are_rejected_before_any_traversal` (`:268`) — exit 2, empty stdout, clap's conflict message; `clean_scope_selectors_stay_mutually_exclusive` (`src/cli.rs:482`) |
@@ -170,7 +170,7 @@ once. That made `clean --full` emit the intervening Full scan's report ahead of
 the cleanup report — and in `--format json`, **two JSON documents on one stream**,
 breaking the one-document-per-invocation property the automation contract rests
 on. The flag is back as a named `EmitReport` enum parameter
-(`src/main.rs:432-435`) with the reason documented at the definition.
+(`src/main.rs:441-444`) with the reason documented at the definition.
 
 **This regression was found by reading `architecture/13-orchestration.md` during
 M012B's documentation pass, not by a test.** No case runs `clean --full` at any

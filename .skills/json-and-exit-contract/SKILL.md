@@ -196,5 +196,5 @@ did not commit is a failing build, not a detail.
 - [`cli-surface-and-argv`](../cli-surface-and-argv/SKILL.md) — what selects the
   surface, and the usage error that shares exit code `2` with every fatal error
 - [`terminal-and-interactive`](../terminal-and-interactive/SKILL.md) — the
-  interactive path's exit codes, which do not always agree with the
-  non-interactive path
+  interactive path's exit codes, and the one place the two spellings of a scope
+  once disagreed

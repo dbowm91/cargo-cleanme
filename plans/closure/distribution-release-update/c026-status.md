@@ -116,10 +116,10 @@ gate is only half the job.
 | Location | Was | Now | How it was derived |
 |---|---|---|---|
 | `overview.md` header | `0.2.0 (unreleased)` | `0.2.2 (published)` | `Cargo.toml:3` |
-| §4 step 0 | `run_scan` at `main.rs:302` | `main.rs:485` | `grep -n 'fn run_scan'` |
-| §4 steps 1-9 | `main.rs:316,317,338,344,364,403,475,483,535/528` | `main.rs:496,506,527,537,557,596/608,654,662,721/709` | Each step's call site read and confirmed; `reconcile_full` at `:596` and its `publish` at `:608` cited separately |
+| §4 step 0 | `run_scan` at `main.rs:302` | `main.rs:495` | `grep -n 'fn run_scan'` |
+| §4 steps 1-9 | `main.rs:316,317,338,344,364,403,475,483,535/528` | `main.rs:509,506,527,537,557,596/608,654,662,721/709` | Each step's call site read and confirmed; `reconcile_full` at `:596` and its `publish` at `:608` cited separately |
 | §5 mode table | `main.rs:102` and a `Preview`/`Simulate`/`Execute` table where `--dry-run` meant *Cargo preview* and `--dryrun` meant simulation | `CleanMode` at `cleanup.rs:36`, mapping at `cli.rs:224`, Execute-is-default, and the ADR-003 spelling | `grep -n 'enum CleanMode'` and `cli::clean_mode`; the **old table was not just stale but pre-ADR-003 wrong** — it described a CLI that no longer exists |
-| §5 roots | `main.rs:113` and `main.rs:269` | `resolve_cleanup_roots` at `main.rs:314`, `collapse_roots` at `main.rs:440` | Function definitions located by name |
+| §5 roots | `main.rs:113` and `main.rs:269` | `resolve_cleanup_roots` at `main.rs:314`, `collapse_roots` at `main.rs:449` | Function definitions located by name |
 | §3 invariant 2 | `cleanup.rs:493-495` | `cleanup.rs:544-546` | The `ownership != PrivateBounded` early return, re-read |
 | §7 row 2, row 12 | `cleanup.rs:795` | `cleanup.rs:846` | `if !diagnostics.is_empty()`, re-read |
 | §7.2 item 2 | `cleanup.rs:976` / `:979` / `:991-995` | `cleanup.rs:1049` and `:1061-1064` | Re-read. The old citation described a hoisted-universe mechanism that **no longer exists in that form**; the real path is the `ProofFailure` → `skipped` row |

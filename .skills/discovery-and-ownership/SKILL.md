@@ -151,12 +151,12 @@ consequences:
   platform-root errors force Full scans to stay partial.
 - `PlatformRoot` + `Error` is what makes a Full scan `incomplete`. That
   predicate is computed **once**, as `full_traversal_complete`
-  (`src/main.rs:1032-1036`), and reused: as `complete` for reconciliation
+  (`src/main.rs:1083-1087`), and reused: as `complete` for reconciliation
   (`:1103`) and as `full_incomplete` for the exit code (`:1198`). It is not
   two copies of one expression, and you should not make it two.
 
 > **The uncertainty vector is empty in production.** The filter at
-> `src/main.rs:1043-1051` collects the three uncertainty categories
+> `src/main.rs:1094-1102` collects the three uncertainty categories
 > (`PermissionDenied`, `Metadata`, `Vanished`) and then `.filter_map(|d| d.path.clone())`
 > — but all three categories are emitted with `path: None`
 > (`src/discovery.rs:786-793` and `:981-988`), because `dua_core`'s error

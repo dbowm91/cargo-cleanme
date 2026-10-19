@@ -53,8 +53,8 @@ What it deliberately does **not** do:
 
 - **No policy interpretation.** `clean` carries `known`/`full`/
   `min_reclaimable_bytes`/… as raw fields; the Routine-vs-Full decision lives in
-  `policy::resolve`, called from `main.rs:744` (maintenance scope) and
-  `main.rs:994` (scan scope).
+  `policy::resolve`, called from `main.rs:773` (maintenance scope) and
+  `main.rs:1045` (scan scope).
 - **No filesystem discovery.** The only filesystem call is
   `std::env::current_dir()` (`src/cli.rs:436`); there is no `exists`, `is_dir`,
   or `read_dir`. Root existence/directory/symlink checks are later layers' job
@@ -114,12 +114,12 @@ does reject conflicting mode flags *on the subcommand*.
 | Flag | Short | Type | Default | Maps to |
 |---|---|---|---|---|
 | `--config <CONFIG>` | — | `Option<PathBuf>` | `None` | `ConfigPathResolver::new` → `main.rs:71` |
-| `--no-progress` | — | `bool` | `false` | `progress::should_show_progress(..)` → `main.rs:1006`, `main.rs:432` |
-| `--stats` | — | `bool` | `false` | `discover_manifests_with_attribution(.., options.stats)` `main.rs:1019`; the `eprintln!` blocks at `main.rs:1338`, `main.rs:464` |
-| `--format <FORMAT>` | — | `OutputFormat` (value enum) | `human` | selects `output::scan` / `output::cleanup` / `report::render` → `main.rs:1236`, `main.rs:886`, `main.rs:1248`; the bounded `output::log::*` line → `main.rs:1245`, `main.rs:896` |
+| `--no-progress` | — | `bool` | `false` | `progress::should_show_progress(..)` → `main.rs:1057`, `main.rs:441` |
+| `--stats` | — | `bool` | `false` | `discover_manifests_with_attribution(.., options.stats)` `main.rs:1070`; the `eprintln!` blocks at `main.rs:1389`, `main.rs:473` |
+| `--format <FORMAT>` | — | `OutputFormat` (value enum) | `human` | selects `output::scan` / `output::cleanup` / `report::render` → `main.rs:1287`, `main.rs:915`, `main.rs:1299`; the bounded `output::log::*` line → `main.rs:1296`, `main.rs:925` |
 | `--dry-run` | — | `bool` | `false` | `CleanMode::Simulate` for a bare invocation *and* for `clean` / `update`, whichever side of the subcommand it was given on |
 | `--dryrun` (hidden) | — | `bool` | `false` | same, as a compatibility alias |
-| `-i`, `--interactive` | `-i` | `bool` | `false` | `CleanupRequest::interactive` (`src/cli.rs:249`, set at `src/cli.rs:395`) → read at `main.rs:515`; the session itself is `interactive::run_interactive` (`main.rs:574`) |
+| `-i`, `--interactive` | `-i` | `bool` | `false` | `CleanupRequest::interactive` (`src/cli.rs:249`, set at `src/cli.rs:395`) → read at `main.rs:528`; the session itself is `interactive::run_interactive` (`main.rs:587`) |
 | `--help` / `-h` | `-h` | clap built-in | — | clap help path |
 | `--version` / `-V` | `-V` | clap built-in (from `version`, `src/cli.rs:19`) | — | `cargo-cleanme 0.2.9` |
 
@@ -161,7 +161,7 @@ guards: before M012A, `Cli::command` being `None` sent `main.rs` to
 
 | Token | Kind | Notes |
 |---|---|---|
-| `[ROOT]` | optional positional `Option<PathBuf>` | Doc-commented and rendered in the manpage. Passed **raw** (not absolutized) to `policy::resolve` as `ScanRequest.cli_root` → `main.rs:989-1000` |
+| `[ROOT]` | optional positional `Option<PathBuf>` | Doc-commented and rendered in the manpage. Passed **raw** (not absolutized) to `policy::resolve` as `ScanRequest.cli_root` → `main.rs:1040-1051` |
 | `--known` | `bool` | Routine read-only inventory |
 | `-a`, `--all` | `bool` | Full machine reconciliation. The canonical Full selector |
 | `--full` (hidden) | `bool` | Historical spelling of `--all`; retained as a hidden alias |
@@ -183,7 +183,7 @@ all rejected by one declaration.
 `cli.rs` cannot consult `scan.root`, so it cannot narrow the canonical
 reconciliation command by accident — `policy::resolve` returns
 `ScanScope::Global` before it ever looks at configuration
-(`full_resolution_ignores_a_configured_root`, `src/policy.rs:811`). `Cli::invocation`
+(`full_resolution_ignores_a_configured_root`, `src/policy.rs:821`). `Cli::invocation`
 turns the three shapes into `ScanIntent::Full` / `Explicit(root)` /
 `Maintenance` at `src/cli.rs:319-335`.
 
@@ -210,9 +210,9 @@ modes are disjoint sets by construction.
 
 | Token | Kind | Default | Conflicts with | Maps to |
 |---|---|---|---|---|
-| `[ROOT]` | optional positional | `None` | `--known`, `--full` | `CleanupScope::Root` → `cli::absolutize_root` → `main.rs:702` |
-| `--known` | `bool` | `false` | ROOT, `--full` | `CleanupScope::Maintenance` → `policy::resolve` → `main.rs:744` |
-| `--full` | `bool` | `false` | ROOT, `--known` | `CleanupScope::Full` → Full scan first (`main.rs:729`), then `discovery_state::load_default()` learned roots → `main.rs:735-737` |
+| `[ROOT]` | optional positional | `None` | `--known`, `--full` | `CleanupScope::Root` → `cli::absolutize_root` → `main.rs:731` |
+| `--known` | `bool` | `false` | ROOT, `--full` | `CleanupScope::Maintenance` → `policy::resolve` → `main.rs:773` |
+| `--full` | `bool` | `false` | ROOT, `--known` | `CleanupScope::Full` → Full scan first (`main.rs:758`), then `discovery_state::load_default()` learned roots → `main.rs:764-766` |
 | *(no selector)* | — | — | — | `CleanupScope::Maintenance`, identical to bare invocation (`src/cli.rs:363-369`) |
 | `--min-reclaimable-bytes <N>` | `Option<u64>` | `None` → `config.cleanup.policy.min_reclaimable_bytes` | — | `CleanupOverrides.min_reclaimable_bytes` → `CleanupPolicy.min_reclaimable_bytes` via `.unwrap_or(configured…)` → `main.rs:329-331` |
 | `--older-than <SECONDS>` | `Option<u64>` | `None` → `config.cleanup.policy.min_inactive_seconds` | — | `CleanupPolicy.min_inactive_seconds` via `.or(configured…)` → `main.rs:332` |
@@ -325,12 +325,12 @@ it, so it is fixed by construction and by test rather than by observation.
 
 | Variant | Spelling | Downstream effect |
 |---|---|---|
-| `Human` (default) | `human` | `report::render` / `CleanReport::render` on stdout (`main.rs:1248`, `main.rs:906`); inline progress also permitted (`main.rs:432`, `main.rs:1006`); the `state generation last_full_at=…` line prints (`main.rs:454-458`) |
+| `Human` (default) | `human` | `report::render` / `CleanReport::render` on stdout (`main.rs:1299`, `main.rs:943`); inline progress also permitted (`main.rs:441`, `main.rs:1057`); the `state generation last_full_at=…` line prints (`main.rs:463-467`) |
 | `Json` | `json` | exactly one line of `output::scan` / `output::cleanup`, or the hand-built `update_json` object (`main.rs:192`) |
-| `Log` | `log` | one bounded ASCII `key=value` line per report (`output::log::*`, `main.rs:1245`, `main.rs:896`); **not** a machine contract — the doc comment says so at `src/cli.rs:10-12` |
+| `Log` | `log` | one bounded ASCII `key=value` line per report (`output::log::*`, `main.rs:1296`, `main.rs:925`); **not** a machine contract — the doc comment says so at `src/cli.rs:10-12` |
 
 `--format` is orthogonal to `--stats`: `--stats` always writes to stderr
-(`main.rs:1338`, `main.rs:464`) and never changes stdout. Pinned end to end by
+(`main.rs:1389`, `main.rs:473`) and never changes stdout. Pinned end to end by
 `json_scan_is_one_versioned_document_and_stats_stay_on_stderr`
 (`tests/cli_contract.rs:172`), which asserts `plain.stdout == with_stats.stdout`.
 
@@ -538,31 +538,31 @@ pub(crate) fn absolutize_relative(base: &Path, relative: &Path) -> PathBuf {   /
 ### 4.3 Why absolutize at all
 
 `clean` accepts a relative `ROOT` for ergonomics, but the cleanup layer's
-authorization and ownership proof assume an absolute root. `main.rs:698-708` is
+authorization and ownership proof assume an absolute root. `main.rs:727-737` is
 the whole bridge:
 
 ```rust
-CleanupScope::Root(root) => {                                // main.rs:698
+CleanupScope::Root(root) => {                                // main.rs:727
     // Explicit roots stay authoritative: no omission, no fallback to
     // a smaller implicit set. The engine's strict validation reports
     // the defect as a fatal usage error.
-    let absolute = cli::absolutize_root(root)?;              // main.rs:702
+    let absolute = cli::absolutize_root(root)?;              // main.rs:731
     let classified = cargo_cleanme::policy::classify_cleanup_roots(vec![(
         absolute,
         cargo_cleanme::policy::RootProvenance::Explicit,
     )])?;
     Ok(ResolvedCleanup {
-        roots: collapse_roots(classified.admitted),           // main.rs:708
+        roots: collapse_roots(classified.admitted),           // main.rs:737
         …
     })
 }
 ```
 
-(The call site is `main.rs:702`; the roots it produces are then classified and
+(The call site is `main.rs:731`; the roots it produces are then classified and
 collapsed, so the `roots:` field in the real code is
-`collapse_roots(classified.admitted)` at `main.rs:708`.)
+`collapse_roots(classified.admitted)` at `main.rs:737`.)
 
-The asymmetry is real: **`scan ROOT` is not absolutized.** `main.rs:989-1000`
+The asymmetry is real: **`scan ROOT` is not absolutized.** `main.rs:1040-1051`
 passes the parsed `PathBuf` straight into
 `policy::resolve(ScanRequest { cli_root: root, full })`. Only the cleanup path
 calls `absolutize_root`. That is defensible — scan is read-only and
@@ -572,11 +572,11 @@ must be reasoned about on the cleanup side only.
 
 ### 4.4 Absolutize vs canonicalize, and `collapse_roots`
 
-`absolutize_root` is applied at `main.rs:702`, and `collapse_roots` then
+`absolutize_root` is applied at `main.rs:731`, and `collapse_roots` then
 canonicalizes. Its first act is a *different* operation:
-`.map(|p| std::fs::canonicalize(&p).unwrap_or(p))` (`main.rs:917`).
+`.map(|p| std::fs::canonicalize(&p).unwrap_or(p))` (`main.rs:968`).
 
-| | `absolutize_root` (`src/cli.rs:432`) | `canonicalize` (`main.rs:917`) |
+| | `absolutize_root` (`src/cli.rs:432`) | `canonicalize` (`main.rs:968`) |
 |---|---|---|
 | Symlinks in the path | left intact | resolved to their targets |
 | `..` | folded lexically | folded *after* symlink resolution, so it means something different |
@@ -597,18 +597,18 @@ canonicalizes. Its first act is a *different* operation:
   test covers the disagreement.
 
 **Where `collapse_roots` runs.** It is **not** a `run_cleanup` step any more.
-`collapse_roots` is defined at `main.rs:914-928` and is called *inside*
+`collapse_roots` is defined at `main.rs:965-979` and is called *inside*
 `resolve_cleanup_roots`, on the admitted root set of each scope: the explicit
-arm at `main.rs:708`, the configured-root arm at `main.rs:761`, the
-explicit-roots arm at `main.rs:782`, and the automatic (Routine/Full) arm at
-`main.rs:862` inside `admit_automatic`. `run_cleanup` consumes the already
+arm at `main.rs:737`, the configured-root arm at `main.rs:790`, the
+explicit-roots arm at `main.rs:811`, and the automatic (Routine/Full) arm at
+`main.rs:891` inside `admit_automatic`. `run_cleanup` consumes the already
 collapsed `resolved.roots` (`main.rs:386` for the empty-scope check,
-`main.rs:900` for the `combined roots …` line).
+`main.rs:937` for the `combined roots …` line).
 
 That placement is deliberate and is stated in the code: C028 classifies the
 **raw** candidates and collapses only the *admitted* paths, because collapsing
 the canonicalized `policy.scope` set first would have resolved a symlinked root
-into its target and hidden the invalid identity (`main.rs:792-795`).
+into its target and hidden the invalid identity (`main.rs:821-824`).
 
 ---
 
@@ -887,7 +887,7 @@ failure grouping, and the interactive TTY.
 - **No hosted integration case runs a Full scan.** `scan --all` walks the whole
   platform; the suite keeps every case bounded on purpose. The invariant it
   would prove is instead asserted where it is decided:
-  `full_resolution_ignores_a_configured_root` (`src/policy.rs:811`) plus
+  `full_resolution_ignores_a_configured_root` (`src/policy.rs:821`) plus
   `scan_scope_selection_is_full_explicit_or_maintenance` (`src/cli.rs:648`).
   That pair is an argument, not an observation — a reader should weigh it as
   such. (`scan_emits_exactly_one_json_document`,

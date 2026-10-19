@@ -164,6 +164,11 @@ Two refusals exit `2` before any report is formed:
 → [docs/USAGE.md](docs/USAGE.md#exit-codes) for the full exit-code table and
 [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for symptom-first triage.
 
+A run that finds **nothing to clean** is not a refusal. It prints one plain
+line, `Nothing to clean.`, and exits `0` — the same for both spellings, and the
+same whether the scope was empty or the interactive surface had nothing to
+offer.
+
 ## Configuration
 
 ```sh

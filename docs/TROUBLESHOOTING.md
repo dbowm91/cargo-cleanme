@@ -444,23 +444,28 @@ Note that `clean --full` keeps whole-system fail-closed blocking: it asserts
 system-wide proof, so unlike a boundary clean it does not clean around an
 unresolved manifest anywhere.
 
-### `-i` refuses with exit 2 when there is nothing to select
+### `-i` says "Nothing to clean." and exits 0
 
 ```text
-cargo-cleanme: configuration error: no cleanup units are available to select; nothing would be cleaned
+Nothing to clean.
 ```
 
-The interactive session needs a list to choose from. When the scope resolves
-to no cleanup unit at all there is nothing to choose, and an empty selection
-screen would read as "you picked nothing" rather than "there was nothing to
-pick". The same scope cleaned *without* `-i` completes normally and exits
-`0`.
+The scope resolved and proved no cleanup unit, so there was nothing to choose
+from. That is a plain negative result, not a usage error, and it is the same
+answer the same scope gives cleaned *without* `-i` — the two spellings agree
+on the exit code (`0`).
+
+In 0.2.9 and earlier this was a refusal: `cargo-cleanme: configuration error: no
+cleanup units are available to select; nothing would be cleaned`, exit `2`. An
+unattended caller could not tell "there was nothing to do" from "the command
+was wrong".
 
 Run the same scope without `-i` to see what it resolved. A cleanup unit only
 exists for a workspace with measured affected output, so an empty list usually
 means there was nothing built to clean, everything was modified inside
 `recency_seconds` (default 300), or the anchor contains no Cargo workspace at
-all.
+all. `cargo cleanme scan --all` shows the machine-wide inventory without
+changing anything.
 
 ## Installation
 

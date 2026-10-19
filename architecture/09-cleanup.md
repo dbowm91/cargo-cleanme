@@ -158,7 +158,7 @@ weight.
 **Entry-point delegation chain.**
 
 ```text
-clean_with_roots_policy_selector   :1108   ← run_engine_guarded (main.rs:606) calls the guarded form
+clean_with_roots_policy_selector   :1108   ← run_engine_guarded (main.rs:635) calls the guarded form
   └─ clean_with_roots_policy_selector_guarded :1288   (premise = None, selection = All for the unguarded path)
   └─ clean_with_roots_policy       :1086   (selector = None)
        └─ clean_with_roots         :1066   (policy = CleanupPolicy::default())
@@ -285,7 +285,7 @@ design in which the default was a Cargo-spawning preview: a reader who assumes
 
 **Where roots come from** (C028), all funnelled into
 `clean_with_roots_policy_selector_guarded` via `run_engine_guarded`
-(`main.rs:606`):
+(`main.rs:635`):
 
 | Source | Roots |
 | --- | --- |
@@ -294,10 +294,10 @@ design in which the default was a Cargo-spawning preview: a reader who assumes
 | Maintenance / `--known` | Raw Routine candidates classified `Automatic` before any collapse; a configured `scan.root` takes the strict explicit path instead. |
 | None | `AppError` (unknown scope) or a typed `ScopeBlock` (symlink/unreadable automatic root) — never a silent subset. |
 
-`run_engine_guarded` (`main.rs:594-682`) additionally defends the
+`run_engine_guarded` (`main.rs:623-711`) additionally defends the
 admission→validation race: a fatal `InvalidRoot` over an automatic scope
 triggers one fresh reclassification, and only a now-proven-omittable offender
-rebuilds the universe from scratch (`main.rs:622-660`); anything else becomes a
+rebuilds the universe from scratch (`main.rs:651-689`); anything else becomes a
 typed block, never a sibling cleanup against a stale proof.
 `cleanup.rs:1204` applies `collapse_roots` again and re-validates the collapsed
 set at `:1213-1215` with the comment at `:1211-1212` that collapsing only
@@ -517,7 +517,7 @@ by root, so output is deterministic regardless of completion order. A thread
 panic degrades to `(ScanCounters::default(), None)`, treated by the caller as a
 re-resolve failure — fail-closed. Peak concurrency lands in
 `counters.proof_metadata_peak_concurrency` and reaches the user through the
-`--stats` line in `main.rs:461-472`.
+`--stats` line in `main.rs:470-481`.
 
 This apparatus is an efficiency concern the project tracked explicitly, not a
 safety mechanism: it keeps the *cost* of proving linear. Pinned by
@@ -717,7 +717,7 @@ an `AppError::InvalidRoot` usage error, never a silent fallback to `All`.
 emit the *unresolved* `CleanupSelection::WorkingDirectory` (`cli.rs:316`,
 `cli.rs:375-378`, and the `Cli::cleanup` mirror at `cli.rs:496-499`), and
 `main.rs` calls `CleanupSelection::resolved` before the engine runs
-(`main.rs:516`, and `main.rs:555` on the `-i` path). The `CleanupRequest`
+(`main.rs:529`, and `main.rs:568` on the `-i` path). The `CleanupRequest`
 doc comment says so at `cli.rs:236-237`. `clean ROOT` and `clean --full`
 use `CleanupSelection::All` because they already bound their own scope.
 
@@ -1134,7 +1134,7 @@ once (`equal_and_nested_target_build_are_one_unit_and_one_invocation` `:8672`).
 
 ### Is the exit-code behaviour correct?
 
-`main.rs:474-478` returns `1` if `report.failed > 0 || report.scope_blocked.is_some()`.
+`main.rs:483-487` returns `1` if `report.failed > 0 || report.scope_blocked.is_some()`.
 `report.failed` is incremented only at `:1829` (spawn error) and `:1848` (non-zero
 exit). `scope_blocked` is set only at the typed block sites listed in §8 — the
 two scan-time boundary sites, the zero-unit edge, and the mid-run block sites

@@ -23,11 +23,11 @@ categorised; `counters` — which directories were skipped and, by reason, why;
 
 - **Workspace resolution.** `manifests` are raw paths; turning them into
   workspaces, members and physical groups is `workspace::resolve_workspaces`
-  (`main.rs:1061-1067`, see [Workspace](07-workspace.md)). Discovery never parses a
+  (`main.rs:1112-1118`, see [Workspace](07-workspace.md)). Discovery never parses a
   manifest, never calls `cargo metadata`, and never asks Cargo where an output
   directory is.
 - **Sizing or activity.** No `mtime`, no byte counts —
-  `traverse.rs`/`workspace::analyze_groups` (`main.rs:1187-1196`).
+  `traverse.rs`/`workspace::analyze_groups` (`main.rs:1238-1247`).
 - **The inactivity decision.** `Active`/`Inactive`/`Uncertain`
   (`domain.rs:40-44`) is decided after physical grouping, on group ownership
   evidence.
@@ -47,7 +47,7 @@ use crate::{domain::*, error::AppError, progress::ProgressObserver, traverse};
 `ScanDiagnostic`, `DiagnosticCategory`, `DiagnosticSeverity`, `ScanCounters`
 ([Domain & errors](01-domain-and-errors.md)). External crates: `globset` (`:3`),
 `directories::BaseDirs` (`:148`, `:172`), `dua_core` 4.1 (`Cargo.toml:67`),
-`tempfile` in tests only (`:1005`). Note the inversion: `policy.rs:697-701` calls
+`tempfile` in tests only (`:1005`). Note the inversion: `policy.rs:707-711` calls
 back into `crate::discovery::effective_rustup_home`, so `policy` depends on this
 module for exactly one function.
 
@@ -67,7 +67,7 @@ module for exactly one function.
 `discover_manifests` is a one-line delegation (`:327`); all logic is in
 `discover_manifests_with_attribution`, and `discover_manifests` exists so that
 callers who do not want the per-entry attribution map do not have to pass a
-`false`. Callers: `main.rs:1019-1022` (with `options.stats`),
+`false`. Callers: `main.rs:1070-1073` (with `options.stats`),
 `cleanup.rs:1230`, `cleanup.rs:1717` and `cleanup.rs:2867` (the destructive
 paths, without), `tests/end_to_end.rs:135`,
 `examples/traversal-qualification.rs:35`.
@@ -131,7 +131,7 @@ subtrees hold *real, buildable* `Cargo.toml` files that are not user projects:
 `registry/src/*/*/` (extracted third-party crate sources) and
 `git/checkouts/*/*/` (git-dependency checkouts). Admitting them would (a) inflate
 the candidate set by thousands of entries, each of which becomes a `cargo
-metadata` subprocess in `workspace::resolve_workspaces` (`main.rs:1061-1067`), and
+metadata` subprocess in `workspace::resolve_workspaces` (`main.rs:1112-1118`), and
 (b) let the tool attribute `target/` output built *by* a dependency to a "project"
 it does not own. Test: `manifest_discovery_prunes_cargo_home_registry`
 (`:1748-1773`).
@@ -144,8 +144,8 @@ system lists overlap on Linux:
 | Prune set | Owner | Consulted when | Applied in |
 |---|---|---|---|
 | `<cargo home>/{registry,git}` | **this module** (`:358`) | always | every scope |
-| `global_only_prunes` (`/System /dev /bin /sbin /usr` on macOS; `/proc /sys /dev /run` on Linux — `policy.rs:585-595`) | `policy.rs` | only when the scope is `Global` **and** its roots match the policy's own roots (`:336-345`) | global path only (`:597`, `:679`) |
-| `managed_tool_prunes` (the rustup home) | `policy.rs:697-701`, *computed from* `effective_rustup_home` | same guard (`:359-365`) | global path only (`:599`, `:681`) |
+| `global_only_prunes` (`/System /dev /bin /sbin /usr` on macOS; `/proc /sys /dev /run` on Linux — `policy.rs:595-605`) | `policy.rs` | only when the scope is `Global` **and** its roots match the policy's own roots (`:336-345`) | global path only (`:597`, `:679`) |
+| `managed_tool_prunes` (the rustup home) | `policy.rs:707-711`, *computed from* `effective_rustup_home` | same guard (`:359-365`) | global path only (`:599`, `:681`) |
 | `system_prune` (hardcoded: `/proc /sys /dev /run` on Linux, `/dev` on macOS, `false` on Windows) | **this module** (`:129-142`) | always | sequential path only (`:899`, `:936`) |
 
 `policy` is authoritative for *what to walk*; this module for the env-derived
@@ -155,7 +155,7 @@ tests do) gets `None` for the policy and therefore no platform or rustup prunes 
 the module never silently reinterprets a caller-supplied scope as "the machine".
 
 There is a fourth, hardcoded system prune for the non-global path:
-`system_prune` (`:129-142`). It duplicates the Linux list from `policy.rs:593`
+`system_prune` (`:129-142`). It duplicates the Linux list from `policy.rs:603`
 in a second place and is reachable only when a user explicitly points a scan at
 a system directory. The two lists are not the same rule: macOS's `/usr` and
 `/System` are pruned only by the platform policy (and therefore only in a
@@ -273,7 +273,7 @@ Every skip the code implements, with the reason it is auditable:
 
 | Reason | Rule | Global path | Sequential path | Counter | Diagnostic |
 |---|---|---|---|---|---|
-| Platform system dir | `global_only_prunes` (`policy.rs:585-595`) | descend `:597`, count `:679` | **not applied** | `platform_system_prunes` | none |
+| Platform system dir | `global_only_prunes` (`policy.rs:595-605`) | descend `:597`, count `:679` | **not applied** | `platform_system_prunes` | none |
 | Platform system dir (hardcoded) | `system_prune` (`:129-142`) | **not applied** | descend `:899`, count `:936` | — (the sequential literal has no such field) | none |
 | Cargo home `registry`/`git` | `cargo_home_prunes()` (`:358`) | descend `:598`, count `:680` | descend `:902`, count `:937` | `cargo_home_prunes` | none |
 | Rustup home (managed tool) | `managed_tool_prunes` (`:359-365`) | descend `:599`, count `:681` | **not applied** | `rustup_home_prunes` | none |
@@ -394,9 +394,9 @@ roots, not by the number of errors: the test
 pins 1001 errors into one record.
 
 Unknown-location loss fails closed. `coverage_complete` is set `false` at the
-moment the error is observed (`:638`, `:912`), so `main.rs:1032-1036` refuses to
+moment the error is observed (`:638`, `:912`), so `main.rs:1083-1087` refuses to
 treat the walk as complete, `discovery_state.rs:220-222` refuses to publish a
-Full generation from it, and `main.rs:1198` with `main.rs:1361-1367` makes
+Full generation from it, and `main.rs:1249` with `main.rs:1412-1418` makes
 `scan --full` exit 1. An incomplete walk is positive inventory only.
 
 **Diagnostic-stream determinism.** Both walkers emit at most one summary per
@@ -408,7 +408,7 @@ root's summary as that root's walk finishes, in root order.
 ### The `main.rs` contract, and how it can break
 
 ```rust
-// main.rs:1041-1053 — the three-category uncertainty filter
+// main.rs:1092-1104 — the three-category uncertainty filter
 let uncertainty: Vec<PathBuf> = discovered
     .diagnostics
     .iter()
@@ -439,7 +439,7 @@ negative evidence.
 
 > **Two traps live here.** First, the `matches!` filter above covers **three of
 > the seven** `DiagnosticCategory` variants and has **no `_` arm**
-> (`src/main.rs:1043-1051`), so a newly-added category is *silently* excluded.
+> (`src/main.rs:1094-1102`), so a newly-added category is *silently* excluded.
 > Second, the filter itself is correct and should not be "fixed" by adding a
 > catch-all that admits pathless diagnostics — that would make the vector
 > non-empty with values that carry no location, which is worse than empty.
@@ -545,15 +545,15 @@ final component on POSIX and would otherwise hide the symlink (B1).
 A root that vanishes between `root_is_usable` and the walk becomes a `Warning`
 (`:911-915`, `:975-996`), **not** `Error` + `PlatformRoot`. Because C029 it
 still sets `coverage_complete = false` (`:912`), so a Full scan neither
-publishes (`main.rs:1103` → `discovery_state.rs:220-222`) nor exits 0
-(`main.rs:1198`, `main.rs:1361-1367`). It never reaches the path-carrying
+publishes (`main.rs:1154` → `discovery_state.rs:220-222`) nor exits 0
+(`main.rs:1249`, `main.rs:1412-1418`). It never reaches the path-carrying
 `uncertainty` vector, because the diagnostic is pathless.
 
 **Root vs deep-tree permission errors: distinguished, and it matters.** An
 unstat-able root is `Error` + `PlatformRoot` — the only thing that makes
 `scan --full` exit 1 through the `PlatformRoot && Error` predicate
-(`main.rs:1033-1036` → `main.rs:1198` → `main.rs:1361-1367`) and `complete` false
-(`main.rs:1103` → `discovery_state.rs:220-222`). An unreadable subtree is
+(`main.rs:1084-1087` → `main.rs:1249` → `main.rs:1412-1418`) and `complete` false
+(`main.rs:1154` → `discovery_state.rs:220-222`). An unreadable subtree is
 `Warning` + `PermissionDenied`/`Vanished`/`Metadata`, pathless, named by root in
 the message. It reaches the scan through the other predicate,
 `coverage_complete`. A platform-level failure and a deep hole both make the scan
@@ -645,7 +645,7 @@ Windows run 33.
 1. **The global path's walk-error branch has no test at all** (`:637-642`,
    `:772-798`): its per-root drain, its `coverage_complete = false`, and its
    `sort_by_key` ordering. The sequential path's equivalent *is* tested
-   (`:1022`). This is the branch `main.rs:1032-1036` depends on.
+   (`:1022`). This is the branch `main.rs:1083-1087` depends on.
 2. **`root_is_usable`'s "unavailable" branch is untested** (`:508-509`, the
    missing-or-not-a-directory case) — the branch that makes `scan --full` exit 1.
    Only the symlink sibling is covered.
@@ -683,8 +683,8 @@ Windows run 33.
 ## 10. Review checklist
 
 1. **Does any new `DiagnosticCategory` mean "I could not see here"?** Then it must
-   be added to `main.rs:1041-1053` *and*, if it should block Full reconciliation,
-   to the `PlatformRoot && Error` check (`main.rs:1033-1036`) and to the
+   be added to `main.rs:1092-1104` *and*, if it should block Full reconciliation,
+   to the `PlatformRoot && Error` check (`main.rs:1084-1087`) and to the
    `coverage_complete` flag (`:638`, `:912`). Missing the first silently
    converts a hole in the scan into certainty about learned roots. Before adding
    anything at all, check `cleanup.rs:2332-2345`: under ADR 007 a discovery

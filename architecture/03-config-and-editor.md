@@ -71,10 +71,10 @@ the merged list (`src/cleanup.rs:1300-1301`, `compile_policy_globs`,
 A rootless `cargo cleanme scan` is a Full reconciliation and **never** consults
 the configured root: `policy::resolve` returns from its `full` arm before
 `config.root` is read (`src/policy.rs:20-29`), so configuration cannot narrow
-the canonical reconciliation command (`src/main.rs:985-988`). `scan --known` and
+the canonical reconciliation command (`src/main.rs:1036-1039`). `scan --known` and
 the Routine cleanup scope both resolve with `full: false` and no CLI root, so
 *there* the configured root *is* the scope — an exclusive Explicit override
-rather than an extra root to add (`src/policy.rs:30`, `src/main.rs:739-750`). A
+rather than an extra root to add (`src/policy.rs:30`, `src/main.rs:768-779`). A
 CLI root outranks the configured one wherever both are present
 (`src/policy.rs:30`).
 
@@ -270,7 +270,7 @@ migration shim.
 file is missing, then `load`s it. It never overwrites: a malformed file stays
 malformed and stays on disk (`:406-407` — creation is attempted only when the
 file is absent; `malformed_config_is_not_replaced_automatically`,
-`:1238-1249`). Used by `scan` (`src/main.rs:984`), `clean` (`src/main.rs:323`)
+`:1238-1249`). Used by `scan` (`src/main.rs:1035`), `clean` (`src/main.rs:323`)
 and `config show` (`src/main.rs:249`).
 
 `ensure_exists` (`:422-427`), documented at `:421` as "Ensure a config editor

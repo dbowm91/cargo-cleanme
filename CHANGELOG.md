@@ -6,6 +6,31 @@ All notable changes to cargo-cleanme are documented here. The format follows
 stance: the `0.x` line may make breaking changes in any release, and the
 command-line, JSON, and release-asset contracts are the stable surface.
 
+## [Unreleased]
+
+### Changed
+
+- **A run that cleaned nothing now says so, in one line, and exits 0.** The
+  interactive surface refused an empty candidate list as a *configuration
+  error* (exit `2`) while the same scope cleaned without `-i` exited `0` — two
+  spellings of one scope disagreed, and an unattended caller could not tell
+  "there was nothing to do" from "the command was wrong". Both now print
+  `Nothing to clean.` and exit `0`. The same verdict replaces the scope census
+  and the summary of zeroes for a human cleanup report that has nothing in it.
+  A run that found units and deliberately left them alone still reports every
+  one of them: "nothing was selected" never reads as "nothing was eligible".
+- **The learned-root omission summary is no longer printed for by-design
+  omissions.** A learned root that sits at a known-transient origin — an agent
+  worktree, a package cache, a temporary directory — is omitted *by design*:
+  the tool would never have cleaned it, so omitting it narrows nothing. That
+  summary fired on essentially every Routine invocation, in the tool's error
+  shape, naming paths the operator never asked about. A durable learned root
+  that has **vanished**, and a root that is no longer a directory, are still
+  reported — those are news.
+
+The JSON envelope, the log line, and every exit code other than the
+interactive empty case are unchanged.
+
 ## [0.2.9] - 2026-10-19
 
 ### Changed

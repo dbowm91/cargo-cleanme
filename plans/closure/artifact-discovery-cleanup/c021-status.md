@@ -392,7 +392,7 @@ real results.
 | 3 | `release-check.sh` and `verify-release-attestation.py` are reachable from no workflow | low | **Open by design**, now documented as such rather than as an omission. Operator surfaces: the first refuses a dirty tree and needs `eggpack` and 1.89; the second needs a published immutable release and a live `gh` |
 | 4 | Hosted runs can be cancelled while queued for a runner, and 4 commits pushed in 30 seconds is enough to trigger it | low | **Open as infrastructure.** Diagnosed in §8.1. No product change. A `concurrency` group on `ci.yml` is the candidate remedy and is registered as follow-up, not adopted here — CI/release policy is outside C021's authorization |
 | 5 | `architecture/12-self-update.md`'s test catalogue names 32 of 44 tests | low | **Open, now stated.** The 12 unlisted are C018's provenance-uncertainty group, named individually in the document. They are the evidence behind the new C018 changelog entry |
-| 6 | `update_json` (`main.rs:755`) remains the one machine-readable surface with no test | medium | **Open, pre-existing, deliberately unchanged.** Noted here because C021 touched `update.rs` and this is the adjacent gap a reviewer will ask about. Migrations and tests both need their own plan |
+| 6 | `update_json` (`main.rs:784`) remains the one machine-readable surface with no test | medium | **Open, pre-existing, deliberately unchanged.** Noted here because C021 touched `update.rs` and this is the adjacent gap a reviewer will ask about. Migrations and tests both need their own plan |
 
 No medium-or-higher finding remains **inside C021's scope**. Findings 1, 2, 4
 and 6 are each outside the surfaces this plan authorizes, and each is recorded

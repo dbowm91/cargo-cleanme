@@ -38,7 +38,7 @@ Plus four fully-qualified `crate::domain::elapsed_nanos` uses (`:564`, `:627`,
   Cargo. The only parsing of Cargo output is JSON — with exactly one narrow
   parse of a Cargo *message* (§4, `believed_workspace_manifest`).
 - **Reporting.** This module produces `PhysicalOutputGroup`; the report-facing
-  `EligibleOutputGroup` is built in `main.rs:1200-1213`.
+  `EligibleOutputGroup` is built in `main.rs:1251-1264`.
 
 **The workspace → cleanup edge is one-way, and in this file it is test-only.**
 The production half of `workspace.rs` contains *zero* references to
@@ -54,8 +54,8 @@ groups, `cleanup.rs:3292` reduces the covering union, `cleanup.rs:3371` reads
 member roots) plus a test-only back-reference. There is no cycle and no
 production import from `workspace` into `cleanup`.
 
-Call sites in the read-only scan: `main.rs:1060` (runner), `main.rs:1061`
-(`resolve_workspaces`), `main.rs:1171` (`build_groups`), `main.rs:1187`
+Call sites in the read-only scan: `main.rs:1111` (runner), `main.rs:1112`
+(`resolve_workspaces`), `main.rs:1222` (`build_groups`), `main.rs:1238`
 (`analyze_groups`).
 
 ---
@@ -775,7 +775,7 @@ the analysis progress bar determinate. The survivor branch also fires
 
 ### Clock handling
 
-`clock_start` and `clock_cutoff` come from the caller; `main.rs:1175-1185` computes
+`clock_start` and `clock_cutoff` come from the caller; `main.rs:1226-1236` computes
 `clock_cutoff = scan_start - recency` and turns an overflow into
 `AppError::Config`.
 
@@ -805,7 +805,7 @@ jointly implement for multi-owner groups.
 
 **This module produces only `PhysicalOutputGroup`** (`:1826-1837`), with
 `covering_roots`, `owners: Vec<WorkspaceId>`, and `uncertain`. It never
-constructs `EligibleOutputGroup`; that flattening happens in `main.rs:1200-1213`,
+constructs `EligibleOutputGroup`; that flattening happens in `main.rs:1251-1264`,
 which drops `covering_roots` and `uncertain` and maps `owners` to
 `workspace_roots`. The distinction is the scan's report-facing projection versus
 the internal working type.

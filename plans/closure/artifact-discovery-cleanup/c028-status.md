@@ -57,10 +57,10 @@ the absence rule was checked against ADR 002 §§5–6 and fits inside them
 | # | Acceptance criterion | Evidence |
 |---|---|---|
 | 1 | Stale worktree no longer returns fatal `InvalidRoot` from bare cleanup; valid roots still decided | `stale_learned_root_is_omitted_and_bare_routine_execute_cleans_the_sibling` (`tests/cli_contract.rs:2378`) direct + staged-plugin: exit 0, `scope=routine`, `cleaned=1`, one Cargo clean, stale path absent from `selected_roots`, `invalid scan root` absent from stderr |
-| 2 | Explicit roots strict; auto missing/non-dir omittable; unreadable/symlink never benign | `missing_explicit_roots_stay_fatal_with_zero_cargo_clean_spawns` (`:2468`, exit 2 both forms, zero spawns); `automatic_file_root_is_omitted_and_symlink_root_blocks_without_traversal` (`:2535`, file omitted + sibling cleaned, symlink-to-dir and broken link exit 1 with zero `metadata` calls); `unreadable_automatic_root_blocks_instead_of_omitting` (`:2597`, exit 1, premise-checked skip under privilege); unit `automatic_roots_classify_by_provenance_and_explicit_roots_stay_strict` (`src/policy.rs:783`), `symlinked_automatic_roots_block_and_are_never_followed_or_omitted` (`:831`) |
-| 3 | One fresh combined universe; reappearance/deletion cannot bypass completeness | `violated_admission_premise_blocks_with_zero_cargo_spawns` (`src/cleanup.rs:3414`, pre-proof block, zero cleans); `admission_premise_recheck_detects_reappearance_and_disappearance` (`src/policy.rs:868`, incl. surviving-file and vanished-file non-violations); `run_engine_guarded` rebuild-or-block (`src/main.rs:365`) |
-| 4 | Routine omission persists nothing; complete certain Full prunes only definitively nonexistent dirs | `complete_certain_full_prunes_only_positively_absent_learned_roots` (`src/discovery_state.rs:660`, absence prunes, existing-but-unobserved retained, uncertainty vetoes, incomplete never publishes); Routine touch branch unchanged (`src/main.rs:889`) |
-| 5 | `clean --full` cannot act on an older generation after a failed Full | `full_cleanup_consumes_only_a_fresh_in_memory_generation` (`src/policy.rs:913`, non-zero code and missing generation both refuse); `ScanOutcome::full_state` plumbing (`src/main.rs:727`); no live `clean --full` run exists — see §6 |
+| 2 | Explicit roots strict; auto missing/non-dir omittable; unreadable/symlink never benign | `missing_explicit_roots_stay_fatal_with_zero_cargo_clean_spawns` (`:2468`, exit 2 both forms, zero spawns); `automatic_file_root_is_omitted_and_symlink_root_blocks_without_traversal` (`:2535`, file omitted + sibling cleaned, symlink-to-dir and broken link exit 1 with zero `metadata` calls); `unreadable_automatic_root_blocks_instead_of_omitting` (`:2597`, exit 1, premise-checked skip under privilege); unit `automatic_roots_classify_by_provenance_and_explicit_roots_stay_strict` (`src/policy.rs:793`), `symlinked_automatic_roots_block_and_are_never_followed_or_omitted` (`:831`) |
+| 3 | One fresh combined universe; reappearance/deletion cannot bypass completeness | `violated_admission_premise_blocks_with_zero_cargo_spawns` (`src/cleanup.rs:3414`, pre-proof block, zero cleans); `admission_premise_recheck_detects_reappearance_and_disappearance` (`src/policy.rs:878`, incl. surviving-file and vanished-file non-violations); `run_engine_guarded` rebuild-or-block (`src/main.rs:365`) |
+| 4 | Routine omission persists nothing; complete certain Full prunes only definitively nonexistent dirs | `complete_certain_full_prunes_only_positively_absent_learned_roots` (`src/discovery_state.rs:660`, absence prunes, existing-but-unobserved retained, uncertainty vetoes, incomplete never publishes); Routine touch branch unchanged (`src/main.rs:918`) |
+| 5 | `clean --full` cannot act on an older generation after a failed Full | `full_cleanup_consumes_only_a_fresh_in_memory_generation` (`src/policy.rs:923`, non-zero code and missing generation both refuse); `ScanOutcome::full_state` plumbing (`src/main.rs:756`); no live `clean --full` run exists — see §6 |
 | 6 | Human/JSON/log tell the truth; contracts preserved | every new CLI case asserts `operation`/`scope`/`mode` plus one-envelope stdout; `stale_and_blocked_automatic_roots_keep_the_bounded_log_contract` (`:2631`, one bounded ASCII line, no paths, exit 0 vs `status=blocked` exit 1); `all_automatic_roots_missing_is_a_successful_empty_no_op` (`:2508`, exit 0, `units=[]`, zero spawns of any kind); `stale_learned_root_simulate_agrees_with_execute_and_spawns_no_cargo_clean` (`:2434`) |
 | 7 | Negative controls + focused fixtures prove the defect and each gate; old proof fixtures green | §5 below; full suite green (§4); C003/C004/C006/C023 fixtures untouched and passing |
 | 8 | Ordinary + hosted lanes pass with execution evidence | ordinary lanes pass (§4); hosted lanes **not run** — §6 |
@@ -127,7 +127,7 @@ see §7.
 1. **No live `clean --full` subprocess run exists.** A Full cleanup walks the
    platform roots, which is unsuitable for a hermetic test. The Full-only
    properties are covered one level down: generation freshness
-   (`src/policy.rs:913`), absence pruning under complete/certain Full
+   (`src/policy.rs:923`), absence pruning under complete/certain Full
    (`src/discovery_state.rs:660`), and the shared `admit_automatic` path the
    live Routine cases exercise. A hosted full-machine run remains the only
    way to observe the composed path.
@@ -163,7 +163,7 @@ see §7.
    / `:402-406` / `:448-452` / `:479-483` / `:590-592` cluster,
    `09-cleanup.md`'s `main.rs:100-110` CleanMode mapping (the mapping lives in
    `cli.rs:224`), and `04-policy-and-scope.md`'s `main.rs:174-194` /
-   `main.rs:510-522` scope-label cites — and left them for a C026-class
+   `main.rs:523-535` scope-label cites — and left them for a C026-class
    reconciliation corrective, which is the repository's established pattern
    for citation sweeps (C026 re-derived 20 citations with no Rust changed).
    Every citation C028 added or rewrote was re-derived from the post-change
@@ -178,7 +178,7 @@ see §7.
    implementation classified `policy::resolve`'s canonicalized Routine set
    and the symlink CLI case passed vacuously — the link had already become
    its target. The failing CLI test forced `routine_cleanup_candidates`
-   (`src/policy.rs:365`), which carries raw paths. Scan policy (`resolve`)
+   (`src/policy.rs:375`), which carries raw paths. Scan policy (`resolve`)
    is unchanged; only cleanup admission uses the raw seam.
 2. **Omission-kind-aware recheck.** The first recheck treated any existing
    omitted path as a violation, which blocked a run whose omitted path was a
@@ -196,7 +196,7 @@ see §7.
 5. **Symlinked seeds block rather than omit.** Safe omission of a symlink
    that points at a real directory cannot be proven (the tree exists, the
    walker would never descend), so the run blocks. The symlinked-seed case is
-   pinned at `src/policy.rs:943`.
+   pinned at `src/policy.rs:953`.
 
 ## 8. Residual risks
 

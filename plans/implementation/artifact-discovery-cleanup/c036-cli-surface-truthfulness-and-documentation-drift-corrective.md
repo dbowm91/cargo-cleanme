@@ -52,7 +52,7 @@ a non-root Linux workstation, unless stated otherwise.
 | D7 | No **live** `clean --full` run exists in the evidence base, and the repository knows it: the deep dive marks the fail-closed rule "partial", and the contract test that would cover it is a placeholder no case can satisfy. | `architecture/13-orchestration.md:1219-1220`; `tests/cli_contract.rs:3080-3121` |
 | D8 | A bare invocation whose working directory lies **outside** the resolved Routine scope reports `0 CleanupUnit(s)`, `0 would-clean`, and exits 0 — silence where ADR 006 §4 requires a typed report. | live run in `/tmp/<scratch>`; ADR 006 §4 |
 | D9 | `--include` / `--exclude` are matched against the **workspace root**, not the physical output root, and neither the flag help nor the config key says so. A pattern written as `**/target` matches nothing and produces no warning. | `src/cleanup.rs:1467`, `src/cleanup.rs:1477`; `config.toml` `cleanup.include` / `cleanup.exclude` |
-| D10 | A configured `scan.root` is **silently ignored by a rootless `scan`**: `policy::resolve` returns from its `full` arm before the configured root is read. The behaviour is deliberate — configuration must not narrow the canonical reconciliation command — but the config key's own documentation does not mention it. | `src/policy.rs:19`; `src/main.rs:985-988`; `config.toml` `scan.root` |
+| D10 | A configured `scan.root` is **silently ignored by a rootless `scan`**: `policy::resolve` returns from its `full` arm before the configured root is read. The behaviour is deliberate — configuration must not narrow the canonical reconciliation command — but the config key's own documentation does not mention it. | `src/policy.rs:19`; `src/main.rs:1036-1039`; `config.toml` `scan.root` |
 | D11 | `plans/output-schema-v1.md` lists **19** `reason_code` values; the code has **20**. The missing one is `skipped_outside_selection` — the value M014 actually emits for a workspace outside the selected scope. | `src/cleanup.rs:263-286`; `src/cleanup.rs:1431`; `plans/output-schema-v1.md:48` |
 | D12 | `plans/output-schema-v1.md` describes a non-UTF-8 path as using "the platform escaped debug form". `output::path` now uses `to_string_lossy()`, so the human and machine renderings **agree** and both render `U+FFFD`. The schema's own wording ("are UTF-8 strings when representable") is also wrong: a path is always a UTF-8 `String`, representable or not. | `src/output.rs:262-266`; `plans/output-schema-v1.md:51` |
 | D13 | `plans/registry.md` contradicts **itself**: the M011C row says the automatic self-update smoke is "demonstrated three times" while the evidence table beneath it lists **seven** green automatic smokes. | `plans/registry.md:123`; `plans/registry.md:182-190` |
@@ -176,7 +176,7 @@ which is a description of the defect ADR 007 was accepted to fix.
 records that no live `clean --full` run exists, and that the one-document
 contract test "cannot run `clean --full` because that is a full filesystem
 walk". The unit test that covers the gate
-(`src/policy.rs:1062`, `full_cleanup_roots(1, Some(state()))`) asserts that a
+(`src/policy.rs:1072`, `full_cleanup_roots(1, Some(state()))`) asserts that a
 **literal** `1` is refused; it never asserts that a real traversal on a real
 machine produces a non-zero code. The gate was therefore green for a
 premise — "code 1 is refused" — that held, while the operation it guards was

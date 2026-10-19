@@ -81,7 +81,7 @@ and `Serialize` is derived on no domain type — the JSON contract belongs to
 | `Vanished` | A path disappeared between discovery and inspection. |
 | `Metadata` | Metadata could not be established. |
 | `InvalidEntry` | A directory entry is malformed (bad name, wrong file type). |
-| `PlatformRoot` | A root is a filesystem root or otherwise not a real project root; at `Error` severity this makes a Full scan incomplete (`main.rs:1032-1036`, `main.rs:1198`). |
+| `PlatformRoot` | A root is a filesystem root or otherwise not a real project root; at `Error` severity this makes a Full scan incomplete (`main.rs:1083-1087`, `main.rs:1249`). |
 | `CandidateUncertain` | A *candidate* was dropped or refused: source-tree overlap, filesystem-root target, unmeasurable output. |
 | `OutOfScope` | ADR 007: an unprovable participant *outside* the selected proof boundary. Reported, never blocking; informational by construction (`domain.rs:75-77`, raised at `cleanup.rs:2401-2411`). |
 
@@ -269,7 +269,7 @@ Same idea at two stages, and the field differences are the point.
 that survived the gates, and is the *candidate* form: it carries `covering_roots`
 (the minimal outermost canonical roots, used for measurement and per-group
 authorization, `domain.rs:230-231`) and an `uncertain: bool`.
-`EligibleOutputGroup` is the *report* form, built by the map at `main.rs:1201-1213`
+`EligibleOutputGroup` is the *report* form, built by the map at `main.rs:1252-1264`
 and the equivalent in `tests/end_to_end.rs:177-186`.
 
 Two asymmetries are worth stating. First, `owners: Vec<WorkspaceId>` becomes
@@ -327,19 +327,19 @@ which is why `category` is a closed enum:
 
 1. **Rendering** — every diagnostic reaches the human report and `DiagnosticV1`
    (`output.rs:122-140`).
-2. **Uncertainty extraction** — `main.rs:1041-1053` filters *exactly*
+2. **Uncertainty extraction** — `main.rs:1092-1104` filters *exactly*
    `PermissionDenied | Metadata | Vanished` and maps them to a `Vec<PathBuf>`
    via `filter_map` on `d.path.clone()`, so a diagnostic with `path: None`
    contributes nothing. This vector decides whether the learned-root state file
    may be trusted and reconciled.
 3. **Scan incompleteness** — a `PlatformRoot` diagnostic at `Error` severity
-   makes a Full scan `full_incomplete` (`main.rs:1032-1036`, `main.rs:1198`),
+   makes a Full scan `full_incomplete` (`main.rs:1083-1087`, `main.rs:1249`),
    suppressing state-destroying reconciliation.
 4. **Durable uncertainty** — the `Uncertain` ownership class exists so
    candidate-level uncertainty becomes a *property attached to a group*, not
    just a transient log line.
 
-`main.rs:1041-1053` is the single most important thing to know about this enum,
+`main.rs:1092-1104` is the single most important thing to know about this enum,
 and it is a `matches!` listing three of seven variants. It compiles whether or
 not an eighth exists. That asymmetry — compile-checked in `output.rs:127-135`,
 silently exhaustive in `main.rs` — is review item 1 in §7. `OutOfScope` is
@@ -363,9 +363,9 @@ decision, not duplication. The proof pass re-resolves the ownership universe at
 the destructive boundary (`cleanup.rs:2981` and `cleanup.rs:3134` call
 `merge_proof`), and that work is real cost. The `proof_*` doc comment gives the
 reason: proof work is kept separate from initial discovery counters "so
-`--stats` cannot hide it" (`domain.rs:291-292`). Accordingly `main.rs:460-473`
+`--stats` cannot hide it" (`domain.rs:291-292`). Accordingly `main.rs:469-482`
 prints **four** lines for `cleanup --stats` — `stats_line`, `timings_line`,
-`proof_stats_line`, `proof_timings_line` — while `main.rs:1336-1343` prints two
+`proof_stats_line`, `proof_timings_line` — while `main.rs:1387-1394` prints two
 for a plain scan.
 
 `merge_proof` is one-directional: six specific fields are copied into `proof_*`
@@ -446,7 +446,7 @@ everything else qualifies the path inline.
 | `UnknownCapability` | 1 | `output.rs` (test module only, `output.rs:641`) |
 | `UnresolvedOwnershipParticipant` | 1 | `output.rs` (test module only, `output.rs:637`) |
 | `ScanScope`, `ScanDiagnostic`, `EligibleOutputGroup`, `OutputRootKind` | 1 each | `main.rs`, `cleanup.rs` |
-| `OutputOwnershipClass` | 1 | `interactive.rs` (test module only, `interactive.rs:804`) |
+| `OutputOwnershipClass` | 1 | `interactive.rs` (test module only, `interactive.rs:815`) |
 | `OutputRoot`, `OutputSet`, `ResolvedWorkspace`, `WorkspaceId`, `WorkspaceMember`, `WorkspacePackage` | 0 (glob) | `workspace.rs`, `cleanup.rs` |
 | `CargoBuildDirCapability`, `CargoCapabilities`, `CargoCleanCapabilities` | 0 (glob) | `workspace.rs`, `cleanup.rs` |
 | `UnresolvedOwnershipParticipant`, `ResolutionCoverage` | 0 (glob, production) | `workspace.rs`, `cleanup.rs` |
@@ -485,7 +485,7 @@ match sites outside `domain.rs`:
 | `OutputRootKind` | `workspace.rs:275-278`, `workspace.rs:319-322`, `workspace.rs:1953-1956`, `cleanup.rs:937-940` → **compile error**. The label builder at `workspace.rs:1958-1963` has a `_` arm and is *not* checked. |
 | `SizeMetric` | `output.rs:114-117` → **compile error** |
 | `DiagnosticSeverity` | `as_str()` at `domain.rs:60-64` is exhaustive → **compile error** |
-| **`DiagnosticCategory` at `main.rs:1045-1050`** | **nothing — compiles silently.** A new uncertainty class would default to *not* feeding the `uncertainty` vector, so an incomplete scan would be treated as complete. The sharpest edge in this file. |
+| **`DiagnosticCategory` at `main.rs:1096-1101`** | **nothing — compiles silently.** A new uncertainty class would default to *not* feeding the `uncertainty` vector, so an incomplete scan would be treated as complete. The sharpest edge in this file. |
 | **`OutputOwnershipClass` at `cleanup.rs:812`, `cleanup.rs:946`, `cleanup.rs:1960`, `cleanup.rs:2234`, `cleanup.rs:3279`** | **nothing — all are `==`/`!=` comparisons.** A new class falls through as "not private", i.e. fails closed. Safe direction, but safe by accident rather than by construction. |
 | **`UnknownCapability` at `workspace.rs:423`** | **nothing — an `!=` comparison.** A new class falls through to `MergeAll`, which merges everything. Fails closed, and again by accident. |
 
@@ -506,7 +506,7 @@ counter is "a silent-wrong-number bug waiting for a slow machine"
 (`domain.rs:303-307`).
 
 **That reasoning is now applied consistently.** Eight call sites use the helper
-(`main.rs:1040`, `cleanup.rs:1235`, `cleanup.rs:3394`, `cleanup.rs:3418`,
+(`main.rs:1091`, `cleanup.rs:1235`, `cleanup.rs:3394`, `cleanup.rs:3418`,
 `workspace.rs:564`, `workspace.rs:627`, `workspace.rs:1628`,
 `workspace.rs:1722`) and **no** site in `src/` writes
 `elapsed().as_nanos() as u64`. The `cargo_locate_nanos` and
@@ -516,19 +516,19 @@ saturating-adds, now call the helper (`workspace.rs:564`, `workspace.rs:627`).
 **5.5 Saturating vs checked arithmetic.** `saturating_add` appears on 43 lines
 in `src/`, 6 of them in `merge_proof` (`domain.rs:363-382`).
 `saturating_sub` appears 13 times in production: the `SystemTime` clamps where
-clamping to the epoch is intended (`policy.rs:485`, `policy.rs:532`,
+clamping to the epoch is intended (`policy.rs:495`, `policy.rs:542`,
 `discovery_state.rs:320`), the byte-decrease clamp at
 `cleanup.rs:1885` (`proof.pre_bytes.saturating_sub(after)` — clamping to `0`
 when output *grew* between proof and verification, the only safe reading), the
 count clamps at `cleanup.rs:489`, `cleanup.rs:2010`,
-`discovery.rs:795`, `discovery.rs:994` and `main.rs:1308`, and the
-scroll/index clamps in the interactive list (`interactive.rs:199`,
-`interactive.rs:255`, `interactive.rs:334`, `interactive.rs:403`).
-`checked_sub` appears 16 times but only **4** in production code (`main.rs:1175`,
+`discovery.rs:795`, `discovery.rs:994` and `main.rs:1359`, and the
+scroll/index clamps in the interactive list (`interactive.rs:204`,
+`interactive.rs:260`, `interactive.rs:339`, `interactive.rs:408`).
+`checked_sub` appears 16 times but only **4** in production code (`main.rs:1226`,
 `cleanup.rs:1686`, `cleanup.rs:2426`, `cleanup.rs:3353`); the other 12 are
 `start.checked_sub(…).unwrap()` inside test modules. The production uses are all
 `SystemTime` cutoff computations mapping to `AppError::Config` — see
-`main.rs:1175-1184`, "recency window exceeds system time range". `checked_add`
+`main.rs:1226-1235`, "recency window exceeds system time range". `checked_add`
 appears only at `traverse.rs:151`, `traverse.rs:160`, `traverse.rs:259` and
 `traverse.rs:268`, where overflow is not silently clamped but sets
 `stats.uncertain = true` and aborts the walk. Byte accumulation in hot paths
@@ -586,7 +586,7 @@ now covered, in `domain.rs:417-434`.
 
 The integration surfaces that exercise this vocabulary:
 
-- **`tests/cli_contract.rs`** (3989 lines, 62 `#[test]`s) drives the real binary
+- **`tests/cli_contract.rs`** (4050 lines, 63 `#[test]`s) drives the real binary
   via `CARGO_BIN_EXE_cargo-cleanme` and asserts the JSON/stderr contract that
   `output.rs` and the counter lines produce.
   `json_scan_is_one_versioned_document_and_stats_stay_on_stderr`
@@ -617,10 +617,10 @@ The integration surfaces that exercise this vocabulary:
 
 1. **Adding a `DiagnosticCategory` variant.** Three things must happen; only one
    is compiler-enforced: fix the exhaustive match at `output.rs:127-135`; decide
-   whether it belongs in the uncertainty filter at `main.rs:1045-1050` (a
+   whether it belongs in the uncertainty filter at `main.rs:1096-1101` (a
    `matches!` that will *not* warn); and decide whether it makes a scan
-   incomplete in the `PlatformRoot` + `Error` sense at `main.rs:1032-1036` /
-   `main.rs:1198`. If it is a new way for the walk to be incomplete and it is
+   incomplete in the `PlatformRoot` + `Error` sense at `main.rs:1083-1087` /
+   `main.rs:1249`. If it is a new way for the walk to be incomplete and it is
    absent from the `main.rs` filter, an incomplete Full scan is treated as
    complete and may delete learned roots it never observed.
 2. **Adding an `OutputOwnershipClass` variant.** It needs a `label()` arm at
@@ -633,7 +633,7 @@ The integration surfaces that exercise this vocabulary:
 3. **Changing `ScanCounters`.** A new field must be classified: is it in
    `stats_line` or `proof_stats_line`? If it is proof-phase work it must be a
    `proof_*` field merged by `merge_proof` (`domain.rs:363-382`) so
-   `cleanup --stats` (`main.rs:460-473`) cannot hide it. If it is a maximum
+   `cleanup --stats` (`main.rs:469-482`) cannot hide it. If it is a maximum
    rather than a sum (like `proof_metadata_peak_concurrency`, set by `.max()` at
    `cleanup.rs:3019-3021`), it must *not* be added to `merge_proof`.
 4. **Any change to `elapsed_nanos` usage.** The helper exists to avoid a silent
@@ -648,7 +648,7 @@ The integration surfaces that exercise this vocabulary:
    contract?** Neither type is `Serialize`. A new field changes nothing on the
    wire until `output.rs` maps it (`output.rs:105-159`), and that mapping is the
    only place a stable name can be given. Separately, `visited_entries` is
-   written at `main.rs:1216` and read nowhere — if you add a report field,
+   written at `main.rs:1267` and read nowhere — if you add a report field,
    decide who reads it.
 7. **Is `PhysicalOutputGroup.uncertain` still meaningful?** It is `false` at the
    only construction site (`workspace.rs:1836`) because uncertainty is decided by

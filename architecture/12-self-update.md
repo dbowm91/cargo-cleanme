@@ -1042,7 +1042,7 @@ target is recomputed independently at `src/update.rs:988`.
 | `#[test]` functions | **47** | `grep -cE '^\s*#\[test\]' src/update.rs` |
 | `tests/` integration tests referencing `update` | **3** | `grep -nE '^\s*fn .*update' tests/cli_contract.rs` |
 
-`tests/cli_contract.rs` has 62 `#[test]` functions and `tests/end_to_end.rs` has
+`tests/cli_contract.rs` has 63 `#[test]` functions and `tests/end_to_end.rs` has
 4. **The update path is no longer untested at the integration level**: three
 cases in `tests/cli_contract.rs` now drive it —
 

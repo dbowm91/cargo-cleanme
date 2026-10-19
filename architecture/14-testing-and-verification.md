@@ -8,7 +8,7 @@
 
 The verification apparatus does three distinct jobs. The third is what makes it unusual.
 
-**(a) Product behaviour.** 450 declared inline `#[test]` functions in `src/`, plus two
+**(a) Product behaviour.** 458 declared inline `#[test]` functions in `src/`, plus two
 integration suites: one drives the compiled binary as a subprocess, the other drives the
 library's scan entry point in-process. Between them they cover ownership proof, cleanup
 authorization, the three clean modes, workspace resolution, real Cargo failure presentation,
@@ -41,8 +41,8 @@ were the premises, and is any of them unchecked?*
 
 | Layer | Location | Count | What it can catch | What it cannot catch |
 |---|---|---:|---|---|
-| Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 450 declared `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
-| Integration — CLI contract | `tests/cli_contract.rs` (3,989 lines) | 62 `#[test]` | The subprocess boundary end to end: argv normalization, exit codes, JSON shape, log-line shape, `--stats` stream discipline, selector behaviour, usage conflicts, stale-learned-root admission, repeated-root noise bounds, incomplete-discovery stage counts, real Cargo failure summaries, default Routine execution against real Cargo | Internals of `run()`; anything on a real machine; platform-gated cases are excluded on other lanes |
+| Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 458 declared `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
+| Integration — CLI contract | `tests/cli_contract.rs` (4,050 lines) | 63 `#[test]` | The subprocess boundary end to end: argv normalization, exit codes, JSON shape, log-line shape, `--stats` stream discipline, selector behaviour, usage conflicts, stale-learned-root admission, repeated-root noise bounds, incomplete-discovery stage counts, real Cargo failure summaries, default Routine execution against real Cargo | Internals of `run()`; anything on a real machine; platform-gated cases are excluded on other lanes |
 | Integration — end to end | `tests/end_to_end.rs` (840 lines) | 4 `#[test]` | Full production-pipeline scans against synthetic trees with real mtimes, under both a filtered Routine scope and an explicit scope | Cleanup, update, config editing |
 | Shared harness | `tests/common/mod.rs` (262 lines) | 0 tests | `set_path_modified` / `backdate_file` (per-platform mtime control), `inactive_project` tree construction, `write_fake_cargo` / `cargo_calls` (unix only) | — |
 | Contract checkers | `scripts/` | **17** (see note) | Published-crate contents, fixture portability, installer/shape/smoke contracts, release identity, benchmark regression, and the completeness of this inventory | That a fixture case proves its intended branch (explicitly disclaimed) |
@@ -101,13 +101,13 @@ from `src/`, never copied between documents.
 | `src/cleanup.rs` | 114 | 3747 | 9983 | 6237 |
 | `src/workspace.rs` | 76 | 2094 | 6068 | 3975 |
 | `src/update.rs` | 47 | 1290 | 2886 | 1597 |
-| `src/interactive.rs` | 40 | 801 | 1581 | 781 |
+| `src/interactive.rs` | 42 | 812 | 1627 | 816 |
 | `src/discovery.rs` | 39 | 1001 | 2363 | 1363 |
 | `src/cli.rs` | 32 | 482 | 1273 | 792 |
 | `src/output.rs` | 21 | 273 (`path_tests`), 509 (`mod tests`), 945 (`update_tests`) | 1065 | 793 |
 | `src/config.rs` | 20 | 614 | 1499 | 886 |
 | `src/discovery_state.rs` | 17 | 581 | 1129 | 549 |
-| `src/policy.rs` | 16 | 703 | 1184 | 482 |
+| `src/policy.rs` | 17 | 713 | 1238 | 526 |
 | `src/progress.rs` | 13 | 534 | 873 | 340 |
 | `src/report.rs` | 7 | 72 | 195 | 124 |
 | `src/traverse.rs` | 6 | 495 | 624 | 130 |
@@ -115,16 +115,16 @@ from `src/`, never copied between documents.
 | `src/domain.rs` | 1 | 407 | 435 | 29 |
 | `src/error.rs` | 0 | — | 16 | — |
 | `src/lib.rs` | 0 | — | 16 | — |
-| `src/main.rs` | 0 | — | 1373 | — |
-| **Total** | **450** | | | |
+| `src/main.rs` | 4 | 1426 | 1562 | 137 |
+| **Total** | **458** | | | |
 
-**The count is declared, not executed.** 450 `#[test]` functions exist in `src/`; **448
+**The count is declared, not executed.** 458 `#[test]` functions exist in `src/`; **456
 compile on Linux x86_64**, because two are gated to the other platforms
 (`config.rs:995`, `#[cfg(windows)]`, and `discovery.rs:1552`,
 `#[cfg(any(target_os = "macos", windows))]`). Beyond that, 35 more are `#[cfg(unix)]` and four
 are Linux-only (`config.rs:1443`, `discovery.rs:1572`, `output.rs:280`, `workspace.rs:5337`),
 so the other two lanes compile smaller sets. The three hosted lanes therefore compile different
-sets — 448 on Linux x86_64, 445 on macOS, 411 on Windows. Platform-gated tests mean a green local run does not mean a green run
+sets — 456 on Linux x86_64, 453 on macOS, 419 on Windows. Platform-gated tests mean a green local run does not mean a green run
 elsewhere — which is the whole reason the OS matrix exists, and the reason
 `check-fixture-portability.py` exists to catch a *new* ungated fixture before a lane disagrees
 about it.
@@ -139,7 +139,7 @@ about it.
 > totals are **source-derived, not build-verified** — the hosted CI matrix is
 > the only thing that proves them.
 
-`cleanup.rs` (114) + `workspace.rs` (76) = 190 of 451 = **42.1%**. The two largest and most
+`cleanup.rs` (114) + `workspace.rs` (76) = 190 of 458 = **41.5%**. The two largest and most
 safety-critical modules — authorization, ownership proof, pre-spawn decision, and the `cargo
 metadata` resolution everything depends on — hold roughly two fifths of the unit tests. That
 allocation is correct, and it is the one place the pyramid is emphatically *not* inverted.
@@ -165,7 +165,7 @@ lives.
 
 ### The test-double architecture
 
-Two process seams keep almost all of the 451 declared tests from spawning a real `cargo`:
+Two process seams keep almost all of the 458 declared tests from spawning a real `cargo`:
 
 - **`CargoRunner`** — `src/workspace.rs:29`. `fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput>`.
 - **`CleanupRunner`** — declared in `src/cleanup.rs` for the destructive step, so cleanup is exercised while `cargo clean` is a no-op returning recorded bytes.
@@ -241,9 +241,10 @@ prevent, with the premise stated in the test's own doc comment.
 
 **Not defensible, and significant.**
 
-- **`src/main.rs` (1373 lines, 0 tests).** The composition root. It *is* covered —
-  `cli_contract.rs` runs the binary as a subprocess, so `main()` and `run()` execute in 61 of
-  the 62 cases. The Cargo-failure cases check real process behavior, bounded human grouping,
+- **`src/main.rs` (1562 lines, 4 tests).** The composition root. It *is* covered —
+  `cli_contract.rs` runs the binary as a subprocess, so `main()` and `run()` execute in 62 of
+  the 63 cases, and the four inline tests pin the orchestrator's own decisions
+  (the interactive surface's three endings, and the report verdict). The Cargo-failure cases check real process behavior, bounded human grouping,
   and unchanged JSON diagnostic coverage. This remains black-box coverage of an opaque
   process: nothing asserts on `run()`'s structure, and the exit-code table is only as complete
   as the cases someone remembered to write. The two pipelines are joined here and nowhere
@@ -311,19 +312,19 @@ file. See R8.
 
 ### `interactive.rs`
 
-`src/interactive.rs` arrived with M014. It is 1581 lines with **40** `#[test]` functions
-(test module opens at `src/interactive.rs:801`), which makes it the fourth-largest inline test
+`src/interactive.rs` arrived with M014. It is 1627 lines with **42** `#[test]` functions
+(test module opens at `src/interactive.rs:812`), which makes it the fourth-largest inline test
 suite in the crate and gives it more tests than `discovery_state.rs` and `policy.rs` combined
-(17 + 16).
+(17 + 17).
 
 The shape is worth recording because it is the one place the project chose a *pure* seam over
-a process seam: `Session` (`src/interactive.rs:142`) is a state machine that owns mode, cursor,
+a process seam: `Session` (`src/interactive.rs:147`) is a state machine that owns mode, cursor,
 filter, and selection and renders itself to a `Vec<String>` with no terminal in scope, while
 everything that touches a real terminal lives behind the `Terminal` trait
-(`src/interactive.rs:106`, whose `restore` is at `src/interactive.rs:113`). The consequence is
+(`src/interactive.rs:111`, whose `restore` is at `src/interactive.rs:118`). The consequence is
 that the failure that actually matters — a session that exits without restoring the terminal —
 is testable at all, and the test suite is where the "restore on unwind" guarantee is pinned
-(`src/interactive.rs:1449` catches the unwind).
+(`src/interactive.rs:1460` catches the unwind).
 
 What the module does **not** change is the reachability of the interactive path from the
 integration suites: `cli_contract.rs` exercises `-i` only through the usage-error and
@@ -350,7 +351,7 @@ outside it.
 first. `end_to_end.rs` is the exception: it drives the library's scan entry point in-process
 with a `MetadataOnly` Cargo stub (`end_to_end.rs:73-75`).
 
-Consequence: `main.rs` executes end to end in 61 of the 62 `cli_contract.rs` cases — argv
+Consequence: `main.rs` executes end to end in 62 of the 63 `cli_contract.rs` cases — argv
 normalization (`Cli::parse_normalized`), dispatch, exit codes — but only as an opaque process.
 The one case that does not run the binary is `the_json_update_branch_prints_only_the_tested_seam`
 (`tests/cli_contract.rs:3270`), which reads `src/main.rs` as text. `run()`'s internals are
@@ -376,9 +377,9 @@ Both are gated `#[cfg(unix)]` with the reason recorded in the doc comment at
 `tests/common/mod.rs:158`, which is exactly the discipline the fixture portability checker
 exists to enforce.
 
-### `tests/cli_contract.rs` — 62 declared cases
+### `tests/cli_contract.rs` — 63 declared cases
 
-Eighteen run on every platform; forty-four are `#[cfg(unix)]` because they need the
+Nineteen run on every platform; forty-four are `#[cfg(unix)]` because they need the
 `write_fake_cargo` stub on `PATH`.
 
 | Test | Line | Contract pinned |
@@ -418,7 +419,7 @@ Eighteen run on every platform; forty-four are `#[cfg(unix)]` because they need 
 | `log_mode_fatal_error_is_one_bounded_stderr_line_and_no_stdout` | 2971 | A fatal error is a bounded stderr line; stdout stays empty, so a consumer reads one stream |
 | `json_and_human_output_are_unchanged_by_log_mode` | 3014 | Adding the third format did not perturb the two existing byte-for-byte outputs |
 | `log_is_an_explicit_value_and_invalid_formats_still_fail_closed` | 3059 | `log` is an accepted `--format` value; an unknown one still exits 2 (`cli_contract.rs:3076`) |
-| `scan_emits_exactly_one_json_document` | 3094 | The one-document-per-invocation invariant, asserted as a **source string**: `src/main.rs` must still contain `enum EmitReport` (`src/main.rs:954`). This is the closest the evidence base comes to `clean --full`, and it does not run it — see below |
+| `scan_emits_exactly_one_json_document` | 3094 | The one-document-per-invocation invariant, asserted as a **source string**: `src/main.rs` must still contain `enum EmitReport` (`src/main.rs:1005`). This is the closest the evidence base comes to `clean --full`, and it does not run it — see below |
 | `json_update_refusal_emits_no_document_and_exits_non_zero` | 3219 | A forbidden-provenance `update` emits zero stdout bytes and exits 2, and its stdout is not even parseable as a success document |
 | `the_json_update_branch_prints_only_the_tested_seam` | 3270 | The only `cli_contract.rs` case that does not execute the binary: it reads `src/main.rs` and asserts the JSON branch has exactly one unterminated stdout write and prints `update_json_stream` |
 | `repeated_routine_runs_bound_stale_root_noise_without_mutating_state` | 3646 | Two Routine Simulate invocations over 100 missing hints retain one bounded summary, preserve state bytes and keep the healthy sibling selected |
@@ -436,16 +437,16 @@ reporting a false green.
 
 There is **no live `clean --full` run anywhere in the evidence base**, and there cannot be one
 on a normal workstation. `clean --full` consumes the generation reconciled by the internal
-Full traversal, and `policy::full_cleanup_roots` (`src/policy.rs:430`) fails closed with an
+Full traversal, and `policy::full_cleanup_roots` (`src/policy.rs:440`) fails closed with an
 `AppError::Config` — exit 2 — whenever that reconciliation reported an incomplete scan
-(`src/policy.rs:434`). A Full traversal is incomplete whenever the host has an unreadable
+(`src/policy.rs:444`). A Full traversal is incomplete whenever the host has an unreadable
 directory, which is the normal case, not the exceptional one. The product behaves correctly;
 the *evidence* cannot reach it.
 
 What exists instead is `scan_emits_exactly_one_json_document`
 (`tests/cli_contract.rs:3094`), and its own doc comment is honest about the substitution: it
 runs a bounded `scan`, proves one document and one newline, and then asserts that
-`src/main.rs` still contains `enum EmitReport` (`src/main.rs:954`) — the guard that keeps
+`src/main.rs` still contains `enum EmitReport` (`src/main.rs:1005`) — the guard that keeps
 `clean --full` from emitting two documents in a row. That is a **source-string guard**, the
 weakest link in this document's evidence: it would not notice a change that broke the guard's
 behaviour while leaving the identifier in place. It is the same shape as
@@ -616,7 +617,7 @@ separation is easy to misremember, and an earlier version of this document did.
 
 **`checks`** (`.github/workflows/ci.yml:4`) — the bulk of the gate. OS matrix of
 `ubuntu-latest`, `macos-latest`, `windows-latest`, so the unit tests that compile on this
-platform and the 62 integration cases (18 of them on a Windows lane) execute across all
+platform and the 63 integration cases (19 of them on a Windows lane) execute across all
 three, and on stable. Runs `cargo fmt --check`, `cargo clippy --all-targets --all-features --
 -D warnings` (a real lint gate — warnings are errors), `cargo test --all-targets
 --all-features`, then **four** Python guards: `smoke-release-candidate.py`
@@ -1065,7 +1066,7 @@ review.
 | `cleanup.rs` | 9983 | 114 | 114 / 3746 | Appropriate. Most safety-critical module has the most tests; the race fakes show the hard cases were found and pinned — and it is also the module that carried the long-standing red, R7, now corrected by C037 |
 | `workspace.rs` | 6068 | 76 | 76 / 2093 | Appropriate, and the fakes are argument-focused rather than result-focused — the right instinct |
 | `update.rs` | 2886 | 47 | 47 / 1289 | Reasonable unit coverage, but this is the module whose defects (C011, C016, C017) escaped to production. Unit tests cannot see a transport that cannot reach its authority. Its transaction-hygiene evidence was briefly a false green too — see R6 |
-| `interactive.rs` | 1581 | 40 | 40 / 800 | Good for a new module, and the only one that put the terminal behind a pure seam. Its *surface* — a real selection session — is covered nowhere outside the module, because the integration suite has no terminal |
+| `interactive.rs` | 1627 | 42 | 42 / 811 | Good for a new module, and the only one that put the terminal behind a pure seam. Its *surface* — a real selection session — is covered nowhere outside the module, because the integration suite has no terminal |
 | `discovery.rs` | 2363 | 39 | 39 / 1000 | Permission traversal has a premise-checked Unix fixture; 1,001 synthetic errors prove per-root aggregation stays bounded |
 | `cli.rs` | 1273 | 32 | 32 / 481 | Good |
 | `output.rs` | 1065 | 21 | 21 / 540 | **Split verdict, and the split is the finding.** The in-file tests cover bounded log output and update JSON; the scan/cleanup envelope layer still has **zero** direct in-file tests |
@@ -1079,7 +1080,7 @@ review.
 | `domain.rs` | 435 | 1 | 1 / 406 | Defensible. Pure data, exercised transitively, with one well-premised test for the saturating counter conversion. Semantic *rules* live in the modules that interpret the types |
 | `error.rs` | 16 | 0 | — | Defensible |
 | `lib.rs` | 16 | 0 | — | Defensible |
-| `main.rs` | 1373 | 0 | 0 / 1373 | **Zero inline tests for the composition root.** Partly mitigated — `cli_contract.rs` runs the binary as a subprocess and pins several non-zero exit paths — but `run()`'s structure remains opaque, and C023 established that the cleanup progress-bar ordering here is unreachable from the tests |
+| `main.rs` | 1562 | 4 | 4 / 1425 | **Four inline tests for the composition root**, added by C038: the interactive surface's three endings and the report verdict. Still thin — `cli_contract.rs` runs the binary as a subprocess and pins several non-zero exit paths, but `run()`'s structure remains opaque, and C023 established that the cleanup progress-bar ordering here is unreachable from the tests |
 
 The contrast in the last three rows is the finding. The *human* renderer beside the
 *machine* DTO layer has 7 unusually strong tests, while the envelope layer below the log
@@ -1092,15 +1093,15 @@ sees a covered module where the versioned DTOs are exactly as unpinned as before
 
 ### Behaviours a reviewer should treat as under-verified
 
-1. **`main.rs` composition and the exit-code table.** `run()` stitches the two pipelines together and maps outcomes to codes. **All three** codes are pinned: `1` asserted at `cli_contract.rs:754` and `:1153`, `2` at `:674` and `:3076`, and `0` at `:2016`, `:2055`, `:2077`, and `:2107` (the resolved-scope label test is at `:213`). The *distinct failure routes* are not all pinned — a usage error and a config error both surface as `2`, and nothing distinguishes them at the exit-code level. `src/main.rs:1361` shows the `full_incomplete` → 1 path. The cleanup pipeline has its own `Ok(1)` route — a failed unit or a blocked scope (`src/main.rs:474`) — now tested through the `scope_blocked.is_some()` shape M012A introduced, and M012A also made bare `cargo cleanme` a cleanup path, so `run()`'s dispatch is materially larger than when this list was written.
-2. **`clean --full` itself.** No live run exists, and none can exist on a host with an unreadable directory, because `policy::full_cleanup_roots` (`src/policy.rs:430`) fails closed with exit 2 whenever the Full reconciliation was incomplete (`src/policy.rs:434`). The only evidence is a source-string guard on `enum EmitReport` (`tests/cli_contract.rs:3094`, `src/main.rs:954`). A pty harness, as C023 proposed for the progress-bar ordering, is the shape of thing that would close this properly.
+1. **`main.rs` composition and the exit-code table.** `run()` stitches the two pipelines together and maps outcomes to codes. **All three** codes are pinned: `1` asserted at `cli_contract.rs:754` and `:1153`, `2` at `:674` and `:3076`, and `0` at `:2016`, `:2055`, `:2077`, and `:2107` (the resolved-scope label test is at `:213`). The *distinct failure routes* are not all pinned — a usage error and a config error both surface as `2`, and nothing distinguishes them at the exit-code level. `src/main.rs:1412` shows the `full_incomplete` → 1 path. The cleanup pipeline has its own `Ok(1)` route — a failed unit or a blocked scope (`src/main.rs:483`) — now tested through the `scope_blocked.is_some()` shape M012A introduced, and M012A also made bare `cargo cleanme` a cleanup path, so `run()`'s dispatch is materially larger than when this list was written.
+2. **`clean --full` itself.** No live run exists, and none can exist on a host with an unreadable directory, because `policy::full_cleanup_roots` (`src/policy.rs:440`) fails closed with exit 2 whenever the Full reconciliation was incomplete (`src/policy.rs:444`). The only evidence is a source-string guard on `enum EmitReport` (`tests/cli_contract.rs:3094`, `src/main.rs:1005`). A pty harness, as C023 proposed for the progress-bar ordering, is the shape of thing that would close this properly.
 3. **`update_json` output shape** (`output.rs:903-940`). Bypasses `EnvelopeV1` and has its own `schema_version` literal at `output.rs:905`. C022 added the four missing cases (`output.rs:969`, `:995`, `:1009`, `:1048`) plus the CLI failure-shape case; what remains unpinned is a successful live document and the schema reconciliation itself. See R3.
 4. **`output.rs` envelope field completeness.** `scan()` (`output.rs:105`) and `cleanup()` (`output.rs:161`): adding, removing, or renaming a field breaks no in-crate test. The 17 tests in the log and path modules all live below `pub mod log` or in `path_tests`; the four `update_tests` cover the other contract.
 5. **`report.rs` rendering is covered, but not end to end.** The 7 inline tests are strong; the default `--format text` path is never asserted through the binary.
 6. **`domain.rs` semantics.** One test is defensible for the data shapes, but any *meaningful* method on those types is untested by construction — nothing would catch one being added.
 7. **`traverse.rs` measurement.** 6 tests for parallel size/recency measurement. Symlink handling, `CACHEDIR.TAG` qualification, and per-entry `ReadDir` error attribution are what would go wrong on a real machine, and what the platform matrix would be best placed to catch — but the fakes are hand-rolled per test, so real behaviour is only sampled, and the one activity test does not discriminate (R8).
 8. **The whole self-update path.** 47 inline tests against `FixtureEnvironment`, plus manual live rehearsal. Every published defect in this line escaped that apparatus, and the reason is structural: a fixture that replaces the network can never discover that the real network rejects you. The automated evidence is a substitute for the thing, not a check of it.
-9. **Cross-platform behaviour generally.** 44 of the 62 `cli_contract.rs` cases are `#[cfg(unix)]`, so a Windows lane exercises the argv, dispatch, and envelope layers but never the spawn-and-delete layer. `check-fixture-portability.py` closes the ungated-POSIX-fixture hole, and its own docstring (script lines 2-57) disclaims checking whether a case's pass condition proves its intended branch. That disclaimer *is* the guarantee's boundary: a green run means "no statically visible platform-shaped fixture is ungated", not "every fixture proved something on every lane". The C013 25-row inventory remains the only real audit of that question, and it is a point-in-time artifact, not a continuous guarantee.
+9. **Cross-platform behaviour generally.** 44 of the 63 `cli_contract.rs` cases are `#[cfg(unix)]`, so a Windows lane exercises the argv, dispatch, and envelope layers but never the spawn-and-delete layer. `check-fixture-portability.py` closes the ungated-POSIX-fixture hole, and its own docstring (script lines 2-57) disclaims checking whether a case's pass condition proves its intended branch. That disclaimer *is* the guarantee's boundary: a green run means "no statically visible platform-shaped fixture is ungated", not "every fixture proved something on every lane". The C013 25-row inventory remains the only real audit of that question, and it is a point-in-time artifact, not a continuous guarantee.
 
 ---
 

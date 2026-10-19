@@ -26,7 +26,7 @@ scan (exit 1); no cleanup commands were run against its unproven learned roots
 Exit code 2. The refusal is unconditional in practice. The chain, each link
 verified against the built binary on a live machine:
 
-1. `clean --full` runs a Full reconciliation first (`src/main.rs:729`,
+1. `clean --full` runs a Full reconciliation first (`src/main.rs:758`,
    `run_scan(ScanIntent::Full, …)`).
 2. A Full reconciliation walks the **platform root** — `/` on unix. On this
    machine that walk produced **127 permission-denied traversal errors**,
@@ -37,7 +37,7 @@ verified against the built binary on a live machine:
    from it, so the Full scan is **incomplete**.
 4. An incomplete Full scan exits **1** (`full_incomplete`).
 5. `policy::full_cleanup_roots` refuses any non-zero reconciliation code
-   (`src/policy.rs:434-439`), so `clean --full` exits **2**.
+   (`src/policy.rs:444-449`), so `clean --full` exits **2**.
 
 The 127 unreadable directories are `/var` (63), `/snap` (42), `/run` (26),
 `/etc` (6), `/root` (1), `/opt` (1), `/media` (1) and a tail deeper than the
@@ -86,7 +86,7 @@ implementation choice.
 The gate is unit-tested, and the test is green — but it tests the *function*,
 never the *reachability* of the function from a real invocation.
 
-`src/policy.rs:1062`:
+`src/policy.rs:1072`:
 
 ~~~rust
 // An incomplete reconciliation never authorizes stale roots.

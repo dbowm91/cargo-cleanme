@@ -191,10 +191,10 @@ without discarding the existing selection. `Enter` on an empty selection does
 not commit. Combine with `--dry-run` to review a selection without invoking
 `cargo clean`. The session refuses to start when stdin or stdout is not a
 terminal, and it refuses machine formats (`--format json` / `--format log`),
-because a selection list is an operator surface, not a report. It also refuses
-an **empty candidate list**: `no cleanup units are available to select;
-nothing would be cleaned`, exit `2`. The same scope cleaned *without* `-i`
-completes normally and exits `0`.
+because a selection list is an operator surface, not a report. An **empty
+candidate list** is not a refusal: the scope resolved and proved no cleanup
+unit, so the run prints one plain line, `Nothing to clean.`, and exits `0` —
+the same exit the same scope cleaned *without* `-i` produces.
 
 ### Migration from 0.1.x
 

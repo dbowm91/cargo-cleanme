@@ -183,7 +183,7 @@ Decided, not deferred, on the following evidence:
   (§6E). Bare maintenance (`CleanupRequest` at `src/cli.rs:228-250`,
   built at `:312-317` and `:379-395`) does not set it.
 - **Threading.** New `partitioned: bool` field on `CleanupRequest`,
-  through `run_engine_guarded` (`src/main.rs:594-618`) into
+  through `run_engine_guarded` (`src/main.rs:623-647`) into
   `clean_with_roots_policy_selector_guarded`
   (`src/cleanup.rs:1278-1290`, already `#[allow(too_many_arguments)]`).
   Documented in `cli.rs` with a doc comment naming its interaction
@@ -296,7 +296,7 @@ the assessment *is* the decision, recorded here so the implementer does
 not re-decide it:
 
 - **Exit codes: unchanged code, clarified meaning.**
-  `src/main.rs:474-478` (`failed > 0 || scope_blocked.is_some() → 1`)
+  `src/main.rs:483-487` (`failed > 0 || scope_blocked.is_some() → 1`)
   is untouched. Partial success keeps `scope_blocked` set (held
   islands are named in it), so exit 1 falls out of the existing
   aggregation with no new code and no new exit value — satisfying
