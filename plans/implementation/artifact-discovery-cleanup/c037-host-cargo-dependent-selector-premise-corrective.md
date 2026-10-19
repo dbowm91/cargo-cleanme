@@ -1,7 +1,9 @@
 # C037 — Host-Cargo-Dependent Selector Premise Corrective
 
-Status: **closing** — implementation landed; closure evidence in
+Status: **conditionally closed** — implementation landed and hosted-verified;
+closure evidence in
 [`plans/closure/artifact-discovery-cleanup/c037-status.md`](../../closure/artifact-discovery-cleanup/c037-status.md).
+**Still open until a published release carries the fix.**
 
 Date: 2026-10-19.
 Repository baseline: `main` at 0.2.9 (unpublished; latest published tag `v0.2.8`),

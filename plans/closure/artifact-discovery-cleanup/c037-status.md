@@ -13,7 +13,8 @@ Corrects / closes findings from:
 
 Repository baseline: `main` at 0.2.9 (unpublished; latest published tag `v0.2.8`),
 commit `6224d07`.
-Implementation commit: *recorded in §1 once the commit exists.*
+Implementation commit: `27ab9e3` — *"fix(test): state the selector premise so the
+case is host-independent"*.
 Release tag carrying the work: **none yet** — 0.2.9 is unreleased and no release
 is authorized. See §9.
 
@@ -169,9 +170,29 @@ the Linux set by 4. Every document carrying the census was updated:
 
 ## 7. Hosted evidence
 
-- **Outstanding at the time of writing:** the `checks` lane on ubuntu, macOS and
-  Windows for the implementation commit, plus the release-drift guard. Recorded
-  here when the runs complete.
+Run **`39312028264`** on `27ab9e3` (push to `main`), **all nine jobs green**:
+
+| Job | Result |
+|---|---|
+| `checks (ubuntu-latest)` | **success** |
+| `checks (macos-latest)` | **success** |
+| `checks (windows-latest)` | **success** |
+| `msrv` (toolchain 1.89) | **success** |
+| `generated-docs` | **success** |
+| `benchmark` | **success** |
+| `installers (ubuntu-latest)` / `(macos-latest)` / `(windows-latest)` | **success** |
+
+The three `checks` lanes had been red on every push since `38912914854`
+(2026-10-16). The `ubuntu` lane's log now shows the **whole** suite executing
+again — `449 passed; 0 failed` (lib), `62 passed; 0 failed` (`cli_contract`),
+`4 passed; 0 failed` (`end_to_end`) — where the failing `--lib` target had
+been suppressing the two integration targets since 2026-10-16.
+
+Two sibling workflows on the same commit: **Release drift guard** `39312028164`
+**success**, **Cargo selector qualification** `39312028148` **success**. The
+selector-qualification workflow is the hosted real-Cargo matrix that owns the
+*support claims*; it is green, and it did **not** promote any version — the
+allowlist and the policy are unchanged, as the plan requires.
 
 ## 8. Known limitations
 
@@ -188,15 +209,15 @@ the Linux set by 4. Every document carrying the census was updated:
 
 ## 9. Disposition
 
-**Conditionally closed — implementation landed and locally verified; the
-published release is outstanding.**
+**Conditionally closed — implementation landed, locally verified, and hosted
+green on all nine jobs; the published release is outstanding.**
 
 Per `plans/003-planning-process.md` §5, compilation is not closure and
 publication is not closure. This record is complete on the implementation side:
 the defect is corrected, the repair is proven discriminating in both
-directions, and the full verification ladder is green on the repaired tree. It
-is **not** closed, because no published release carries the correction, and the
-hosted evidence in §7 must show all three `checks` lanes green.
+directions, the full verification ladder is green on the repaired tree, and the
+hosted CI is green on every lane. It is **not** closed, because no published
+release carries the correction.
 
 ## 10. Unresolved findings by severity
 
