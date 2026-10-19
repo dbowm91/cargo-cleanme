@@ -124,13 +124,13 @@ set is valuable.
 
 ## Coverage shape, honestly
 
-**450** inline `#[test]` functions are **declared** in `src/`; **448** compile
+**451** inline `#[test]` functions are **declared** in `src/`; **449** compile
 and run on Linux. Two are excluded there: one `#[cfg(windows)]`
 (`src/config.rs:997`) and one `#[cfg(any(target_os = "macos", windows))]`
 (`src/discovery.rs:1554`). A further **35** carry `#[cfg(unix)]` and **4** are
 Linux-only (`src/config.rs:1445`, `src/discovery.rs:1574`, `src/output.rs:282`,
-`src/workspace.rs:5339`), so the three hosted lanes compile **448 of 450 on
-Linux**, **411 of 450 on Windows**, and **445 of 450 on macOS** —
+`src/workspace.rs:5339`), so the three hosted lanes compile **449 of 451 on
+Linux**, **412 of 451 on Windows**, and **446 of 451 on macOS** —
 `#[cfg(unix)]` is true *on* macOS, which is the half people get wrong. A green
 local run is not a green run elsewhere — that is what the OS matrix in `ci.yml`
 is for, and why `check-fixture-portability.py` exists to catch a *new* ungated
@@ -144,11 +144,11 @@ fixture before a lane disagrees about it.
 > `cargo test --lib -- --list` on the host platform; anything else silently
 > disagrees by a few.
 
-State which number you mean. "450 tests" (declared) and "448 passing" (on
+State which number you mean. "451 tests" (declared) and "449 passing" (on
 Linux) are both true, and a record that gives one while meaning the other is
 ambiguous in the direction that matters.
 
-Of the 450, **42.0% live in two modules** (`cleanup.rs` 113, `workspace.rs` 76).
+Of the 451, **42.1% live in two modules** (`cleanup.rs` 114, `workspace.rs` 76).
 That concentration is a direct consequence of the architecture: cleanup and
 workspace resolution are where the invariants are. It is not a balanced suite,
 and a flat count would hide that. A change to a small module can be genuinely

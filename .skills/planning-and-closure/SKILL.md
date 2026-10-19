@@ -112,15 +112,27 @@ A closure record that claims a gate passed when it was not run is **worse than
 no record**, because the next milestone trusts it. If a command was skipped, or
 a suite is red for an unrelated reason, say so, in the record.
 
-One live example in this repository: `plans/closure/artifact-discovery-cleanup/m017-status.md`
-records a pre-existing failing test
+One worked example in this repository: `plans/closure/artifact-discovery-cleanup/m017-status.md`
+recorded a pre-existing failing test
 (`cleanup::tests::real_temp_project_preview_and_execute_with_redirected_target`,
-`src/cleanup.rs:6722`) and says it "needs its own corrective". **No such
-corrective exists yet.** The tool skips in the *safe* direction (host cargo is
-newer than the nine exact versions the `profile_selector` capability allowlist
-names, `src/workspace.rs:146-165`) — it is the *test* that is wrong, not the
-tool. Do not "fix" it by widening the allowlist: that would grant a capability
-the code has not verified the host supports.
+`src/cleanup.rs:6722`) and said it "needs its own corrective". For four days
+**no such corrective existed** — the note was a permanent resident, and the
+red it described was silently suppressing the whole integration-test surface on
+CI, because `cargo test` stops scheduling the remaining targets behind a
+failing `--lib` target. C037
+(`plans/implementation/artifact-discovery-cleanup/c037-host-cargo-dependent-selector-premise-corrective.md`)
+is the corrective that was missing.
+
+Two things it teaches. First, **a closure record that names a needed
+corrective is not the same as a corrective**: until a plan exists, the defect
+is open, and a red that suppresses other targets deserves more than a "known
+limitation" line. Second, the fix was **not** to widen the capability
+allowlist: the tool skips in the *safe* direction (the host cargo is newer
+than the nine exact versions the `profile_selector` capability allowlist
+names, `src/workspace.rs:146-165`), so it is the *test* that was wrong, and
+widening the allowlist would grant a capability the code has not verified the
+host supports. The repair was to make the test **state its premise** and
+assert the outcome the product owes for that premise.
 
 ## Registering work
 

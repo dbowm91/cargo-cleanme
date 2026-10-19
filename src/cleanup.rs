@@ -6719,8 +6719,8 @@ mod tests {
             Some(CleanupSelector::Profile("dev".into())),
         )
         .unwrap();
-        assert_eq!(profile_preview.results[0].outcome, CleanOutcome::Previewed);
-        assert!(profile_preview.render().contains("output-union before"));
+        // The expected outcome is derived from the product's own host premise.
+        assert_profile_preview_matches_host_premise(&profile_preview);
         assert!(external.join("artifact.bin").exists());
         // Simulate must not invoke clean and must match preview candidate set.
         let sim = clean_with(&root, 0, &[], CleanMode::Simulate, &runner, &noop).unwrap();
@@ -9881,5 +9881,103 @@ mod tests {
             );
             assert!(runner.inner.clean_calls().is_empty(), "{mode:?}");
         }
+    }
+
+    /// The outcome a profile-scoped preview must report on the host that runs
+    /// this case.
+    ///
+    /// `runtime_clean_capabilities` is the product's own premise: the profile
+    /// selector is offered only for the exact Cargo releases the qualification
+    /// policy claims (`release/selector-qualification.json`), and every other
+    /// Cargo — including a patch release of a claimed one — is refused by
+    /// design. Deriving the expectation from that same function keeps the
+    /// assertion tight in both directions: a qualified host must preview, and
+    /// an unqualified one must refuse *without* invoking a Cargo clean.
+    ///
+    /// It is deliberately not a disjunction. Accepting either outcome would
+    /// leave the case green on a host where the selector was wrongly refused
+    /// and on a host where it was wrongly offered, which is the "green that
+    /// proves nothing" shape this repository keeps finding.
+    fn assert_profile_preview_matches_host_premise(report: &CleanReport) {
+        if runtime_clean_capabilities().profile_selector {
+            assert_eq!(report.results[0].outcome, CleanOutcome::Previewed);
+            assert!(report.render().contains("output-union before"));
+        } else {
+            assert_eq!(report.results[0].outcome, CleanOutcome::Skipped);
+            assert_eq!(
+                report.results[0].reason_code,
+                CleanupReasonCode::SelectorUnsupported
+            );
+        }
+    }
+
+    /// A selector reaches Cargo's command line.
+    ///
+    /// The runtime capability gate decides *whether* a selector is offered, and
+    /// it reads the host's Cargo version — so on a host outside the
+    /// qualification policy the whole selector path is refused before any
+    /// command is built. This case pins the composition itself, which is
+    /// host-independent: a `--profile` selector must reach `cargo clean` as
+    /// `--profile <name>`, and a `--package` selector as `--package <spec>`.
+    /// Without it, the argument composition would only be exercised on a
+    /// qualified host, and CI runs on whatever `stable` currently is.
+    #[test]
+    fn a_selector_reaches_the_cargo_command_line() {
+        let ctx = RevalidatedContext {
+            workspace_roots: vec![PathBuf::from("/ws")],
+            workspace_root: PathBuf::from("/ws"),
+            root_manifest: PathBuf::from("/ws/Cargo.toml"),
+            canonical_members: vec![PathBuf::from("/ws")],
+            target: PathBuf::from("/cache/target"),
+            build: Some(PathBuf::from("/cache/build")),
+            capability: CargoCapabilities {
+                build_dir: CargoBuildDirCapability::Distinct,
+                metadata_had_build_directory: true,
+                env_build_dir_set: false,
+            },
+            covering: vec![PathBuf::from("/cache/target")],
+            pre_bytes: 0,
+            newest_activity: None,
+            ownership: OutputOwnershipClass::PrivateBounded,
+            frozen_env: Vec::new(),
+        };
+        let args = clean_args(
+            &ctx,
+            CleanMode::CargoPreview,
+            Some(&CleanupSelector::Profile("dev".into())),
+        );
+        let args: Vec<String> = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let position = |flag: &str| {
+            args.iter()
+                .position(|a| a == flag)
+                .unwrap_or_else(|| panic!("{flag} is missing from {args:?}"))
+        };
+        assert_eq!(args[position("--profile") + 1], "dev");
+        assert!(
+            !args.iter().any(|a| a == "--package"),
+            "a profile selector must not also name a package: {args:?}"
+        );
+        let args = clean_args(
+            &ctx,
+            CleanMode::CargoPreview,
+            Some(&CleanupSelector::Package("app-a@1.0.0".into())),
+        );
+        let args: Vec<String> = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let position = |flag: &str| {
+            args.iter()
+                .position(|a| a == flag)
+                .unwrap_or_else(|| panic!("{flag} is missing from {args:?}"))
+        };
+        assert_eq!(args[position("--package") + 1], "app-a@1.0.0");
+        assert!(
+            !args.iter().any(|a| a == "--profile"),
+            "a package selector must not also name a profile: {args:?}"
+        );
     }
 }

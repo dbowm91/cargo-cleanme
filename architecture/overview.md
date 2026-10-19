@@ -19,7 +19,7 @@ distinction matters.
 - **What it is:** a Cargo subcommand (`cargo cleanme`) that finds inactive Cargo
   build artifacts on a machine and either reports or safely reclaims them.
 - **Shape:** one binary (`src/main.rs`) over one library (`src/lib.rs`) of 16
-  modules, 18 source files, 32,680 lines in `src/` (14,908 of them outside
+  modules, 18 source files, 32,778 lines in `src/` (14,908 of them outside
   every `#[cfg(test)]` scope), no async runtime of its own, and exactly one
   binary dependency that matters for safety (`cargo metadata`).
 - **Version:** 0.2.9 (unpublished; latest published tag `v0.2.8`) ·
@@ -97,9 +97,9 @@ Execute mode). `scan --full` is a hidden alias of `scan --all`.
 |---|---|---|
 | Source files | 18 | `src/` |
 | Library modules | 16 | `src/lib.rs` |
-| Total lines in `src/` | 32,680 | `wc -l src/*.rs` |
+| Total lines in `src/` | 32,778 | `wc -l src/*.rs` |
 | Production lines | 14,908 | total minus every `#[cfg(test)]` scope |
-| Inline `#[test]` functions | 450 | `#[test]` attributes in `src/` |
+| Inline `#[test]` functions | 451 | `#[test]` attributes in `src/` |
 | Integration test files | 2 | `tests/cli_contract.rs`, `tests/end_to_end.rs` |
 | Contract-checker scripts | 17 | `scripts/` — the set is machine-gated, see §9 |
 | GitHub workflows | 6 | `.github/workflows/` |
@@ -129,7 +129,7 @@ the file itself; the integration suites in `tests/` are counted separately in
 
 | Module | total | prod | tests | Module | total | prod | tests |
 |---|---:|---:|---:|---|---:|---:|---:|
-| `cleanup.rs` | 9885 | 3746 | 113 | `output.rs` | 1065 | 540 | 21 |
+| `cleanup.rs` | 9983 | 3746 | 114 | `output.rs` | 1065 | 540 | 21 |
 | `workspace.rs` | 6068 | 2093 | 76 | `progress.rs` | 873 | 533 | 13 |
 | `update.rs` | 2886 | 1289 | 47 | `report.rs` | 195 | 71 | 7 |
 | `discovery.rs` | 2363 | 1000 | 39 | `traverse.rs` | 624 | 494 | 6 |
@@ -141,7 +141,7 @@ the file itself; the integration suites in `tests/` are counted separately in
 | `discovery_state.rs` | 1129 | 580 | 17 | | | | |
 
 Two observations a reader should carry forward. **Coverage is concentrated**:
-`cleanup.rs` and `workspace.rs` alone hold 189 of the 450 inline tests, and
+`cleanup.rs` and `workspace.rs` alone hold 190 of the 451 inline tests, and
 `main.rs` — the only module with no tests at all — is where the two pipelines
 are stitched together. And **the biggest files are the biggest risk**:
 `cleanup.rs` is where bytes get deleted.
@@ -631,7 +631,7 @@ things a reviewer should check first in any change.
 | `tests/cli_contract.rs` | 62 contract tests over the CLI surface, exit codes, and reason codes. | [14 — Testing](14-testing-and-verification.md) |
 | `tests/end_to_end.rs` | 4 end-to-end tests over a real fixture. | [14 — Testing](14-testing-and-verification.md) |
 | `tests/common/` | The shared fixture harness. | [14 — Testing](14-testing-and-verification.md) |
-| `src/**/*.rs` inline tests | 450 `#[test]` functions, concentrated in `cleanup.rs` (113) and `workspace.rs` (76). | [14 — Testing](14-testing-and-verification.md) |
+| `src/**/*.rs` inline tests | 451 `#[test]` functions, concentrated in `cleanup.rs` (114) and `workspace.rs` (76). | [14 — Testing](14-testing-and-verification.md) |
 | `scripts/` (17) | The contract-checker set: release contract, release identity, staged-release validation, installer contract, doc citations, fixture portability, selector qualification, post-release smoke contract, and the release/benchmark tooling. The exact set is machine-gated — a new checker cannot ship undocumented. | [14 — Testing](14-testing-and-verification.md) §5 |
 | `.github/workflows/` (6) | `ci.yml`, `post-release-smoke.yml`, `qualify-cargo-selectors.yml`, `release-binaries.yml`, `release-drift.yml`, `validate-staged-release.yml`. | [15 — Distribution](15-distribution-and-release.md) |
 | `packaging/` | `install.sh` and `install.ps1` plus their qualification harness. | [15 — Distribution](15-distribution-and-release.md) |
@@ -686,7 +686,7 @@ the same pass, so these rows point at completed work rather than at a plan.
 | 23 | **A user-facing diagnostic points the operator at `scan --full`** (`src/discovery.rs:373-380`) — a *hidden* alias that does not appear in `scan --help`. The canonical spelling is `scan --all`. | **Covered by C036 D3** (proposed, not accepted). |
 | 24 | **`cli::absolutize_root` and `main::collapse_roots` disagree about `..`.** The CLI folds `..` lexically; `main.rs:917` canonicalizes, which resolves symlinks first. A relative root whose `..` crosses a symlink names different directories under the two. No test covers the disagreement. | **Open — not yet planned.** |
 | 25 | **A root-level `--dry-run` is accepted alongside `scan` and then silently ignored** — the root flag is not global, clap accepts it, and the `Invocation::Scan` arm never reads it. Harmless today because a scan is read-only, but it is the same shape as the discarded-flag defect the `Clean` and `Update` arms were fixed for. | **Open — not yet planned.** |
-| 26 | **One lib test fails on any host whose Cargo version is outside an exact allowlist.** `cleanup::tests::real_temp_project_preview_and_execute_with_redirected_target` expects `Previewed` and gets `Skipped`, because `clean_capabilities_from_version` (`src/workspace.rs:146-165`) enables `profile_selector` only for nine exact versions — `1.89.0`, `1.90.0`, `1.91.1`, `1.92.0`, `1.93.1`, `1.94.1`, `1.95.0`, `1.98.1`, `1.99.0` — and the host here is `1.99.1`. The tool skips in the **safe** direction; the *test* is what fails. | **Known and recorded; no corrective exists.** `plans/closure/artifact-discovery-cleanup/m017-status.md` records it as "the known pre-existing `real_temp_project_preview_and_execute_with_redirected_target` (host cargo outside the profile-selector allowlist)" and states it "needs its own corrective" — but no such corrective plan exists in `plans/implementation/artifact-discovery-cleanup/`. The failure is on the **pristine HEAD** as well, so it is not caused by anything in this documentation pass. |
+| 26 | **One lib test fails on any host whose Cargo version is outside an exact allowlist.** `cleanup::tests::real_temp_project_preview_and_execute_with_redirected_target` expected `Previewed` and got `Skipped`, because `clean_capabilities_from_version` (`src/workspace.rs:146-165`) enables `profile_selector` only for nine exact versions — `1.89.0`, `1.90.0`, `1.91.1`, `1.92.0`, `1.93.1`, `1.94.1`, `1.95.0`, `1.98.1`, `1.99.0` — and the host here is `1.99.1`. The tool skips in the **safe** direction; the *test* was what failed. The defect was the test's **unstated host premise**, and the exact-version allowlist made it structural: the first patch release of any qualified minor is outside the set, so the case had a known expiry date with no alarm before it. | **Corrected by C037** (`plans/implementation/artifact-discovery-cleanup/c037-host-cargo-dependent-selector-premise-corrective.md`); the hosted release is outstanding. The case now derives its expectation from the product's own premise function and asserts a *specific* outcome per premise — a qualified host must preview, an unqualified one must refuse with `SelectorUnsupported` — rather than a disjunction. Proven by mutation in both directions, and the selector-to-Cargo composition is now covered by a host-independent case. No production behaviour changed: `src/workspace.rs` and `release/selector-qualification.json` are byte-identical. |
 | 27 | **`traverse::tests::source_scan_short_circuits_recent_files` does not discriminate what it claims.** It writes one fresh file into a *freshly created* temp dir and walks that dir as the root. The root's own mtime is fresh, the root is not excluded from the walk, and `Order::ParentFirst` yields the root first — so `Recent` is returned on the **directory's** mtime before the file is ever examined. The test would still pass if the file were deleted, if the guard ignored files entirely, or if directories were excluded from the evidence. | **Open — not yet planned.** This is the AGENTS.md §4 "green test" shape exactly: a passing test that cannot fail for the reason it claims. It needs a discriminating fixture pair. |
 | 28 | **The C028 narrow-absence rule has *zero* discriminating coverage.** Verified by mutation on a scratch copy: deleting the probe (`src/discovery_state.rs:308-317`) leaves **all 17** `discovery_state` unit tests green and **all 62** `cli_contract` integration tests green. The nominal test `complete_certain_full_prunes_only_positively_absent_learned_roots` (`src/discovery_state.rs:966`) stages roots under `tempfile::tempdir()` with `home: None`, so the **C030** rule at `src/discovery_state.rs:298-300` drops them first — the temp root is forbidden when `home` is `None` (`src/discovery_state.rs:165-166`). The symmetric mutation (deleting C030 instead) fails two tests, confirming C030 is the rule actually under test. | **Open — not yet planned.** The rule is live in production and untested; only the rule that shadows it is tested. |
 | 29 | **`discovery_state::tests::zero_retention_disables_expiration_and_nested_roots_collapse` no longer demonstrates its name.** Same fixture problem: the assertion is now `learned_roots.is_empty()`, so the zero-retention path and the nested-root containment collapse are both unexercised. Only the exact-duplicate fold (`src/discovery_state.rs:1064`) is covered. | **Open — not yet planned.** |

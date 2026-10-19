@@ -98,7 +98,7 @@ from `src/`, never copied between documents.
 
 | File | `#[test]` | `mod tests` opens at | Total lines | Lines in test module |
 |---|---:|---:|---:|---:|
-| `src/cleanup.rs` | 113 | 3747 | 9885 | 6139 |
+| `src/cleanup.rs` | 114 | 3747 | 9983 | 6237 |
 | `src/workspace.rs` | 76 | 2094 | 6068 | 3975 |
 | `src/update.rs` | 47 | 1290 | 2886 | 1597 |
 | `src/interactive.rs` | 40 | 801 | 1581 | 781 |
@@ -139,7 +139,7 @@ about it.
 > totals are **source-derived, not build-verified** — the hosted CI matrix is
 > the only thing that proves them.
 
-`cleanup.rs` (113) + `workspace.rs` (76) = 189 of 450 = **42.0%**. The two largest and most
+`cleanup.rs` (114) + `workspace.rs` (76) = 190 of 451 = **42.1%**. The two largest and most
 safety-critical modules — authorization, ownership proof, pre-spawn decision, and the `cargo
 metadata` resolution everything depends on — hold roughly two fifths of the unit tests. That
 allocation is correct, and it is the one place the pyramid is emphatically *not* inverted.
@@ -147,13 +147,13 @@ allocation is correct, and it is the one place the pyramid is emphatically *not*
 ### The structural observation: the testing is inverted
 
 The convention is a separate `tests/` tree beside a lean `src/`. This crate does the
-opposite. `cleanup.rs` is 9885 lines of which **6139 are test code** — 62% of that file is
+opposite. `cleanup.rs` is 9983 lines of which **6237 are test code** — 62% of that file is
 fake-Cargo runners and assertion bodies. `workspace.rs` is 6068 lines, 3975 of them tests.
 `report.rs` runs the other way: its test module opens at line 72, roughly the first third,
 so the rendering tests sit *above* most of the production code they exercise.
 
 The consequence for review is concrete. Opening `src/cleanup.rs` to understand the pre-spawn
-decision puts 6139 lines of `FakeCleanupRunner` variants (`cleanup.rs:3747`–`9885`) between
+decision puts 6237 lines of `FakeCleanupRunner` variants (`cleanup.rs:3747`–`9983`) between
 the reader and nearly all production code. Locate the boundary first — `mod tests {` at
 `cleanup.rs:3747` — and read upward. Do not infer "few tests" from a file's position in the
 tree, and do not count `cleanup.rs` as production code when estimating where complexity
@@ -165,20 +165,22 @@ lives.
 
 ### The test-double architecture
 
-Two process seams keep almost all of the 450 declared tests from spawning a real `cargo`:
+Two process seams keep almost all of the 451 declared tests from spawning a real `cargo`:
 
 - **`CargoRunner`** — `src/workspace.rs:29`. `fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput>`.
 - **`CleanupRunner`** — declared in `src/cleanup.rs` for the destructive step, so cleanup is exercised while `cargo clean` is a no-op returning recorded bytes.
 
-Two test sites reach past the seam and drive the real `cargo` deliberately:
-`workspace.rs:5508` (`a_relative_root_resolves_the_same_workspaces_as_its_absolute_spelling`)
-and `cleanup.rs:6746` / `cleanup.rs:6819` (both inside
+Three test sites reach past the seam and drive the real `cargo` deliberately:
+`workspace.rs:5508` (`a_relative_root_resolves_the_same_workspaces_as_its_absolute_spelling`),
+`cleanup.rs:6605` (`real_temp_project_preview_and_execute_with_redirected_target`)
+and `cleanup.rs:6740` / `cleanup.rs:6819` (both inside
 `real_cargo_package_selector_preserves_sibling_workspace_artifacts`).
 
 A third real-Cargo call is made by *production* code rather than by a test, and it is the
 one that matters for R7 below: `runtime_clean_capabilities` (`cleanup.rs:3615`) shells out to
 `cargo --version` to decide which selectors the host Cargo supports. That is why a
-fake-driven cleanup case can still be sensitive to the host's Cargo version.
+*selector* case can still be sensitive to the host's Cargo version even where the Cargo it
+drives is a fake: the capability gate is consulted before any command is built.
 
 Two further seams remove the remaining side effects:
 
@@ -893,31 +895,74 @@ written up in [§7](#7-the-false-green-problem) history below because the class 
 to staging directories: **a test whose observation surface is wider than the subject it claims to
 test can report another actor's behaviour as its own.**
 
-**R7 — A test that fails on the current host, with no corrective to fix it.**
+**R7 — A test that failed on the current host, and what it took to fix it.**
+*(Corrective: C037 — `plans/implementation/artifact-discovery-cleanup/c037-host-cargo-dependent-selector-premise-corrective.md`.)*
 `cleanup::tests::real_temp_project_preview_and_execute_with_redirected_target`
-(`src/cleanup.rs:6605`) drives a *fake* Cargo, but production code inside that path shells
-out to the real one to learn the host's version: `runtime_clean_capabilities`
-(`src/cleanup.rs:3615`) reads `cargo --version` and feeds it to
-`clean_capabilities_from_version` (`src/workspace.rs:146`), which enables `profile_selector`
-for exactly nine exact versions (1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0,
+(`src/cleanup.rs:6605`) drives the **real** Cargo through `SystemCleanupRunner`,
+and production code inside that path shells out to the real one to learn the
+host's version: `runtime_clean_capabilities` (`src/cleanup.rs:3615`) reads
+`cargo --version` and feeds it to `clean_capabilities_from_version`
+(`src/workspace.rs:146`), which enables `profile_selector` for exactly nine
+exact versions (1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0,
 1.98.1, 1.99.0), with `1.99.1` explicitly excluded and asserted as excluded at
-`src/cleanup.rs:4213`. The case's profile-selector step asserts
-`CleanOutcome::Previewed` (`src/cleanup.rs:6722`), so on a host running Cargo **1.99.1** the
-capability is false, the engine takes the fail-closed branch (`src/cleanup.rs:1499`) and
-reports `CleanOutcome::Skipped` with `CleanupReasonCode::SelectorUnsupported` — **no Cargo
-clean is invoked**, which is the safe direction. The *test* is what fails.
+`src/cleanup.rs:4213`. The case's profile-selector step asserted
+`CleanOutcome::Previewed` (`src/cleanup.rs:6722` pre-fix), so on a host running
+Cargo **1.99.1** the capability is false, the engine takes the fail-closed
+branch (`src/cleanup.rs:1499`) and reports `CleanOutcome::Skipped` with
+`CleanupReasonCode::SelectorUnsupported` — **no Cargo clean is invoked**, which
+is the safe direction. The *test* was what failed.
 
-This is recorded here because it is a real, current, reproducible red in the evidence base and
-because the record for it is incomplete. `plans/closure/artifact-discovery-cleanup/m017-status.md`
-carries it as a known pre-existing failure — "the known pre-existing
-`real_temp_project_preview_and_execute_with_redirected_target` (host cargo outside the
-profile-selector allowlist)" — verified identical on a pristine tree and marked "needs its own
-corrective". **No such corrective exists**: there is no plan under
-`plans/implementation/artifact-discovery-cleanup/` for it, and the only file added there
-since, `c036-cli-surface-truthfulness-and-documentation-drift-corrective.md`, is a
-*proposed, not active, no implementation authority* plan about CLI surface truthfulness and
-documentation drift — not about this failure. A failing test with no corrective is a live
-gap, not a historical note.
+**The defect was the unstated premise, not the assertion.** The case never said
+"this requires a profile-qualified Cargo"; it *discovered* that at run time, so
+it could not fail for its own reason and it could not pass for its own reason.
+Because the allowlist matches exact `X.Y.Z` strings, the **first patch release
+of any qualified minor** is outside it — the case had a known expiry date and
+no alarm before it. The hosted break is exactly that: the `checks` lane's
+`dtolnay/rust-toolchain@stable` moved from **1.99.0** to **1.99.1** (run log of
+`39307925648`: `stable-x86_64-unknown-linux-gnu updated - rustc 1.99.1
+(58cf8f9c3 2026-10-13) (from rustc 1.99.0 (b940084d7 2026-09-28))`), and every
+lane went red from run `38912914854` (2026-10-16) onwards. It was also worse
+than one red: `cargo test` stops scheduling the remaining targets behind a
+failing `--lib` target, so the whole 62-case `cli_contract` and 4-case
+`end_to_end` integration surface was never executed on CI.
+
+**The repair states the premise and keeps the assertion tight in both
+directions.** The step now calls
+`assert_profile_preview_matches_host_premise` (`src/cleanup.rs:9901`), which
+derives the expected outcome from `runtime_clean_capabilities()` — the
+product's own premise function — and asserts a *specific* outcome per premise:
+a qualified host must report `Previewed` and the output-union line, an
+unqualified one must report `Skipped` with `SelectorUnsupported`. It is
+deliberately **not** a disjunction: accepting either outcome would stay green
+on a host where the selector was wrongly refused *and* on a host where it was
+wrongly offered. The premise is derived from the runtime table rather than the
+policy file, and the chain is still sound because
+`workspace::tests::runtime_allowlist_agrees_with_the_selector_qualification_policy`
+(`src/workspace.rs:2146`) independently asserts that the table agrees with
+`release/selector-qualification.json` — exhaustively, over every
+`major.minor.patch` in `0..3 × 0..110 × 0..3`. A table that drifts from the
+policy fails there; a gate that stops consulting the table fails in the
+amended case.
+
+**The repair is proven, not asserted.** Three mutations, each reverted:
+
+| Mutation | Result |
+|---|---|
+| The gate no longer consults the capability (`&& !selector_capabilities.profile_selector` → `&& false`) | the case **fails**: `left: Previewed, right: Skipped` |
+| The gate always refuses (`&& true`) with the table made to qualify the host | the case **fails**: `left: Skipped, right: Previewed` |
+| `--profile` is dropped from the built command line | the new case **fails**: `--profile is missing from [...]` |
+
+The supported branch is no longer only reachable on a qualified host: the new
+`a_selector_reaches_the_cargo_command_line` (`src/cleanup.rs:9925`) pins that a
+`--profile` selector reaches `cargo clean` as `--profile <name>` and a
+`--package` selector as `--package <spec>`, with neither implying the other.
+That composition is host-independent, which is what the capability gate
+otherwise hides.
+
+**No production behaviour changed.** `src/workspace.rs` and
+`release/selector-qualification.json` are byte-identical to the baseline. The
+repair is line-count neutral above the end of the test module, so the cited
+lines in this file did not move.
 
 **R8 — Two tests whose names promise more than their assertions deliver.** This is the C012
 shape in its quietest form: a green case that cannot fail for the reason its name states.
@@ -1005,7 +1050,7 @@ and the hosted workflow is what asks them automatically. It is still the one scr
 reference tree; `release-benchmark.py` re-measures and fails on a configurable regression
 percentage, run by the `benchmark` job. The regression it catches is the class no correctness
 test notices: a change that keeps every answer right but makes the scan substantially slower.
-With `cleanup.rs` at 9885 lines and the parallel probe fan-out a live optimisation surface
+With `cleanup.rs` at 9983 lines and the parallel probe fan-out a live optimisation surface
 (`ParallelProbeRunner` exists precisely to assert the fan-out), that is a realistic and
 otherwise invisible failure mode. The trade-off is inherent: a wall-clock threshold is flaky on
 shared runners, so this gate is the one most likely to be loosened — itself a thing to watch in
@@ -1017,7 +1062,7 @@ review.
 
 | Module | Lines | Tests | Tests / prod. lines | Verdict |
 |---|---:|---:|---:|---|
-| `cleanup.rs` | 9885 | 113 | 113 / 3746 | Appropriate. Most safety-critical module has the most tests; the race fakes show the hard cases were found and pinned — and it is also the module carrying the current red, R7 |
+| `cleanup.rs` | 9983 | 114 | 114 / 3746 | Appropriate. Most safety-critical module has the most tests; the race fakes show the hard cases were found and pinned — and it is also the module that carried the long-standing red, R7, now corrected by C037 |
 | `workspace.rs` | 6068 | 76 | 76 / 2093 | Appropriate, and the fakes are argument-focused rather than result-focused — the right instinct |
 | `update.rs` | 2886 | 47 | 47 / 1289 | Reasonable unit coverage, but this is the module whose defects (C011, C016, C017) escaped to production. Unit tests cannot see a transport that cannot reach its authority. Its transaction-hygiene evidence was briefly a false green too — see R6 |
 | `interactive.rs` | 1581 | 40 | 40 / 800 | Good for a new module, and the only one that put the terminal behind a pure seam. Its *surface* — a real selection session — is covered nowhere outside the module, because the integration suite has no terminal |
@@ -1078,7 +1123,8 @@ sees a covered module where the versioned DTOs are exactly as unpinned as before
 15. **Is the rule you just wrote actually *decided* by a case?** A green case that would stay green with the rule deleted is decoration with a passing status. Ask what input makes the case fail *for that rule specifically*. R9 records two live instances: the C028 narrow-absence probe (`src/discovery_state.rs:308`) and `sweep_own_stale_temps` (`src/discovery_state.rs:506`).
 16. **Is a test's name a claim the assertions support?** `source_scan_short_circuits_recent_files` and `zero_retention_disables_expiration_and_nested_roots_collapse` both name a mechanism the assertions do not exercise. A name is a contract with the next reader.
 17. **Citing a line in `architecture/`?** Write the `file.rs:N` form, not the bare `:N` — only the former is range-checked by `check-doc-citations.py` (R10). And re-derive the line by reading it; a shifted number that still resolves is worse than no number, because it looks verified.
-18. **Is a failing test recorded with a corrective?** A red in the evidence base with no plan behind it (R7) is a gap the correction process is supposed to catch. If a test fails on a host the project supports, the answer is a corrective plan, not a closure record that calls it pre-existing.
+18. **Is a failing test recorded with a corrective?** A red in the evidence base with no plan behind it (R7) is a gap the correction process is supposed to catch. If a test fails on a host the project supports, the answer is a corrective plan, not a closure record that calls it pre-existing. R7 is the worked example: it sat in a closure record as "needs its own corrective" for four days and no plan was opened, and the red it described was silently suppressing the entire integration-test surface on CI.
+19. **Does a test state its premise?** A case whose expected outcome depends on the *host* — a toolchain version, a filesystem feature, a locale — must say so and derive the expectation from the product's own premise. R7 asserted one outcome for a host-dependent branch; the repair derives the expectation and asserts a *specific* outcome per premise, never a disjunction that accepts whatever the host produces.
 
 ---
 

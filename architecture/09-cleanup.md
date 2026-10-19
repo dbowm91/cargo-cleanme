@@ -2,8 +2,8 @@
 
 > Component deep dive · part of the [architecture overview](overview.md)
 
-Module under review: `src/cleanup.rs`, 9885 lines (3746 production, 6139 lines
-of test code, 113 `#[test]` functions). It is the largest module in the crate
+Module under review: `src/cleanup.rs`, 9983 lines (3746 production, 6237 lines
+of test code, 114 `#[test]` functions). It is the largest module in the crate
 and the densest concentration of safety logic. Every other module decides *what
 to look at*; this one decides *what may be destroyed*, proves the decision
 still holds, and only then acts.
@@ -234,7 +234,7 @@ resolution calls do not need. Constructed at `:2380`, `:2880`, `:2771`.
 Production therefore makes every Cargo call through one injected seam regardless
 of phase.
 
-**Testability payoff and its risk.** The 113 tests need no real cargo binary for
+**Testability payoff and its risk.** The 114 tests need no real cargo binary for
 decision logic. Eight fakes are defined in-module: `FakeCleanupRunner` `:3913`,
 `ChangingTargetRunner` `:6290`, `PerPathFailRunner` `:6437` (function-local),
 `RaceRunner` `:7133`, `BuildChangingRunner` `:7389` (function-local),
@@ -1161,9 +1161,9 @@ safety hole.
 
 ## 10. Testing
 
-**Numbers (verified by grep):** 113 `#[test]` functions; the test module opens at
+**Numbers (verified by grep):** 114 `#[test]` functions; the test module opens at
 `cleanup.rs:3747` (`#[cfg(test)]`), so production is lines 1–3746 (3746 lines)
-and the test region is 3747–9885 (6139 lines, 62% of the file). No fixture
+and the test region is 3747–9983 (6237 lines, 62% of the file). No fixture
 files are needed: workspaces are built on disk and mtimes backdated so recency
 gates run without sleeping.
 
@@ -1180,6 +1180,7 @@ gates run without sleeping.
 | Concurrency / cost | `proof_refresh_parallelism_is_bounded_and_results_stay_deterministic` `:9507`; `sequential_and_parallel_refreshes_produce_the_same_workspace_graph_and_disposition` `:9578`; `final_proof_cost_is_linear_in_the_number_of_workspaces` `:9200` |
 | Accounting / reporting | `execution_reports_observed_decrease_deduped` `:6093`; `final_report_lists_all_groups_and_deduped_total` `:6559`; `union_accounting_counts_each_output_root_once` `:9003`; `post_clean_disappearing_sibling_is_measured_normally` `:9041`; `post_clean_measurement_uncertainty_fabricates_no_decrease` `:9062`; `stats_account_for_final_ownership_universe_proof_work` `:9289`; `cleanup_progress_is_determinate_through_observer_path` `:7773`; `scan_analysis_total_is_determinate_through_real_path` `:7808`; `blocked_scope_render_lists_unresolved_participants_with_workspace_hint` `:4703`; `blocked_scope_render_bounds_unresolved_participant_listing` `:4764`; `one_invocation_one_result_progress_total_and_no_sibling_row` `:8338` |
 | Real Cargo integration | `real_temp_project_preview_and_execute_with_redirected_target` `:6605`; `real_cargo_package_selector_preserves_sibling_workspace_artifacts` `:6740`; `multi_member_private_workspace_can_be_cleaned` `:6854` |
+| Selector composition (host-independent) | `a_selector_reaches_the_cargo_command_line` `:9925`; `profile_selector_capability_is_bounded_to_qualified_runtime_versions` `:4206` |
 | Root validation / frozen env | `clean_requires_absolute_root` `:6107`; `frozen_env_sets_target_and_build_dir` `:6052`; `frozen_env_pins_the_build_directory_so_an_inherited_redirect_cannot_apply` `:9265`; `collapse_roots_fails_closed_when_a_root_no_longer_resolves` `:6150`; `violated_admission_premise_blocks_with_zero_cargo_spawns` `:6353`; `cleanup_root_symlink_with_trailing_slash_is_refused` `:6125` (`#[cfg(unix)]`) |
 | Misc | `cleanup_reason_codes_have_stable_contract_names` `:4177`; `source_tree_as_output_root_is_never_cleaned` `:9144`; `another_workspaces_source_tree_inside_the_cleaned_region_is_never_cleaned` `:9098`; `proof_failures_distinguish_a_change_from_an_unproven_ownership` `:9236`; `cross_workspace_overlap_race_into_target_skips_candidate` `:8714`; `cross_workspace_overlap_race_into_distinct_build_skips_candidate` `:8758` |
 | Scoped proof default (M017 / ADR 007) | `scope_note_does_not_block_in_boundary_execute` `:4982`; `simulate_and_preview_predict_without_spawning_or_blocking` `:5135`; `out_of_anchor_poison_does_not_block_anchor` `:5080`; `refused_passenger_rides_along_without_blocking` `:5172`; `redirected_outputs_skip_both_sides_without_blocking` `:5229`; `nested_outputs_skip_at_unit_gate_with_zero_spawns` `:5272`; `metadata_failure_blocks_boundary_with_zero_spawns` `:5311`; `symlinked_output_produces_no_unit_while_sibling_cleans` `:5347`; `mid_run_growth_blocks_remaining_scope_with_reported_note` `:5401`; `proof_refuses_where_stale_universe_would_proceed` `:5449`; `passenger_host_never_cleans_alone_after_redirect` `:5501`; `environment_change_blocks_remaining_units` `:5563` + `environment_change_probe` `:5588`; `listing_offers_rows_with_no_block` `:5676`; `listing_refuses_blocked_boundary` `:5702`; `empty_proof_universe_blocks_listing` `:4505`; `unresolved_scope_note_is_reported_without_blocking_any_mode` `:4624`; `the_candidate_listing_is_the_engines_own_unit_set` `:4328`; `the_listing_never_spawns_a_clean` `:4471`; `a_candidate_row_states_when_it_cannot_be_cleaned` `:4541`; `blocked_listing_detail_names_participants_and_hints_workspace_membership` `:3756`; `mid_run_manifest_growth_blocks_remaining_scope` `:4882`; `universe_stability_predicate_detects_growth_that_naive_stub_misses` `:4853`; `build_dir_move_detected_by_full_env_check_but_missed_by_target_only_naive` `:4812` |

@@ -566,7 +566,7 @@ is the only test in the file, and the only `#[cfg(test)]` module
 (`domain.rs:407-435`). `error.rs` contains zero `#[test]` attributes and zero
 `#[cfg(test)]` modules.
 
-The crate has **450** `#[test]` functions in `src/` — `cleanup.rs` 113,
+The crate has **451** `#[test]` functions in `src/` — `cleanup.rs` 114,
 `workspace.rs` 76, `update.rs` 47, `interactive.rs` 40, `discovery.rs` 39,
 `cli.rs` 32, `output.rs` 21, `config.rs` 20, `discovery_state.rs` 17,
 `policy.rs` 16, `progress.rs` 13, `report.rs` 7, `traverse.rs` 6, `editor.rs` 2,
