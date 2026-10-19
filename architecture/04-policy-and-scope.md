@@ -2,7 +2,8 @@
 
 > Component deep dive · part of the [architecture overview](overview.md)
 
-`src/policy.rs` — 349 lines, 101 of them inline tests.
+`src/policy.rs` — 1,184 lines, 702 of them production; the inline test
+module is the remaining 482.
 
 ## 1. Responsibility
 
@@ -11,17 +12,26 @@
 `discovery.rs` then walks. It is the only place in the crate where the
 Routine / Full / Explicit distinction is decided.
 
-**Owns:** scope-mode selection and its precedence (`policy.rs:20-58`); the
+It does a second, separate job: it is the **cleanup admission seam**. The
+scan path decides *what to look at*; the admission seam decides *what may be
+cleaned*, and it does so by provenance, before any canonical collapse can hide
+a symlinked root. The two jobs share the module but not the decision.
+
+**Owns:** scope-mode selection and its precedence (`policy.rs:19-58`); the
 per-scope recency window (`:22`, `:54`); per-scope filter activation (`:24-27`,
 `:42`, `:47-50`); existence / real-directory validation of an explicit root
-(`:32-41`); Routine root assembly (`:497-542`); platform global root and prune
-enumeration (`:544-630`); root normalization, dedup and containment collapse
+(`:32-41`); the provenance vocabulary — `RootProvenance`, `AutomaticOmission`,
+`AutomaticBlock`, `ClassifiedRoots` (`:81-120`); the admission classifier
+(`:179-296`); the late premise recheck (`:312-416`); the Full cleanup gate
+(`:430-454`); the raw Routine cleanup candidates (`:465-495`); Routine root
+assembly (`:497-542`); platform global root and prune enumeration
+(`:544-630`); root normalization, dedup and containment collapse
 (`:636-695`); the rustup managed-tool prune list (`:697-701`).
 
 **Does not own:** filesystem traversal (`discovery.rs`), manifest → workspace
 resolution (`workspace.rs`), activity classification (`traverse.rs`), state
 reconciliation and atomic publish (`discovery_state.rs`), the cleanup root list
-(`main.rs:563-698`), and the user-facing scope *label* (`main.rs:810-816`).
+(`main.rs:691-826`), and the user-facing scope *label* (`main.rs:938-944`).
 
 **Actual dependency set.** A grep for `crate::` in `policy.rs` yields exactly
 five modules:
@@ -31,37 +41,43 @@ five modules:
 | `crate::config::ScanConfig` | `policy.rs:2`, `policy.rs:19` | input config |
 | `crate::domain::{DiscoveryFilters, EffectiveScanPolicy, ScanRequest, ScanScope}` | `policy.rs:3` | in/out vocabulary |
 | `crate::error::AppError` | `policy.rs:4` | the only error type returned |
-| `crate::discovery_state` | `policy.rs:465-495`, `:512-542` | `load_default`, `StateLoad`, `now_seconds` |
+| `crate::discovery_state` | `policy.rs:238`, `:263`, `:325`, `:432`, `:468`, `:504`, `:523`, `:529` | `load_default`, `StateLoad`, `now_seconds`, `DiscoveryState`, `automatic_root_is_maintainable` |
 | `crate::discovery::effective_rustup_home` | `policy.rs:698` | managed-tool prune list |
 
 Plus the `directories` crate (`policy.rs:180`, `:316`, `:498`) and, on Windows only,
 `windows_sys` (`policy.rs:607-630`).
 
 **Boundary with `discovery.rs` prune helpers.** `discovery.rs` owns the
-*environment-derived* prune sets: `effective_cargo_home` (`:102`),
-`effective_rustup_home` (`:83`) and `cargo_home_prunes` (`:114`, i.e.
-`$CARGO_HOME/registry` and `$CARGO_HOME/git`). `policy.rs` owns only the
-*platform* and global-only prune sets. The division is by scope, not by subject:
-`cargo_home_prunes()` applies to **every** scope (`discovery.rs:358`) because a
-registry tree must never trigger Cargo resolution even under an explicit root,
-whereas the rustup list applies **only** to `Global` or `Routine`
-(`discovery.rs:359-365`) and is sourced from
+*environment-derived* prune sets: `effective_cargo_home` (`discovery.rs:164`),
+`effective_rustup_home` (`discovery.rs:145`) and `cargo_home_prunes`
+(`discovery.rs:176`, i.e. `$CARGO_HOME/registry` and `$CARGO_HOME/git`).
+`policy.rs` owns only the *platform* and global-only prune sets. The division
+is by scope, not by subject: `cargo_home_prunes()` applies to **every** scope
+(`discovery.rs:358`) because a registry tree must never trigger Cargo
+resolution even under an explicit root, whereas the rustup list applies
+**only** to `Global` or `Routine` (`discovery.rs:359-365`) and is sourced from
 `policy::global_discovery_policy().managed_tool_prunes`, populated by
 `managed_rust_prunes()` (`policy.rs:697`). `policy.rs` reaches into
 `discovery` exactly once (`policy.rs:698`), for a single path; everything else
 flows the other way.
 
 **I/O: it does perform I/O, read-only.** The module is a *decision* module, not a
-*pure* one. Its logic is a total function of `(request, config)` for the Full and
-Explicit branches; the Routine branch additionally consults the filesystem, the
-process environment, the wall clock, and the persisted state file. All of these
+*pure* one. Its scan-side logic is a total function of `(request, config)` for
+the Full and Explicit branches; the Routine branch additionally consults the
+filesystem, the process environment, the wall clock, and the persisted state
+file. The admission seam reads metadata for every candidate root. All of these
 calls are reads:
 
 | Call | Location | Reads |
 |---|---|---|
-| `fs::symlink_metadata` | `policy.rs:32` | explicit root stat |
+| `fs::symlink_metadata` | `policy.rs:32` | explicit root stat (resolve) |
+| `fs::symlink_metadata` | `policy.rs:189`, `:203` | symlink identity, trailing separators stripped |
+| `fs::symlink_metadata` | `policy.rs:216` | admission classification |
+| `fs::symlink_metadata` | `policy.rs:323`, `:384` | late premise recheck |
+| `fs::symlink_metadata` | `policy.rs:472` | raw seed existence (cleanup candidates) |
+| `fs::read_dir` | `policy.rs:240` | coverage proof for a non-maintainable root |
 | `Path::is_dir` (seeds) | `policy.rs:519` | seed existence |
-| `directories::BaseDirs::new()` | `policy.rs:498` | env / platform home |
+| `directories::BaseDirs::new()` | `policy.rs:180`, `:316`, `:498` | env / platform home |
 | `discovery_state::load_default()` | `policy.rs:504` | state JSON file |
 | `discovery_state::now_seconds()` | `policy.rs:477`, `:523` | wall clock |
 | `Path::new("/usr/local").is_dir()` | `policy.rs:548` | macOS filesystem |
@@ -96,42 +112,59 @@ pub fn resolve(request: ScanRequest, config: &ScanConfig)
 
 The specific case of an explicit CLI root *and* `--full` *and* a configured
 `scan.root` resolves to **`ScanScope::Global`**, because the `full` early-return
-at `policy.rs:20` precedes the `or_else` at `policy.rs:30`. That combination is
-unreachable from the command line — `scan --full` carries
-`conflicts_with = "root"` (`cli.rs:73`), `clean --full` carries
-`conflicts_with_all = ["root", "known"]` (`cli.rs:89`) — so the precedence
-matters only for programmatic callers (`tests/end_to_end.rs:124`,
-`examples/traversal-qualification.rs:26`). Note the asymmetry with cleanup, which
-is decided in `main.rs` rather than here: for `clean`, a `ROOT` argument wins
-over `--full` (`main.rs:113-115`).
+at `policy.rs:20` precedes the `or_else` at `policy.rs:30`. That combination
+is unreachable from the command line: `scan` requires exactly one of ROOT /
+`--known` / `--all` through an `ArgGroup` (`cli.rs:83`), so `scan --all` and
+`scan ROOT` are mutually exclusive, and `clean --full` carries
+`conflicts_with_all = ["root", "known"]` (`cli.rs:115`). No in-repo caller
+constructs the conflicting pair either — `tests/end_to_end.rs:124` and
+`examples/traversal-qualification.rs:26` both pass `cli_root: None`. The
+precedence therefore matters only for a future programmatic caller.
+
+Note the asymmetry with cleanup, which is decided in `cli.rs` rather than here:
+for `clean`, a `ROOT` argument wins over `--full`, because the scope match
+tests `root` first (`cli.rs:363-368`).
 
 ### Fields populated on `EffectiveScanPolicy`
 
-| Field | Full (`policy.rs:21-28`) | Explicit (`policy.rs:53-57`) | Routine (`policy.rs:53-57`) |
+| Field | Full (`policy.rs:21-28`) | Explicit (`policy.rs:42`) | Routine (`policy.rs:44-51`) |
 |---|---|---|---|
 | `recency` | `config.recency_seconds` | same | same |
 | `scope` | `Global(global_discovery_policy().roots)` | `Explicit(cli_root \| config.root)` | `Routine(routine_roots(retention_days))` |
 | `discovery_filters` | `Active { ignore, unignore }` from config | `Bypassed` | `Active { ignore, unignore }` from config |
 
-`recency` is scope-independent — it is `Duration::from_secs(config.recency_seconds)`
-on every path (`policy.rs:22`, `policy.rs:54`). The type is
-`domain::EffectiveScanPolicy` (`domain.rs:27-32`); `recency` is consumed by
-`main.rs:1047` for the activity cutoff, not by the walker.
+All three paths share one construction site (`policy.rs:53-57`). `recency` is
+scope-independent — it is `Duration::from_secs(config.recency_seconds)` on
+every path (`policy.rs:22`, `:54`). The type is
+`domain::EffectiveScanPolicy` (`domain.rs:27-32`); `recency` is captured at
+`main.rs:1001` and turned into the activity cutoff at `main.rs:1175`, not by
+the walker.
 
 ### Errors returned
 
-Only one variant, from two sites, both in the Explicit branch:
+`resolve` returns exactly one error variant, from two sites, both in the
+Explicit branch:
 
 | Site | Condition | Message |
 |---|---|---|
 | `policy.rs:32-35` | `fs::symlink_metadata` fails | `AppError::InvalidRoot { path, reason: e.to_string() }` — includes the OS error (missing, permission denied) |
 | `policy.rs:36-41` | not a directory, **or** is a symlink | `AppError::InvalidRoot { path, reason: "expected a real directory" }` |
 
-The Full and Routine branches are infallible. A Routine scope with no
-available roots returns `Ok(ScanScope::Routine(vec![]))`, never an error; the
-user-facing signal is a diagnostic emitted later by `discovery.rs:372-380` and
-the one stderr line at `policy.rs:507`. A propagated `AppError` reaches
-`main.rs:19-34` and becomes exit code 2.
+The Full and Routine branches of `resolve` are infallible. A Routine scope
+with no available roots returns `Ok(ScanScope::Routine(vec![]))`, never an
+error; the user-facing signal is a diagnostic emitted later by
+`discovery.rs:372-381` and the one stderr line at `policy.rs:507`.
+
+The **module** as a whole has four more error sites, all on the cleanup side:
+
+| Site | Condition | Message |
+|---|---|---|
+| `policy.rs:219-222` | an *explicit* admission candidate is not a real directory | `AppError::InvalidRoot { …, reason: "expected a real directory" }` |
+| `policy.rs:256-259` | an *explicit* admission candidate cannot be stat'ed | `AppError::InvalidRoot { …, reason: e.to_string() }` |
+| `policy.rs:435-438` | the Full reconciliation reported a non-zero exit code | `AppError::Config("full reconciliation reported an incomplete scan (exit N); no cleanup commands were run against its unproven learned roots")` |
+| `policy.rs:441-445` | the Full reconciliation produced no fresh in-memory generation | `AppError::Config("full reconciliation produced no fresh generation; no cleanup commands were run against stale learned roots")` |
+
+A propagated `AppError` reaches `main.rs:19-34` and becomes exit code 2.
 
 ## 3. The three scope modes
 
@@ -141,9 +174,16 @@ only three of them:
 | Variant | Produced by `resolve`? | Meaning |
 |---|---|---|
 | `Explicit(PathBuf)` | yes, `policy.rs:42` | one user-named root |
-| `ExplicitRoots(Vec<PathBuf>)` | **no** | multiple explicit roots forming one cleanup boundary; constructed only in `cleanup.rs:1000` and `cleanup.rs:2131` |
+| `ExplicitRoots(Vec<PathBuf>)` | **no** | multiple explicit roots forming one cleanup boundary; constructed only in `cleanup.rs:1218`, `cleanup.rs:1714` and `cleanup.rs:2864` |
 | `Global(Vec<PathBuf>)` | yes, `policy.rs:23` | exhaustive platform roots |
 | `Routine(Vec<PathBuf>)` | yes, `policy.rs:46` | bounded adaptive roots |
+
+Which spelling reaches which scope is decided in `cli.rs` and `main.rs`, not
+here: `scan ROOT` → Explicit, `scan --known` → Routine, `scan --all` → Global
+(`cli.rs:319-335`, `main.rs:989-993`); `clean ROOT` → Explicit, `clean --full`
+→ Global, and `clean --known` plus the bare front door → the maintenance scope
+(`cli.rs:363-368`), which resolves to Routine **or** to Explicit when a
+`scan.root` is configured (§7.8).
 
 ### `Explicit(root)` — the user named a place
 
@@ -152,28 +192,32 @@ One directory, no `scan.ignore` / `scan.unignore` at all
 walks `~/work/api` recursively and reports every `Cargo.toml` beneath it, even
 under a directory the user has globally ignored in `config.toml`. It still
 enforces the symlink and real-directory rule (`policy.rs:36-41`), and it is the
-only branch that can fail. A symlink *to* a directory is rejected.
+only branch of `resolve` that can fail. A symlink *to* a directory is rejected.
 
-### `Routine(roots)` — the default, bounded
+### `Routine(roots)` — the maintenance scope, bounded
 
-The default `scan` with no root (`main.rs:266` → `run_scan(None, false, …)`).
-Roots are existing seed directories under `$HOME` plus retained learned roots
-from the state file (§5). Worked example: a developer with `~/Code/api` and
-`~/Code/web` plus a learned root at `~/scratch/lab`, where the state file's
-`last_project_seen_at` for `~/scratch/lab` is 10 days old and retention is 30.
+The Routine *scan* is `scan --known`
+(`main.rs:992` → `run_scan(None, false, …)`); the Routine *cleanup* is the
+bare front door and `clean --known`, which resolve their scope through
+`policy::resolve` at `main.rs:744-750`. Roots are existing seed
+directories under `$HOME` plus retained learned roots from the state file (§5).
+Worked example: a developer with `~/Code/api` and `~/Code/web` plus a learned
+root at `~/scratch/lab`, where the state file's `last_project_seen_at` for
+`~/scratch/lab` is 10 days old and retention is 30.
 `canonical_dedup_roots` (`policy.rs:541`) collapses nothing here, so the scan
 walks all three, applying `scan.ignore` / `scan.unignore` normally. A Rust
 project in `~/Documents/sidequest` is **not** found — that is the deliberate
-blind spot, and `scan --full` is the documented way to teach the tool about it.
+blind spot, and `scan --all` is the documented way to teach the tool about it.
 
-### `Global(roots)` — `--full`
+### `Global(roots)` — `--all`
 
 `ScanScope::Global(global_discovery_policy().roots)` (`policy.rs:23`). Worked
 example on Linux: roots is `["/"]` and the platform prunes are
 `/proc`, `/sys`, `/dev`, `/run` (`policy.rs:592-595`), so the walk is
 filesystem-root breadth minus pseudo-filesystems. `scan.ignore` / `scan.unignore`
 apply. This is also the only scope that runs
-`discovery_state::reconcile_full` afterwards (`main.rs:976`).
+`discovery_state::reconcile_full` afterwards (`main.rs:1104`, reached only when
+`full` is true — `main.rs:1079`).
 
 ### Cost / benefit
 
@@ -188,7 +232,7 @@ than narrow it permanently, and lists "Full scans remain expensive by design" as
 an accepted cost (*Consequences*).
 
 Cross-reference: this module is pipeline step 2 of `run_scan`
-(`main.rs:845`), described in [the overview's scan pipeline](overview.md) §4 as
+(`main.rs:994`), described in [the overview's scan pipeline](overview.md) §6 as
 "Resolve scope — `policy::resolve` turns `{cli_root, full}` into concrete roots
 + a recency window".
 
@@ -203,26 +247,26 @@ between them — it never merges them:
 | `Bypassed` | Explicit (`:42`) | `(&[][..], &[][..])` at `discovery.rs:355` |
 
 `config.ignore` and `config.unignore` are cloned verbatim from `ScanConfig`
-(`config.rs:47-49`); `resolve` adds no patterns of its own.
+(`config.rs:47-48`); `resolve` adds no patterns of its own.
 
 ### Semantics
 
 - **ignore globs prune, and the exclusion is inherited.** Each `scan.ignore`
   string is compiled into a `globset::GlobSet` (`discovery.rs:18-30`) and matched
-  against `path.to_string_lossy()` (`discovery.rs:38-45`). The lossy match is
+  against `path.to_string_lossy()` (`discovery.rs:38-43`). The lossy match is
   deliberate: a non-UTF-8 directory name must not escape a broad `*` rule on
-  Linux (comment at `discovery.rs:30-37`, test
+  Linux (comment at `discovery.rs:31-37`, test
   `non_utf8_directory_still_matches_a_broad_ignore_pattern` at
   `discovery.rs:1574`). The match is also consulted for every **ancestor** of the
-  candidate (`Filters::inherits_ignore`, `discovery.rs:52-59`), because a literal
+  candidate (`Filters::inherits_ignore`, `discovery.rs:52-55`), because a literal
   ignore rule names a directory, not its children: `/archive` is not a match for
   `/archive/other`, but `other` is still under an ignored directory and must
   stay excluded. This is the C019 correction, and the walk descends into
   `/archive` only as far as an exception requires.
 - **`unignore` re-includes a subtree, not a single entry.** One function decides
-  all of it: `Filters::disposition` (`discovery.rs:68-99`) returns
+  all of it: `Filters::disposition` (`discovery.rs:68-87`) returns
   `Included` / `Pruned` / `PassThrough` / `ReIncluded` (enum at
-  `discovery.rs:101-110`). `ReIncluded` applies when
+  `discovery.rs:102-107`). `ReIncluded` applies when
   `p.starts_with(u)` for some unignore entry, so the unignore path *and everything
   beneath it* escapes the prune. `PassThrough` is the other half: excluded, but
   with an unignore entry at or below it, so the walker enters far enough to reach
@@ -250,22 +294,26 @@ Absoluteness is not cosmetic: patterns are matched against the **canonical**
 walk path, so a relative or symlink-spelled pattern would silently match
 nothing. `config::load` rewrites the glob-free literal prefix of every pattern
 to its canonical spelling via `canonical_pattern_prefix` (`config.rs:155-187`,
-`:323-366`), leaving the glob tail verbatim. A pattern naming a non-existent
+`:353-403`), leaving the glob tail verbatim. A pattern naming a non-existent
 path is left untouched — it still means exactly what it says, i.e. it matches
-nothing. Glob *syntax* is validated at load time too (`config.rs:137-151`), so
+nothing. Glob *syntax* is validated at load time too (`config.rs:147-151` for
+`scan.ignore`, `config.rs:137-146` for the cleanup include/exclude globs), so
 a bad pattern fails at `config::load_or_create` rather than at the first walk.
 
 **What `globset` is for:** it compiles the ignore list once into a `GlobSet`
 (`discovery.rs:19-27`) so the per-directory prune test is a set lookup rather
 than a re-parse. The unignore side uses no globbing at all — it is exact
 `Path::starts_with` prefix comparison on absolute `PathBuf`s, which is why
-`config.toml:24` calls them "Exact absolute directories".
+`config.toml:27` calls them "Exact absolute directories".
 
-**One divergence to be aware of.** `config.toml:21` says these filters "apply
-only to global discovery". The code applies them to Routine scope as well
-(`policy.rs:47-50`), and `discovery.rs` honours them for both
-(`discovery.rs:326-330`, `discovery.rs:343-389` vs `:334-350`). The comment is
-narrower than the behaviour.
+**The template and the code now agree.** `config.toml:21-24` says these
+filters "apply to global discovery and to the Routine scope", which is exactly
+what the code does: `resolve` activates them for both Full (`:24-27`) and
+Routine (`:47-50`), and `discovery.rs` hands the compiled filter set to the
+global branch (`discovery.rs:401`) and to the per-root branch
+(`discovery.rs:433`) alike. The earlier divergence — a template that claimed
+"global discovery" only while the code also applied the filters to Routine —
+has been closed.
 
 ## 5. Seed candidates
 
@@ -303,7 +351,7 @@ directory; `routine_seed_candidates` is the only seam, and it exists so the list
 can be asserted without touching the real home directory. If
 `BaseDirs::new()` returns `None`, `routine_roots` returns an empty `Vec`
 (`policy.rs:498-499`) and Routine silently degrades to "no roots", which
-`discovery.rs:372-380` reports as `Info` / `PlatformRoot`.
+`discovery.rs:372-381` reports as `Info` / `PlatformRoot`.
 
 **Heuristic vs exact:**
 
@@ -325,13 +373,13 @@ consumer.
 **Assembly.** `routine_roots_from_state` concatenates existing seeds first,
 then learned roots that pass both retention and the automatic-maintenance
 location policy, then hands the vector to `canonical_dedup_roots`. The shared
-`discovery_state::automatic_root_is_maintainable` rule excludes known cache
-(`~/.cache`, `~/Library/Caches`, pnpm stores), Trash, temporary locations
-(platform temp root plus the `/tmp`, `/private/tmp`, `/var/tmp` aliases),
-system software locations (`/usr/local`, `/opt`), `node_modules`, the
-`~/Downloads` drop zone, and transient Codex worktree locations from
-Routine selection. It is not a Full discovery filter and does not affect an
-explicit root. Retention remains:
+`discovery_state::automatic_root_is_maintainable` rule
+(`discovery_state.rs:114-207`) excludes known cache (`~/.cache`,
+`~/Library/Caches`, pnpm stores), Trash, temporary locations (platform temp
+root plus the `/tmp`, `/private/tmp`, `/var/tmp` aliases), system software
+locations (`/usr/local`, `/opt`), `node_modules`, the `~/Downloads` drop zone,
+and transient Codex worktree locations from Routine selection. It is not a Full
+discovery filter and does not affect an explicit root. Retention remains:
 
 ```rust
 automatic_root_is_maintainable(path, home)
@@ -339,6 +387,7 @@ automatic_root_is_maintainable(path, home)
     || now < r.last_project_seen_at               // future timestamp: keep
     || now.saturating_sub(r.last_project_seen_at) <= u64::from(retention_days) * 86400)
 ```
+(`policy.rs:529-533`)
 
 `retention_days == 0` disables expiration and a future timestamp fails
 conservative — both match ADR 002 §5. A `StateLoad` that is not `Loaded`
@@ -364,6 +413,10 @@ symlinked root into its target and hide the invalid identity:
   path at a known-transient origin omits as `NotMaintainable`, a missing
   durable location omits as `NotFound`; symlinks never reach that arm and
   every other failure still blocks.
+- `path_is_symlink` (`policy.rs:188-208`) closes the trailing-separator
+  bypass: `symlink_metadata("link/")` follows the final component on POSIX, so
+  a trailing slash (or a trailing `/.`) would otherwise hide a symlink from the
+  `is_symlink` check. The stripped spelling is judged too.
 - `routine_cleanup_candidates` (`policy.rs:465`) supplies the raw Routine
   candidates (existing seeds in any form plus age-eligible learned roots)
   without canonicalization, so a symlinked seed reaches classification as a
@@ -374,10 +427,53 @@ symlinked root into its target and hide the invalid identity:
   `CleanupCandidates` (`policy.rs:420`) is the shared candidate type.
 
 Omission diagnostics are grouped by typed reason and sorted deterministically
-(`ClassifiedRoots::omission_diagnostics`, `policy.rs:135-172`). Each summary
+(`ClassifiedRoots::omission_diagnostics`, `policy.rs:135-170`). Each summary
 includes the exact omitted-root count and at most three sanitized paths. The
 omission vector remains complete for `recheck_admission_premise`; reporting does
 not retire persisted state or alter the selected cleanup universe.
+
+### The Full cleanup gate is deliberate, not a bug (ADR 007)
+
+`full_cleanup_roots` (`policy.rs:430-454`) is the only place where a scan
+result gates a destructive operation:
+
+```rust
+if reconciliation_code != 0 {
+    return Err(AppError::Config(format!(
+        "full reconciliation reported an incomplete scan (exit {reconciliation_code}); \
+         no cleanup commands were run against its unproven learned roots"
+    )));
+}
+```
+(`policy.rs:434-439`)
+
+A non-zero reconciliation code — an **incomplete** Full scan — refuses, and the
+`AppError::Config` becomes exit code 2 through `main.rs:19-34`. A missing
+in-memory generation refuses for the same reason (`policy.rs:440-446`): the
+roots come from the generation the traversal just proved, never from a disk
+reload that could be an older generation after a failed or unsupported
+publication. A *failed save* is not a refusal — it stays a stderr warning for
+the caller (`main.rs:730-734`).
+
+This refusal is a **deliberate ADR 007 rule**, not an implementation defect.
+ADR 007 §1 reserves whole-system fail-closed blocking for exactly one
+operation: "`clean --full` proves the full system and retains whole-system
+fail-closed blocking — the operation whose job is system-wide reconciliation
+keeps the old rule." Every other scope is proof-scoped, and an out-of-boundary
+unprovable participant is reported rather than blocking.
+
+The unit test `full_cleanup_consumes_only_a_fresh_in_memory_generation`
+(`policy.rs:1049`) pins the gate with a literal exit code: `full_cleanup_roots(1, Some(state))`
+is an error (`policy.rs:1062`), while `full_cleanup_roots(0, None)` is an error
+(`policy.rs:1060`) and `full_cleanup_roots(0, Some(state))` yields the
+automatic roots plus the generation (`policy.rs:1064`).
+
+A **proposed** ADR 008
+(`plans/adr/008-proposed-canonical-full-cleanup-spelling-and-proof-scoped-full-gate.md`,
+status *proposed; not accepted; no implementation authority*) argues that this
+gate makes `clean --full` unreachable for ordinary users on unix, because a
+platform-root walk by a non-root user is never complete. It is a proposal
+only: the behaviour described in this section is what the shipped code does.
 
 ## 6. Global discovery policy
 
@@ -450,13 +546,13 @@ root is still folded; `a_root_inside_a_global_prune_reopens_that_prune`
 (`discovery.rs:1124`) covers the prune. `managed_tool_prunes` is `Some` only via
 `managed_rust_prunes()` → `discovery::effective_rustup_home()`
 (`policy.rs:697-701`), i.e. `$RUSTUP_HOME` when absolute, else `~/.rustup`
-(`discovery.rs:145-186`).
+(`discovery.rs:145-161`).
 
 ### Consumers
 
 | Consumer | Behaviour |
-|---|---|---|
-| `discovery.rs:336` | re-derives the policy for `Global` scope only |
+|---|---|
+| `discovery.rs:336-337` | re-derives the policy for `Global` scope only |
 | `discovery.rs:338-345` | **adopts it only if `canonical_roots(roots) == canonical_roots(&candidate.roots)`**; otherwise treats the scope as a plain root list with no platform prunes |
 | `discovery.rs:349` | when adopted, walks `p.roots` — which is why the `roots` carried in `ScanScope::Global` and in `GlobalDiscoveryPolicy` are kept in agreement |
 | `discovery.rs:359` | `managed_tool_prunes`, gated on `global` (Global **or** Routine) |
@@ -501,12 +597,13 @@ subtree to be scanned twice.
    (`policy.rs:767`).
 4. **A Routine root is *not* guaranteed to be under `$HOME` by this module.**
     Seeds are (`policy.rs:77`), but learned roots are taken verbatim from
-    `state.learned_roots[].path` (`policy.rs:535`) with a recency test and
-    nothing else — no containment check is performed here. The "no
-    broad/platform roots are learned" guarantee is a *derivation-time* rule in
-    `discovery_state.rs` (`is_broad_root` at `discovery_state.rs:361`, the
-    home-equality filter at `discovery_state.rs:252`), i.e. ADR 002 §2, and it is
-    not re-asserted here. A hand-edited or stale state file can therefore inject a
+    `state.learned_roots[].path` (`policy.rs:535`) with a recency test and a
+    maintainability test (`policy.rs:529`) and nothing else — no containment
+    check is performed here. The "no broad/platform roots are learned"
+    guarantee is a *derivation-time* rule in `discovery_state.rs`
+    (`is_broad_root` at `discovery_state.rs:361`, the home-equality filter at
+    `discovery_state.rs:252`), i.e. ADR 002 §2, and it is not re-asserted here.
+    A hand-edited or stale state file can therefore inject a
     root outside the home directory into Routine scope, and `clean --known` will
     use it.
 5. **A stale configured root is a hard error, not a fallback.** `config::load`
@@ -519,7 +616,7 @@ subtree to be scanned twice.
     unreadable), via the admission seam above — a stale advisory path can no
     longer reach explicit-root validation and abort the run.
 6. **Empty Routine roots are not an error.** `resolve` returns
-   `Ok(Routine(vec![]))`; `discovery.rs:372-380` emits `Info` / `PlatformRoot`
+   `Ok(Routine(vec![]))`; `discovery.rs:372-381` emits `Info` / `PlatformRoot`
    "no Routine roots are available; run `scan --full` or scan an explicit root".
 7. **`learned_root_retention_days as u16` (`policy.rs:46`) is lossless only
    because of the caller's validation.** `config::load` range-checks it to
@@ -528,18 +625,28 @@ subtree to be scanned twice.
    would wrap silently. Same class of issue for `recency_seconds`: `load`
    rejects 0 (`config.rs:99-103`) because 0 would disable the inactivity guard,
    but `resolve` does not (`policy.rs:22`, `:54`).
-8. **A configured `scan.root` silently disables `clean --known`.**
-   `main.rs:133-143` takes only the `Routine` arm and yields `Vec::new()` for any
-   other scope; `main.rs:380-408` then prints "no bounded cleanup roots are
-   known; no cleanup commands were run" and returns **0**. Setting `scan.root`
-   is therefore not orthogonal to `--known`.
-9. **The JSON `scope` field is derived from CLI flags, not from the resolved
-   policy** (`main.rs:510-522`): `full ? "full" : explicit_scope ? "explicit" :
-   "routine"`, where `explicit_scope = root.is_some()` (`main.rs:296`). A scan
-   driven by a *configured* `scan.root` resolves to `ScanScope::Explicit` but
-   reports `"routine"`. Do not use the JSON label to infer the resolved scope.
+8. **A configured `scan.root` redirects the maintenance scope; it does not
+   disable it.** `clean --known` and the bare front door resolve their scope
+   through `policy::resolve` with `cli_root: None, full: false`
+   (`main.rs:744-750`), and the resulting `ScanScope::Explicit` arm is handled
+   explicitly (`main.rs:755-774`): the configured root becomes the scope that
+   gets cleaned, and the machine label is `"explicit"`. `ScanScope::Routine`
+   (`main.rs:791-815`) is the no-configured-root case, and `ScanScope::Global`
+   is refused rather than treated as an empty scope (`main.rs:818-822`).
+   Setting `scan.root` is therefore not orthogonal to `--known`: it changes
+   what `--known` cleans.
+9. **The JSON `scope` field is derived from the resolved policy, not from the
+   CLI flags** (`main.rs:938-944`): `Global` → `"full"`, `Explicit` and
+   `ExplicitRoots` → `"explicit"`, `Routine` → `"routine"`. The function's own
+   doc comment records the earlier defect — deriving it from `root.is_some()`
+   reported `"routine"` for a scan that was in fact pinned to one explicit root
+   (`main.rs:930-937`). The contract test is
+   `json_scope_label_follows_the_resolved_scope_not_the_cli_flags`
+   (`tests/cli_contract.rs:214`), and `known_scan_resolves_routine_without_a_configured_root_and_explicit_with_one`
+   (`tests/cli_contract.rs:2455`) pins the same label for `scan --known` with
+   and without a configured root.
 10. **The safety-envelope coupling.** `clean --known` routes its cleanup roots
-    through `policy::resolve` (`main.rs:616`), so any change to scope resolution
+    through `policy::resolve` (`main.rs:744`), so any change to scope resolution
     changes the set of roots a destructive command may operate on. A scope
     change is a safety change and belongs in the same review as the proof work
     in [the cleanup deep dive](09-cleanup.md).
@@ -547,11 +654,17 @@ subtree to be scanned twice.
     state file degrades Routine to seeds plus one stderr line
     (`policy.rs:506-507`, `policy.rs:521-541`); it never expands scope and never
     fails the run.
+12. **The Full cleanup gate is the one place a scan result blocks cleanup.**
+    `full_cleanup_roots` (`policy.rs:434-439`) refuses an incomplete Full
+    reconciliation and a missing fresh generation. Every other scope is
+    proof-scoped under ADR 007: an out-of-boundary unprovable participant is
+    reported, never blocking. A change to this gate is a change to the safety
+    boundary, not a refactor.
 
 ## 8. Testing
 
 `policy.rs` **does** have an inline `#[cfg(test)] mod tests` at
-`policy.rs:704` — the tests:
+`policy.rs:703-704` — the tests:
 
 | Test | Line | Covers |
 |---|---|---|
@@ -565,14 +678,17 @@ subtree to be scanned twice.
 | `routine_state_errors_fall_back_to_seeds_with_one_warning` | `policy.rs:858` | `RecoverableInvalid` and `UnsupportedNewer` both fall back to existing seeds and produce a warning |
 | `automatic_roots_classify_by_provenance_and_explicit_roots_stay_strict` | `policy.rs:886` | C028 decision table: automatic `NotFound`/non-directory omit, explicit defects stay fatal |
 | `symlinked_automatic_roots_block_and_are_never_followed_or_omitted` | `policy.rs:937` | C028: symlink-to-dir and broken-link automatic roots block (`#[cfg(unix)]`) |
-| `cleanup_candidates_preserve_symlinked_seed_identity_for_admission` | `policy.rs:1079` | C028: raw candidates carry the link itself, and classification blocks it (`#[cfg(unix)]`) |
+| `trailing_slash_symlink_roots_classify_like_plain_symlinks` | `policy.rs:976` | B1: `link/` and `link/.` classify exactly like a plain symlink — fatal for explicit, blocking for automatic (`#[cfg(unix)]`) |
 | `admission_premise_recheck_detects_reappearance_and_disappearance` | `policy.rs:1004` | C028 late recheck: reappearance/disappearance invalidates the premise; surviving files and vanished non-directories do not |
 | `full_cleanup_consumes_only_a_fresh_in_memory_generation` | `policy.rs:1049` | C028: non-zero reconciliation or missing generation refuses; fresh state yields automatic roots plus generation |
+| `cleanup_candidates_preserve_symlinked_seed_identity_for_admission` | `policy.rs:1079` | C028: raw candidates carry the link itself, and classification blocks it (`#[cfg(unix)]`) |
 | `missing_transient_roots_classify_as_non_maintainable_not_unavailable` | `policy.rs:1110` | C033: a missing path at a known-transient origin omits as `NotMaintainable`, a missing durable location as `NotFound`; neither blocks |
+| `omission_diagnostics_group_reasons_and_bound_path_samples` | `policy.rs:1155` | C033: one summary per omission reason, exact counts, at most three sanitized examples, bounded line length |
 
 Scope behaviour is covered mostly **one level down**, in `discovery.rs`, by
 constructing `EffectiveScanPolicy` directly rather than through `resolve` — via
-the `explicit_manifests` (`:1059`) and `routine_manifests` (`:1073`) helpers:
+the `explicit_manifests` (`discovery.rs:1506`) and `routine_manifests`
+(`discovery.rs:1533`) helpers:
 
 - `discovery_reaches_unignored_project_without_entering_ignored_sibling`
   (`discovery.rs:1801`) — the unignore `exception_below` half, negative control
@@ -589,29 +705,39 @@ the `explicit_manifests` (`:1059`) and `routine_manifests` (`:1073`) helpers:
   (`discovery.rs:1356`), `global_rustup_prune_keeps_adjacent_user_project_reachable`
   (`discovery.rs:1299`).
 
-Integration: `tests/end_to_end.rs:124` is the only test that calls
-`policy::resolve` end to end, and it uses a **configured** root with
-`cli_root: None` (`end_to_end.rs:120-123`). `tests/cli_contract.rs:202` asserts
-the JSON `scope` field equals `"explicit"` — but per §7.9 that string comes from
-`main.rs:1110`, so it does not exercise the resolved scope.
+Integration: `tests/end_to_end.rs:124` is the only *integration* test that
+calls `policy::resolve` end to end, and it uses a **configured** root with
+`cli_root: None` (`end_to_end.rs:120-123`). `tests/cli_contract.rs:197`
+asserts the JSON `scope` field equals `"explicit"`, and per §7.9 that string
+comes from the resolved policy (`main.rs:938-944`), so the assertion does
+exercise the resolved scope rather than the flags.
 
 **Honest gaps** — scope behaviour a reader should not assume is covered:
 
-- **The Full branch has no test at all.** Nothing constructs
-  `ScanRequest { full: true }`, so `ScanScope::Global` from `resolve` and the
-  `global_discovery_policy()` call at `policy.rs:23` are never executed by a
-  test; the platform tables are covered only through the pure `unix_policy`
-   helper. The `#[cfg(windows)]` body (`policy.rs:607-630`) is untested too.
-- `canonical_dedup_roots` and `lexical_identity` (`policy.rs:636-695`) are
-   covered only indirectly, via the discovery tests above — the
-   unresolvable-root branch (the L16 fix) has no direct test. The `other unix`
-   arm (`policy.rs:596-598`) and the `BaseDirs::new() == None` branch
-   (`policy.rs:498-499`) are uncovered.
+- **The Full branch is exercised, but only for its *variant*.**
+  `full_resolution_ignores_a_configured_root` (`policy.rs:811`) does construct
+  `ScanRequest { full: true }`, so `resolve` takes the early return and
+  `global_discovery_policy()` is called on the host platform — but the
+  assertion is `matches!(p.scope, ScanScope::Global(_))`, not the root set.
+  The platform *tables* are therefore still covered only through the pure
+  `unix_policy` helper, and the `#[cfg(windows)]` body (`policy.rs:607-630`)
+  is untested on any lane.
+- `canonical_dedup_roots` and `lexical_identity` (`policy.rs:636-695`) now have
+  a direct caller in a test (`policy.rs:753` and `policy.rs:746`), but the
+  unresolvable-root branch (the L16 fix, `policy.rs:679`) still has no direct
+  test. The `other unix` arm (`policy.rs:596-598`) and the
+  `BaseDirs::new() == None` branch (`policy.rs:498-499`) are uncovered.
 - The retention filter (`policy.rs:530-533`) is not directly tested:
-   `retention_days == 0`, boundary equality, and the future-timestamp case.
-- `clean --known` root derivation (`main.rs:615-694`), including the
-  configured-root interaction in §7.8, has no integration test in
-  `tests/cli_contract.rs` or `tests/end_to_end.rs`.
+  `retention_days == 0`, boundary equality, and the future-timestamp case. The
+  only `routine_roots_from_state` test (`policy.rs:858`) exercises the
+  *degraded* load arms, never the `Loaded` arm that owns the filter.
+- `clean --known` root derivation (`main.rs:691-826`), including the
+  configured-root interaction in §7.8, has no test in `src/policy.rs`.
+  `main.rs` has no tests at all; the nearest coverage is
+  `known_scan_resolves_routine_without_a_configured_root_and_explicit_with_one`
+  (`tests/cli_contract.rs:2455`) on the *scan* side and
+  `bare_cleanup_with_no_known_roots_is_a_successful_no_op`
+  (`tests/cli_contract.rs:1899`) on the empty-scope side.
 
 ## 9. Review checklist
 
@@ -641,16 +767,24 @@ the JSON `scope` field equals `"explicit"` — but per §7.9 that string comes f
    `config.rs:107-111`; `policy.rs:22` relies on `config.rs:99-103` for the
    non-zero recency guard. Test-constructed `ScanConfig` values bypass both.
 8. **Any new `AppError` here becomes exit code 2.** `policy.rs:32` and
-   `policy.rs:37` are the only sources today; `main.rs:19-34` maps every
-   `AppError` to exit 2, and a missing `scan.root` is therefore fatal rather
-   than degrading to Routine.
-9. **Scope changes are safety changes for `clean --known`.** `main.rs:615-694`
-   and `main.rs:380-408` turn this module's output into the bounded root list
+   `policy.rs:37` are the only sources today in `resolve`; `main.rs:19-34`
+   maps every `AppError` to exit 2, and a missing `scan.root` is therefore
+   fatal rather than degrading to Routine. The admission seam adds
+   `policy.rs:219` and `policy.rs:256`, and the Full gate adds
+   `policy.rs:435` and `policy.rs:441` — the last of which is the *intended*
+   exit-2 refusal, not a defect.
+9. **Scope changes are safety changes for `clean --known`.** `main.rs:691-826`
+   and `main.rs:386-416` turn this module's output into the bounded root list
    a destructive command receives; re-verify §7.8 and §7.10 before landing.
-10. **Add a test for any branch you touch.** The Full branch
-    (`policy.rs:20-29`), the Windows body (`policy.rs:607-630`), and the
-    retention filter (`policy.rs:530-533`) are currently untested; use
-    `unix_policy`'s injected booleans (`policy.rs:583`) for platform tables
-    and `routine_roots_from_state`'s injected `StateLoad`
+10. **Do not weaken the Full gate by accident.** `policy.rs:434-446` is the
+    ADR 007 reservation of whole-system fail-closed blocking for
+    `clean --full`. Changing it needs a decision record, not a patch; ADR 008
+    is the open proposal and it is *not* accepted.
+11. **Add a test for any branch you touch.** The Windows body
+    (`policy.rs:607-630`), the `other unix` arm (`policy.rs:596-598`), the
+    unresolvable-root branch (`policy.rs:679`) and the retention filter
+    (`policy.rs:530-533`) are currently untested; use `unix_policy`'s injected
+    booleans (`policy.rs:583`) for platform tables and
+    `routine_roots_from_state`'s injected `StateLoad`
     (`policy.rs:512-515`) for state behaviour — those are the two seams the
     module already provides.

@@ -12,11 +12,13 @@ is internally consistent before publication.
 Three findings dominate and are stated up front because they change how the rest
 should be read:
 
-1. **The live self-update rehearsal is manual.** It is `workflow_dispatch`-only
-   with no `push` or `pull_request` trigger. Every rehearsal cited in the release
-   history (`v0.1.1 → v0.1.2`, `v0.1.3 → v0.1.4`, `v0.1.5 → v0.1.6`) was
-   triggered by hand against an already-published release, and the two defects it
-   found (C016, C017) shipped in published versions. See §8.
+1. **The live self-update rehearsal is automatic.** Since M011C,
+   `post-release-smoke.yml` runs on `release: published`
+   (`.github/workflows/post-release-smoke.yml:29-31`) as well as on
+   `workflow_dispatch`, which is retained as the manual recovery path. It has
+   fired nine times: **two failed, seven were green on all five lanes.** The
+   manual-only era that produced the two shipped defects is preserved in §8.2 as
+   history, not as the current state.
 2. **Installer downloads are checksum-verified, and a missing checksum is
    fatal.** Both installers download a `.sha256` sidecar and abort if it is
    absent, malformed, or mismatched. See §3.
@@ -40,6 +42,8 @@ It owns:
 - the binary release pipeline and its identity gates
   (`.github/workflows/release-*`, `scripts/check-release-identity.py`,
   `scripts/gen-release-workflow-shape.py`, `scripts/validate-staged-release.py`);
+- the local aggregate release gate (`scripts/release-check.sh`) and the 17
+  scripts under `scripts/` it aggregates;
 - post-release verification (`.github/workflows/post-release-smoke.yml`,
   `scripts/post-release-smoke.sh`, `scripts/smoke-release-candidate.py`).
 
@@ -59,6 +63,11 @@ The dependency runs the other way, in two places, and both are load-bearing:
   replace installations it is entitled to replace. The installers must produce a
   layout the classifier recognises. See §2, §3, and
   [12-self-update.md](12-self-update.md).
+
+The wider tooling surface — the rest of `scripts/`, the CI lanes, and the
+verification ladder — is inventoried in
+[architecture/overview.md](overview.md) §9 and in
+[14-testing-and-verification.md](14-testing-and-verification.md).
 
 ## 2. Distribution channels
 
@@ -87,28 +96,29 @@ chooses `/usr/local/bin` (elevated) or `$HOME/.local/bin` (normal user)
 (`packaging/install.ps1:105-113`). Both are outside any Cargo root, so
 `classify_provenance_in` falls through to hashing the executable and returns
 `VerifiableSelfManaged`. The source comment on that fall-through names the
-installers directly: "the published installer's `/usr/local/bin` and
-`~/.local/bin` keep resolving to the self-managed path"
-(`src/update.rs:440-441`). **If either installer were changed to install into
-`$CARGO_HOME/bin`, every installation it created would immediately become
-un-updatable.** That is a cross-component coupling invisible from either side
-alone.
+installers directly: it "keeps the published installer's `/usr/local/bin` and
+`~/.local/bin` on the self-managed path", because "'no Cargo evidence anywhere'
+must remain eligible" (`src/update.rs:483-486`). **If either installer were
+changed to install into `$CARGO_HOME/bin`, every installation it created would
+immediately become un-updatable.** That is a cross-component coupling invisible
+from either side alone.
 
 **The classification is by positive record, not by location.** A binary sitting
 inside `<cargo root>/bin` is `CargoManaged` only if Cargo's own metadata records
 this package and this binary name there; if the root records nothing, the result
-is `UnprovableOwnership`, not `CargoManaged` (`src/update.rs:416-431`). The
+is `UnprovableOwnership`, not `CargoManaged` (`src/update.rs:444-452`). The
 same applies to the ancestor scan that covers `cargo install --root DIR`
-(`src/update.rs:442-447`). A directory that merely *looks* like an install root
+(`src/update.rs:476-490`). A directory that merely *looks* like an install root
 is not evidence.
 
 The load-bearing property is therefore **distinguishability**, and it holds with
 four outcomes rather than two. Self-update is entitled to replace only a
 `VerifiableSelfManaged` installation, and only after re-proving the destination
 by its exact prior digest under the mutation lock
-(`src/update.rs:172-175`, `LiveDigestVerifier` at `src/update.rs:220-229`). A
-`CargoManaged` installation must be refused with the corrective command printed
-instead — `cargo install cargo-cleanme --locked --force`
+(`src/update.rs:172-175`; `LiveDigestVerifier` at `src/update.rs:219-222`, and
+its `verify` implementation at `src/update.rs:224-238`). A `CargoManaged`
+installation must be refused with the corrective command printed instead —
+`cargo install cargo-cleanme --locked --force`
 (`src/update.rs:197-199`) — because replacing it in place would make
 `cargo install --list` and Cargo's uninstall bookkeeping lie. `UnprovableOwnership`
 is refused too, with its own remediation (`src/update.rs:203-206`).
@@ -118,9 +128,10 @@ That distinction is not cosmetic. The `v0.1.3 → v0.1.4` rehearsal (C017) found
 in those two published versions
 (`plans/closure/distribution-release-update/c017-status.md`).
 
-Current version is **0.2.2**; the changelog records 0.1.0 through 0.2.2, and
-**v0.2.0 is the only yanked release** on crates.io. The other nine are not
-yanked.
+The crate currently declares version **0.2.9** (`Cargo.toml:3`), which is
+unreleased; the changelog records 0.1.0 through 0.2.8, so **sixteen releases are
+published** and **v0.2.0 is the only yanked release** on crates.io. The other
+fifteen are not yanked.
 
 The yanking decision is recorded here in full because it was made twice and
 resolved differently, and the second time is the harder case.
@@ -157,8 +168,9 @@ set, then parses each installer to extract the triples it can select
 either can select a triple with no published asset. Since C022 the check takes a
 fixture root and the exec bit git recorded rather than reading the repository
 (`check` at `scripts/check-installer-contract.py:125`), which is what lets
-`--self-test` (`:354`) build isolated trees and require a rejection for each
-defect class instead of only reporting that today's tree passes.
+`--self-test` (`scripts/check-installer-contract.py:354`) build isolated trees
+and require a rejection for each defect class instead of only reporting that
+today's tree passes.
 
 ### 3.1 `packaging/install.sh`
 
@@ -167,17 +179,22 @@ defect class instead of only reporting that today's tree passes.
 | Platform detection | `uname -s` → `linux`/`macos`; anything else fails, pointing the user at `cargo install --locked` | `install.sh:154-158` |
 | Architecture detection | `uname -m` normalised: `x86_64\|amd64`→`x64`, `aarch64\|arm64`→`arm64`, `armv7l\|armv7\|armhf`→`armv7`; anything else fails with the same source-build pointer | `install.sh:160-165` |
 | Triple selection | `case "$os_family:$arch_family"` mapping to one of the contracted triples, or `""` meaning "no prebuilt binary" | `install.sh:168-176` |
-| Download source | `${CARGO_CLEANME_INSTALL_BASE_URL}` or `${CARGO_CLEANME_INSTALL_LATEST_URL}`, defaulting to the GitHub release URLs. Both env vars exist so the fixture server can stand in for the release host | `install.sh:37-38` |
+| Download source | `${CARGO_CLEANME_INSTALL_BASE_URL}` or `${CARGO_CLEANME_INSTALL_LATEST_URL}`, defaulting to the GitHub release URLs. Both env vars exist so the fixture server can stand in for the release host | `install.sh:38-39` |
 | Asset naming | `$PRODUCT-$TARGET`, plus `.exe` on Windows | `install.sh:469-474` |
 | Integrity verification | **Yes — SHA-256 sidecar, mandatory.** Non-2xx on the sidecar is fatal ("The digest sidecar is mandatory evidence. Its absence is a hard failure, not a fallback signal"); the digest must match `^[0-9a-f]{64}$`; then compared against the downloaded file | `install.sh:515-537` |
-| Post-download identity check | The staged binary is executed and must report a version, or the install aborts | `install.sh:540-545` |
-| Transport | HTTPS only. A non-HTTPS URL is refused unless `CARGO_CLEANME_INSTALL_ALLOW_INSECURE=1`; an unrecognised scheme is always refused. A connection-level failure prints `000` and is fatal | `install.sh:238-252` |
+| Post-download identity check | The staged binary is executed and must report a release version, or the install aborts | `install.sh:540-545` |
+| Transport | HTTPS only. A non-HTTPS URL is refused unless `CARGO_CLEANME_INSTALL_ALLOW_INSECURE=1`; an unrecognised scheme is always refused. A connection-level failure prints `000` and is fatal | `install.sh:238-253`, `install.sh:267` |
 | Install target | `/usr/local/bin` when `id -u` is 0, else `$HOME/.local/bin`; overridable with `--dir` | `install.sh:189-195` |
 | Existing install | **Refuses.** `fail "$DEST already exists. Re-run with --force to replace it."` — replacement requires an explicit `--force` | `install.sh:205-207` |
-| Cargo fallback | When no prebuilt binary matches, resolves `cargo` and builds from source. Entered on an unrecognised triple or a genuine **404** only; a 5xx or transport fault stays fatal "so a release host outage can never silently become a local build" | `install.sh:178-182`, `install.sh:659-671` |
+| Cargo fallback | When no prebuilt binary matches, resolves `cargo` and builds from source. Entered on an unrecognised triple or a genuine **404** only; a 5xx or transport fault stays fatal "so a release host outage can never silently become a local build" | `install.sh:178-182`, `install.sh:490-495`, `install.sh:665-675` |
 | Dependencies | Requires `curl` plus `sha256sum` or `shasum` for the prebuilt path | `install.sh:209-216` |
-| Failure behaviour | Diagnostics to stderr, non-zero exit; the binary is staged in a temp dir and moved only after every check passes | `install.sh:462`, `install.sh:532-545` |
-| Shell PATH persistence | Since C027, a default non-root install appends one bounded guarded block to a single zsh/bash startup file **after** the verified binary is placed, and still prints the export for the current shell. Skipped for `--dir`, system scope, unsupported shells, unsafe targets, `--no-shell-profile`, and `--no-path`. See §3.1a | `install.sh:282-459`, `install.sh:683-753` |
+| Failure behaviour | Diagnostics to stderr, non-zero exit; the binary is staged in a temp dir and moved only after every check passes | `install.sh:58-61`, `install.sh:462`, `install.sh:573-579` |
+| Post-placement re-verification | The **placed** bytes are re-hashed and removed if they do not match the verified candidate, so a partial write cannot masquerade as a successful install | `install.sh:582-587` |
+| Shell PATH persistence | Since C027, a default non-root install appends one bounded guarded block to a single zsh/bash startup file **after** the verified binary is placed, and still prints the export for the current shell. Skipped for `--dir`, system scope, unsupported shells, unsafe targets, `--no-shell-profile`, and `--no-path`. See §3.1a | `install.sh:282-459`, `install.sh:683-754` |
+
+The temp directory the candidate is staged in is removed by an `EXIT`/`HUP`/
+`INT`/`TERM` trap (`install.sh:50-56`), so a failed install leaves nothing
+behind even on an interrupt.
 
 ### 3.1a Shell PATH persistence (C027)
 
@@ -192,13 +209,13 @@ The contract is now a **state transition on a profile**, asserted as one.
 
 The helpers are separable operations rather than one trailing `case`
 (`install.sh:282-459`): `path_has_dir` asks whether the destination is already
-on `PATH`; `shell_profile_target` selects a supported startup file; 
+on `PATH`; `shell_profile_target` selects a supported startup file;
 `profile_target_is_safe` refuses anything that is not a writable regular file or
 a creatable file in an existing directory; `profile_has_active_entry` decides
 whether the profile already integrates the directory *for real*;
 `append_profile_entry` writes the guarded block; and
 `profile_persistence_permitted` decides whether this invocation may persist at
-all. The final gate is one line (`install.sh:750-753`): PATH handling happens
+all. The final gate is one line (`install.sh:751-754`): PATH handling happens
 only when the caller wants it and the destination is not already on `PATH`.
 
 Four properties are load-bearing, and each is a mutation-checked case:
@@ -231,15 +248,20 @@ mechanisms, and the correspondence is close enough to enumerate:
 
 | Concern | Behaviour | Reference |
 | --- | --- | --- |
-| Architecture detection | Normalised to the same arch families; a family with no published Windows binary sets `$cargoFallbackHost` | `install.ps1:96-100` |
+| Architecture detection | Normalised to the same arch families; a family with no published Windows binary sets `$cargoFallbackHost` | `install.ps1:82-87`, `install.ps1:96-100` |
 | Download source | Same two env-var overrides with the same GitHub defaults | `install.ps1:55-56` |
 | Integrity verification | `Get-FileHash -Algorithm SHA256`; the sidecar is mandatory, its status must be 2xx, and the digest must match `^[0-9a-f]{64}$` | `install.ps1:125`, `install.ps1:225-235` |
 | TLS | HTTPS enforced by a scheme check, with TLS 1.2 as the enforced floor and the previous `SecurityProtocol` restored afterwards | `install.ps1:134`, `install.ps1:143-165` |
-| Post-download identity check | The candidate "must print exactly `cargo-cleanme X.Y.Z`" | `install.ps1:16` |
+| Post-download identity check | The candidate "must print exactly `cargo-cleanme X.Y.Z`" before it is placed | `install.ps1:16`, enforced at `install.ps1:241-253` |
 | Install target | `%ProgramFiles%\cargo-cleanme\bin` when elevated, else `%LOCALAPPDATA%\cargo-cleanme\bin`; overridable with `-Directory` | `install.ps1:105-113` |
 | Existing install | **Refuses** unless `-Force`, mirroring the POSIX `--force` | `install.ps1:118-119` |
 | Cargo fallback | Present and equivalent: a **404** on the asset enters the fallback, while a non-2xx other than 404 or a transport failure stays fatal, with the same stated reason | `install.ps1:208-215` |
-| Atomic install | Copies to the destination only after verification; cleans up the work directory in a `finally` | `install.ps1:301-324` |
+| Atomic install | Copies to the destination only after verification, re-hashes the placed bytes, removes them on a mismatch, and cleans up the work directory in a `finally` | `install.ps1:299-324` |
+
+The PowerShell wrapper deliberately never mutates the machine `PATH`; it only
+reports whether the destination is already on it (`install.ps1:312-320`). That
+is the one contract asymmetry between the two installers and it is scoped
+deliberately — see §9.
 
 ### 3.3 Divergence between the two installers
 
@@ -248,7 +270,7 @@ is a process failure. The release history records a Windows installer fixture th
 had never executed on a Windows host, producing a green result that meant nothing
 (C012). The repair was to make the suite assert its own premises, and the CI lane
 now runs the PowerShell wrapper for real on `windows-latest`
-(`.github/workflows/ci.yml:37-63`).
+(`.github/workflows/ci.yml:56-58`).
 
 Reading the two side by side, the **contract-equivalent** behaviours line up:
 mandatory sidecar, 404-only fallback, refuse-to-overwrite without an explicit
@@ -272,19 +294,21 @@ shell-appropriate:
   (`install.sh:168-176`); the Windows one is reached from a runtime
   `$target` emptiness check (`install.ps1:96-100`). Same outcome, different
   mechanism.
+- PATH persistence exists only on the POSIX side (§3.1a). PowerShell reports
+  the situation and leaves the machine environment alone.
 
 ### 3.4 The installer fixtures
 
-`packaging/tests/test_installers.py` (1813 lines) is the installer qualification
+`packaging/tests/test_installers.py` (1828 lines) is the installer qualification
 suite, and `packaging/tests/fixture_server.py` (160 lines) is a local fixture
 server that stands in for the GitHub release service. **No test in this suite
 contacts the public GitHub service or a real release** — the CI job comment
-states this explicitly (`.github/workflows/ci.yml:38-40`).
+states this explicitly (`.github/workflows/ci.yml:50-51`).
 
 **The Windows cases do execute on a Windows runner.** The job matrix is
-`[ubuntu-latest, macos-latest, windows-latest]` (`.github/workflows/ci.yml:47`)
+`[ubuntu-latest, macos-latest, windows-latest]` (`.github/workflows/ci.yml:58`)
 and the suite is invoked on all three. The cross-platform roster has 15 named cases
-(`packaging/tests/test_installers.py:1522-1538`):
+(`packaging/tests/test_installers.py:1537-1553`):
 
 | Case | What it pins down |
 | --- | --- |
@@ -306,18 +330,18 @@ and the suite is invoked on all three. The cross-platform roster has 15 named ca
 
 The last three are the C012 repair. `case_fake_cargo_is_actually_resolved`
 exists specifically because a stub `cargo` earlier in `PATH` could have made a
-green result meaningless, and `self_test()` (`packaging/tests/test_installers.py:1570`)
+green result meaningless, and `self_test()` (`packaging/tests/test_installers.py:1585`)
 proves the guards reject a deliberately broken setup. The premise-negative
 self-test runs on every matrix lane, including Windows, specifically because
-that is where the defect lived (`.github/workflows/ci.yml:86-91`).
+that is where the defect lived (`.github/workflows/ci.yml:89-95`).
 
 **A second roster exists for the C027 PATH work**, and it is separate because
 its cases have a different signature and only apply to `install.sh`: they assert
 a state transition on a shell profile, which `install.ps1` does not have. The 19
 cases are in `POSIX_PATH_CASES`
-(`packaging/tests/test_installers.py:1547-1567`) and run only on a host that can
+(`packaging/tests/test_installers.py:1562-1582`) and run only on a host that can
 run the POSIX block. Both rosters are tuples and the driver counts what it ran
-(`packaging/tests/test_installers.py:1786-1803`), because a case quietly dropped
+(`packaging/tests/test_installers.py:1801-1817`), because a case quietly dropped
 from a roster would otherwise shrink coverage while the run stayed green — the
 same failure mode this suite exists to prevent.
 
@@ -338,7 +362,7 @@ asserts the negative direction in the same environment — the same shell must
 **not** resolve it when the profile entry is removed — because without that, a
 `PATH` that happened to contain the directory would make the positive result
 meaningless. It runs with `--require-macos` in the installer lane
-(`.github/workflows/ci.yml:74-84`) so a lane that was supposed to prove this and
+(`.github/workflows/ci.yml:81-88`) so a lane that was supposed to prove this and
 could not fails instead of skipping. `qualify()` takes the shell as a parameter,
 so a Linux host drives the identical sequence with bash rather than
 reimplementing it.
@@ -357,7 +381,7 @@ package allowlist and is never published.
 It has exactly one input and two output kinds. The input is the clap command
 model from `src/cli.rs`; there is no hand-maintained copy of the CLI anywhere in
 the generator, so the docs cannot disagree with the parser by construction — only
-by staleness. The outputs are:
+by staleness. The outputs are **13 generated artefacts** in total:
 
 - **5 completion files** in `completions/`, one per shell in the `SHELLS` array
   (`xtask/src/main.rs:23-29`): Bash, Zsh, Fish, PowerShell, Elvish. Elvish is
@@ -365,7 +389,7 @@ by staleness. The outputs are:
   (`xtask/src/main.rs:21-22`). Each is generated with
   `clap_complete::generate` (`xtask/src/main.rs:46`).
 - **8 manpages** in `man/`, one per command node, via `clap_mangen`
-  (`xtask/src/main.rs:120-165`).
+  (`xtask/src/main.rs:126-173`).
 
 The `--check` flag is what makes CI enforcement possible: it regenerates in
 memory and compares against the checked-in tree instead of writing
@@ -374,7 +398,7 @@ memory and compares against the checked-in tree instead of writing
 ### 4.2 Naming convention in `completions/`
 
 The output path per shell is chosen explicitly in `completion_path`
-(`xtask/src/main.rs:107-115`), and the naming is **not** uniform — deliberately:
+(`xtask/src/main.rs:107-118`), and the naming is **not** uniform — deliberately:
 
 | File | Shell | Convention note |
 | --- | --- | --- |
@@ -393,7 +417,7 @@ independent filename decisions.
 
 ### 4.3 The manpage structure
 
-Eight pages, one per command:
+Eight pages — the root plus one per subcommand:
 
 `cargo-cleanme.1` plus `cargo-cleanme-clean.1`, `cargo-cleanme-config.1`,
 `cargo-cleanme-edit.1`, `cargo-cleanme-path.1`, `cargo-cleanme-scan.1`,
@@ -420,12 +444,15 @@ via `git ls-files`). The generator's output is therefore a tracked artefact and
 is subject to drift by construction: it is regenerated only when someone
 remembers to run it.
 
-The `generated-docs` job in `.github/workflows/ci.yml:72` closes that gap. It runs
+The `generated-docs` job in `.github/workflows/ci.yml:96` closes that gap. It runs
 the generator in its `--check` mode — `cargo run --quiet --features dev-tools
---bin generate-docs -- --check` (`ci.yml:74`) — which regenerates in memory and
-fails if the result differs from what is committed, rather than writing over it.
-The same job also runs `scripts/check-release-contract.py` (`ci.yml:76`). The
-practical consequence is unambiguous:
+--bin generate-docs -- --check` (`ci.yml:107-108`) — which regenerates in memory
+and fails if the result differs from what is committed, rather than writing over
+it. On this tree the gate reports "13 artifacts match the clap model". The same
+job also runs `scripts/check-release-contract.py` (`ci.yml:109-110`) and five
+further guard scripts — the selector-qualification pair, the staged-validation
+pair, the installer-contract pair, and the smoke transition resolver
+(`.github/workflows/ci.yml:114-144`). The practical consequence is unambiguous:
 
 > **Any change to the CLI surface must be accompanied by regenerated completions
 > and manpages, or CI fails.**
@@ -458,10 +485,10 @@ checkout rather than whatever Cargo happens to infer."
 
 What it excludes is everything that exists to build, verify, document, or release
 the project: `tests/`, `scripts/`, `xtask/`, `docs/`, `man/`, `completions/`,
-`packaging/`, `plans/`, `examples/`, and `architecture/`. The exclusion is
-load-bearing, not merely tidy — a crate shipping its own CI scripts, installers,
-and generator would invite consumers to depend on files that are not a stable
-API. The check enforces the boundary from the outside too:
+`packaging/`, `release/`, `plans/`, `examples/`, and `architecture/`. The
+exclusion is load-bearing, not merely tidy — a crate shipping its own CI
+scripts, installers, and generator would invite consumers to depend on files
+that are not a stable API. The check enforces the boundary from the outside too:
 `check-release-contract.py:468-471` fails if the allowlist is ever widened to
 include the xtask generator.
 
@@ -482,8 +509,8 @@ pub const CONFIG_TEMPLATE: &str = include_str!("../config.toml");
   compile at all** — `cargo install cargo-cleanme` fails with a compile error in
   `src/config.rs`, not with a runtime error and not with a degraded feature.
 - First-use config creation is impossible without it. The constant is the only
-  source of the default template; `src/config.rs:489` writes those bytes as the
-  new config file, and `src/config.rs:1114` parses them to prove the checked-in
+  source of the default template; `src/config.rs:519` writes those bytes as the
+  new config file, and `src/config.rs:1172` parses them to prove the checked-in
   template is well-formed. Both are compile-time-dependent facts about a file
   that lives outside `src/`.
 
@@ -555,12 +582,15 @@ cannot be produced as a release artefact even accidentally.
 
 The Linux targets are cross-compiled with `cargo-zigbuild` pinned to `0.23.3`
 (`release-binaries.yml:143`) with the `.2.17` target suffix, which establishes
-the glibc floor as a **build** fact. The contract check enforces a specific and
-subtle invariant about how that fact may be described: the README may *mention*
-the glibc 2.17 floor, but only alongside an explicit non-claim such as "not yet
-claimed" or "no runtime evidence" (`check-release-contract.py:486-509`). A plain
-"the string may never appear" rule was deliberately rejected as forbidding the
-honest explanation of the floor's status.
+the glibc floor as a **build** fact. The Zig toolchain itself is pinned to
+`0.14.1` and its official archive is verified against a recorded SHA-256 before
+use (`release-binaries.yml:148-160`). The contract check enforces a specific and
+subtle invariant about how the glibc fact may be described: the README may
+*mention* the glibc 2.17 floor, but only alongside an explicit non-claim such
+as "not yet claimed" or "no runtime evidence"
+(`check-release-contract.py:493-509`). A plain "the string may never appear" rule
+was deliberately rejected as forbidding the honest explanation of the floor's
+status.
 
 **There is no signing and no notarisation step.** No `gpg`, `sigstore`,
 `minisign`, `codesign`, or notarisation reference appears anywhere in the
@@ -570,11 +600,19 @@ unauthenticated. See §9.
 ### 6.2 The critical property: the workflow cannot publish
 
 The most important thing this workflow does is **refuse to publish**. The final
-job is named `stage`, its steps are `_prepare-stage` and `_stage-github-draft`
-(`release-binaries.yml:1047-1052`), and `check_workflow_cannot_publish` (called at
+job is named `stage` (`release-binaries.yml:1009`), its steps are
+`_prepare-stage` and `_stage-github-draft`
+(`release-binaries.yml:1045-1052`), and `check_workflow_cannot_publish` (called at
 `check-release-contract.py:527`) fails the contract check if the generated
 workflow contains any publication or clobber path. The candidate build stages a
 **draft** release and stops. Publication is a separate, deliberate, human step.
+
+The permission split is what makes that structural rather than editorial. The
+workflow declares `permissions: contents: read` at the top
+(`release-binaries.yml:9-10`), and exactly one job — `stage` — widens it to
+`contents: write` (`release-binaries.yml:1013-1014`), and that job is gated on
+`if: github.event_name == 'workflow_dispatch'` (`release-binaries.yml:1011`).
+Every build, qualification, and aggregation job runs read-only.
 
 This split is what makes the identity gates meaningful. If the build could publish
 itself, "the bytes in the draft are the bytes from the tagged commit" would be a
@@ -583,8 +621,8 @@ staged artefact. `validate-staged-release.py` (§7.3) exists to inspect that
 artefact *before* anyone acts on it.
 
 The whole workflow is also `workflow_dispatch`-only, requires an exact existing
-`release_tag` as input (`release-binaries.yml:3-7`), checks out that tag
-(`release-binaries.yml:34-36`), and holds `permissions: contents: read` — the
+`release_tag` as input (`release-binaries.yml:2-8`), checks out that tag
+(`release-binaries.yml:35-38`), and holds `permissions: contents: read` — the
 build job has no write scope of its own.
 
 ### 6.3 What Eggpack is, and what cargo-cleanme inherits
@@ -603,6 +641,16 @@ able to validate the result. It contains ten files, including:
 | `github-policy.json`, `github-template.json` | The GitHub surface policy and draft template |
 | `install-policy.toml`, `installer-presentation.json` | Installer policy and the presentation contract |
 | `workflow-shape.json` | The machine-readable shape the generated workflow must have |
+
+The target matrix is owned by `distribution.toml` and `pack.toml`, not by the
+wrappers: `distribution.toml` names the five triples and their asset and
+install names, and `pack.toml` names the build strategy and pinned toolchain per
+triple (`release/eggpack/pack.toml:21-83`). `install-policy.toml` is an
+intentionally *empty* bootstrap policy — every target is a direct artifact with
+no bundle, so there is no per-target install policy to express, and the file
+exists so the producer can generate the exact-release installers without
+acquiring product install semantics that would fork the public contract
+(`release/eggpack/install-policy.toml:3-12`).
 
 The project narrative is that Eggpack is an **external producer whose existing
 contract, manifest, bootstrap, CI-generation, drift, and draft-staging surfaces
@@ -654,7 +702,7 @@ find work* — the worst possible release regression — shows up here as
 `reportable: 0` or a non-zero `failures` count, and nothing else in this document
 would surface it. `dependency_count` also refuses to record a failed `cargo tree`
 as zero, so a broken measurement cannot silently become a passing baseline
-(`scripts/release-benchmark.py:162-165`).
+(`scripts/release-benchmark.py:162-179`).
 
 The fixture is built by the script rather than borrowed from the test suite, so
 the numbers describe a documented, reproducible workload instead of whatever a
@@ -712,7 +760,7 @@ reason: a hand-maintained shape "would make it a second copy of the producer
 facts already held in `pack.toml`, `build-bindings.toml`,
 `qualification-bindings.toml`, `consumer-validators.json`, and
 `distribution.toml`, which is exactly the drift this subsystem is meant to
-eliminate."
+eliminate" (`scripts/gen-release-workflow-shape.py:4-9`).
 
 `release-drift.yml` runs it with `--check` ("Check reusable workflow shape is
 derived from the Eggpack inputs"), so a hand-edit to the checked-in shape, or an
@@ -722,28 +770,32 @@ This is what makes "the workflow still stages rather than publishes" (§6.2) a
 property of the actual file rather than of the generator's intent. The script
 also states its own limit: it "adds no producer semantics: it copies validated
 input documents verbatim and only chooses canonical ordering and the staging
-intent."
+intent" (`scripts/gen-release-workflow-shape.py:16-17`).
 
 ### 7.3 `scripts/validate-staged-release.py`
 
 It runs **after** the build workflow has staged a draft and **before** anything is
 published — its own docstring: "Run after `release-binaries.yml` stages a draft
 and before anything is published. Nothing here publishes; it only inspects and
-reports" (`scripts/validate-staged-release.py:3-5`). That position in the
+reports" (`scripts/validate-staged-release.py:4-5`). That position in the
 sequence is the whole reason the draft-staging design in §6.2 is worth having:
 this is the last point at which a disagreement can still be fixed.
 
 Its six checks, in the script's own order:
 
 1. **Exact inventory** — five binaries, five `.sha256` sidecars,
-   `release-manifest.json`, and both bootstrap installers. A missing *or extra*
-   asset is a hard failure, because "exactly the required qualified inventory"
-   is a publication precondition.
+   `release-manifest.json`, and **four** installers: the two product-owned
+   public wrappers `install.sh` and `install.ps1` plus the two Eggpack
+   exact-release bootstrap installers `install-exact.sh` and `install-exact.ps1`
+   (`scripts/validate-staged-release.py:168-177`). A missing *or extra* asset is
+   a hard failure, because "exactly the required qualified inventory" is a
+   publication precondition.
 2. **Sidecar integrity** — every sidecar must name its own asset and its digest
    must match the bytes actually served.
 3. **Manifest agreement** — `release-manifest.json` must agree with the bytes for
-   every asset it lists, by size and SHA-256. A disagreement is treated as a
-   stale-build indicator.
+   every asset it lists, by size and SHA-256, and must bind the exact tag and
+   the commit the tag points at. A disagreement is treated as a stale-build
+   indicator.
 4. **Contract agreement** — asset names must be exactly what
    `release/eggpack/distribution.toml` expands to. Per the docstring, "This is
    the check that the installer and the updater point at the same release
@@ -762,11 +814,37 @@ this host" (6/6 against `v0.1.2`,
 `plans/closure/distribution-release-update/c014-status.md:76`).
 
 **Stated limitation, from that same record:** step 6 runs **only on the host
-platform**. The other four targets' installer paths are covered by the contract
-check and hosted CI, not by this script (same file, line 196 and line 212). So
-the live, real-bytes installer evidence is single-platform; the five-target
-coverage for the installer contract comes from §3.4's fixtures and the
+platform**. The script skips it on a non-POSIX host
+(`scripts/validate-staged-release.py:319-321`) and on a host whose own asset is
+not in the staged set (`scripts/validate-staged-release.py:329-331`); the record
+states the same thing at `c014-status.md:196` and `c014-status.md:212`. So the
+live, real-bytes installer evidence is single-platform; the five-target coverage
+for the installer contract comes from §3.4's fixtures and the
 `check-installer-contract.py` static check instead.
+
+**One reporting defect to be aware of when reading its output.** The validator's
+`report()` collects its evidence notes and then discards them — the loop that
+would print them is `for message in notes: pass`
+(`scripts/validate-staged-release.py:410-420`). The *failures* are still printed
+and the exit code is still correct, so the gate is fail-closed; but the positive
+evidence it produced — the measured glibc floor per Linux target, the manifest
+agreement summary, the "installed bytes match the release asset digest exactly"
+confirmation — never reaches the operator or the CI log. The check's verdict is
+trustworthy; its supporting numbers are currently not visible. This is a
+documentation-and-diagnostics gap in the script, not a soundness gap in the
+gate, and it is recorded here rather than fixed because this review owns
+documentation only.
+
+**One place where the script's own docstring is out of date.** The module
+docstring still describes the staged inventory as "the two exact-release
+bootstrap installers"
+(`scripts/validate-staged-release.py:9-12`), but the code requires **four**
+installers — the two Eggpack exact-release ones *and* the two product-owned
+public wrappers — and says so in a comment of its own
+(`scripts/validate-staged-release.py:168-170`). The code is authoritative and is
+what this document describes; the docstring is the stale side of the pair. The
+shape of the mistake is the one this repository keeps meeting: a prose summary
+of an invariant that was later widened, where the prose was not widened with it.
 
 ### 7.4 `release-drift.yml`
 
@@ -781,14 +859,15 @@ recorded in `release/eggpack/github-policy.json:48-50`. Its checks, in order:
 | `check-release-contract.py` | The packaging, installer, and workflow contract has drifted |
 | `check-release-contract.py --self-test` | The toolchain rule has rotted into a check that always passes |
 | `check-release-identity.py --self-test` | The identity gate has rotted into a check that always passes |
+| `check-installer-contract.py --self-test` | The installer guard has rotted into a check that always passes |
 | `check-installer-contract.py` | The installers have drifted from the contracted asset set |
 | `check-post-release-smoke-contract.py` (+ `--self-test`) | The post-release smoke matrix has drifted from the release runners, or that check has rotted |
 
-The two `--self-test` invocations are the part that distinguishes this workflow
+The `--self-test` invocations are the part that distinguishes this workflow
 from a list of assertions. The CI comment states the intent: "The tag/source
 identity gate and the exact-toolchain rule are both verified in the failing
 direction here, so neither can rot into a check that always passes"
-(`release-drift.yml:49-51`). That is the C012 lesson generalised to the whole
+(`release-drift.yml:50-52`). That is the C012 lesson generalised to the whole
 release surface — a gate that has only ever been observed to pass has not been
 shown to work.
 
@@ -797,6 +876,20 @@ assumptions decay. A change to the CLI surface, the allowlist, the asset contrac
 or the toolchain can invalidate a release that qualified correctly on its own
 terms. Separating "the release was broken" from "the world moved after the
 release" is otherwise impossible — both present as the same red build.
+
+One guard in this table carries a stale sentence in its own docstring.
+`scripts/check-post-release-smoke-contract.py:15` still says the smoke workflow
+"is manually dispatched only, so it cannot run on a push" — which was true
+before M011C and is now false in two directions. The **code** was updated to
+match the new reality: it requires exactly two triggers, `workflow_dispatch`
+*and* `release: types: [published]`, and it rejects `push`, `pull_request`,
+`schedule`, and `workflow_run` on the smoke workflow
+(`scripts/check-post-release-smoke-contract.py:174-208`). The guard is therefore
+correct and M011C-aware; only its prose summary was left behind. It is the same
+shape as the `validate-staged-release.py` docstring in §7.3 — a written invariant
+that was widened in code and not in prose — and it is recorded here because a
+reviewer who reads the docstring would draw a wrong conclusion about what the
+guard enforces.
 
 ### 7.5 The chain of evidence, and which links are machine-checked
 
@@ -808,19 +901,74 @@ link's enforcement:
 | 1 | Tag ↔ source revision are the same commit | **Yes** | `check-release-identity.py:check_identity` |
 | 2 | The tree being released is clean | **Yes** | `check-release-identity.py:check_clean_tree` |
 | 3 | Manifest and lockfile agree on the version | **Yes** | `check-release-identity.py:crate_version`, `locked_version` |
-| 4 | `Cargo.toml` version ↔ `CHANGELOG.md` entry ↔ git tag | **Yes** | `check-release-identity.py:105-113`, `136-143` |
+| 4 | `Cargo.toml` version ↔ `CHANGELOG.md` entry ↔ git tag | **Yes** | `check-release-identity.py:104-142` |
 | 5 | The build runs in a pinned, recorded toolchain (`+1.99.0`, `cargo-zigbuild 0.23.3`) | **Yes** | `check_release_toolchains` against `pack.toml`; `--self-test` in drift CI |
 | 6 | The workflow cannot publish; it stages a draft | **Yes** | `check_workflow_cannot_publish` + `workflow-shape.json` + `eggpack ci check` |
 | 7 | The staged draft's inventory, digests, manifest, and contract all agree | **Yes** | `validate-staged-release.py` 1-5, before publication |
-| 8 | The published installer verifies the staged digest, on real bytes | **Yes, one host platform** | `validate-staged-release.py:6`; §3.4 fixtures for the other targets |
+| 8 | The published installer verifies the staged digest, on real bytes | **Yes, one host platform** | check 6 of `validate-staged-release.py`; §3.4 fixtures for the other targets |
 | 9 | Each target's binary actually runs and self-identifies | **Yes** | Per-target smoke + `consumer-validators.json` |
-| 10 | The **installed** binary self-updates correctly, and a Cargo-managed one refuses | **No — manual** | The live rehearsal, `workflow_dispatch`-only. See §8 |
+| 10 | The **installed** binary self-updates correctly, and a Cargo-managed one refuses | **Yes — automatic since M011C** | `post-release-smoke.yml` on `release: published`; the *reading* of the run is still a human step. See §8 |
 
-Links 1-9 are machine-checked, with link 8's live-installer half limited to one
-host platform and link 5's timing data explicitly excluded from the pass/fail
-line (§6.4). **Link 10 is not machine-checked at all, and link 10 is where both
-shipped defects were found.** The one step that verifies the composed system
-against real published bytes is the one step a human has to remember to trigger.
+All ten links are machine-checked, with link 8's live-installer half limited to
+one host platform and link 5's timing data explicitly excluded from the pass/fail
+line (§6.4). What is **not** machine-checked is the last mile: reading the
+automatic smoke's result, and noticing a red one. That gap is smaller than it
+was, but it is the same gap in which both shipped defects lived — §8.2.
+
+### 7.6 The local aggregate gate, and the script inventory
+
+`scripts/release-check.sh` is the single local gate for everything that must hold
+before a release may be staged. It performs no publication: the last two steps
+are a package build and a publish *dry run*
+(`scripts/release-check.sh:139-145`). Given the exact release tag it also proves
+the tag matches the source identity in the tree; without an argument the
+identity check runs in self-test mode only
+(`scripts/release-check.sh:74-80`).
+
+Its order is the argument: format, clippy, tests, doc tests, the MSRV toolchain,
+the semantic-counter baseline, the generated-docs drift check, the Eggpack shape
+and workflow drift checks, then the release contract, the release identity, the
+installer contract, the post-release smoke contract, the transition resolver,
+the staged-validation contract, the selector qualification, the attestation
+verifier, the installer fixtures, the fixture-portability guard, the
+architecture-citation guard, the release-candidate smoke, and finally
+`cargo package --locked` and `cargo publish --locked --dry-run`
+(`scripts/release-check.sh:32-137`).
+
+`scripts/` holds **17 scripts**. **11 of them implement `--self-test`** — a mode
+that feeds the guard a known-bad sample and requires a rejection. The other six
+do not: `gen-release-workflow-shape.py` (a pure derivation with no defect class
+to demonstrate), `post-release-smoke.sh` (a networked rehearsal, not a guard),
+`release-benchmark.py` (a measurement, not a guard), `smoke-release-candidate.py`
+(a positive consumer validator), `validate-staged-release.py` (the validator
+described in §7.3), and `release-check.sh` itself, which *invokes* twelve
+self-tests — eleven of the guards under `scripts/` plus the installer fixture
+suite — rather than providing one of its own
+(`scripts/release-check.sh:72-133`).
+
+| Script | Owns | `--self-test`? |
+| --- | --- | --- |
+| `check-doc-citations.py` | `file.rs:N` citations in `architecture/` resolve | **yes** |
+| `check-fixture-portability.py` | A fixture can run where it reports success | **yes** |
+| `check-installer-contract.py` | The wrappers match `distribution.toml` | **yes** |
+| `check-post-release-smoke-contract.py` | The smoke matrix is a projection of the release runners | **yes** |
+| `check-release-contract.py` | Allowlist, toolchain, and no-publish invariants | **yes** |
+| `check-release-identity.py` | Tag ↔ source ↔ manifest ↔ lockfile identity | **yes** |
+| `check-selector-qualification.py` | Policy ↔ runtime allowlist ↔ hosted matrix | **yes** |
+| `check-staged-validation-contract.py` | The staged-validation workflow's premises | **yes** |
+| `gen-release-workflow-shape.py` | Derives `workflow-shape.json` from the Eggpack inputs | no |
+| `post-release-smoke.sh` | The live self-update rehearsal | no |
+| `qualify-cargo-selectors.sh` | Real-Cargo selector characterization | **yes** |
+| `release-benchmark.py` | The semantic-counter baseline | no |
+| `release-check.sh` | The local aggregate gate | no (invokes twelve) |
+| `resolve-smoke-transition.py` | The automatic path's transition resolver | **yes** |
+| `smoke-release-candidate.py` | The per-target consumer validator | no |
+| `validate-staged-release.py` | The staged-draft validator | no |
+| `verify-release-attestation.py` | The immutable-release attestation verifier | **yes** |
+
+The same inventory, with the reasoning behind it, is maintained in
+[14-testing-and-verification.md](14-testing-and-verification.md) §5, and the
+wider tooling surface in [architecture/overview.md](overview.md) §9.
 
 ## 8. Post-release verification
 
@@ -864,13 +1012,16 @@ distinguishability property. The second one is C017's regression test, written
 down as a live scenario.
 
 The workflow runs a five-target matrix on purpose-matched runners
-(`post-release-smoke.yml:32-42`: `macos-14`, `ubuntu-24.04-arm`,
+(`post-release-smoke.yml:141-152`: `macos-14`, `ubuntu-24.04-arm`,
 `macos-15-intel`, `windows-latest`, `ubuntu-latest`), and that matrix is itself
-guarded: `scripts/check-post-release-smoke-contract.py` asserts the runners
-against the generated release workflow "so this matrix cannot silently drift into
-a second, unguarded target list." The workflow holds `permissions: contents: read`
-only and needs no publication credentials, and the script's design constraints
-are explicit that a network failure is a failure, that nothing runs under
+guarded: `scripts/check-post-release-smoke-contract.py` makes the smoke matrix a
+*projection* of the release workflow's build jobs, because "a hand-written
+matrix in a second workflow is exactly that risk: it is plausible to add, drop,
+or repoint a runner here without touching the release contract"
+(`scripts/check-post-release-smoke-contract.py:6-9`). The workflow holds
+`permissions: contents: read` only and needs no publication credentials, and
+the script's design constraints are explicit that a network failure is a
+failure, that nothing runs under
 `|| true` where a failure would be hidden, and that **the premise of every
 scenario is asserted before its behaviour is** — the installed binary's identity
 and digest are proven to be the published ones before `update` is asked to do
@@ -913,7 +1064,7 @@ real self-update defects**:
 The diagnosis behind C017 is stated in the suite itself: the case "was green for
 an entire release cycle precisely because nothing ever checked the guards in the
 direction that matters: with the stub *not* reachable, and with the real tool
-winning the lookup" (`packaging/tests/test_installers.py:1570-1641`). The fixtures
+winning the lookup" (`packaging/tests/test_installers.py:1589-1591`). The fixtures
 had been built to pass, not to be shown capable of failing.
 
 The consequence, stated without softening: **a defect of the C016 or C017 class
@@ -938,16 +1089,32 @@ that.** `post-release-smoke.yml` now carries `release: published` plus the
 retained manual dispatch; see §8.3 for the two new failure shapes it introduced
 and the machinery that handles them.
 
-The automatic trigger has now fired **three times**, and the honest scoreboard is
-that **two of the three failed**:
+The automatic trigger has now fired **nine times**, and the honest scoreboard is
+that **two of the nine failed**:
 
 | Release | Run | Result | Why |
 | --- | --- | --- | --- |
 | v0.2.0 | `37419183947` | **failed** | Three defects in the automation path itself. |
 | v0.2.1 | `37507738147` | **failed** | C023 had just yanked v0.2.0; the resolver picked that now-uninstallable version as its rehearsal source. Fixed by consulting crates.io's yanked set (`cfdc910`). |
 | v0.2.2 | `37561575727` | **green, all five lanes** | `from_version=v0.2.1`, resolved to an installable predecessor. The first green automatic run in the project's history. |
+| v0.2.3 | `37652257315` | **green, all five lanes** | `from_version=v0.2.2`. The second consecutive green. |
+| v0.2.4 | `37850582892` | **green, all five lanes** | `from_version=v0.2.3`. |
+| v0.2.5 | `37988595432` | **green, all five lanes** | `from_version=v0.2.4`. |
+| v0.2.6 | `38303253453` | **green, all five lanes** | `from_version=v0.2.5`. |
+| v0.2.7 | `38454264585` | **green, all five lanes** | `from_version=v0.2.6`. |
+| v0.2.8 | `38683755836` | **green, all five lanes** | `from_version=v0.2.7`. |
 
-Two things follow, and both matter more than the green run.
+Seven green automatic runs, two failures, and the two failures stay recorded as
+failures. The written release receipts are
+`plans/closure/distribution-release-update/r022-status.md` through
+`r026-status.md` — v0.2.2 through v0.2.6; **v0.2.7 and v0.2.8 have no receipt**,
+which the registry records as "distribution-line debt". The milestone's own
+closure row still says the trigger is "demonstrated three times" — a row that
+predates the six runs that followed it and that the registry's own release table
+contradicts. The run identifiers above are the durable facts; the counts in the
+records are not.
+
+Two things follow, and both matter more than the green runs.
 
 First, **the automation found real defects immediately, in its own first use.**
 Both failures were in the automatic path, not in the product, and both were
@@ -967,11 +1134,13 @@ program also needed to be hardened before the trigger was safe to expose.
 
 What remains manual, deliberately: `workflow_dispatch` is kept as the recovery
 surface, because an automatic trigger is not a substitute for being able to
-re-run a known transition on demand. And **reading** the run is still a human
-step. Nothing forces anyone to open the result, which is the same class of gap at
-a smaller scale — see checklist item 13.
+re-run a known transition on demand. It is not a vestigial path — the five-lane
+green evidence for `v0.1.6 -> v0.2.1` (run `37508262225`) comes from it. And
+**reading** the run is still a human step. Nothing forces anyone to open the
+result, which is the same class of gap at a smaller scale — see checklist
+item 13.
 
-## 8.3 Hosted release automation (Phase 11)
+### 8.3 Hosted release automation (Phase 11)
 
 Three workflows were added in Phase 11, and the common property is that each one
 turns a previously manual or undocumented step into an enforcement point **while
@@ -979,7 +1148,7 @@ keeping the human publication action where it was**.
 
 | Workflow | Subscribes to | Owns | Cannot |
 | --- | --- | --- | --- |
-| `validate-staged-release.yml` | `workflow_run` on `Eggpack candidate builds` | The hosted enforcement point for `validate-staged-release.py` (§7.3) | Publish. Holds `contents: write` — see below. |
+| `validate-staged-release.yml` | `workflow_run` on `Eggpack candidate builds`, plus a manual dispatch recovery path | The hosted enforcement point for `validate-staged-release.py` (§7.3) | Publish — the file contains no publication command at all |
 | `post-release-smoke.yml` | `release: published`, plus manual dispatch | The real self-update transaction across all five targets | Mutate anything outside its own job directory |
 | `qualify-cargo-selectors.yml` | weekly, dispatch, and path-filtered push/PR | Real-Cargo evidence for the selector support claim | Edit the support allowlist, or change a verdict |
 
@@ -989,7 +1158,22 @@ operator remembered. It lives in its own file because `release-binaries.yml` is
 generated by Eggpack and protected by a drift gate. Its two quiet failure modes
 are guarded statically by `check-staged-validation-contract.py`: a `push` trigger
 would run the validator on an arbitrary branch, and a default-branch checkout
-would validate whatever `main` currently contains while genuinely passing.
+would validate whatever `main` currently contains while genuinely passing. Its
+manual dispatch path takes an exact tag and, optionally, the upstream run id, and
+re-proves tag/source identity from the checkout, so a manual re-run cannot
+validate "latest" or a tag from an unrelated commit
+(`.github/workflows/validate-staged-release.yml:37-51`).
+
+That workflow does hold `contents: write`, and the reason is worth stating
+plainly rather than leaving as a surprise: it must **read** a draft release, and
+GitHub serves drafts only to identities with push access, so `contents: read`
+"cannot do that job and `contents: write` is the narrowest permission that can.
+There is no read-only-draft permission to reach for"
+(`.github/workflows/validate-staged-release.yml:22-25`). What still prevents
+publication is that the file contains no publication command at all, and
+`check-staged-validation-contract.py` enforces exactly that — including
+`gh release publish`, `curl … PATCH`, and `cargo publish`. There is no
+long-lived credential in it.
 
 `post-release-smoke.yml` gained a `release: published` trigger in M011C, which
 introduced two new failure shapes and two new pieces of tested machinery in
@@ -1001,7 +1185,9 @@ ordering: publication is GitHub-release-first and `cargo publish`-second, so the
 event can fire before the version the updater resolves exists. The wait is
 bounded, and **exhausting it is a failure rather than a skip**, because "the
 smoke did not run" and "the smoke passed" must never be confusable in a closure
-record.
+record. The transition pair is resolved **once**, centrally, so all five lanes
+provably test the same pair rather than five independently-resolved ones
+(`.github/workflows/post-release-smoke.yml:49-51`).
 
 `qualify-cargo-selectors.yml` exists because the product fails closed for an
 unknown Cargo version, which is exactly why a stale support allowlist is
@@ -1009,7 +1195,9 @@ invisible: nothing breaks, the product just quietly stops offering a selector.
 `release/selector-qualification.json` is the single authority, the runtime
 allowlist in `workspace.rs` is proved against it, the hosted matrix names its
 toolchains explicitly so a dropped version is detectable, and the exploratory
-lane is structurally incapable of promoting anything — see §7 of
+lane — `stable` alone
+(`release/selector-qualification.json:48-50`) — is structurally incapable of
+promoting anything — see §7 of
 `architecture/07-workspace.md`.
 
 ## 9. Invariants and gaps
@@ -1019,14 +1207,14 @@ Reported as determined, not assumed.
 | Question | Determination |
 | --- | --- |
 | **Is the published crate guaranteed to compile and work standalone?** | Partly. `config.toml` is in the allowlist and the check enforces it, so the `include_str!` coupling holds. But the check is static: it validates the manifest, not a build of the *published package*. Nothing I found builds the staged `.crate` standalone. A file needed at runtime but outside the allowlist would fail at **compile** time if referenced via `include_str!`/`include_bytes!` (loud, CI would likely catch it), and at **runtime** if referenced by path or as a data file (quiet, and not covered by any check I found). |
-| **Can `completions/` and `man/` drift from the parser?** | Yes, by construction — they are tracked generated artefacts. The `generated-docs` job in `ci.yml:72` regenerates and diffs, so drift is caught at PR time. This is the one drift risk in this component that is genuinely closed. |
-| **Is the installer's download integrity verified?** | **Yes — SHA-256 sidecar, mandatory, on both installers.** `install.sh` requires a 2xx on the sidecar, requires the digest to match `^[0-9a-f]{64}$`, and compares it to the downloaded file (`install.sh:515-537`); `install.ps1` does the same via `Get-FileHash -Algorithm SHA256` (`install.ps1:125`, `225-235`). Both comment the rule in the same words: "The digest sidecar is mandatory evidence. Its absence is a hard failure, not a fallback signal." Both also *execute* the staged binary afterwards and abort if it does not report a version (`install.sh:540-545`, `install.ps1:16`). Three fixture cases pin the negative cases (`case_checksum_absent_is_fatal`, `case_malformed_digest`, `case_digest_mismatch`) and a fourth (`case_wrong_candidate`) pins that a correctly-named but wrong binary is caught. **What it is not: a signature.** See the last row. |
+| **Can `completions/` and `man/` drift from the parser?** | Yes, by construction — they are tracked generated artefacts. The `generated-docs` job in `ci.yml:96-144` regenerates and diffs, so drift is caught at PR time. This is the one drift risk in this component that is genuinely closed. |
+| **Is the installer's download integrity verified?** | **Yes — SHA-256 sidecar, mandatory, on both installers.** `install.sh` requires a 2xx on the sidecar, requires the digest to match `^[0-9a-f]{64}$`, and compares it to the downloaded file (`install.sh:515-537`); `install.ps1` does the same via `Get-FileHash -Algorithm SHA256` (`install.ps1:125`, `225-235`). Both comment the rule in the same words: "The digest sidecar is mandatory evidence. Its absence is a hard failure, not a fallback signal." Both also *execute* the staged binary afterwards and abort if it does not report a version (`install.sh:540-545`, `install.ps1:16`, `install.ps1:241-253`), and both re-hash the *placed* bytes and remove them on a mismatch (`install.sh:582-587`, `install.ps1:302-307`). Three fixture cases pin the negative cases (`case_checksum_absent_is_fatal`, `case_malformed_digest`, `case_digest_mismatch`) and a fourth (`case_wrong_candidate`) pins that a correctly-named but wrong binary is caught. **What it is not: a signature.** See the last row. |
 | **Do the two installers behave equivalently for every user-facing case?** | For the contract — supported triples, asset names, install names, mandatory sidecar, 404-only fallback, refuse-to-overwrite without an explicit force flag, post-download version check — yes, and it is machine-checked or fixture-covered on both sides. **PATH persistence is deliberately POSIX-only since C027** (§3.1a): the POSIX wrapper appends a guarded profile block, PowerShell does not persist an environment variable at all. That is the one contract *asymmetry* between the two installers, and it is intentional — the plan scoped C027 to `install.sh` and left Windows environment-variable persistence untouched. The differences that remain are shell-appropriate (destination rule, TLS mechanism) rather than behavioural. The one property I could **not** find a check for: that neither destination is ever inside a Cargo root. That property is what keeps installer-created installations updatable (§2), and it is currently enforced only by convention and by reading the source. |
-| **Unsupported platform/arch — clear message or confusing 404?** | A clear message, and deliberately not a raw 404. An unrecognised OS or arch fails immediately with a pointer to `cargo install --locked` (`install.sh:157`, `install.sh:164`); a recognised family with no published binary enters the Cargo source build (`install.sh:178-182`, `install.ps1:96-100`); a 404 on a contracted asset is treated as genuine absence and also falls back, while a 5xx or transport fault stays fatal precisely so an outage cannot silently become a local build (`install.sh:659-671`, `install.ps1:208-215`). Fixtures cover the path: `case_binary_404_falls_back`, `case_cargo_missing`, `case_cargo_produces_nothing`. |
+| **Unsupported platform/arch — clear message or confusing 404?** | A clear message, and deliberately not a raw 404. An unrecognised OS or arch fails immediately with a pointer to `cargo install --locked` (`install.sh:157`, `install.sh:164`); a recognised family with no published binary enters the Cargo source build (`install.sh:178-182`, `install.ps1:96-100`); a 404 on a contracted asset is treated as genuine absence and also falls back, while a 5xx or transport fault stays fatal precisely so an outage cannot silently become a local build (`install.sh:665-675`, `install.ps1:208-215`). Fixtures cover the path: `case_binary_404_falls_back`, `case_cargo_missing`, `case_cargo_produces_nothing`. |
 | **Is `cargo install --locked` guaranteed to resolve with zero non-registry sources?** | The lockfile is in the allowlist so resolution data ships, and the identity gate checks that `Cargo.lock` agrees with `Cargo.toml` on the version. I did **not** find a check that asserts a zero-non-registry-source count for the published crate, and the installers' own fallback builds invoke Cargo against whatever source configuration the host has. Not established. |
 | **Are `Cargo.toml` version, `CHANGELOG.md` version, git tag, and published crate version checked against each other?** | **Yes, and in one function.** `check_identity` (`scripts/check-release-identity.py:91-144`) asserts, in order: the tag is an exact `v<major.minor.patch>` with no pre-release or build metadata; the tag's version equals `Cargo.toml`'s; `Cargo.lock` records the same version (with the stated reason — "a `--locked` release build would fail, or would build a different version than the tag names"); the tag resolves to an existing commit **and** points at the revision being released; and `CHANGELOG.md` has an entry for that exact version. `check_clean_tree` (line 147) then rejects a dirty checkout. The published crate version is the manifest version, so the four are tied together transitively. |
-| **Any manual step in the release process?** | Yes, enumerated: (1) **publishing the staged draft** — the release workflow deliberately cannot do it, and that separation is the point; (2) **nothing for the rehearsal** — since M011C it runs automatically on `release: published`, with `workflow_dispatch` retained only as a recovery surface (§8.2.1, §8.3). **Reading** that run remains a human step; (3) the staging validation's **real-installer step runs on one host platform only** — since M011B the validation itself is a hosted workflow, but that step is unchanged — the other four targets rest on the contract check and hosted CI (`c014-status.md:196,212`); (4) deciding **whether the glibc 2.17 floor may be advertised** — it is a build fact from `cargo_zigbuild` with no runtime qualification behind it, which is why the contract check requires an explicit non-claim in the README (`check-release-contract.py:486-509`). |
-| **Blast radius of a compromised release — is there signature verification?** | **Closed for the first time by M011A, and narrowly.** Immutable releases are enabled for `dbowm91/cargo-cleanme` (repository policy, enabled 2026-10-05), so a published release's assets and tag can no longer be replaced, and GitHub issues a signed attestation binding the release to its repository, tag, commit, and every asset digest. `scripts/verify-release-attestation.py` verifies it and fails closed on policy-off, release-mutable, attestation-missing/unparseable, wrong-repository/tag, unattested-asset, digest-mismatch, inventory drift, and missing-or-old-`gh` states. **The trust root is still GitHub's release and attestation infrastructure.** This is not an independent maintainer-key signature and not SLSA build provenance, and it does not become one by being described loosely. A compromise of the GitHub release account still yields a self-consistent artefact every check accepts. Releases v0.1.0–v0.1.6 predate the policy, remain mutable, and must not be described as attested or recreated. |
+| **Any manual step in the release process?** | Yes, enumerated: (1) **publishing the staged draft** — the release workflow deliberately cannot do it, and that separation is the point; (2) **reading the automatic smoke** — since M011C the rehearsal itself runs automatically on `release: published`, with `workflow_dispatch` retained only as a recovery surface (§8.2.1, §8.3), but nothing forces anyone to read the result; (3) the staging validation's **real-installer step runs on one host platform only** — since M011B the validation itself is a hosted workflow, but that step is unchanged — the other four targets rest on the contract check and hosted CI (`c014-status.md:196`, `c014-status.md:212`); (4) deciding **whether the glibc 2.17 floor may be advertised** — it is a build fact from `cargo_zigbuild` with no runtime qualification behind it, which is why the contract check requires an explicit non-claim in the README (`check-release-contract.py:493-509`). |
+| **Blast radius of a compromised release — is there signature verification?** | **Closed for the first time by M011A, and narrowly.** Immutable releases are enabled for `dbowm91/cargo-cleanme` (repository policy, enabled `2026-10-05T13:34:38Z`), so a published release's assets and tag can no longer be replaced, and GitHub issues a signed attestation binding the release to its repository, tag, commit, and every asset digest. `scripts/verify-release-attestation.py` verifies it and fails closed on policy-off, release-mutable, attestation-missing/unparseable, wrong-repository/tag, unattested-asset, digest-mismatch, inventory drift, and missing-or-old-`gh` states. Two limits are worth stating plainly. The policy is **not owner-enforced** (`enforced_by_owner: false`), so a repository administrator can turn it off. And **the trust root is still GitHub's release and attestation infrastructure**: this is not an independent maintainer-key signature and not SLSA build provenance, and it does not become one by being described loosely. A compromise of the GitHub release account still yields a self-consistent artefact every check accepts. Releases v0.1.0–v0.1.6 predate the policy, remain mutable, and must not be described as attested or recreated. |
 
 ## 10. Review checklist
 
@@ -1035,9 +1223,9 @@ the release workflows.
 
 1. **Did you change the `src/cli.rs` command surface?** Regenerate completions
    and manpages in the same commit, or the `generated-docs` job fails
-   (`.github/workflows/ci.yml:72`). There are currently eight manpages — one per
-   subcommand, plus the root page — so adding a subcommand means a ninth manpage and
-   removing one means deleting a page.
+   (`.github/workflows/ci.yml:96`). There are currently **eight manpages — the
+   root page plus one per subcommand** — so adding a subcommand means a ninth
+   manpage and removing one means deleting a page.
 2. **Do not "normalise" the underscore prefix** on `completions/_cargo-cleanme`
    or `completions/_cargo-cleanme.ps1`. It is required by zsh and PowerShell
    respectively; removing it breaks completion loading (§4.2).
@@ -1058,13 +1246,13 @@ the release workflows.
    not.
 6. **Does your installer change touch digest handling?** Three fixture cases
    exist specifically to prove a missing, malformed, or mismatched `.sha256`
-   aborts the install (`packaging/tests/test_installers.py:1522-1538`). If you
+   aborts the install (`packaging/tests/test_installers.py:1537-1553`). If you
    make the checksum optional, you are removing a guarantee, and the fixtures
    must be changed deliberately rather than incidentally.
 8. **Are your new fixtures capable of failing?** After C012, a green fixture
    that has only ever passed is not evidence. If you add a case, prove it rejects
    a broken premise, following `self_test()`
-   (`packaging/tests/test_installers.py:1570`). For the C027 PATH cases the
+   (`packaging/tests/test_installers.py:1585`). For the C027 PATH cases the
    stronger form is the one to copy: mutate `packaging/install.sh` by removing
    each guard in turn and require the suite to go red. Five of those mutants
    initially passed, and the reason is the shape worth remembering — two
@@ -1086,30 +1274,36 @@ the release workflows.
     rejects a dirty tree. Run these locally before tagging.
 11. **Are you adding a README claim about the glibc floor?** Mentioning it
     requires an explicit non-claim nearby
-    (`scripts/check-release-contract.py:486-509`). The floor is a build fact
+    (`scripts/check-release-contract.py:493-509`). The floor is a build fact
     until runtime qualification exists.
 12. **Are you relying on the smoke as proof the updater works?** It is not. The
     per-target consumer validator proves the artefact runs and self-identifies
     (`release/eggpack/consumer-validators.json`); it does not exercise the
     self-replacement commit path. Only the live rehearsal covers that. Since
     M011C it runs automatically on `release: published`
-    (`post-release-smoke.yml:6-7`); `workflow_dispatch` is retained as the
+    (`post-release-smoke.yml:29-31`); `workflow_dispatch` is retained as the
     manual recovery surface.
 13. **If you cut a release, read its automatic smoke run before you consider
     the line closed.** C016 and C017 both shipped because nothing forced a
     rehearsal. Nothing forces that step now either — it is automatic, which is
     the fix, but *reading the result* is still on you. The
     `v0.1.5 → v0.1.6` pattern — run the rehearsal, expect the first run to fail
-    on the harness, fix the harness, re-run — is the documented practice, and
-    it has found real defects each time. Three automatic runs later, the honest
-    record is that **two of the three failed**: v0.2.0 on three defects in the
+    on the harness, fix the harness, re-run — is the documented practice, and it
+    has found real defects each time. Nine automatic runs later, the honest
+    record is that **two of the nine failed**: v0.2.0 on three defects in the
     automation path, and v0.2.1 because C023 had just yanked v0.2.0 and the
-    resolver picked that uninstallable predecessor. Only v0.2.2's run
-    `37561575727` was green on all five lanes. A failed automatic run is evidence
-    to act on, not noise to re-run until it looks better.
+    resolver picked that uninstallable predecessor. The other seven were green
+    on all five lanes. A failed automatic run is evidence to act on, not noise to
+    re-run until it looks better.
 14. **Does your release yank its own immediate predecessor?** Then check that the
     resolver picks an installable source. That is exactly the case that broke
     v0.2.1's run, and the resolver now consults crates.io's yanked set.
+15. **Did you add a script under `scripts/`?** A new guard must ship with a
+    `--self-test` that feeds it a known-bad sample and requires a failure; a
+    guard that stopped guarding is worse than no guard. It must then appear in
+    the `scripts/` inventory in
+    [14-testing-and-verification.md](14-testing-and-verification.md) §5, or the
+    citation gate fails.
 
 See also [12-self-update.md](12-self-update.md) for the provenance classifier
 these installers must satisfy, and
