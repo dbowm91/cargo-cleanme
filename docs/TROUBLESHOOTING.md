@@ -212,6 +212,35 @@ cargo install --list | grep cargo-cleanme     # the version Cargo believes it ow
 
 If those disagree, run `cargo install cargo-cleanme --locked --force`.
 
+## A preview run makes the next cleanup find nothing
+
+**Symptom.** `cargo cleanme scan <root>` finds the project, but
+`cargo cleanme clean <root>` reports `0 CleanupUnit(s)` and cleans nothing.
+The scan that ran a moment earlier showed the group.
+
+**Cause.** `--cargo-preview` runs Cargo's own `cargo clean --dry-run
+--verbose`, and Cargo writes `target/.rustc_info.json` while doing it. That
+file is now fresh, so the output group is **active** — and an active group is
+protected by the recency guard (`recency_seconds`, default 300) and is
+excluded from cleanup. The preview changed the thing it was previewing.
+
+This is the activity guard working as designed; it is the *preview* that
+tripped it. `--dry-run` does not have this effect, because it spawns nothing
+at all and so never lets Cargo touch the target directory.
+
+**Check.**
+
+```sh
+ls -l <root>/target/.rustc_info.json
+```
+
+If that file's mtime is within the recency window, that is the cause.
+
+**Work around it.** Wait out the window, or use `--older-than` to require
+more quiet than the recency guard already demands. Do not backdate a real
+project's `target/` directory to work around it — the recency guard exists so
+that a build in progress is never cleaned.
+
 ## Upgrading from 0.1.x: bare `cargo cleanme` now cleans
 
 **Applies to 0.1.x only.** Bare `cargo cleanme` was a read-only Routine scan on
