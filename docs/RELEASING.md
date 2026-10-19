@@ -1,7 +1,10 @@
 # Releasing cargo-cleanme
 
 Operator checklist for a release. Everything here is a precondition or an
-explicit, manual action — no step in this document is automated away.
+explicit, manual action — with one exception: the post-publication smoke in
+[After you publish](#after-you-publish-the-automatic-published-release-smoke)
+runs by itself, unattended, on the `release: published` event. Every other step
+below is yours to perform.
 
 Read this before changing anything under `release/eggpack/`. Those files are
 producer authority: the release workflow, the asset names, the installer
@@ -17,8 +20,11 @@ The order matters. Publication is last because it is the only irreversible step.
    own commit. The version in the tree must equal the version you will publish.
 3. Run the complete local gate (below). It must be green on a clean tree.
 4. Tag the release commit and push the tag.
-5. Dispatch `Release drift guard` / `Eggpack candidate builds`
-   (`.github/workflows/release-binaries.yml`) against that exact tag.
+5. Dispatch `Eggpack candidate builds`
+   (`.github/workflows/release-binaries.yml`) against that exact tag. The
+   `Release drift guard` workflow (`.github/workflows/release-drift.yml`) is a
+   different workflow: it runs on pushes and pull requests to `main` and checks
+   that the generated release workflow has not drifted.
 6. Inspect the **draft** release Eggpack staged. Verify the inventory and every
    asset digest. This is a human review gate.
 7. Publish the draft.
@@ -33,19 +39,28 @@ cargo install --git https://github.com/eggstack/eggpack --rev <revision> --locke
 scripts/release-check.sh
 ```
 
-`release-check.sh` runs, in order: `cargo fmt --check`, clippy with
-`-D warnings`, the full test suite, doc tests, the Rust 1.89 check and test,
-the semantic-counter benchmark, the completions/manpage drift gate, the derived
-workflow-shape check, the Eggpack `ci check` workflow drift check, the release
-contract check, the installer-contract check, the installer fixture suite,
-the fixture-portability and architecture-citation guards, `cargo package
---locked`, and `cargo publish --locked --dry-run`.
+`release-check.sh` runs **24 labelled steps**, in order — each one announced by a
+`release-check: …` header as it starts. This document does not restate that
+list: a partial enumeration of a gate looks authoritative and is not, and the
+script is the list. Read `scripts/release-check.sh` for what it runs.
 
-Each static guard runs its own `--self-test` first. That ordering is
-deliberate: a guard that has quietly stopped detecting its defect shape is
-worse than no guard, so the gate proves each one can still fail before trusting
-it to pass. This includes the installer-contract check, whose `--self-test` was
-added in C022 — before it, this paragraph was a claim the gate did not honour.
+Where a guard has one, the gate runs its `--self-test` **first**, and then the
+guard itself. That ordering is deliberate: a guard that has quietly stopped
+detecting its defect shape is worse than no guard, so the gate proves each one
+can still fail before trusting it to pass. This includes the installer-contract
+check, whose `--self-test` was added in C022 — before it, this paragraph was a
+claim the gate did not honour.
+
+Not every script in `scripts/` has a `--self-test`, and the gate does not
+pretend otherwise. **Eleven of the seventeen** implement one; the six that do
+not are `release-check.sh` itself, `gen-release-workflow-shape.py`,
+`release-benchmark.py`, `smoke-release-candidate.py`,
+`validate-staged-release.py`, and `post-release-smoke.sh`.
+`release-check.sh` is the interesting one: it *invokes* twelve other
+self-tests rather than providing one, because it is a composite gate rather
+than a checker. `packaging/tests/test_installers.py` does have one, and the
+gate runs it. **A new guard must ship with a `--self-test`** — a guard that
+stopped guarding is worse than no guard.
 
 The Eggpack revision is pinned in `release/eggpack/github-policy.json`. Install
 that exact revision; a different one may render a different workflow.
@@ -133,9 +148,12 @@ Verify before you install or recommend a download:
 
 ```sh
 python3 scripts/verify-release-attestation.py --settings-only
-python3 scripts/verify-release-attestation.py --tag v0.1.7
-python3 scripts/verify-release-attestation.py --tag v0.1.7 --assets-dir ./downloads
+python3 scripts/verify-release-attestation.py --tag v0.2.8
+python3 scripts/verify-release-attestation.py --tag v0.2.8 --assets-dir ./downloads
 ```
+
+Use a tag that was actually published: the sequence went v0.1.6 → v0.2.0, so
+`v0.1.7` was never released and there is no such release to verify.
 
 The helper fails closed on every non-pass state — policy off, release mutable,
 attestation missing or unparseable, attestation for another repository or tag,
@@ -143,6 +161,23 @@ an asset the attestation does not name, local bytes that do not match the
 attested digest, an inventory that is not the contracted set, and a missing or
 too-old `gh` client. **Releases v0.1.0 through v0.1.6 predate the policy and
 remain mutable. Do not recreate them, and do not describe them as attested.**
+
+## The staged release inventory
+
+| Item | Count | Source |
+|---|---|---|
+| release binary per contracted target | 5 | `release/eggpack/distribution.toml` |
+| `.sha256` sidecar per binary | 5 | the contract's checksum template |
+| `release-manifest.json` | 1 | Eggpack |
+| `install-exact.sh` / `install-exact.ps1` | 2 | Eggpack bootstrap, from `packaging/` |
+| release notes | 1 | maintainer |
+
+The five targets are `x86_64-unknown-linux-gnu`,
+`aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-apple-darwin`,
+and `x86_64-pc-windows-msvc`.
+
+Verify the inventory exactly. A missing target, an extra asset, or a digest
+that does not match the plan means **do not publish**.
 
 ## After you publish: the automatic published-release smoke
 
@@ -174,23 +209,6 @@ failed original run: the closure record includes both.
 The attestation verification from M011A runs post-publication too; its failure
 stays separately visible and does not merge into the smoke's result.
 
-
-
-| Item | Count | Source |
-|---|---|---|
-| release binary per contracted target | 5 | `release/eggpack/distribution.toml` |
-| `.sha256` sidecar per binary | 5 | the contract's checksum template |
-| `release-manifest.json` | 1 | Eggpack |
-| `install-exact.sh` / `install-exact.ps1` | 2 | Eggpack bootstrap, from `packaging/` |
-| release notes | 1 | maintainer |
-
-The five targets are `x86_64-unknown-linux-gnu`,
-`aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-apple-darwin`,
-and `x86_64-pc-windows-msvc`.
-
-Verify the inventory exactly. A missing target, an extra asset, or a digest
-that does not match the plan means **do not publish**.
-
 ## Before you publish the crate
 
 ### Breaking-invocation gate (0.2.0 and later)
@@ -208,16 +226,27 @@ checkable by a script in this repository:
    mapping table a user can act on.
 3. **The migration table is visible outside the changelog.** A breaking default
    that only appears in a changelog is a breaking default users hit before they
-   read it. `README.md` and `docs/TROUBLESHOOTING.md` must both carry it, and
-   `docs/TROUBLESHOOTING.md` must keep its "Upgrading from 0.1.x" section.
+   read it. `README.md` §"Upgrading from 0.1.x" is the **canonical table**;
+   `docs/TROUBLESHOOTING.md` §"Upgrading from 0.1.x" and `docs/USAGE.md`
+   §"Migration from 0.1.x" must each keep a section that points a reader at
+   it, and the greps below check that they do. One source of truth, checked
+   copies — not three tables to keep in step by hand.
 
 Verify locally before publishing:
 
 ```sh
 grep -n '^version' Cargo.toml | head -1
 grep -c 'Changed — BREAKING' CHANGELOG.md
-grep -c 'Upgrading from 0.1.x' docs/TROUBLESHOOTING.md README.md
+grep -c 'Upgrading from 0.1.x' docs/TROUBLESHOOTING.md
+grep -c 'Upgrading from 0.1.x' README.md
+grep -c 'Migration from 0.1.x' docs/USAGE.md
 ```
+
+Each of the last four greps must report **at least one** match: `grep -c` on a
+single file exits non-zero when the count is zero, so a file that quietly lost
+its migration section fails the gate on its own. (The counts themselves are not
+fixed — `docs/TROUBLESHOOTING.md` reports more than one today, because it
+names the section twice.)
 
 ### The package check
 
@@ -228,10 +257,10 @@ succeed, and you must have looked at what is inside the package:
 tar tzf target/package/cargo-cleanme-<version>.crate | sort
 ```
 
-The published crate is an intentional subset: `src/`, `config.toml`,
-`Cargo.toml`, `Cargo.lock`, `README.md`, `CHANGELOG.md`, and the two license
-files. Planning, tests, scripts, `release/`, `packaging/`, and `xtask/` are
-excluded by the `include` allowlist.
+The published crate is an intentional subset, and the `include` allowlist in
+`Cargo.toml` is its authority — read it there rather than from a list copied
+into this document. Planning, tests, scripts, `release/`, `packaging/`, and
+`xtask/` are excluded by that allowlist.
 
 `config.toml` **must** be in that list. `src/config.rs` embeds it with
 `include_str!("../config.toml")`, and first-use config creation is impossible
@@ -268,7 +297,9 @@ cargo install cargo-cleanme --locked
 cargo-cleanme --version
 cargo cleanme --version
 cargo cleanme config show
+cargo cleanme config show --format json          # must refuse, exit 2
 cargo cleanme scan --format json --no-progress <some path>
+cargo cleanme clean --full --dry-run
 cargo cleanme update --dry-run
 ```
 
@@ -280,6 +311,19 @@ Check each of these:
 - A bounded read-only scan works and changes nothing.
 - `--format json` emits exactly one document on stdout, with progress and
   diagnostics on stderr.
+- `config show --format json` is **refused**, exit `2`, with
+  `configuration error: config command does not support --format json; use human
+  or log output`. It must never put the config text on a `--format json`
+  stdout.
+- `clean --full --dry-run` exercises the one cleanup path that can **refuse
+  before it cleans**. Either the Full reconciliation is fresh and the run
+  proceeds without spawning a single `cargo clean` — `--dry-run` spawns nothing
+  — or it refuses with exit `2` and one of these two messages:
+  `configuration error: full reconciliation reported an incomplete scan (exit
+  N); no cleanup commands were run against its unproven learned roots`, or
+  `configuration error: full reconciliation produced no fresh generation; no
+  cleanup commands were run against stale learned roots`. A refusal is a
+  correct outcome; a *silent* cleanup against unproven learned roots is not.
 - `update --dry-run` reports already-current rather than offering a downgrade.
 
 A binary installed by Cargo must be **refused**, not updated. `cargo cleanme

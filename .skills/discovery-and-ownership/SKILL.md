@@ -42,7 +42,8 @@ what makes the attribution honest.
 
 `cargo metadata` is the only binary dependency that matters for safety. It is
 invoked through a `CargoRunner` trait precisely so tests can substitute a runner
-that **fails**, which is how the blocking behaviour above is testable at all.
+that **fails**, which is how the fail-closed blocking behaviour is testable at
+all.
 
 ## C015: the mistake to not repeat
 
@@ -63,8 +64,10 @@ Two rules make the byte union correct:
 
 - **Nested and equal roots are deduplicated.** `<ws>/target` and
   `<ws>/target/debug/build` must produce one `PhysicalOutputGroup` containing
-  both, and `dua_core::walk_roots` must assert `target != build_root` internally
-  so we never count the shared prefix twice.
+  both, and `dua_core::walk_roots` asserts that the **root indices are unique**
+  (`dua-core-4.1.0/src/lib.rs:659`:
+  `assert_eq!(indices.len(), roots.len(), "root indices must be unique")`) so we
+  never hand the engine two roots under one index.
 - **Ordering is normalised, not assumed.** Output roots are sorted
   (by path length, then by path) before being handed to the walk, so the result
   vector is in ascending `usize` order rather than completion order. A test
@@ -75,15 +78,27 @@ Two rules make the byte union correct:
 Do not "optimise" by asserting the comparator. See
 [`test-evidence`](../test-evidence/SKILL.md).
 
-## Candidate indices must be unique
+## Candidate indices must be unique — and the panic is already fixed
 
 A repeat `candidate_index` is measured once and every occurrence reports that
-one measurement. The reason is not tidiness: `dua_core::walk_roots` asserts
-`target != build_root` internally, and a duplicate index trips that assertion
-into a panic. The regression test is
-`duplicate_candidate_indices_do_not_panic_and_are_measured_once` in
-`traverse.rs`. If you add a way for two outputs to share an index, you have
-reintroduced a panic on a duplicated manifest path.
+one measurement. `measure_many_targets` keeps a `seen_indices` set
+(`src/traverse.rs:191`) and `continue`s on a repeat (`:198-200`): the first
+occurrence wins, later duplicates are dropped rather than measured twice.
+
+This was **not always so**. An earlier version fed two roots under one index
+straight into `dua_core::walk_roots` and tripped its uniqueness assertion into
+a panic. The fix is in, and the regression test is
+`duplicate_candidate_indices_do_not_panic_and_are_measured_once`
+(`src/traverse.rs:529-567`).
+
+Two consequences for you:
+
+- The test **pins the fix**. If you change the deduplication, that test must
+  still say "does not panic".
+- The assertion in `dua-core` is about **unique indices**, not about
+  `target != build_root`. An earlier version of this skill described it as the
+  latter, which is a different (and weaker) invariant. Do not rely on it to
+  catch a nested-root mistake — the deduplication above does that.
 
 ## Routine vs Full, and what state is allowed to do
 
@@ -93,17 +108,37 @@ window (default 300 seconds, `config.toml`).
 
 Learned state is **advisory, never authority**. Rules that are not negotiable:
 
-- A manifest carrying `[package] ignore` is pruned from discovery. It is
-  invisible, not reported.
-- Manifests carrying `ignore.unignore` **are** the full relative path, **not** a
-  filesystem glob. A 4-segment pattern is a literal 4-segment path plus literal
-  children, and it does not support `*`, `**`, or `?` — it predates glob
-  support by design. Editing it requires a plan, not a doc update.
-- `scan.root` is a first-class config option and always overrides the
-  discovered root set.
+- Manifests carrying `ignore.unignore` **are** literal **absolute** paths, **not**
+  filesystem globs. `unignore` is absolute-checked (`src/config.rs:122-123` →
+  `require_absolute(p, "unignore")`) and matched as `PatternKind::Literal`
+  (`src/config.rs:161-162`), so it supports neither `*`, `**`, nor `?` — it
+  predates glob support by design. Editing it needs a plan, not a doc update.
+  By contrast `scan.ignore` **is** a glob (`src/config.rs:148-151`) and must be
+  absolute (`src/config.rs:116-120`).
+- There is **no `[package] ignore` feature.** An earlier version of this skill
+  claimed manifests carrying one are pruned from discovery; nothing in `src/`
+  reads it. Do not reintroduce the claim.
 - State written by a **newer** binary, or unreadable, is never overwritten.
 
-## Uncertainty is the interesting output
+### `scan.root` is honoured *except* by a Full scan
+
+`policy::resolve` (`src/policy.rs:19-30`) has two arms:
+
+- The **Full** arm returns at `:20-29` **before the config is read**. A Full
+  scan therefore **ignores `scan.root` entirely** — it is a machine-wide
+  reconciliation, and the configured root is not a filter on it.
+- Every other arm takes `request.cli_root.or_else(|| config.root.clone())`
+  (`:30`), so `scan --known` and `scan ROOT` *do* honour it.
+
+"Always overrides the discovered root set" was the old, wrong version of this
+claim. The other half is easy to get wrong too: `scan.root` narrows the
+**scan scope**, but the **working-directory anchor still narrows the
+selection** for a cleanup (`src/cli.rs:375-378` →
+`CleanupSelection::WorkingDirectory`). A configured root therefore does *not*
+mean "cleanup targets exactly that root" — running from outside it yields
+zero units.
+
+## Uncertainty is reported, and the vector that would carry it is empty
 
 Diagnostics carry a `kind` (`Untraversable`, `Unreadable`, `IoError`,
 `Vanished`) and a `severity` (`Warning`, `Error`, `PlatformRoot`). Three
@@ -114,11 +149,25 @@ consequences:
   anything.
 - A walk-root path (on unix, `/`) retains **everything** under it, which is why
   platform-root errors force Full scans to stay partial.
-- `PlatformRoot` + `Error` is what makes a Full scan `incomplete` — and that
-  predicate is evaluated twice in `main.rs` (once as `complete` for
-  reconciliation, once as `full_incomplete` for the exit code). If you change it,
-  change both or extract a helper; they are currently two copies of one
-  expression.
+- `PlatformRoot` + `Error` is what makes a Full scan `incomplete`. That
+  predicate is computed **once**, as `full_traversal_complete`
+  (`src/main.rs:1032-1036`), and reused: as `complete` for reconciliation
+  (`:1103`) and as `full_incomplete` for the exit code (`:1198`). It is not
+  two copies of one expression, and you should not make it two.
+
+> **The uncertainty vector is empty in production.** The filter at
+> `src/main.rs:1043-1051` collects the three uncertainty categories
+> (`PermissionDenied`, `Metadata`, `Vanished`) and then `.filter_map(|d| d.path.clone())`
+> — but all three categories are emitted with `path: None`
+> (`src/discovery.rs:786-793` and `:981-988`), because `dua_core`'s error
+> carries no child path. The vector is therefore **always empty**.
+>
+> Two traps follow. First, the filter is a `matches!` over **three of the seven**
+> `DiagnosticCategory` variants (`src/domain.rs:68-78`) with **no `_` arm**, so
+> a newly-added category is *silently* excluded. Second, do not describe the
+> path-carrying protection as if it were live — an earlier version of this skill
+> did, and `architecture/05-discovery.md` still carried the same error until
+> this pass corrected it.
 
 ## State is an optimization only
 
@@ -132,11 +181,14 @@ into the exit decision.
 
 - A `scan --full` from a relative root and from an absolute root produce the
   same workspace count. (C015's regression test.)
-- Unresolved manifests appear in the report as
-  `manifest_observed_unresolved`, and — for cleanup — block the whole scope.
+- Unresolved manifests appear in the report as `manifest_observed_unresolved`,
+  and — for cleanup — block the **boundary** they are inside. An unresolved
+  manifest *outside* the boundary is reported and never blocks. See
+  [`cleanup-safety`](../cleanup-safety/SKILL.md).
 - A `scan.root` set in config produces `scope: "explicit"` in JSON. The label is
   derived from the **resolved** `policy.scope`, never from the CLI flags.
 - Repeated output roots do not panic and do not double-count bytes.
+- A Full scan still ignores `scan.root`, and a non-Full scan still honours it.
 
 Then run the full gate and `scripts/check-doc-citations.py`.
 
@@ -145,3 +197,5 @@ Then run the full gate and `scripts/check-doc-citations.py`.
 - [`cleanup-safety`](../cleanup-safety/SKILL.md) — what this subsystem's output
   is allowed to authorise
 - [`json-and-exit-contract`](../json-and-exit-contract/SKILL.md)
+- [`cli-surface-and-argv`](../cli-surface-and-argv/SKILL.md) — the selectors
+  that decide which of these arms runs

@@ -25,8 +25,11 @@ successful run.
 
 When cleanup is blocked by incomplete discovery, the human/JSON report includes
 the workspaces and cleanup units actually resolved after the walk. A diagnostic
-count no longer implies that Cargo resolution was skipped; the `reason` field
-still identifies the whole-scope block, and no cleanup command is spawned.
+count no longer implies that Cargo resolution was skipped. The `reason` field
+names one of **two** block reason codes — `incomplete_discovery` and
+`ownership_unproven` — and both are **boundary-scoped**: they describe the
+proof boundary that was blocked, not the whole machine.
+[Operational limits](#operational-limits) has the exact wording for each.
 
 ```console
 $ cargo cleanme --format log
@@ -68,8 +71,43 @@ consumer must be able to rely on a field. Log drops per-unit detail entirely.
 | `status` | always | `ok`, `blocked`, `failed`, or `error` |
 | `scope` | reports | `full`, `explicit`, or `routine` — what was resolved, not what was typed |
 | `mode` | cleanup and update | `execute`, `simulate`, or `preview` (cleanup); `simulate` or `execute` (update) |
-| `reason` | when blocked or failed | a stable code, never English prose |
-| counts and bytes | when they fit | base-10 ASCII integers |
+| `reason` | when blocked or error | a stable code, never English prose — the two sets are listed below |
+| `action` | `config` | the action that ran: `path`, `show`, or `edit`. Never the path, never the text |
+| `from`, `to` | `update` | the version being replaced and the version resolved |
+| `target` | `update` | the target triple — a triple, never a path |
+| `manifests`, `groups`, `bytes`, `diagnostics` | `scan` | base-10 ASCII integers: discovered manifests, output groups, total bytes, diagnostics |
+| `cleaned`, `skipped`, `failed`, `diagnostics` | `cleanup` | base-10 ASCII integers: units cleaned, units skipped, units failed, diagnostics |
+| `reclaimed_bytes` | `cleanup`, only when it executed | base-10 ASCII integer; never printed for a simulation or a Cargo preview |
+
+`reason` is a code, and there are exactly two sets, told apart by `status`:
+
+| `status` | `reason=` codes | What the code means |
+|---|---|---|
+| `blocked` | `ownership_unproven`, `incomplete_discovery` | the proof boundary was blocked; see [Operational limits](#operational-limits) |
+| `error` | `config`, `io`, `scan`, `provenance`, `update` | the run failed before any report existed: a configuration or root problem (`config`), an I/O failure (`io`), a scanner failure (`scan`), a self-update refusal (`provenance`), or a self-update failure (`update`) |
+
+**The JSON envelope drops three things the safety model depends on.** A
+scheduler parsing `--format json` cannot see any of them:
+
+- `capability` — *which kind* of unproven ownership a participant carries:
+  `RefusedByCargo` (Cargo ran and refused the manifest — it is in no workspace
+  Cargo can see, so it owns no bytes) or `Unproven` (byte capability unproven,
+  which merges everything). The serialized participant
+  (`unresolved_participants[]`) carries `manifest`, `stage`, and `reason` only.
+- `out_of_scope_unresolved` — the count of manifests that did not resolve
+  **outside** the selected scope. The human output renders it as one bounded
+  line, and the entries are folded into the cleanup JSON's
+  `summary.diagnostics` **count**, but there is no field for it: a JSON
+  consumer cannot tell an out-of-scope diagnostic from any other diagnostic.
+- the **stable block code** — `scope_reason` in the cleanup JSON carries the
+  human prose. The code itself (`ownership_unproven`, `incomplete_discovery`)
+  is a log-mode field only, so a JSON consumer sees *that* the boundary was
+  blocked and has to parse English to learn *why*.
+
+So a JSON consumer can see *that* a boundary was blocked, but not *what kind* of
+unproven ownership caused it, not the boundary's own block code, and cannot
+tell "the boundary is clean" from "the system is clean" without also reading
+the human output.
 
 Guarantees:
 
@@ -221,9 +259,19 @@ one bounded line, load-aware timing, and never root for a developer home.**
 - It will not clean anything you built in the last `recency_seconds` (default
   300). Nightly schedules are far outside that window; a job that somehow runs
   during a build protects the build.
-- It will not clean a group whose exclusive ownership it cannot prove, and it
-  will not clean **any** group in a scope where one discovered manifest fails
-  to resolve. That is the whole scope, not just the broken project.
+- It will not clean a group whose exclusive ownership it cannot prove.
+  Cleanup fails closed **only for the proof boundary** — the scope you
+  selected: the working-directory anchor, the explicit roots, or the Full set.
+  A manifest Cargo cannot resolve *inside* that boundary blocks it. A manifest
+  *outside* it is reported as a bounded `out_of_scope` diagnostic and never
+  blocks: cleaning a healthy anchor while poison exists elsewhere is the
+  intended behaviour, so a boundary clean is never read as a system clean.
+- It will not run `clean --full` against a Full reconciliation that is
+  incomplete or stale. That refuses with exit `2` and no cleanup command:
+  `full reconciliation reported an incomplete scan (exit N); no cleanup commands
+  were run against its unproven learned roots`, or `full reconciliation produced
+  no fresh generation; …`. The learned roots a Full cleanup acts on must come
+  from a reconciliation that just proved them.
 - It will not grow. `cargo cleanme` never installs a service and never spawns a
   resident process. The tool itself never modifies your `PATH`; the separate
   bootstrap installer adds one guarded block to a zsh or bash startup file so a
@@ -244,11 +292,21 @@ not a crash. The reasons you will actually see:
 
 | `reason=` | What it means |
 |---|---|
-| `ownership_unproven` | at least one discovered manifest could not be resolved, so coverage of the scope is unproven and **nothing** was cleaned |
-| `incomplete_discovery` | discovery produced diagnostics, so the combined ownership universe is incomplete — including an automatic (seed/learned) root that is a symlink or cannot be read, which is never silently omitted |
+| `ownership_unproven` | coverage of the **proof boundary** could not be proven — a manifest inside it did not resolve with an unknown owner, or an authorization or re-proof step could not be verified — so **nothing in the boundary** was cleaned |
+| `incomplete_discovery` | discovery produced diagnostics **inside the proof boundary**, so the combined ownership universe for the boundary is incomplete — including an in-boundary automatic (seed/learned) root that is a symlink or cannot be read, which is never silently omitted |
 
-Both mean "no bytes were removed", by construction. Re-running rarely helps;
-the cause is usually an unbuildable or in-flux workspace inside the scope.
+Both are boundary-scoped. Not every unresolved manifest inside the boundary
+blocks it: one that Cargo *named* the owner for, or named as a member of the
+scope, is reported and never blocks — there is no unknown owner left to merge.
+Only an in-boundary manifest with a genuinely unknown owner blocks.
+
+The early blocks — discovery diagnostics, unprovable ownership — are raised
+before the boundary is cleaned and run no cleanup command at all. A block
+raised mid-run — a changed admission premise, a changed manifest set, a changed
+output environment — stops the remaining units and says "no further cleanup
+commands were run", so units cleaned before it keep their `cleaned` rows.
+Re-running rarely helps; the cause is usually an unbuildable or in-flux
+workspace **inside the boundary**.
 
 ### Interpreting a nonzero exit
 
@@ -260,6 +318,29 @@ same command in the foreground without `--format` to get the full message:
 ```sh
 cargo cleanme --config ./config.toml          # human prose, exit 2
 ```
+
+Two commands can refuse with exit `2` before any report exists, and both read
+as "the tool declined" rather than as a crash:
+
+| Command | Exit | Stderr line (human format) |
+|---|---|---|
+| `cargo cleanme config show --format json` | `2` | `cargo-cleanme: configuration error: config command does not support --format json; use human or log output` |
+| `cargo cleanme clean --full` | `2` | `cargo-cleanme: configuration error: full reconciliation reported an incomplete scan (exit N); no cleanup commands were run against its unproven learned roots` |
+| `cargo cleanme clean --full` (stale state) | `2` | `cargo-cleanme: configuration error: full reconciliation produced no fresh generation; no cleanup commands were run against stale learned roots` |
+
+In `--format log` the same refusals are one bounded stderr line —
+`cargo-cleanme op=config status=error reason=config` — and the prose is not
+printed at all.
+
+`config` has no JSON envelope: `config path` and `config show` are a path and
+the config file's text, and emitting them on a `--format json` stdout would
+break the one-document contract. `--format log` is accepted and exits `0`,
+reporting the action instead of the content.
+
+`clean --full` refuses rather than cleaning against learned roots that the
+current reconciliation could not prove. Neither refusal is transient: re-running
+the same command changes nothing, so fix the input or the reconciliation rather
+than the schedule.
 
 ### Credentials and disclosure
 

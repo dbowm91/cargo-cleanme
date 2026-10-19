@@ -61,6 +61,22 @@ C001–C009 and C010–C017 are all corrective passes. That is the pattern: a
 material defect found after a milestone gets a **new** plan, and the original
 closure record keeps the original verdict.
 
+The corpus is now **35** correctives, `C001`–`C034` plus `C036`. **`C035` is
+absent on purpose**: it is superseded, it lives on a separate branch, and it
+must **not** be merged. It stays as the record of the rejected mechanism. Do not
+"fix" the numbering gap — a gap that is invisible to a numbering check is
+exactly what a deliberate gap looks like.
+
+**A proposed ADR has no implementation authority.** ADR 005
+(`plans/adr/005-*.md`) and ADR 008 (`plans/adr/008-*.md`) are both `proposed;
+not accepted`. That means: no code change may be justified by them, and they do
+**not** belong in the registry (which holds `ready`/`active`/`blocked` plans —
+see below). A proposed ADR is a direction, not a task.
+
+Two open ADRs, two open correctives, and an owner decision between them is the
+current state of the decision record. Read `plans/registry.md` before assuming
+anything is unclaimed.
+
 ## The corrective-pass rule
 
 A new corrective plan MUST identify:
@@ -92,6 +108,20 @@ understood and the plan is not ready.
 Do not write a success record because the crate compiles. See
 [the closure README](../../plans/closure/README.md).
 
+A closure record that claims a gate passed when it was not run is **worse than
+no record**, because the next milestone trusts it. If a command was skipped, or
+a suite is red for an unrelated reason, say so, in the record.
+
+One live example in this repository: `plans/closure/artifact-discovery-cleanup/m017-status.md`
+records a pre-existing failing test
+(`cleanup::tests::real_temp_project_preview_and_execute_with_redirected_target`,
+`src/cleanup.rs:6722`) and says it "needs its own corrective". **No such
+corrective exists yet.** The tool skips in the *safe* direction (host cargo is
+newer than the nine exact versions the `profile_selector` capability allowlist
+names, `src/workspace.rs:146-165`) — it is the *test* that is wrong, not the
+tool. Do not "fix" it by widening the allowlist: that would grant a capability
+the code has not verified the host supports.
+
 ## Registering work
 
 `plans/registry.md` is a **control surface**, not a second copy of the roadmaps.
@@ -102,6 +132,22 @@ with its status and closure path.
 
 When you close something, update **both** the roadmap section and the registry,
 or they will disagree — which is the staleness this rule exists to prevent.
+
+§11 says the registry holds `ready`/`active/blocked` implementation plans. A
+**proposed** ADR is none of those, so it does not go in the registry — it goes
+in the ADR file, and it is found from the plan that would implement it. Adding
+it to the registry would make the registry claim work is queued when no
+implementation authority exists.
+
+## The registry is small on purpose
+
+A registry that accumulates every plan is a second copy of the roadmaps, and
+the two copies drift. The registry's job is to answer one question — *what is
+open right now* — in one screen. If you cannot say in a sentence why an entry
+is in it, it does not belong.
+
+The corollary is that **closing something removes it from the registry**, not
+just marks it.
 
 ## Status vocabulary
 

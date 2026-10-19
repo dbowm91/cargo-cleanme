@@ -54,9 +54,33 @@ Two more that recur:
    checking the comparator. Assert that the code under test called the mock
    without checking anything about the result.
 5. **A guard that stopped guarding.** A checker with no negative sample reports
-   green forever. Every guard in `scripts/` and `packaging/tests/` therefore
-   takes a `--self-test` that feeds it a known-bad sample and requires a
-   failure. If you add a guard, the self-test is not optional.
+   green forever. Every *new* guard must therefore take a `--self-test` that
+   feeds it a known-bad sample and requires a failure. If you add a guard, the
+   self-test is not optional.
+
+   The inventory is not uniform, and the inventory is the point: of the 17
+   scripts in `scripts/`, **11** implement `--self-test` and **6** do not —
+   `gen-release-workflow-shape.py`, `post-release-smoke.sh`,
+   `release-benchmark.py`, `smoke-release-candidate.py`,
+   `validate-staged-release.py`, and `release-check.sh` itself, which
+   *invokes* twelve self-tests rather than providing one.
+   `packaging/tests/test_installers.py` does have one. The six gaps are
+   inventoried in
+   [`architecture/14-testing-and-verification.md` §5](../../architecture/14-testing-and-verification.md).
+   If you close one, close it with a self-test — a guard that stopped guarding
+   is worse than no guard.
+
+And one more, which is the sharpest of them:
+
+6. **A test that pins the defect.** A test can be green *because* it asserts
+   the wrong thing — including the thing you are about to fix.
+   `the_driver_shows_the_hardware_cursor_only_in_insert_mode`
+   (`src/interactive.rs:1374-1390`) asserts that the terminal cursor's **last**
+   recorded visibility is `Some(false)`. The interactive session never restores
+   the cursor, so that test is green by asserting the bug. Fixing the cursor
+   without fixing the test would leave a green test pinning the *new* bug.
+   The general rule: **before you fix a defect, check whether a test is
+   currently pinning it.**
 
 ## The worked example worth remembering
 
@@ -66,16 +90,24 @@ unnoticed while the test stayed green. The test asserted "the port is in
 range"; the test needed was "the process really was the one under test".
 
 Generalised: before trusting a test, ask **"what input makes this fail?"** If
-you cannot produce one, the test is decoration. `cleanup.rs` contains an
-`all_dryrun_modes_emit_zero_clean_spawns` test whose comment is worth reading
-before writing anything in that module.
+you cannot produce one, the test is decoration. `cleanup.rs` contains several
+tests of exactly that shape — `metadata_failure_blocks_boundary_with_zero_spawns`
+(`src/cleanup.rs:5311`) and
+`violated_admission_premise_blocks_with_zero_cargo_spawns`
+(`src/cleanup.rs:6353`) — whose comments are worth reading before writing
+anything in that module.
 
 ## What only a subprocess can prove
 
-Five modules have **zero** inline tests: `main.rs`, `output.rs`, `domain.rs`,
-`error.rs`, `lib.rs`. That is a real gap, not an oversight, and it is deliberate
-in part: the composition, argv, and exit-code paths are only observable from
-outside the process.
+Three modules have **zero** inline tests: `main.rs`, `error.rs`, and `lib.rs`.
+That is a real gap, not an oversight, and it is deliberate in part: the
+composition, argv, and exit-code paths are only observable from outside the
+process.
+
+`output.rs` is no longer on that list — it has 21 inline tests — and neither is
+`domain.rs`, which has 1. Do not add either back to the list: the list is the
+set of modules where `grep 'mod tests'` finds nothing, and it is re-derived from
+`src/`, not remembered.
 
 So:
 
@@ -86,39 +118,56 @@ So:
 | an installer, transport, or toolchain version | the fixture suite / external smoke |
 
 Do not write an inline `#[test]` for `main.rs` composition. Add a subprocess
-case, and note that the gate only has 2 pinned exit codes; widening that is
-valuable.
+case. The contract suite pins **three** exit codes — `0`, `1`, and `2` — so a
+usage error that silently became exit `1` or `0` fails the build. Widening that
+set is valuable.
 
 ## Coverage shape, honestly
 
-320 inline `#[test]` functions are **declared**; **318 compile and run on Linux**.
-Two are excluded there: one `#[cfg(windows)]`
-(`config.rs:960`) and one `#[cfg(any(target_os = "macos", windows))]`
-(`discovery.rs:1394`). A further 21 carry `#[cfg(unix)]`, 3 carry
-`#[cfg(target_os = "linux")]` or an `all(linux, …)` form, so the three hosted
-lanes compile **318 of 320 on Linux**, **296 of 320 on Windows**, and **317 of 320
-on macOS** — `#[cfg(unix)]` is true *on* macOS, which is the half people get
-wrong. A green local run is not a green run elsewhere — that is what the OS
-matrix in `ci.yml` is for, and why `check-fixture-portability.py` exists to catch
-a *new* ungated fixture before a lane disagrees about it.
+**450** inline `#[test]` functions are **declared** in `src/`; **448** compile
+and run on Linux. Two are excluded there: one `#[cfg(windows)]`
+(`src/config.rs:997`) and one `#[cfg(any(target_os = "macos", windows))]`
+(`src/discovery.rs:1554`). A further **35** carry `#[cfg(unix)]` and **4** are
+Linux-only (`src/config.rs:1445`, `src/discovery.rs:1574`, `src/output.rs:282`,
+`src/workspace.rs:5339`), so the three hosted lanes compile **448 of 450 on
+Linux**, **411 of 450 on Windows**, and **445 of 450 on macOS** —
+`#[cfg(unix)]` is true *on* macOS, which is the half people get wrong. A green
+local run is not a green run elsewhere — that is what the OS matrix in `ci.yml`
+is for, and why `check-fixture-portability.py` exists to catch a *new* ungated
+fixture before a lane disagrees about it.
 
-State which number you mean. "320 tests" (declared) and "318 passing" (on Linux)
-are both true, and a record that gives one while meaning the other is ambiguous in
-the direction that matters.
+> **Count the gates, not the greps.** A naive "the `#[cfg(unix)]` immediately
+> above `#[test]`" grep finds 26, not 35, because Rust allows `#[test]` to come
+> *before* the gate (`src/cleanup.rs:6124` does exactly that). Nine of the 35
+> have the gate after the `#[test]`. Derive these
+> numbers with a brace-tracking parser and check them against
+> `cargo test --lib -- --list` on the host platform; anything else silently
+> disagrees by a few.
 
-Of the 320, **40.3% live in two modules** (`cleanup.rs` 72, `workspace.rs` 57).
+State which number you mean. "450 tests" (declared) and "448 passing" (on
+Linux) are both true, and a record that gives one while meaning the other is
+ambiguous in the direction that matters.
+
+Of the 450, **42.0% live in two modules** (`cleanup.rs` 113, `workspace.rs` 76).
 That concentration is a direct consequence of the architecture: cleanup and
 workspace resolution are where the invariants are. It is not a balanced suite,
 and a flat count would hide that. A change to a small module can be genuinely
 under-covered; count the module, not the crate.
+
+The full per-file distribution lives in
+[`architecture/overview.md` §3.1](../../architecture/overview.md), which is the
+source of truth — verify it against `src/` rather than copying it.
 
 The same discipline applies to documentation. `architecture/` cites source by
 line, so a fix that adds or removes lines silently invalidates every citation
 past that point while the prose keeps reading as true. This happened: a commit
 added 38 lines to `main.rs` and 55 to `traverse.rs`, and the deep dives went on
 citing the old numbers. `scripts/check-doc-citations.py` now gates the
-mechanically decidable half. The semantic half — whether the line still says
-what the sentence claims — is a reviewer's job, and no tool can do it.
+mechanically decidable half — the cited file exists, the line is in range, the
+range is ordered. It resolves **only** the `file.rs:N` form: the bare `:N` form
+is the dominant convention inside the deep dives (2,742 of them) and is **not**
+machine-gated. The semantic half — whether the line still says what the sentence
+claims — is a reviewer's job and no tool can do it.
 
 ## The verification ladder
 
@@ -130,7 +179,13 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 python3 scripts/check-fixture-portability.py --self-test && python3 scripts/check-fixture-portability.py
 python3 scripts/check-doc-citations.py --self-test && python3 scripts/check-doc-citations.py
+cargo run --quiet --features dev-tools --bin generate-docs -- --check
 ```
+
+The last one is the **generated-artifact drift gate**. It only matters if you
+touched the CLI surface, but it is cheap, and a CLI change that leaves the
+completions and man pages stale fails CI rather than you. Regenerate with
+`cargo run --quiet --features dev-tools --bin generate-docs`.
 
 For a full pre-release gate use `scripts/release-check.sh`, which adds the
 completions/manpage drift check, the contract checkers, `cargo package
@@ -143,7 +198,10 @@ not run is worse than no record, because the next milestone trusts it.
 ## Before you claim verification
 
 - You can name the input that makes each new test fail, and you have seen it.
-- Every new guard has a `--self-test` that fails on a known-bad sample.
+- Every **new** guard has a `--self-test` that fails on a known-bad sample. (The
+  six pre-existing scripts without one are a known gap, inventoried in
+  `architecture/14-testing-and-verification.md` §5 — not a precedent.)
+- No test is currently **pinning** the defect you fixed.
 - If a test stubs a tool, it asserts **which** tool was invoked, not merely that
   the invocation succeeded.
 - External-process fixtures prove their own premise — the port is free, the

@@ -11,8 +11,9 @@ tags:
 
 # Release and Distribution
 
-`cargo-cleanme` ships as a binary, four installer variants, a self-updater, five
-shell completions, and man pages. The procedure is normative in
+`cargo-cleanme` ships as a binary, four installer variants, a self-updater, **13
+generated artifacts** (5 shell completions + 8 man pages), and a signed release
+attestation. The procedure is normative in
 [`docs/RELEASING.md`](../../docs/RELEASING.md); this is the reasoning behind the
 parts that surprise people.
 
@@ -76,27 +77,51 @@ on publication would hide a real defect.
   search is deliberately generous.
 - **Integrity evidence is not authenticity.** The `.sha256` files prove the
   bytes were not corrupted in transit. They prove nothing about who published
-  them. `docs/TROUBLESHOOTING.md` states this limitation plainly; keep it.
+  them. Scope the claim precisely, though: there is no *maintainer-key*
+  signature and no transparency log, but the release **does** carry a GitHub
+  release attestation, and `scripts/verify-release-attestation.py` verifies it
+  (`scripts/release-check.sh:119`). What the **shipped updater** does not do is
+  verify that attestation. "Everything cargo-cleanme publishes is unsigned" is
+  over-broad; "there is no maintainer-key signature" is true.
 
 ## The gate, and its self-tests
 
-`scripts/release-check.sh` runs: `cargo fmt --check`, clippy with
-`-D warnings`, the full suite, doc tests, the Rust 1.89 check and test, the
-semantic-counter benchmark, the completions/manpage drift gate, the derived
-workflow-shape check, the Eggpack CI drift check, the release contract check,
-the installer-contract check, the installer fixture suite, the fixture-portability
-and architecture-citation guards, `cargo package --locked`, and
-`cargo publish --locked --dry-run`.
+`scripts/release-check.sh` is **24 steps** — from `cargo fmt --check` through
+`cargo publish --locked --dry-run`, with no publication. Read the script for
+the list; a restatement here would be a partial list, and a partial list of a
+gate is the worst of both: it looks authoritative and is not.
 
-Each static guard runs its own `--self-test` **first**. That ordering is the
-point: a guard that has quietly stopped detecting its defect shape is worse than
-no guard, so the gate proves each one can still fail before trusting it to pass.
-Two of those guards exist because of a defect this repository shipped (see
+It invokes **twelve** `--self-test` modes
+(`scripts/release-check.sh:72, 79, 86, 90, 97, 103, 110, 112, 119, 126, 129,
+133`). That ordering is the point: a guard that has quietly stopped detecting
+its defect shape is worse than no guard, so the gate proves each one can still
+fail before trusting it to pass. Two of those guards exist because of a defect
+this repository shipped (see
 [test-evidence](../test-evidence/SKILL.md)).
+
+**But the inventory is not uniform, and the uniform claim is a trap.** Of the
+**17** scripts in `scripts/`, **11** implement `--self-test`. Six do not:
+
+- `release-check.sh` itself — it *invokes* twelve self-tests, and provides none
+- `gen-release-workflow-shape.py`
+- `release-benchmark.py`
+- `smoke-release-candidate.py`
+- `validate-staged-release.py`
+- `post-release-smoke.sh`
+
+`packaging/tests/test_installers.py` **does** have one, and it is the twelfth
+invocation. An earlier version of this skill said "each static guard runs its
+own `--self-test` first", which was false for six of them. If you close one of
+the six gaps, close it with a self-test — a guard that stopped guarding is
+worse than no guard.
 
 Two `cargo publish --locked --dry-run` warnings are **expected**: the staged
 self-updater and the `release-check` script have dev-only dependencies. Do not
 "fix" them.
+
+The gate also requires a **clean working tree** and the `eggpack` binary, and
+toolchain **1.89** installed. It is therefore not ordinary verification — do not
+run it as a routine check.
 
 ## Before you cut a release
 
@@ -111,6 +136,17 @@ self-updater and the `release-check` script have dev-only dependencies. Do not
 - The post-release record goes to `plans/closure/<subsystem>/<NNN>-status.md` and
   is referenced from `plans/registry.md`.
 
+### The published-release count
+
+**Sixteen** releases are published, `v0.1.0` through `v0.2.8`. **`v0.2.0` is
+yanked**; the other fifteen are installable. The current source version is
+`0.2.9`, **unpublished**.
+
+Two ways to get this wrong, both of which have shipped as bugs in this
+repository's own docs: saying "fifteen releases are published" (that is the
+*installable* count — 0.2.0 is published, just yanked) and saying "sixteen are
+installable" (it is fifteen). State both numbers, or neither.
+
 ## Non-obvious traps
 
 - **A Cargo-managed binary must never be self-updated.** C017 was exactly this,
@@ -122,13 +158,21 @@ self-updater and the `release-check` script have dev-only dependencies. Do not
 - **`install.ps1`'s `irm | iex` is correct.** It is idiomatic PowerShell. Do not
   "harden" it by downloading to a temp file unless you are prepared to argue the
   change with someone who ships Windows tooling.
+- **`install.ps1`'s parameter is `-Directory`, not `-Dir`.** `-Dir` happens to
+  bind by PowerShell prefix-matching, so it works by accident. Document the real
+  name.
 - **The generated artifacts document `cargo cleanme`**, not `cleanme`, because
   that is the spelling that resolves after a registry install. Regenerate with
   `cargo run --quiet --features dev-tools --bin generate-docs`.
+- **`release/eggpack/distribution.toml` is the authority, but its tables are
+  hand-copied** into `README.md` and `docs/INSTALLING.md`. When the matrix
+  changes, all three move together.
 
 ## Related
 
-- [`json-and-exit-contract`](../json-and-exit-contract/SKILL.md) — the one
-  untested output mode, and what to do about it
+- [`json-and-exit-contract`](../json-and-exit-contract/SKILL.md) — the
+  `update_json` surface, which the updater's machine contract depends on
 - [`planning-and-closure`](../planning-and-closure/SKILL.md) — why a fix is not
   a closure
+- [`test-evidence`](../test-evidence/SKILL.md) — the `--self-test` discipline
+  the release gate depends on

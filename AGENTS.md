@@ -48,19 +48,52 @@ The one thing to internalise before touching cleanup or discovery:
 | [15-distribution-and-release](architecture/15-distribution-and-release.md) | installers, CI, packaging | You touch distribution |
 | [16-interactive](architecture/16-interactive.md) | `interactive.rs` | You touch `-i`, the selection TUI, or raw-mode lifecycle |
 
+### 1.1 The overview, by section
+
+[`architecture/overview.md`](architecture/overview.md) is the birds-eye view **and**
+the index. Cite it by **section number**, never by line — a line citation into
+a file that is being rewritten rots immediately.
+
+| § | Section | Use it for |
+|---|---|---|
+| 1 | The one-paragraph model | Orientation in thirty seconds |
+| 2 | What the tool can do | The capability surface, in user terms |
+| 3 | The crate at a glance | Module sizes and the **authoritative counts** — verify against `src/` before copying |
+| 4 | Module index | Per module: what it owns, what it depends on, what it breaks |
+| 5 | The layer map | The dependency graph, the two production cycles, the test-only back edges |
+| 6 | The scan pipeline | What happens on `scan`, end to end |
+| 7 | The cleanup pipeline | What happens on `clean`, end to end |
+| 8 | Cross-cutting invariants | The eight rules that span modules — read before changing any of them |
+| 9 | Tooling and verification surfaces | The gates, and what each one actually proves |
+| 10 | Findings from the deep dives | 57 known defects and their dispositions — **check here before adding a new one** |
+| 11 | How the code got this way | The plan corpus |
+| 12 | Index of deep dives | The sixteen deep dives |
+| 13 | Reading order | If you read one thing, read this |
+
 ## 2. Skills
 
 Load the one that matches your change. They carry the *how* and the traps; the
 deep dives carry the *what*.
 
-| Skill | Load it when |
-|---|---|
-| [planning-and-closure](.skills/planning-and-closure/SKILL.md) | You touch anything under `plans/`, or a closure claim |
-| [cleanup-safety](.skills/cleanup-safety/SKILL.md) | You can delete bytes, or change what becomes `PrivateBounded` |
-| [discovery-and-ownership](.skills/discovery-and-ownership/SKILL.md) | You change discovery, grouping, resolution, or learned state |
-| [json-and-exit-contract](.skills/json-and-exit-contract/SKILL.md) | You touch `output.rs`, a reason code, or an exit code |
-| [test-evidence](.skills/test-evidence/SKILL.md) | You write or review a test, or claim verification |
-| [release-and-distribution](.skills/release-and-distribution/SKILL.md) | You release, or touch the updater or an installer |
+| Skill | Load it when | Deep dive |
+|---|---|---|
+| [planning-and-closure](.skills/planning-and-closure/SKILL.md) | You touch anything under `plans/`, or a closure claim | — |
+| [cleanup-safety](.skills/cleanup-safety/SKILL.md) | You can delete bytes, or change what becomes `PrivateBounded` | [09](architecture/09-cleanup.md) |
+| [discovery-and-ownership](.skills/discovery-and-ownership/SKILL.md) | You change discovery, grouping, resolution, or learned state | [05](architecture/05-discovery.md) · [06](architecture/06-discovery-state.md) · [07](architecture/07-workspace.md) |
+| [json-and-exit-contract](.skills/json-and-exit-contract/SKILL.md) | You touch `output.rs`, a reason code, or an exit code | [10](architecture/10-reporting.md) |
+| [cli-surface-and-argv](.skills/cli-surface-and-argv/SKILL.md) | You touch argv, a flag, a selector, or a generated artifact | [02](architecture/02-cli.md) · [13](architecture/13-orchestration.md) |
+| [terminal-and-interactive](.skills/terminal-and-interactive/SKILL.md) | You touch `-i`, the TUI, raw mode, the cursor, or the TTY renderer | [16](architecture/16-interactive.md) · [11](architecture/11-progress.md) |
+| [test-evidence](.skills/test-evidence/SKILL.md) | You write or review a test, or claim verification | [14](architecture/14-testing-and-verification.md) |
+| [release-and-distribution](.skills/release-and-distribution/SKILL.md) | You release, or touch the updater or an installer | [12](architecture/12-self-update.md) · [15](architecture/15-distribution-and-release.md) |
+
+> **The skills are not machine-gated.** `scripts/check-doc-citations.py` resolves
+> citations inside `architecture/` only — not in `.skills/`, `docs/`, or
+> `README.md`. Three of the six skills carried fabricated facts until this pass
+> re-derived them from source (an exit-code table for codes that do not exist,
+> four reason codes that do not exist, a `Preview` mode that does not exist, and
+> a `[package] ignore` feature that does not exist). **Re-derive a skill's
+> claims from the source; do not copy them forward.** See
+> `architecture/overview.md` §10, findings 53 and 54.
 
 ## 3. Verification ladder
 
@@ -72,23 +105,22 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 python3 scripts/check-fixture-portability.py --self-test && python3 scripts/check-fixture-portability.py
 python3 scripts/check-doc-citations.py --self-test && python3 scripts/check-doc-citations.py
+cargo run --quiet --features dev-tools --bin generate-docs -- --check
 ```
+
+The last step is the **generated-artifact drift gate**. It only matters if you
+touched the CLI surface, but it is cheap, and a CLI change that leaves the
+completions and man pages stale fails CI rather than you. Regenerate with
+`cargo run --quiet --features dev-tools --bin generate-docs`.
 
 Focused test: `cargo test --all-features --test cli_contract <test_name>`
 (`tests/` holds `cli_contract.rs` and `end_to_end.rs`, plus inline unit tests in
 `src/`). Current counts live in `architecture/overview.md` §3, which is the source
 of truth — verify them there rather than copying them from here).
 
-If you change the CLI surface, regenerate derived artifacts or the drift gate
-fails (`generate-docs -- --check` in CI):
-
-```sh
-cargo run --quiet --features dev-tools --bin generate-docs
-```
-
-Full pre-release gate: `scripts/release-check.sh` — requires a clean tree, the
-`eggpack` binary, and toolchain 1.89 installed, so do not run it as routine
-verification; the ladder above is the ordinary gate.
+Full pre-release gate: `scripts/release-check.sh` — **24 steps**, requires a
+clean tree, the `eggpack` binary, and toolchain 1.89 installed, so do not run
+it as routine verification; the ladder above is the ordinary gate.
 
 **Report what actually ran.** A record claiming a gate passed when it was not
 run is worse than no record, because the next milestone trusts it.
@@ -102,8 +134,8 @@ product defects (C015, C016, C017) were found by this repository's own evidence
 work, and **none** was repaired under the plan that found it. A plan that finds
 a defect writes a corrective; it does not fix it.
 
-Three ways a test goes green without testing anything — and the guard that
-exists for each:
+Ways a test goes green without testing anything — and the guard that exists for
+each:
 
 1. A fixture that cannot run where it reports success →
    `scripts/check-fixture-portability.py`
@@ -111,10 +143,18 @@ exists for each:
    `packaging/tests/test_installers.py --self-test`
 3. A case whose pass condition is an unrelated failure → prefer a discriminating
    assertion (the specific reason code, not "the command failed")
+4. A test that **pins the defect** — it asserts the wrong thing, including the
+   thing you are about to fix. `the_driver_shows_the_hardware_cursor_only_in_insert_mode`
+   asserts the terminal cursor's last recorded visibility is `Some(false)`; the
+   interactive session never restores the cursor, so the test is green *because*
+   it asserts the bug. **Before you fix a defect, check whether a test is
+   currently pinning it.**
 
-Every guard takes a `--self-test` that feeds it a known-bad sample and requires
-a failure. If you add a guard, the self-test is not optional: a guard that
-stopped guarding is worse than no guard.
+Every **new** guard takes a `--self-test` that feeds it a known-bad sample and
+requires a failure. If you add a guard, the self-test is not optional: a guard
+that stopped guarding is worse than no guard. (Eleven of the seventeen scripts
+already have one; the six that do not are inventoried in
+`architecture/14-testing-and-verification.md` §5.)
 
 Before trusting a test, ask **"what input makes this fail?"** If you cannot
 produce one, the test is decoration. See
@@ -134,9 +174,27 @@ half (does the line still say what the sentence claims?) is a reviewer's job and
 no tool can do it. When you shift a citation, re-derive it from the source; do
 not shift it arithmetically unless you have read the new line.
 
+Three limits of that gate, all of which have bitten:
+
+- It resolves **only** the `file.rs:N` form. The bare `:N` form is the dominant
+  convention inside the deep dives (2,742 of them) and is **not** machine-gated.
+- It covers `architecture/` **only**. `.skills/`, `docs/`, and `README.md` are
+  ungated, and all three drifted (findings 53 and 54 in
+  `architecture/overview.md` §10).
+- It cannot judge meaning. A citation can resolve perfectly and say something
+  the code no longer does.
+
 Counts are not to be copied between documents. `architecture/overview.md` is the
 source of truth for module line counts and the inline-test total; verify each
 against `src/`, fix the overview first, then align the deep dives.
+
+The same rule applies to **per-platform test counts**, which have disagreed
+across three documents: they are 450 declared, 448 on Linux, 411 on Windows,
+445 on macOS. Derive them with a brace-tracking parser evaluated against
+`rustc --print cfg --target <triple>`, and cross-check against
+`cargo test --lib -- --list`. A grep for `#[cfg(unix)]` immediately above
+`#[test]` finds 26 of the 35, because Rust allows `#[test]` to come first —
+nine have the gate *after* the `#[test]`.
 
 ## 6. Planning and decision records
 
@@ -159,10 +217,19 @@ closure records.
   bare `cargo cleanme` is Routine **Execute**, with `--dry-run` the canonical
   zero-mutation preview. The safety boundary is ownership proof, not user
   rememberment.
+- **Fail-closed means the proof boundary, not the discovered universe.** Under
+  [ADR 007](plans/adr/007-accepted-scoped-proof-boundary.md)
+  and M017, an unresolved manifest *inside* the selected boundary blocks it; an
+  unresolved manifest *outside* it is reported as an `out_of_scope` diagnostic
+  and **never blocks**. Do not reintroduce a whole-scope block; the regression
+  test `out_of_anchor_poison_does_not_block_anchor` fails by construction
+  against it.
 - `allowed_output_roots` authorizes; it can never manufacture ownership proof.
 - `--dry-run` (hidden alias `--dryrun`) spawns nothing, not even a Cargo preview,
   and is otherwise as strict as `--yes`. Cargo's own `clean --dry-run` lives
-  behind the separate `--cargo-preview` flag (`cli::clean_mode`).
+  behind the separate `--cargo-preview` flag (`cli::clean_mode`). The three
+  conflict pairwise **on `clean`**; a root-level `--dry-run` takes precedence
+  over `--cargo-preview`, because simulation spawns nothing.
 - `ignore.unignore` is a literal absolute path, not a glob. It predates glob
   support by design; changing it needs a plan.
 - Learned state is advisory, never authority, and a persistence failure never
@@ -172,6 +239,26 @@ closure records.
 - `update_json` is the one non-envelope output. It is **no longer untested**:
   C022 pinned the machine contract with tests. Migrating it to `EnvelopeV1` is
   still a contract change needing a plan and a version bump.
+- There are **three** exit codes: `0`, `1`, `2`. Every `AppError` exits `2`,
+  usage errors included. The log-format `reason=` codes (`config`, `io`,
+  `scan`, `provenance`, `update`) are a **different** axis from the exit
+  status.
+- `cargo cleanme scan` with no selector is a **usage error** (exit `2`), not a
+  Full scan. `scan --full` is a hidden alias of `scan --all`.
+
+### Open decisions — do not resolve them yourself
+
+- **ADR 008** (`plans/adr/008-*.md`, *proposed*) proposes making
+  `cargo cleanme --full` the canonical Full-cleanup spelling, with
+  `cargo cleanme clean --full` retained as a hidden alias (published since
+  0.2.4). It has **no implementation authority**, and its §4 (policy-flag
+  placement) and §5 (the Full gate) carry two owner decisions that are still
+  open. Do not add a root-level `--full`, and do not remove the published
+  spelling, until the ADR is accepted.
+- **C036** (`plans/implementation/artifact-discovery-cleanup/c036-*.md`,
+  *proposed*) is the open documentation-drift corrective. It is the right home
+  for a newly-found doc or message defect — extend it rather than opening a
+  second one.
 
 ## 8. Repository map
 
@@ -180,12 +267,12 @@ closure records.
 | `src/` | the crate — 18 files; `main.rs` is the binary, `lib.rs` declares the 16 library modules |
 | `tests/` | `cli_contract.rs` (62 tests), `end_to_end.rs` (4), `common/` |
 | `architecture/` | `overview.md` + 16 deep dives |
-| `docs/` | `RELEASING.md` (operator checklist), `TROUBLESHOOTING.md` (includes known defects by version) |
+| `docs/` | `USAGE.md`, `AUTOMATION.md`, `INSTALLING.md`, `RELEASING.md`, `TROUBLESHOOTING.md`, `UPDATE.md` |
 | `plans/` | decision records — see §6 |
-| `.skills/` | the six skills — see §2 |
+| `.skills/` | the eight skills — see §2 |
 | `scripts/` | 17 scripts; `check-doc-citations.py` also gates that `architecture/14-testing-and-verification.md` §5 table is exactly these 17, so a new checker cannot ship undocumented. **11 of the 17 implement `--self-test`; the other 6 do not** — `release-check.sh` *invokes* twelve self-tests rather than providing one, and `gen-release-workflow-shape.py`, `release-benchmark.py`, `smoke-release-candidate.py`, `validate-staged-release.py`, and `post-release-smoke.sh` have no such mode. A new guard must ship with one; the existing six are inventoried in `architecture/14-testing-and-verification.md` §5 |
-| `completions/`, `man/` | **generated** — do not hand-edit; run `generate-docs` |
+| `completions/`, `man/` | **generated** — 5 completions + 8 man pages = 13; do not hand-edit; run `generate-docs` |
 | `xtask/` | `generate-docs` source (feature `dev-tools`); excluded from the published crate |
-| `release/eggpack/` | `distribution.toml` is the authority for the release target matrix |
+| `release/eggpack/` | `distribution.toml` is the authority for the release target matrix; the tables in `README.md` and `docs/INSTALLING.md` are hand-copied transcriptions of it |
 | `packaging/`, `release/` | installers, Eggpack policy, smoke and qualification scripts |
 | `CHANGELOG.md` | released changes, including known defects per version |

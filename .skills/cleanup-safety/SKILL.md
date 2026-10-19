@@ -33,7 +33,7 @@ This skill is about *how to change it without weakening it*.
 ## The invariants, and the one that is easiest to break
 
 1. **Ownership proof, not timestamps.** `OutputOwnershipClass` in
-   `domain.rs:186` is the vocabulary. `Shared`, `Uncertain`, and
+   `domain.rs:210` is the vocabulary. `Shared`, `Uncertain`, and
    `ExternalUnproven` are **inventory-only, forever**.
 2. **Authorization never manufactures proof.** `allowed_output_roots` lets a
    user authorize a location; it cannot upgrade an ownership class.
@@ -56,7 +56,7 @@ converts a user-facing configuration key into a way to delete shared build
 output. The check is deliberately placed before any path handling so that a
 future refactor cannot accidentally make authorization load-bearing for
 ownership. If you touch `covering_is_authorized_roots`, re-read
-[`overview.md` §6 invariant 2](../../architecture/overview.md) first and say
+[`overview.md` §8 invariant 2](../../architecture/overview.md) first and say
 in your change why the ordering still holds.
 
 ## Deletion is always Cargo's
@@ -78,11 +78,22 @@ vocabulary.
 | `CargoPreview` | `--cargo-preview` | yes, as `cargo clean --dry-run --verbose` |
 
 `--dry-run` and `--cargo-preview` are deliberately different spellings with
-different meanings, and every mode pair conflicts. `--dryrun` is a hidden alias
-of `--dry-run` and `--yes` is a hidden alias of the (now default) `Execute`;
-neither alias introduces a fourth mode or a different safety path. Do not "help"
-by reintroducing a `Preview`-default table or by making `--dry-run` spawn a
-Cargo preview.
+different meanings. `--dryrun` is a hidden alias of `--dry-run` and `--yes` is a
+hidden alias of the (now default) `Execute`; neither alias introduces a fourth
+mode or a different safety path. Do not "help" by reintroducing a
+`Preview`-default table or by making `--dry-run` spawn a Cargo preview.
+
+Two details the shorthand hides:
+
+- The three flags conflict pairwise **on `clean`**. The **root-level**
+  `--dry-run` does *not* conflict with the clean-level `--cargo-preview`; the
+  root flag wins and selects `Simulate` (`src/cli.rs:381-385`), because
+  simulation spawns nothing. See
+  [`cli-surface-and-argv`](../cli-surface-and-argv/SKILL.md).
+- There is **no `Preview` mode**. `CargoPreview` maps to the *wire* label
+  `"preview"` (`src/cleanup.rs:52`), and `CleanOutcome::Previewed` is an
+  outcome, not a mode. Writing "Preview" in a mode table is how the old
+  whole-scope rule survived in this file for so long.
 
 `Simulate` (`--dry-run`) is not a weaker mode: it runs discovery, resolution,
 filtering, sizing, authorization, revalidation, progress, and reporting, and
@@ -90,19 +101,54 @@ only the deletion step is a no-op. It shares the same completeness and
 final-proof gates as `Execute`, so it is the mode to use when testing a change
 to the gates.
 
-## Unresolved ownership blocks the whole scope
+## Unresolved ownership blocks the boundary, not the universe
+
+This is the rule most often got wrong, including by earlier versions of this
+skill. It is **not** "any unresolved manifest blocks the whole scope".
 
 Every `Cargo.toml` under the selected cleanup root must be accounted for by
 direct successful resolution or by successful workspace metadata listing it as a
-member/root. Any remaining unresolved manifest blocks Preview, Simulate, and
-Execute **for the complete selected-root scope** — no `cargo clean` runs at all,
-including Cargo's own preview dry-run. Read-only scans stay partial-result
-tolerant; cleanup does not. That asymmetry is intentional.
+member/root. What happens to the ones that remain is a **three-way split**
+(ADR 007 §1–§4, implemented by `split_unresolved_for_boundary`,
+`src/cleanup.rs:2290-2313`):
+
+| Where the unresolved manifest is | What happens |
+|---|---|
+| **Outside the proof boundary** | Reported as an `out_of_scope` diagnostic. **Never blocks.** |
+| **Inside the boundary**, unknown owner (`MergeAll`) | **Blocks the boundary.** Fails closed. |
+| **Inside the boundary**, Cargo named the owner (`PassengerOf`) or the scope (`ScopeNote`) | Reported. Never blocking. |
+
+The **proof boundary** is the scope the operator selected: the working-directory
+anchor, the explicit roots, or the Full set.
+
+Cleaning a healthy boundary while poison exists elsewhere is the *intended*
+behaviour, precisely so that a boundary clean can never be read as a system
+clean. The regression test is `out_of_anchor_poison_does_not_block_anchor`
+(`src/cleanup.rs:5080`) — it **fails by construction** against the old
+whole-scope rule, which is what makes it worth keeping.
+
+Read-only scans stay partial-result tolerant; cleanup does not. That asymmetry
+is intentional.
+
+> **Do not reintroduce a whole-scope block to "be safe".** It would not make
+> the tool safer; it would make it refuse the operation ADR 007 was accepted to
+> fix, and it would silently contradict the documented behaviour in five files
+> across `docs/` and `README.md`.
 
 Note the consequence for tests: asserting "zero clean spawns" under a blocked
-scope is the strongest available assertion, and there is an all-mode
-zero-spawn test for it in `cleanup.rs`. Prefer that over asserting an error
-message.
+boundary is the strongest available assertion, and `cleanup.rs` has several —
+`metadata_failure_blocks_boundary_with_zero_spawns`
+(`src/cleanup.rs:5311`) and
+`violated_admission_premise_blocks_with_zero_cargo_spawns`
+(`src/cleanup.rs:6353`). Prefer that over asserting an error message.
+
+## The `skipped_outside_selection` reason code exists
+
+An out-of-boundary participant is not a failure and not a skip of a candidate
+that was in scope. It has its own reason code, `skipped_outside_selection`, so
+a consumer can tell "never a candidate" from "considered and refused". Do not
+collapse it into a generic `skipped`; the distinction is what lets a JSON
+consumer report coverage honestly.
 
 ## Before you claim the change is safe
 
@@ -117,6 +163,10 @@ message.
 - Nested and equal `target`/`build` roots still collapse to one group and one
   deduplicated byte union, so one invocation produces one result and one
   measurement.
+- **An out-of-boundary unresolved manifest still does not block**, and an
+  in-boundary unknown owner still does. If your change touched
+  `split_unresolved_for_boundary` or `boundary_admits`, say which of the three
+  ADR 007 cases you changed and why.
 
 Then run the full gate (see [`test-evidence`](../test-evidence/SKILL.md)):
 `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D
@@ -130,3 +180,5 @@ warnings`, `cargo test --all-targets --all-features`.
   — the Routine/Full decision that selects cleanup roots
 - [`json-and-exit-contract`](../json-and-exit-contract/SKILL.md) — the
   machine-readable contract these decisions surface through
+- [`terminal-and-interactive`](../terminal-and-interactive/SKILL.md) — the `-i`
+  selection, which can only *narrow* what this skill authorises

@@ -1,10 +1,11 @@
 # Installing cargo-cleanme
 
-Fifteen releases are published as GitHub releases and on crates.io. **0.2.0 is
-yanked**: it could delete files it did not own, and `cargo install` will no
-longer select it for a new installation. See
-[TROUBLESHOOTING.md](TROUBLESHOOTING.md#known-defects-by-version) before
-installing anything at or below that version.
+Sixteen releases are published as GitHub releases and on crates.io: v0.1.0
+through v0.1.6, then v0.2.0 through v0.2.8. **Fifteen of them are
+installable.** **0.2.0 is yanked**: it could delete files it did not own, and
+`cargo install` will no longer select it for a new installation. See
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md#check-this-first-known-defects-by-version)
+before installing anything at or below that version.
 
 ## Contents
 
@@ -26,6 +27,10 @@ installing anything at or below that version.
 cargo install cargo-cleanme --locked                    # newest release
 cargo install cargo-cleanme --locked --version 0.1.6    # pin an exact release
 ```
+
+The pinned examples on this page use `0.1.6` — the oldest non-yanked release —
+to show the *syntax* of a pin. It is not the current release; drop `--version`
+(or `--version <X.Y.Z>`) to take the newest one.
 
 Installing the package is enough for Cargo to expose the external subcommand,
 so `cargo cleanme …` works after `cargo install`. The binary is named
@@ -55,10 +60,16 @@ sh install.sh --dir "$HOME/bin"
 irm https://raw.githubusercontent.com/dbowm91/cargo-cleanme/main/packaging/install.ps1 | iex
 
 ./install.ps1 -Version 0.1.6
-./install.ps1 -Dir "$env:LOCALAPPDATA\bin"
+./install.ps1 -Directory "$env:LOCALAPPDATA\bin"
 ```
 
+As above, `0.1.6` is a pin example, not the current release: omit the version
+argument to take the newest release.
+
 `irm … | iex` is idiomatic PowerShell and is intentional.
+
+The Windows wrapper's destination parameter is `-Directory`. `-Dir` is not a
+parameter name; the POSIX wrapper's equivalent is `--dir`.
 
 ## What the installer guarantees
 
@@ -73,8 +84,9 @@ The path is binary-first and fail-closed:
 7. report the path, and make sure the directory is on `PATH` for future shells
    (see below).
 
-There is no signature check, so this is integrity evidence, not authenticity.
-See [Signing and notarization](#signing-and-notarization).
+The installer checks the `.sha256` sidecar and nothing else — it does **not**
+verify the release attestation — so this is integrity evidence, not
+authenticity. See [Signing and notarization](#signing-and-notarization).
 
 ## Destinations
 
@@ -161,8 +173,12 @@ and cleans up only its own temporary state.
 ## Prebuilt release targets
 
 [`release/eggpack/distribution.toml`](../release/eggpack/distribution.toml) is
-the single authority for the published target matrix and asset names. It is
-compiled from that file; the mapping is not maintained by hand anywhere else.
+the single authority for the published target matrix and asset names. The
+release workflow is generated from that file, and
+`scripts/check-installer-contract.py` proves the installer wrappers are a
+projection of it. The tables in this file and in [`README.md`](../README.md) are
+**hand-copied transcriptions** of it, and must be kept in sync with it — they
+are not maintained by hand *instead* of it.
 
 | Target triple | Release asset | Install name |
 |---|---|---|
@@ -174,14 +190,19 @@ compiled from that file; the mapping is not maintained by hand anywhere else.
 
 Each asset ships a `.sha256` sidecar.
 
-Two further hosts are recognized but have **no** prebuilt binary and are
-Cargo-install-only:
+The hosts with **no** prebuilt binary are Cargo-install-only:
 
-- `armv7-unknown-linux-gnueabihf` (32-bit ARMv7 Linux)
-- any other unlisted OS or architecture
+- `armv7-unknown-linux-gnueabihf` (32-bit ARMv7 Linux) — a host the wrappers
+  recognize and route to Cargo; the release contract omits it on purpose
+- musl targets
+- Windows ARM64
+- Windows ARMv7
 
-Musl targets, Windows ARM64, ARMv7 prebuilts, and package-manager formulae are
-follow-up capabilities, not current support.
+Any other unlisted OS or architecture is Cargo-install-only as well, but the
+wrappers do not recognize it as a host at all.
+
+Musl prebuilts, Windows ARM64/ARMv7 prebuilts, and package-manager formulae
+are follow-up capabilities, not current support.
 
 ## Support and release policy
 
@@ -212,9 +233,32 @@ follow-up capabilities, not current support.
 | Windows | **unsigned.** SmartScreen warns on a downloaded binary |
 | Linux | unsigned; no packages or formulae are published |
 
-No signature, transparency log, or reproducible-build claim is made for any
-target. A `.sha256` sidecar proves the bytes match what the release built; it
-does **not** prove who built them.
+"Unsigned" above means *not signed with a platform code-signing key*: there is
+no macOS Developer ID, no Windows Authenticode certificate, and no
+maintainer-key signature or transparency log for any target.
+
+What a published release does carry is a **GitHub release attestation**.
+Immutable releases are enabled for the repository, so a published release's
+assets and tag cannot be replaced, and GitHub issues a signed attestation
+binding the release to its repository, tag, commit, and every asset digest. The
+release pipeline checks this: `scripts/release-check.sh` runs the attestation
+helper's self-test and its `--settings-only` mode (which proves the
+repository's immutability policy is still on), and
+`scripts/verify-release-attestation.py --tag <X.Y.Z>` verifies a specific
+release's attestation and every asset digest against it.
+
+Two limits worth stating plainly:
+
+- **The shipped updater does not verify attestations.** `cargo cleanme update`
+  fetches the asset and its `.sha256` sidecar and checks the digest; it does not
+  consult the attestation. The sidecar check is the updater's fail-closed
+  integrity requirement, not a substitute for the attestation.
+- **The trust root is GitHub's release and attestation infrastructure** — not an
+  independent maintainer key, and not SLSA build provenance.
+
+A `.sha256` sidecar proves the bytes match what the release built; it does
+**not** prove who built them. Releases v0.1.0 through v0.1.6 predate the
+immutable-release policy, remain mutable, and carry no attestation.
 
 ## Linux ABI floor
 
@@ -238,8 +282,10 @@ fails if they drift from the model.
 | PowerShell | `completions/_cargo-cleanme.ps1` |
 | Elvish | `completions/cargo-cleanme.elv` |
 
-Man pages are `man/cargo-cleanme.1` plus one page per subcommand. They document
-the `cargo cleanme` spelling, which is what resolves after a registry install.
+There are **eight** man pages: the root page `man/cargo-cleanme.1`, one page per
+top-level subcommand (`clean`, `config`, `scan`, `update`), and one page per
+`config` sub-subcommand (`edit`, `path`, `show`). They document the
+`cargo cleanme` spelling, which is what resolves after a registry install.
 
 To regenerate after a CLI change:
 

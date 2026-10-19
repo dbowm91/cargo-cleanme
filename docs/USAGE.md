@@ -30,7 +30,7 @@ quickstart; this document has the detail.
 | `cargo cleanme config path\|show\|edit` | locate, print, or edit the config |
 | `cargo cleanme update [--dry-run]` | self-update to the latest stable release |
 
-`cargo cleanme …` and `cargo cleanme-cleanme …` are the same binary and behave
+`cargo cleanme …` and `cargo-cleanme …` are the same binary and behave
 identically. `scan --all` and `clean --full` take **no** `ROOT`; the
 scan form walks the platform roots, and the cleanup form reconciles them first.
 
@@ -117,8 +117,20 @@ cargo cleanme clean ~/projects --min-reclaimable-bytes 104857600
 cargo cleanme clean --known --older-than 2592000 --exclude '**/archived'
 ```
 
-`--dry-run`, `--cargo-preview`, and `--yes` conflict pairwise: they select
-three different modes and never silently precedence-resolve.
+`clean --full` refuses with exit `2` when the Full reconciliation it depends
+on is incomplete or stale — `full reconciliation reported an incomplete scan
+(exit N); no cleanup commands were run against its unproven learned roots`, or
+`full reconciliation produced no fresh generation; no cleanup commands were run
+against stale learned roots`. A Full cleanup runs against the learned roots the
+reconciliation just proved, so an unproven reconciliation refuses the cleanup
+rather than using those roots.
+
+`--dry-run`, `--cargo-preview`, and `--yes` conflict pairwise **on `clean`**:
+they select three different modes. A root-level `--dry-run` — the
+`cargo cleanme --dry-run clean ROOT` spelling Cargo itself passes to an
+external subcommand — is a different flag from the clean-level one and does
+**not** conflict with `--cargo-preview`: the root flag wins and selects
+Simulation, because simulation is the mode that spawns nothing.
 
 `clean` with no scope selector resolves the maintenance scope, exactly as bare
 invocation does — there is one cleanup code path, not two. Both anchor the
@@ -147,9 +159,17 @@ without discarding the existing selection. `Enter` on an empty selection does
 not commit. Combine with `--dry-run` to review a selection without invoking
 `cargo clean`. The session refuses to start when stdin or stdout is not a
 terminal, and it refuses machine formats (`--format json` / `--format log`),
-because a selection list is an operator surface, not a report.
+because a selection list is an operator surface, not a report. It also refuses
+an **empty candidate list**: `no cleanup units are available to select;
+nothing would be cleaned`, exit `2`. The same scope cleaned *without* `-i`
+completes normally and exits `0`.
 
 ### Migration from 0.1.x
+
+The canonical table is
+[README.md §Upgrading from 0.1.x](../README.md#upgrading-from-01x) — it is the
+one this repository's release contract checks, and it is the only copy. The
+five rows that matter:
 
 | 0.1.x | Now | Same thing? |
 |---|---|---|
@@ -158,6 +178,10 @@ because a selection list is an operator surface, not a report.
 | `cargo cleanme clean R --dry-run` (Cargo preview) | `cargo cleanme clean R --cargo-preview` | yes |
 | `cargo cleanme clean R --dryrun` (simulation) | `cargo cleanme clean R --dry-run` | yes |
 | `cargo cleanme clean R --yes` (execute) | `cargo cleanme clean R` | yes |
+
+The one row whose *meaning* changed rather than its spelling: bare
+`cargo cleanme` was a read-only Routine scan in 0.1.x and is Routine **cleanup**
+now, and `--dry-run` was Cargo preview and is **simulation** now.
 
 `--dryrun` and `--yes` remain accepted on `clean` as **hidden** aliases for the
 pre-1.0 migration period. They select the same canonical modes as `--dry-run`
@@ -204,22 +228,6 @@ member manifest that authoritative metadata returned is registered, so later
 manifests from the same workspace need no further metadata processes. An
 N-member workspace costs one locate per manifest and one metadata. Membership
 is never guessed from path ancestry or TOML.
-
-Full discovery can find manifests Cargo cannot resolve as workspaces, such as
-an orphaned member or a broken manifest. Such a manifest stays in the
-read-only inventory as unresolved; it does not become a learned maintenance
-root. Cleanup remains blocked while any discovered manifest *inside the selected scope* is unresolved,
-because its Cargo-configured output ownership is unknown. A manifest outside
-the scope (for example, outside the working-directory anchor) is reported in
-diagnostics and never blocks. To reproduce the
-underlying Cargo error for one path, run from its parent directory:
-
-```sh
-cargo locate-project --workspace --manifest-path /path/to/Cargo.toml
-```
-
-The diagnostic includes a short, sanitized excerpt of Cargo's error chain.
-Cargo's exact wording can vary by version and failure type.
 
 Full discovery can find manifests Cargo cannot resolve as workspaces, such as
 an orphaned member or a broken manifest. Such a manifest stays in the
@@ -444,9 +452,17 @@ exclude = []
 | `min_inactive_seconds` | quiet-age floor |
 | `include` / `exclude` | globs on canonical workspace roots; exclusion wins |
 
-A relative `ignore`, `unignore`, `include`, `exclude`, `root`, or
-`allowed_output_roots` entry is rejected: `configuration error: ignore pattern
-must be absolute: <value>`, exit `2`.
+Four entries are absolute-checked, and a relative one is rejected with exit
+`2`: `scan.root`, `scan.ignore`, `scan.unignore`, and
+`cleanup.allowed_output_roots`. The real messages are `configuration error:
+ignore pattern must be absolute: <value>`, `configuration error: unignore must
+be absolute: <value>`, `configuration error: scan.root must be absolute:
+<value>`, and `configuration error: cleanup.allowed_output_roots must be
+absolute: <value>`.
+
+`include` and `exclude` are **not** absolute-checked. They are globs matched
+against the canonical workspace root and may be relative; only a malformed
+glob is rejected there, also with exit `2`.
 
 ### The filters are bypassed by an explicit root
 
@@ -492,7 +508,7 @@ unignore = ["/home/you/projects/archived/keepme"]
 Use the plain literal form above. If a scan on 0.1.6 or earlier returns more
 projects than you expect from an ignored region, that is a known defect fixed
 after 0.1.6 — upgrade rather than tuning the pattern. See
-[TROUBLESHOOTING.md](TROUBLESHOOTING.md#unignore-re-admitted-siblings-fixed-after-0-1-6)
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md#unignore-re-admitted-siblings-fixed-after-016)
 for the historical detail, and
 [An `ignore` rule seems to do nothing](TROUBLESHOOTING.md#an-ignore-rule-seems-to-do-nothing)
 for the explicit-root case, which is a different thing entirely.
@@ -512,6 +528,14 @@ document on stdout. Not NDJSON, not pretty-printed, not followed by a summary
 line. Field-level detail is normative in
 [`plans/output-schema-v1.md`](../plans/output-schema-v1.md).
 
+> **That schema document is currently behind the code in two specific ways.**
+> It omits the reason code `skipped_outside_selection` (the code carries 20
+> reason codes), and it does not disclose that the JSON envelope drops two
+> fields the safety model depends on: `capability` (present on the
+> unresolved-participant domain type, absent from the serialized participant)
+> and `out_of_scope_unresolved` (the count of manifests that did not resolve
+> outside the selected scope). Read the code alongside the schema document.
+
 - Diagnostics go to **stderr**, never into the document.
 - `--stats` goes to **stderr**. stdout is byte-identical with and without it.
 - Progress is disabled in JSON mode; `TERM=dumb` and non-TTY output are plain.
@@ -523,8 +547,19 @@ line. Field-level detail is normative in
 - `bytes` are platform-independent integers. Display may abbreviate; the JSON
   value never carries a unit.
 
-`update --format json` is the one exception to the envelope and is the only
-untested output surface; see [docs/UPDATE.md](UPDATE.md).
+`update --format json` is the one exception to the envelope; see
+[docs/UPDATE.md](UPDATE.md). It differs from the envelope in four concrete
+ways: it carries its own `schema_version` literal rather than the envelope's
+contract, it has **no** `scope` and **no** `mode` (an update resolves no
+cleanup scope and runs no cleanup mode), its `result` object is a different
+projection entirely, and it is assembled from a hand-rolled
+`serde_json::Map` rather than a typed struct — so a change to an unrelated
+struct cannot move a published field.
+
+It is not an untested surface: four unit tests in `mod update_tests`
+(`src/output.rs`) pin its schema version, its identity fields, its provenance
+tokens, and the one-document-plus-one-newline stream contract, and a CLI
+contract case covers the JSON refusal path.
 
 ### Output formats
 
@@ -533,6 +568,13 @@ untested output surface; see [docs/UPDATE.md](UPDATE.md).
 | `human` (default) | tables, per-unit rows, diagnostic detail | a person is reading |
 | `json` | exactly one schema-1 document on stdout | software needs complete, per-unit data |
 | `log` | exactly one bounded ASCII line on stdout | a scheduler retains a short history tail |
+
+`config` is the one command with **no** JSON shape at all. `config path` and
+`config show` are a raw path and TOML text, and emitting those on a
+`--format json` stdout would break the one-JSON-document automation contract,
+so `cargo cleanme config show --format json` is refused with exit `2` —
+`configuration error: config command does not support --format json; use human
+or log output`. `--format log` is accepted and exits `0`.
 
 **Parse JSON, not log.** Log is an operational summary: it drops per-unit detail
 entirely, prints no paths, and omits optional fields from the tail to stay
@@ -550,7 +592,7 @@ replaced by the `diagnostics=` count. `--stats` stays an opt-in stderr
 override. A failure raised *before* any report exists writes no stdout and one
 bounded stderr line carrying a typed `reason=` code.
 
-→ [docs/AUTOMATION.md](AUTOMATION.md) for the full field list, the scheduling
+→ [docs/AUTOMATION.md](AUTOMATION.md) for the common field list, the scheduling
 integration, and exit-code triage.
 
 ## Cleanup selectors
@@ -566,9 +608,12 @@ Cargo clean.
 
 ### How a version gets added to those lists
 
-The lists above are not hand-maintained prose, and they are not a bare allowlist
-inside the binary. `release/selector-qualification.json` is the single
-machine-readable authority, and four things are proved to agree with it by
+The qualified-version lists above are a **hand-maintained copy** of the
+runtime capability table in `src/workspace.rs` — they are prose here, not
+generated, and they must be kept in sync with that table by hand.
+
+`release/selector-qualification.json` is the single machine-readable
+authority, and four things are proved to agree with it by
 `scripts/check-selector-qualification.py`:
 
 - the runtime capability table in `src/workspace.rs` — what the product actually

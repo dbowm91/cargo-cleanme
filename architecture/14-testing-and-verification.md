@@ -121,13 +121,23 @@ from `src/`, never copied between documents.
 **The count is declared, not executed.** 450 `#[test]` functions exist in `src/`; **448
 compile on Linux x86_64**, because two are gated to the other platforms
 (`config.rs:995`, `#[cfg(windows)]`, and `discovery.rs:1552`,
-`#[cfg(any(target_os = "macos", windows))]`). Beyond that, 26 more are `#[cfg(unix)]` and four
+`#[cfg(any(target_os = "macos", windows))]`). Beyond that, 35 more are `#[cfg(unix)]` and four
 are Linux-only (`config.rs:1443`, `discovery.rs:1572`, `output.rs:280`, `workspace.rs:5337`),
 so the other two lanes compile smaller sets. The three hosted lanes therefore compile different
-sets — 448 on Linux x86_64, 445 on macOS, 420 on Windows. Platform-gated tests mean a green local run does not mean a green run
+sets — 448 on Linux x86_64, 445 on macOS, 411 on Windows. Platform-gated tests mean a green local run does not mean a green run
 elsewhere — which is the whole reason the OS matrix exists, and the reason
 `check-fixture-portability.py` exists to catch a *new* ungated fixture before a lane disagrees
 about it.
+
+> **Count the gates with a parser, not a grep.** A naive "the `#[cfg(unix)]`
+> immediately above `#[test]`" search finds 26, not 35, because Rust allows
+> `#[test]` to precede the gate — nine of the 35 have it that way
+> (`src/cleanup.rs:6124` does exactly that). The
+> figures above come from a brace-tracking evaluation against
+> `rustc --print cfg --target <triple>`, cross-checked against
+> `cargo test --lib -- --list` on the host platform. The Windows and macOS
+> totals are **source-derived, not build-verified** — the hosted CI matrix is
+> the only thing that proves them.
 
 `cleanup.rs` (113) + `workspace.rs` (76) = 189 of 450 = **42.0%**. The two largest and most
 safety-critical modules — authorization, ownership proof, pre-spawn decision, and the `cargo
@@ -242,8 +252,8 @@ prevent, with the premise stated in the test's own doc comment.
 - **`update_json` (`output.rs:903-940`)** *was* the sharpest single gap, and C022 closed the
   test half of it. The only machine-readable output path that does **not** go through
   `EnvelopeV1`; it hand-builds a `serde_json::Map` with its own `json!(1)` at `output.rs:905`
-  and a bespoke `result` object. It now has four contract cases (`output.rs:968`, `:994`,
-  `:1008`, `:1047`) and a failure-shape integration case in `cli_contract.rs`. What is still open is the schema half:
+  and a bespoke `result` object. It now has four contract cases (`output.rs:969`, `:995`,
+  `:1009`, `:1048`) and a failure-shape integration case in `cli_contract.rs`. What is still open is the schema half:
   it shares `schema_version: 1` with the envelope while being a different document, and
   reconciling that needs a plan and a version bump.
 
@@ -842,7 +852,7 @@ gates would notice; the hosted matrix would, but not immediately.
 **R3 — The `update` machine-output surface is pinned, but only at the seam and in the failing
 direction.** `update_json` (`output.rs:903`) is the one machine-readable surface bypassing
 `EnvelopeV1`. C022 moved it out of `main.rs` into `output.rs` and gave it four cases
-(`output.rs:968`) pinning `schema_version`, `operation`, dry-run/`changed` semantics, every
+(`output.rs:969`) pinning `schema_version`, `operation`, dry-run/`changed` semantics, every
 identity field, and all four provenance codes, plus a stream case asserting one document and
 one newline byte-for-byte. Two things remain unproven and are recorded rather than papered
 over: a **successful** run cannot be represented hermetically — every success path resolves the
@@ -948,7 +958,7 @@ it, deleting it changes nothing.
 a citation only when the file name and the line number are written together. The bare `:N`
 convention, which is the dominant style inside the deep dives, is invisible to it —
 `architecture/07-workspace.md` alone carries 448 bare `:N` references, and `09-cleanup.md`
-carries 683. The mechanically checked half of "architecture cites source by line" is therefore
+carries 689. The mechanically checked half of "architecture cites source by line" is therefore
 much smaller than it looks, and the semantic half — whether a cited line still says what the
 sentence claims — is a reviewer's job in *every* document, checked or not. The §5 inventory
 parity rule is unaffected: it does not depend on line citations at all.
@@ -1013,7 +1023,7 @@ review.
 | `interactive.rs` | 1581 | 40 | 40 / 800 | Good for a new module, and the only one that put the terminal behind a pure seam. Its *surface* — a real selection session — is covered nowhere outside the module, because the integration suite has no terminal |
 | `discovery.rs` | 2363 | 39 | 39 / 1000 | Permission traversal has a premise-checked Unix fixture; 1,001 synthetic errors prove per-root aggregation stays bounded |
 | `cli.rs` | 1273 | 32 | 32 / 481 | Good |
-| `output.rs` | 1065 | 21 | 21 / 272 | **Split verdict, and the split is the finding.** The in-file tests cover bounded log output and update JSON; the scan/cleanup envelope layer still has **zero** direct in-file tests |
+| `output.rs` | 1065 | 21 | 21 / 540 | **Split verdict, and the split is the finding.** The in-file tests cover bounded log output and update JSON; the scan/cleanup envelope layer still has **zero** direct in-file tests |
 | `config.rs` | 1499 | 20 | 20 / 613 | Good for its surface |
 | `progress.rs` | 873 | 13 | 13 / 533 | Thin relative to size. Terminal-capability detection is mostly untested, and integration tests force `--no-progress` (`cli_contract.rs:178`), excluding the renderer from end-to-end coverage by construction |
 | `discovery_state.rs` | 1129 | 17 | 17 / 580 | Candidate provenance and cache/runtime exclusion are pinned alongside C028 absence handling — but see R9: the absence rule itself and `sweep_own_stale_temps` are not discriminated by any case |
@@ -1037,9 +1047,9 @@ sees a covered module where the versioned DTOs are exactly as unpinned as before
 
 ### Behaviours a reviewer should treat as under-verified
 
-1. **`main.rs` composition and the exit-code table.** `run()` stitches the two pipelines together and maps outcomes to codes. Three are pinned (`1` asserted at `cli_contract.rs:754` and `:1153`, `2` at `:674` and `:3076`; the resolved-scope label test at `:213`); the rest are not. `src/main.rs:1361` shows the `full_incomplete` → 1 path. The cleanup pipeline has its own `Ok(1)` route — a failed unit or a blocked scope (`src/main.rs:474`) — now tested through the `scope_blocked.is_some()` shape M012A introduced, and M012A also made bare `cargo cleanme` a cleanup path, so `run()`'s dispatch is materially larger than when this list was written.
+1. **`main.rs` composition and the exit-code table.** `run()` stitches the two pipelines together and maps outcomes to codes. **All three** codes are pinned: `1` asserted at `cli_contract.rs:754` and `:1153`, `2` at `:674` and `:3076`, and `0` at `:2016`, `:2055`, `:2077`, and `:2107` (the resolved-scope label test is at `:213`). The *distinct failure routes* are not all pinned — a usage error and a config error both surface as `2`, and nothing distinguishes them at the exit-code level. `src/main.rs:1361` shows the `full_incomplete` → 1 path. The cleanup pipeline has its own `Ok(1)` route — a failed unit or a blocked scope (`src/main.rs:474`) — now tested through the `scope_blocked.is_some()` shape M012A introduced, and M012A also made bare `cargo cleanme` a cleanup path, so `run()`'s dispatch is materially larger than when this list was written.
 2. **`clean --full` itself.** No live run exists, and none can exist on a host with an unreadable directory, because `policy::full_cleanup_roots` (`src/policy.rs:430`) fails closed with exit 2 whenever the Full reconciliation was incomplete (`src/policy.rs:434`). The only evidence is a source-string guard on `enum EmitReport` (`tests/cli_contract.rs:3094`, `src/main.rs:954`). A pty harness, as C023 proposed for the progress-bar ordering, is the shape of thing that would close this properly.
-3. **`update_json` output shape** (`output.rs:903-940`). Bypasses `EnvelopeV1` and has its own `schema_version` literal at `output.rs:905`. C022 added the four missing cases (`output.rs:968`, `:994`, `:1008`, `:1047`) plus the CLI failure-shape case; what remains unpinned is a successful live document and the schema reconciliation itself. See R3.
+3. **`update_json` output shape** (`output.rs:903-940`). Bypasses `EnvelopeV1` and has its own `schema_version` literal at `output.rs:905`. C022 added the four missing cases (`output.rs:969`, `:995`, `:1009`, `:1048`) plus the CLI failure-shape case; what remains unpinned is a successful live document and the schema reconciliation itself. See R3.
 4. **`output.rs` envelope field completeness.** `scan()` (`output.rs:105`) and `cleanup()` (`output.rs:161`): adding, removing, or renaming a field breaks no in-crate test. The 17 tests in the log and path modules all live below `pub mod log` or in `path_tests`; the four `update_tests` cover the other contract.
 5. **`report.rs` rendering is covered, but not end to end.** The 7 inline tests are strong; the default `--format text` path is never asserted through the binary.
 6. **`domain.rs` semantics.** One test is defensible for the data shapes, but any *meaningful* method on those types is untested by construction — nothing would catch one being added.
@@ -1056,9 +1066,9 @@ sees a covered module where the versioned DTOs are exactly as unpinned as before
 3. **Is a new external-process fixture actually exercised — not just present?** The premise is untested by default. Confirm the stub is *reached*: assert on what the subject passed to it (the `RecordingRunner` pattern, `workspace.rs:5438`), not only on what came back. C012 was green because an unrelated failure satisfied the assertion.
 4. **Is a new `scripts/` file wired into a workflow or the operator gate?** All 17 are reachable from an automated surface; the three exceptions (`validate-staged-release.py`, `post-release-smoke.sh`, `verify-release-attestation.py`) are event-specific by construction and say so in the [§5](#5-the-contract-checkers) table — see [§6](#6-ci-as-the-enforcement-point). A new checker reachable from neither repeats that gap. Wire it, or document why not, **in the same change**: `check-doc-citations.py` will fail if the new script is not in the §5 table, so the omission cannot ship.
 5. **Changing a field in `output.rs`?** There is no in-crate test below `pub mod log`. The only assertions are external: `cli_contract.rs:195-197`, `724-728`, `756`, `872-889`, `926`, `964-968`, `1007`, `1047`, `1086-1088`. Update them in the same commit; nothing inside the crate will remind you.
-6. **Changing `update_json` (`output.rs:903`) or `update_json_stream` (`output.rs:941`)?** Four cases in `output.rs:968`, `:994`, `:1008`, `:1047` pin the document and the stream byte-for-byte, and `cli_contract.rs` pins the failure shape and the stdout-write count. What is still unpinned is a *successful* live run; if you need one, the honest route is a published release (the post-release smoke), not a test hook. Routing it through `EnvelopeV1` remains a contract change and needs its own plan and a version bump — it was deliberately not done here.
+6. **Changing `update_json` (`output.rs:903`) or `update_json_stream` (`output.rs:941`)?** Four cases in `output.rs:969`, `:995`, `:1009`, `:1048` pin the document and the stream byte-for-byte, and `cli_contract.rs` pins the failure shape and the stdout-write count. What is still unpinned is a *successful* live run; if you need one, the honest route is a published release (the post-release smoke), not a test hook. Routing it through `EnvelopeV1` remains a contract change and needs its own plan and a version bump — it was deliberately not done here.
 7. **Touching `output.rs:143` or `output.rs:212` (`schema_version` literals)?** Confirm the trailing-newline invariant (`cli_contract.rs:199`, `:728`) and stderr-separation invariant (`:198`) still hold for the surface you touched. They are the reason the JSON is safe to parse unattended. The log surface has its own, stronger invariant — `assert_bounded_log_line` (`cli_contract.rs:2578`) — so a log-mode edit should run the eleven log-mode cases in `cli_contract.rs` rather than the JSON ones.
-8. **New exit codes in `main.rs`** — add a subprocess assertion in `cli_contract.rs` beside the existing ones (`:754` for `1`, `:674` for `2`, `:213` for the scope label). The exit-code table is otherwise unpinned.
+8. **New exit codes in `main.rs`** — add a subprocess assertion in `cli_contract.rs` beside the existing ones (`:754` for `1`, `:674` for `2`, `:2016` for `0`, `:213` for the scope label). The three exit-code *values* are pinned; the distinct *routes* to `2` are not, and nothing distinguishes a usage error from a config error by exit status.
 9. **Touching `traverse.rs`?** 6 tests (module opens at `:495`), and `source_activity` (`:311`) has no production caller — its only call site is `traverse.rs:619`, inside its own test module. If you are adding a caller, say so; if not, its test proves nothing about the system. If you are touching the recency short-circuit, note that the existing case resolves on the *directory's* mtime, not the file's (R8) — a new case must make the file the deciding entry.
 10. **New behaviour in `policy.rs`** — 16 tests, and this module decides the Routine/Full scope boundary, a documented invariant. Cheap to cover, still thinner than the module's importance.
 11. **Reactivating or adding a `.crates.toml` provenance path** — C017 was exactly this: a schema no current Cargo writes, misread as self-managed, which *replaced a binary Cargo owned*. The classification lives in `src/update.rs`, and its tests run against `FixtureEnvironment` (`update.rs:1301`), which cannot reproduce real Cargo's on-disk state.

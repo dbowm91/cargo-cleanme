@@ -364,18 +364,31 @@ substring match would have labelled it "identity".
 (`plans/adr/001-workspace-output-ownership-and-cleanup-authorization.md:217-229`):
 because cargo-cleanme delegates configuration
 semantics to Cargo, it cannot prove that an uncovered manifest does not overlap
-another workspace's output. So Preview, Simulate and Execute **fail closed for
-the entire cleanup scope** while any participant remains — no `cargo clean`, not
-even `--dry-run`. `resolve_workspaces` (`:459-467`) discards the `unresolved`
+another workspace's output. So CargoPreview, Simulate and Execute **fail closed
+for the proof boundary** while an in-boundary participant remains — no `cargo
+clean`, not even `--dry-run`.
+
+> **The boundary is the selection, not the discovered universe.** ADR 007 §1–§4
+> and M017 replaced the earlier whole-scope block: an unresolved manifest
+> **outside** the boundary is reported as an `out_of_scope` diagnostic and
+> **never blocks**, while an **in-boundary** unknown owner still blocks the
+> boundary. `src/cleanup.rs:2290-2313` implements the three-way split, and
+> `out_of_anchor_poison_does_not_block_anchor` (`src/cleanup.rs:5080`) fails by
+> construction against the old whole-scope rule. This passage is the one place
+> in the deep dives that still read as the superseded rule; it is corrected
+> here rather than left to rot.
+
+`resolve_workspaces` (`:459-467`) discards the `unresolved`
 vector, which is exactly why the doc comment at `:662-665` says its
 partial-result behaviour is "intentionally unchanged" and the read-only scan
 stays tolerant.
 
 **Failure-class attribution is report-only (M015); there is no enforcement
 pass-through.** A manifest Cargo refuses with `current package believes it's
-in a workspace when it's not` stays an unresolved participant and still
-blocks the whole scope under ADR 001 C004/C006 — withholding it from
-`unresolved` would narrow the block without ADR cover, which is exactly what
+in a workspace when it's not` stays an unresolved participant — and under ADR
+007 it is an **out-of-boundary** participant that is reported, never blocking;
+an in-boundary one blocks the boundary. Withholding it from `unresolved` would
+narrow the block without ADR cover, which is exactly what
 M015's non-goals forbid (`src/workspace.rs:976-984`). What M015 adds is a
 pure decision function over the failure classes,
 `attribute_unknown` (`src/workspace.rs:419-438`), returning

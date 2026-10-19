@@ -1170,8 +1170,9 @@ The document's own §8 caveat ("A consumer must not treat `schema_version == 1`
 as implying the envelope described here", `plans/output-schema-v1.md:28`) covers
 `update` but not `config`.
 
-**G6 — two exit codes are unlisted.** `plans/output-schema-v1.md:61` describes
-0 / 1 / 2 but omits:
+**G6 — three cases are unlisted.** `plans/output-schema-v1.md:61` describes
+0 / 1 / 2 but omits these cases (two distinct *exit-code values*, `1` and `2`,
+across three invocations):
 
 - `config edit` maps an editor failure to exit `1` (`main.rs:267-275`); the
 editor's own status stays in the diagnostic prose, never in our exit code.
@@ -1181,6 +1182,13 @@ editor's own status stays in the diagnostic prose, never in our exit code.
   error, exit `2` (`main.rs:524-530`) — the interactive TUI is human-only, and
   this is worth stating in the machine contract because it is the one machine
   format that a legitimate invocation cannot use.
+
+Two more refusals belong in the same list, and neither is in the schema doc:
+`config show --format json` exits `2` (`config command does not support --format
+json`), and `-i` on a scope with roots but no cleanup units exits `2`
+(`no cleanup units are available to select`) — the same scope *without* `-i`
+exits `0`. The interactive path's exit codes therefore do not always agree with
+the non-interactive path's.
 
 ### The stability promise, and whether the code honours it
 

@@ -7,10 +7,14 @@ never by deleting directories.
 $ cargo cleanme --dry-run
 combined roots /home/you/Projects
 
-Cleaned  …/demo-app  [private]  output …/demo-app/target  before   8.78 MiB  — simulation: no `cargo clean` command was invoked
+Simulated  …/demo-app  [private]  output …/demo-app/target  before   8.78 MiB  — simulation: no `cargo clean` command was invoked
 
 simulation: 1 would-clean, 0 skipped, 0 failed; estimated would-clean   8.78 MiB; no `cargo clean` command was invoked; 0 filesystem diagnostics
 ```
+
+The transcript above is **illustrative**: the paths and byte counts are
+placeholders, and the real human output prints two scope lines — `combined
+roots …` followed by `combined scope: N root(s) …` — before the per-unit rows.
 
 `cargo cleanme` with no arguments **cleans**. Every deletion is delegated to
 Cargo and gated on a fresh complete ownership proof; `--dry-run` runs the whole
@@ -38,8 +42,9 @@ destination and PATH handling, and what the installer refuses to do.
 ### Prebuilt release targets
 
 [`release/eggpack/distribution.toml`](release/eggpack/distribution.toml) is the
-single authority for this matrix and the asset names; it is not maintained by
-hand.
+single authority for this matrix and the asset names. The tables here and in
+[docs/INSTALLING.md](docs/INSTALLING.md) are hand-copied transcriptions of it
+and must be kept in sync with it.
 
 | Target triple | Install name |
 |---|---|
@@ -116,7 +121,13 @@ Cargo-resolved workspaces in durable developer locations; package caches,
 Trash, temporary trees, `node_modules`, and transient Codex worktrees stay out
 of automatic maintenance while remaining discoverable in Full scans.
 If Cargo cannot resolve one discovered manifest, scans preserve it as an
-unresolved participant and cleanup blocks the selected scope. See
+unresolved participant. Cleanup fails closed **only for the proof boundary** —
+the scope you selected: the working-directory anchor, the explicit roots, or
+the Full set. A manifest Cargo cannot resolve *inside* that boundary blocks
+it. A manifest *outside* it is reported as a bounded `out_of_scope` diagnostic
+and never blocks: cleaning a healthy anchor while poison exists elsewhere is
+the intended behaviour, so a boundary clean is never read as a system clean.
+See
 [Troubleshooting](docs/TROUBLESHOOTING.md#a-manifest-is-found-but-its-cargo-workspace-cannot-be-resolved)
 for reproducing the exact Cargo lookup.
 
@@ -149,6 +160,10 @@ Three modes, and `dry-run` means one specific thing:
 | `--dry-run` | Simulation | **never**, not even preview |
 | `--cargo-preview` | Cargo preview | yes, as `cargo clean --dry-run --verbose` |
 
+The transcripts in this section are **illustrative**: the paths and byte counts
+are placeholders, and the real human output prints `combined roots …` before
+the `combined scope: N root(s) …` line.
+
 ```console
 $ cargo cleanme clean ~/projects/demo-app --cargo-preview --no-progress
 combined scope: 1 root(s) […], 1 manifest(s), 1 resolved workspace(s), 1 CleanupUnit(s), 0 unresolved ownership participant(s)
@@ -178,9 +193,14 @@ cleanup: 1 cleaned, 0 skipped, 0 failed; pre-clean estimate   8.78 MiB, post-cle
 ```
 
 Every candidate must prove exclusive ownership of its bytes, and the proof is
-repeated immediately before each `cargo clean`. If any manifest under the
-scope cannot be resolved, **no** cleanup command runs at all and you get a
-typed block instead:
+repeated immediately before each `cargo clean`. Cleanup fails closed **only
+for the proof boundary** — the scope you selected: the working-directory
+anchor, the explicit roots, or the Full set. A manifest Cargo cannot resolve
+*inside* that boundary blocks it, so **no** cleanup command runs at all and
+you get a typed block instead. A manifest *outside* it is reported as a
+bounded `out_of_scope` diagnostic and never blocks: cleaning a healthy anchor
+while poison exists elsewhere is the intended behaviour, so a boundary clean
+is never read as a system clean. The blocked shape looks like this:
 
 ```console
 $ cargo cleanme --format json; echo "exit $?"
@@ -230,8 +250,8 @@ Created on first use, never overwritten, and validated after every edit.
 ```toml
 [scan]
 recency_seconds = 300          # protect anything touched in the last 5 minutes
-ignore = []                    # literal path segments
-unignore = []                  # literal relative paths, NOT globs
+ignore = []                    # absolute glob patterns
+unignore = []                  # absolute literal paths, NOT globs
 learned_root_retention_days = 30
 
 [cleanup]
@@ -258,12 +278,23 @@ turn a shared or unproven group into a cleanable one.
 | `--config PATH` | use a specific `config.toml` |
 | `--min-reclaimable-bytes N` | only clean units above this measured size (`clean`) |
 | `--older-than SECONDS` | extra quiet-age requirement; never replaces the recency guard (`clean`) |
+| `--include GLOB` | include canonical workspace roots matching this glob (`clean`) |
+| `--exclude GLOB` | exclude canonical workspace roots matching this glob (`clean`) |
+| `--profile NAME` | ask Cargo to clean one named profile (`clean`) |
+| `--package SPEC` | clean one validated workspace package (`clean`) |
+| `--cargo-preview` | after the same proof, run Cargo's own `clean --dry-run --verbose` (`clean`) |
+| `--yes` | hidden alias for the default Execute mode (`clean`) |
 | `--known` | Routine roots (`clean`, `scan`) |
 | `--full` | Full reconciliation before cleanup (`clean`) |
 | `-a` / `--all` | Full machine reconciliation (`scan`; `--full` is a hidden alias) |
 | `-i` / `--interactive` | choose cleanup units from a terminal list (needs a TTY) |
 
-`--dry-run`, `--cargo-preview`, and `--yes` conflict pairwise on purpose.
+`--dry-run`, `--cargo-preview`, and `--yes` conflict pairwise **on `clean`**, on
+purpose: they select three different modes. A root-level `--dry-run` — the
+`cargo cleanme --dry-run clean ROOT` spelling Cargo itself passes to an
+external subcommand — is a different flag from the clean-level one and does
+**not** conflict with `--cargo-preview`: the root flag wins and selects
+Simulation, because simulation is the mode that spawns nothing.
 
 ### Upgrading from 0.1.x
 
@@ -300,6 +331,13 @@ pre-1.0 migration period. They print nothing.
 `1` on `clean` with `scope_blocked: true` is a *success-shaped* result with a
 typed blocker, not a crash. Read the block.
 
+Two refusals exit `2` before any report is formed:
+
+| Command | Refusal |
+|---|---|
+| `cargo cleanme config show --format json` | `configuration error: config command does not support --format json; use human or log output` — `config` has no JSON envelope, so it refuses loudly rather than emitting non-JSON. `--format log` is accepted and exits `0`. |
+| `cargo cleanme clean --full` | `full reconciliation reported an incomplete scan (exit N); no cleanup commands were run against its unproven learned roots`, or `full reconciliation produced no fresh generation; no cleanup commands were run against stale learned roots` — a Full cleanup runs against the learned roots the reconciliation just proved, so an incomplete or stale reconciliation refuses the cleanup instead of using unproven roots. |
+
 ## Keep it current
 
 ```sh
@@ -330,10 +368,16 @@ For contributors and coding agents: [AGENTS.md](AGENTS.md) and
 - **MSRV** 1.89. **Prebuilt** for the five targets in
   [Prebuilt release targets](#prebuilt-release-targets). Musl, Windows ARM64, and
   ARMv7 are Cargo-only.
-- **Integrity, not authenticity.** Published `.sha256` files prove the bytes
-  match what the release built. There is no signature and no authenticity
-  claim. macOS binaries are unsigned and not notarized — Gatekeeper will
-  refuse a downloaded binary on first launch.
+- **Integrity, not full authenticity.** Published `.sha256` files prove the
+  bytes match what the release built; they do not prove *who* built them.
+  There is no maintainer-key signature and no transparency log. Each release
+  additionally carries a GitHub **release attestation** that the release
+  pipeline verifies — see
+  [docs/RELEASING.md](docs/RELEASING.md#release-authenticity-immutable-releases-and-attestations)
+  — but the **shipped updater does not verify attestations**, so the trust
+  root for an install is still the `.sha256` sidecar plus HTTPS. macOS binaries
+  are unsigned and not notarized — Gatekeeper will refuse a downloaded binary
+  on first launch.
 - **No glibc floor is advertised yet.** See the
   [ABI floor note](#prebuilt-release-targets).
 - **Pre-1.0.** Breaking changes to the CLI, JSON schema, or asset names can

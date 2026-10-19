@@ -13,15 +13,17 @@ Related: `plans/adr/008-proposed-canonical-full-cleanup-spelling-and-proof-scope
 
 Make every user-visible statement about the CLI **true**, and make the
 repository's operational documentation match the behaviour the code actually
-has. Thirteen defects are in scope (D1–D13); all are documentation-,
+has. **Twenty-seven** defects are in scope (D1–D27); all are documentation-,
 message-, or evidence-level. **No production behaviour change is authorised by
 this plan**, with one exception: D8 adds a bounded *diagnostic* to the
 bare-invocation path, which changes no exit code and no cleanup behaviour
 (see "Production changes" §3).
 
-D2 was resolved by the architecture documentation pass of 2026-10-19, which
-rewrote `architecture/02-cli.md` against the current source. It is retained in
-the table for the record. Twelve defects remain open.
+D2, D5, D14–D23, and D26 were resolved by the documentation-and-skills
+re-derivation pass of 2026-10-19, which re-derived the eight skills, `AGENTS.md`,
+`README.md`, and all six `docs/` files against the current source. They are
+retained in the table for the record. **Fourteen defects remain open**
+(D1, D3, D4, D6, D7, D8, D9, D10, D11, D12, D13, D24, D25, D27).
 
 ## Non-goals
 
@@ -54,6 +56,20 @@ a non-root Linux workstation, unless stated otherwise.
 | D11 | `plans/output-schema-v1.md` lists **19** `reason_code` values; the code has **20**. The missing one is `skipped_outside_selection` — the value M014 actually emits for a workspace outside the selected scope. | `src/cleanup.rs:263-286`; `src/cleanup.rs:1431`; `plans/output-schema-v1.md:48` |
 | D12 | `plans/output-schema-v1.md` describes a non-UTF-8 path as using "the platform escaped debug form". `output::path` now uses `to_string_lossy()`, so the human and machine renderings **agree** and both render `U+FFFD`. The schema's own wording ("are UTF-8 strings when representable") is also wrong: a path is always a UTF-8 `String`, representable or not. | `src/output.rs:262-266`; `plans/output-schema-v1.md:51` |
 | D13 | `plans/registry.md` contradicts **itself**: the M011C row says the automatic self-update smoke is "demonstrated three times" while the evidence table beneath it lists **seven** green automatic smokes. | `plans/registry.md:123`; `plans/registry.md:182-190` |
+| D14 | **The `json-and-exit-contract` skill taught exit codes `17` and `18`.** Neither exists anywhere in the codebase: `src/main.rs:34` is the only non-zero exit and it exits `2` for *every* `AppError`. The `AppError` variants are distinguished by their log-format `reason=` code (`config`, `io`, `scan`, `provenance`, `update`), which is a **different axis** from the exit status. An agent that trusted the skill's table would branch on a status the tool never returns. | `grep -rn '\b17\b\|\b18\b' src/` → no hits; `src/error.rs:1-16`; `src/main.rs:34`; `src/main.rs:56-59` |
+| D15 | **The same skill taught four reason codes that do not exist**: `skipped_permission_denied`, `skipped_io_error`, `skipped_never_authoritative`, and `skipped_dryrun`. Zero occurrences in `src/`, `tests/`, `plans/output-schema-v1.md`, or `docs/`. The real set is the twenty variants of `ReasonCode`. | `src/cleanup.rs:263-286`; `plans/output-schema-v1.md:48` |
+| D16 | **The `discovery-and-ownership` skill asserted a `[package] ignore` feature** — a manifest-level pruning rule that exists nowhere in `src/` — and described the duplicate-index panic as **live** when it was fixed. | no `[package] ignore` reader in `src/`; `src/traverse.rs:191`, `:198-200`; `src/traverse.rs:529-567` |
+| D17 | **The `test-evidence` skill's census was wrong throughout**: 320 declared / 318 Linux / 296 Windows / 317 macOS (the truth is 450 / 448 / 411 / 445); "five modules have zero inline tests" (three do: `main.rs`, `error.rs`, `lib.rs` — `output.rs` has 21 and `domain.rs` has 1); "40.3% in two modules" (42.0%); "the gate only has 2 pinned exit codes" (**three** are pinned: `0`, `1`, `2`); and it named a test, `all_dryrun_modes_emit_zero_clean_spawns`, that does not exist. | `cargo test --lib -- --list` → 448; `src/output.rs`, `src/domain.rs`; `tests/cli_contract.rs:754`, `:1153`, `:674`, `:3076`, `:2016`, `:2055`, `:2077`, `:2107` |
+| D18 | **The `release-and-distribution` skill claimed "each static guard runs its own `--self-test` first"** — true for 11 of the 17 scripts. Six do not, and `release-check.sh` *invokes* twelve self-tests rather than providing one. It also enumerated a partial list of the release gate's steps. | `scripts/`; `scripts/release-check.sh:72, 79, 86, 90, 97, 103, 110, 112, 119, 126, 129, 133`; 24 gate steps |
+| D19 | **The `planning-and-closure` skill's corrective inventory was incomplete**: it named C001–C009 and C010–C017 only, and did not say that **C035 is deliberately absent** (superseded, on a separate branch, must not be merged). An agent "fixing" the numbering gap would merge a rejected mechanism. | `plans/implementation/artifact-discovery-cleanup/`; `plans/registry.md:41` |
+| D20 | **The `cleanup-safety` skill named a `Preview` mode** that does not exist (`Execute`, `Simulate`, `CargoPreview` are the three), cited `OutputOwnershipClass` at `domain.rs:186` (it is `:210`), and described the superseded ADR 007 whole-scope block. | `src/cleanup.rs:36-46`; `src/domain.rs:210`; ADR 007 §1–§4 |
+| D21 | **`README.md`, `docs/USAGE.md`, `docs/AUTOMATION.md`, and `docs/TROUBLESHOOTING.md` carried the superseded ADR 007 whole-scope block** in eight places. The docs promised a *more* conservative behaviour than the code performs, and `docs/TROUBLESHOOTING.md` went further: it stated, exactly inverted, that the tool "will not clean the healthy-looking workspaces while silently ignoring the unresolved ones" — documenting a refusal the product deliberately removed. | `src/cleanup.rs:2276-2314`; `src/cleanup.rs:5080`; ADR 007 §3–§4 |
+| D22 | **`docs/USAGE.md` carried a verbatim 15-line duplicated block** — two byte-identical copies of the discovery-and-unresolved-ownership paragraph, confirmed identical by md5. | `docs/USAGE.md:208-222` ≡ `docs/USAGE.md:224-238` |
+| D23 | **`docs/USAGE.md` and `docs/TROUBLESHOOTING.md` claimed `include` and `exclude` must be absolute paths.** They are not absolute-checked; only `scan.root`, `scan.ignore`, `scan.unignore`, and `cleanup.allowed_output_roots` are. `include`/`exclude` are globs matched against the canonical workspace root. | `src/config.rs:112-127` (four `require_absolute` calls); `src/config.rs:137-147`, `:198-208` |
+| D24 | **`docs/USAGE.md` and `docs/UPDATE.md` still called `update_json` "the only untested output surface"** — closed by C022, which pinned the machine contract with four unit tests plus a CLI contract case. | `src/output.rs:945-1065`; `tests/cli_contract.rs:3271` |
+| D25 | **Three broken anchors** in the user documentation: `docs/USAGE.md` → `#unignore-re-admitted-siblings-fixed-after-0-1-6` (the real slug strips the dots), `docs/INSTALLING.md` and `docs/UPDATE.md` → `#known-defects-by-version` (the heading is "Check this first: known defects by version"). | `docs/TROUBLESHOOTING.md:3`, `:256` |
+| D26 | **`docs/INSTALLING.md` said "Fifteen releases are published"** — self-contradictory, because `0.2.0` *is* published, just yanked. Sixteen are published; fifteen are installable. It also said man pages are "one per subcommand" (there are **eight**: root, four subcommands, and the three `config` sub-subcommands), and documented `install.ps1 -Dir` when the parameter is `-Directory`. | `git tag` → 16 tags; `man/` → 8 files; `packaging/install.ps1:27`, `:43` |
+| D27 | **Thirteen source doc comments still describe the pre-ADR 007 whole-scope block.** `src/cleanup.rs:300`, `:328`, `:1141`, `:2044`, `src/workspace.rs:394`, `:978`, and `src/main.rs:304`, `:366`, `:590`, `:831` say "whole-scope" where the behaviour is boundary-scoped; `src/cleanup.rs:315-316` says "coverage of the selected scope is unproven". `tests/cli_contract.rs:1929-1930` carries the same wording on a test whose *behaviour* is correct — its unresolved manifest is inside the anchor, so it does block. | ADR 007 §3–§4; `src/cleanup.rs:2276-2314`; `src/cleanup.rs:5080` |
 
 D2 is **already resolved** by the architecture documentation pass of 2026-10-19:
 `architecture/02-cli.md` was rewritten against the current source and its status
@@ -100,13 +116,60 @@ immediately made the group appear.
 
 **D5 — the skill is not gated against the ADRs it summarizes.**
 `scripts/check-doc-citations.py` gates the mechanical half of `architecture/`
-citations only (it globs `architecture/*.md`); the six skills in `.skills/`
+citations only (it globs `architecture/*.md`); the eight skills in `.skills/`
 are hand-maintained prose with no cross-check. ADR 007 was accepted
 2026-10-16 and M017 implemented it, but the skill's "unresolved ownership
 blocks the whole scope" section was not revisited. The live run proves the
 code follows ADR 007 — 12 unresolvable `fuzz/Cargo.toml` manifests were
 reported and did **not** block the worktrees cleanup — so the skill now
 teaches the opposite of what the product does.
+
+**D14–D23 — the ungated surface is the *agent-facing* surface, and it is where
+the fabrications concentrated.** The defect class is not "one document drifted".
+It is that `.skills/`, `docs/`, and `README.md` have **no mechanical check at
+all** (`scripts/check-doc-citations.py` globs `architecture/*.md` only), while
+they carry the highest *authority* in the repository for an agent: a skill is
+read as current instructions, and a doc is read as current behaviour.
+
+What that permits is worse than staleness. D14 taught exit codes `17` and `18`
+that exist nowhere. D15 taught four reason codes that exist nowhere. D16
+described a `[package] ignore` feature that exists nowhere, and described a
+panic as live that was fixed. D17 carried a test census that disagreed with
+the code on every axis and named a test that does not exist. These are not
+wording problems: an agent that trusted D14 would write a consumer that
+branches on a status the tool never returns, and one that trusted D15 would
+match a reason code that never appears.
+
+The reason no gate caught it is that **a fabricated identifier looks exactly
+like a correct one to every check that does not compare against the source.**
+A citation checker resolves `file.rs:N`; it cannot know that the *sentence*
+around the citation is wrong, and it never looks at `.skills/` at all. The
+only check that catches this class is the expensive one: re-derive the claim
+from the source and compare, which is exactly what this pass did.
+
+Two sub-rules follow, and they are the durable output of this corrective:
+
+1. **Never copy a claim forward from a skill, a doc, or another deep dive.**
+   Re-derive it. The drift is not a matter of degree — a copied claim
+   propagates a fabrication into a *new* document that then looks
+   independently corroborated.
+2. **A skill that states an identifier is a liability.** If a skill needs to
+   name an exit code, a reason code, a config key, or a test name, that
+   identifier is a contract claim, and it must be checked against the source
+   every time the source moves. The skills now carry the derivation *method*
+   (how to recount the census, how to find the real test names) rather than
+   only the numbers, so a future reader can re-derive rather than re-copy.
+
+**D21–D26 — the user documentation described the *pre-ADR 007* product.** This
+is the same class as D5, one layer out: the whole-scope block was removed from
+the code by ADR 007 and M017, and eight passages across `README.md`,
+`docs/USAGE.md`, `docs/AUTOMATION.md`, and `docs/TROUBLESHOOTING.md` still
+promised it. The direction of the error matters: the docs described a *more*
+conservative behaviour than the code performs, so an operator reading them
+would expect a refusal that does not come. `docs/TROUBLESHOOTING.md` went
+further and stated the rule exactly inverted — that the tool "will not clean
+the healthy-looking workspaces while silently ignoring the unresolved ones" —
+which is a description of the defect ADR 007 was accepted to fix.
 
 **D6 / D7 — the evidence gap was documented and left open.** The deep dive
 records that no live `clean --full` run exists, and that the one-document
@@ -289,12 +352,27 @@ cargo run --quiet --features dev-tools --bin generate-docs -- --check
 
 ## Documentation updates
 
-`README.md`, `docs/USAGE.md`, `architecture/02-cli.md`,
-`architecture/13-orchestration.md`, `.skills/cleanup-safety/SKILL.md`,
+`README.md`, `docs/USAGE.md`, `docs/AUTOMATION.md`, `docs/INSTALLING.md`,
+`docs/RELEASING.md`, `docs/TROUBLESHOOTING.md`, `docs/UPDATE.md`,
+`architecture/02-cli.md`, `architecture/05-discovery.md`,
+`architecture/07-workspace.md`, `architecture/10-reporting.md`,
+`architecture/14-testing-and-verification.md`, `architecture/overview.md`,
+the eight skills in `.skills/`, `AGENTS.md`,
 `plans/output-schema-v1.md`, `plans/registry.md`, the root `config.toml`,
 `CHANGELOG.md` (Unreleased). `architecture/overview.md` §3 counts are the
 source of truth for module line counts and the inline-test total — if WP-1 or
 WP-2 changes either, update the overview first and then align the deep dives.
+
+**The `.skills/` and `docs/` surfaces need a gate of their own.** The
+architectural fix for D14–D26 is not "review them more carefully next time" —
+it is a checker that resolves the identifiers those documents name against the
+source. The shape it would take: extract every exit code, reason code, config
+key, test name, and command spelling from `.skills/` and `docs/`, and assert
+each against the code. That is mechanically decidable, unlike the citation
+gate's semantic half, and it is the only thing that would have caught D14,
+D15, and D16. **It has not been written.** Until it exists, the only defence
+is the re-derivation discipline above, and every future change to a skill or
+a user doc must re-derive its identifiers rather than copy them.
 
 ## Acceptance criteria
 

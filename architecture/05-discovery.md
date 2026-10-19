@@ -421,18 +421,38 @@ let uncertainty: Vec<PathBuf> = discovered
     .filter_map(|d| d.path.clone()).collect();
 ```
 
-That vector still carries known, path-specific uncertainty into
-`reconcile_full`. Unknown-location traversal errors have no path and therefore
-cannot be represented in the vector; `ManifestDiscovery::coverage_complete`
+That vector is **always empty in production**, and the reason is worth stating
+precisely because it is easy to assume otherwise. All three uncertainty
+categories — `PermissionDenied`, `Metadata`, `Vanished` — are emitted with
+`path: None` (`:783-797`, `:978-996`), because `dua_core`'s error carries no
+failing child path. The `.filter_map(|d| d.path.clone())` above therefore drops
+every one of them, and the vector that was supposed to carry known,
+path-specific uncertainty into `reconcile_full` carries nothing.
+
+The path-carrying protection described below is therefore **unreachable in
+production**; it is the shape the code would take if the diagnostics ever grew
+a path. Unknown-location traversal errors have no path and therefore cannot be
+represented in the vector; `ManifestDiscovery::coverage_complete`
 separately gates both reconciliation and Full exit status. An incomplete walk
 does not publish any generation, so unknown loss cannot be interpreted as
 negative evidence.
 
+> **Two traps live here.** First, the `matches!` filter above covers **three of
+> the seven** `DiagnosticCategory` variants and has **no `_` arm**
+> (`src/main.rs:1043-1051`), so a newly-added category is *silently* excluded.
+> Second, the filter itself is correct and should not be "fixed" by adding a
+> catch-all that admits pathless diagnostics — that would make the vector
+> non-empty with values that carry no location, which is worse than empty.
+> See `architecture/06-discovery-state.md` §5 and `architecture/overview.md`
+> finding #30.
+
 - The diagnostic categories distinguish `PermissionDenied`, `Vanished`, and
   other metadata errors. Traversal summaries count each class, although a mixed
   aggregate uses one representative category for the row (`:785-791`, `:980-986`).
-- Known localized diagnostics still use their paths to protect intersecting
-  old roots. Pathless informational diagnostics remain non-uncertain.
+- *Known localized diagnostics would* use their paths to protect intersecting
+  old roots — but no category currently emits a path, so this branch is
+  unreachable in production. Pathless informational diagnostics remain
+  non-uncertain.
 - The coverage flag, rather than a duplicated category predicate, decides
   whether Full can publish state and whether it exits 1.
 
