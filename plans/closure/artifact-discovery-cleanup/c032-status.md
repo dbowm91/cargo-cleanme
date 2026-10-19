@@ -2,10 +2,15 @@
 
 Plan: `plans/implementation/artifact-discovery-cleanup/c032-cargo-workspace-resolution-diagnostics-and-noise-corrective.md`
 
-Disposition: **conditionally closed; publication pending.** Implementation and
-hosted qualification are complete. The corrective remains open until a
-published release carries it. C032 does not authorize a release, and no
-release or installed-release smoke was performed.
+Disposition: **closed.** Implementation and hosted qualification were
+complete; the corrective's only remaining condition — a published release
+carrying it — is discharged. **v0.2.7** carried the C032–C034
+diagnostics/reporting line first, and **v0.2.9** carries it again; the
+publication and the installed-release smoke are recorded in
+`plans/closure/distribution-release-update/r029-status.md` (§4, §7, §8), with
+the GitHub release immutable and attested, the crate on crates.io, and the
+automatic smoke green on all five target lanes. C032 did not itself authorize
+that release, and the release was not authorized by C032.
 
 Implementation commits:
 

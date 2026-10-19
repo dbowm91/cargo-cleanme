@@ -3,17 +3,30 @@
 Plan: `plans/implementation/artifact-discovery-cleanup/m017-scoped-proof-default.md`
 (status active, owner-directed, ADR 007 accepted).
 
-Disposition: **conditionally closed.** Implementation, local verification,
-live-shape fixtures, and hosted OS/MSRV lanes are complete. Three items
-remain open, all release-time or external rather than code: (a) publication
-of a release carrying it (tree at 0.2.9, unpublished; the flag and islands
-axis were removed before any publication, so nothing shipped needs
-migrating); (b) the ADR 004 item (e) distinct release gate, transferred to
-M017's release; (c) hosted `cli_contract`/`end_to_end` evidence, which did
-not execute on hosted lanes because `cargo test` stops scheduling further
-targets behind the carried pre-existing lib failure (same structural
-situation as M015/M016). Per planning-and-closure, a milestone not yet
-carried by a published release stays open — hence conditional, not closed.
+Disposition: **closed.** Implementation, local verification, live-shape
+fixtures, and hosted OS/MSRV lanes were complete. The three items that
+remained open were all release-time or external rather than code, and all
+three are now discharged by the **v0.2.9** release (tag `v0.2.9` at
+`8c95c2ba416b`, GitHub release published 2026-10-19T20:31:06Z and immutable
+with a valid attestation, crates.io sha256 `9c1461bc…` and not yanked,
+automatic smoke `39319974151` green on all five target lanes; the full record
+is `plans/closure/distribution-release-update/r029-status.md`):
+
+- **(a) Publication** — v0.2.9 carries the scoped proof default. The flag and
+  islands axis were removed before any publication, so nothing shipped needs
+  migrating.
+- **(b) The ADR 004 item (e) distinct release gate** — run as
+  `scripts/release-check.sh v0.2.9` against the tag: 24 steps, exit 0, "no
+  publication was performed".
+- **(c) Hosted `cli_contract`/`end_to_end` evidence** — the carried pre-existing
+  lib failure that had been suppressing those two targets is fixed by **C037**
+  (`27ab9e3`, `plans/closure/artifact-discovery-cleanup/c037-status.md`). The
+  ubuntu lane now reports 449 lib, 62 `cli_contract` and 4 `end_to_end`, none
+  failed.
+
+Per planning-and-closure, a milestone not yet carried by a published release
+stays open. M017 is now carried by one, so it is closed rather than
+conditional.
 
 Implementation (PR #14 branch
 `plans/m015-proof-island-certificate-and-partition-report`, atop the M016
@@ -78,13 +91,15 @@ stack):
 
 ## Known limitations
 
-- The one red test on every lane is carried, not fixed: the profile-selector
-  allowlist does not qualify host stable cargo. Own corrective still
-  needed; it also suppresses hosted `cli_contract`/`end_to_end` execution
-  (cargo stops scheduling targets behind the lib failure), so hosted
-  integration evidence for M017 is outstanding through no fault of M017.
-- No publication yet: 0.2.9 carries the change in-tree; item (e) release
-  gate runs at release time. No release authorized here.
+- **The one red test on every lane was carried, not fixed, and is now
+  fixed.** The profile-selector allowlist did not qualify the host stable
+  cargo; the case asserted one outcome for a host-dependent branch whose
+  premise it never stated. It also suppressed hosted `cli_contract`/`end_to_end`
+  execution, so hosted integration evidence for M017 was outstanding through
+  no fault of M017. **C037** (`27ab9e3`) states the premise, derives the
+  expectation from the product's own capability check, and adds a
+  host-independent composition case; the publication is v0.2.9. See
+  `plans/closure/artifact-discovery-cleanup/c037-status.md`.
 - Machine surface for out-of-boundary poison is the `summary.diagnostics`
   count; per-manifest paths are visible via `scan --all` (whose diagnostics
   array carries them) and the human report carries only the bounded count
@@ -97,10 +112,13 @@ stack):
 
 ## Unresolved findings by severity
 
-- **Low (test-env/toolchain drift, pre-existing, carried):** the
-  allowlist/host-cargo mismatch; own corrective still needed.
+- **None medium or higher.**
+- **Low (test-env/toolchain drift, pre-existing, carried) — now closed:**
+  the allowlist/host-cargo mismatch had no corrective of its own; C037 is
+  that corrective, and v0.2.9 carries it.
 - **Low (M017-owned, found and fixed pre-closure):** the 1.99-only clippy
-  lint and the two path-comparison test defects (`904fc17`, `0bf1b95`).
+  lint and the two path-comparison test defects (`904fc17`, `0bf1b95`) —
+  both shipped in v0.2.9.
 - **None medium or higher.** Per the corrective-pass rule, any future
   material defect gets a new plan, not an edit to this record.
 

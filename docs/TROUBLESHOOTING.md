@@ -11,6 +11,7 @@ action.
 
 | If you are on | Check | Fixed in |
 |---|---|---|
+| **0.2.8 and earlier** | A manifest **outside** the selected scope that Cargo could not resolve **blocked the whole scope** — bare `cargo cleanme` refused to clean units it had already proved, and reported the out-of-scope manifest as the reason | **0.2.9** (M017 / ADR 007; the proof boundary is now the selected scope) |
 | **0.2.3 and earlier** | A deleted automatically learned scan location (for example a removed worktree) aborts bare `cargo cleanme` with `invalid scan root … No such file or directory` | **0.2.4** (C028; see below) |
 | **0.2.1 and earlier** | An `exclude` naming a directory with `[` or `]` in its canonical path **did not exclude it** on Windows | **0.2.2** |
 | **0.2.0** | `--dry-run clean ROOT` **performed a real cleanup** | **0.2.1** (0.2.0 yanked) |

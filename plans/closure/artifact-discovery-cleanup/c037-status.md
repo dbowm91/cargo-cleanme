@@ -11,12 +11,11 @@ Corrects / closes findings from:
 - `architecture/14-testing-and-verification.md` finding **R7**.
 - `architecture/overview.md` §10 finding **26**.
 
-Repository baseline: `main` at 0.2.9 (unpublished; latest published tag `v0.2.8`),
-commit `6224d07`.
+Repository baseline: `main` at 0.2.9 (unpublished at the time of the repair;
+latest published tag was then `v0.2.8`), commit `6224d07`.
 Implementation commit: `27ab9e3` — *"fix(test): state the selector premise so the
 case is host-independent"*.
-Release tag carrying the work: **none yet** — 0.2.9 is unreleased and no release
-is authorized. See §9.
+Release tag carrying the work: **`v0.2.9`**, published 2026-10-19. See §7.
 
 ---
 
@@ -194,6 +193,23 @@ selector-qualification workflow is the hosted real-Cargo matrix that owns the
 *support claims*; it is green, and it did **not** promote any version — the
 allowlist and the policy are unchanged, as the plan requires.
 
+### The publication
+
+The corrective's only remaining condition was a published release carrying it.
+**v0.2.9** does:
+
+| | |
+|---|---|
+| Tag | `v0.2.9` at `8c95c2ba416b298c9aa7ebe541115240feccd4b0` |
+| GitHub release | published 2026-10-19T20:31:06Z, immutable, 15 assets, signed attestation verified against the downloaded bytes |
+| crates.io | published 2026-10-19T20:32:08Z, sha256 `9c1461bcf6806f6511bee89a20cf16c472e4849f825b426315fab29b0d923d7d`, not yanked |
+| Automatic smoke | `39319974151` green on all five target lanes, `v0.2.8` → `v0.2.9` |
+| Release record | `plans/closure/distribution-release-update/r029-status.md` |
+
+The published binary carries the repaired case: the hosted `stable` moved to
+1.99.1 before this release, and the release build passed with the *unqualified*
+host — which is the behaviour the repair was written to make correct.
+
 ## 8. Known limitations
 
 - **The supported branch is still only *executed* against a real Cargo on a
@@ -204,20 +220,18 @@ allowlist and the policy are unchanged, as the plan requires.
   the nearest qualified toolchain. A qualified-host run of the amended case is
   therefore **not** in the hosted evidence. This is a property of the
   qualification policy, not of the repair.
-- **No publication.** 0.2.9 is unreleased and no release is authorized. This
-  corrective is fixed but **open** until a published release carries it.
 
 ## 9. Disposition
 
-**Conditionally closed — implementation landed, locally verified, and hosted
-green on all nine jobs; the published release is outstanding.**
+**Closed.**
 
 Per `plans/003-planning-process.md` §5, compilation is not closure and
-publication is not closure. This record is complete on the implementation side:
-the defect is corrected, the repair is proven discriminating in both
-directions, the full verification ladder is green on the repaired tree, and the
-hosted CI is green on every lane. It is **not** closed, because no published
-release carries the correction.
+publication is not closure. Both are now satisfied. The defect is corrected;
+the repair is proven discriminating in both directions; the full verification
+ladder is green on the repaired tree; the hosted CI is green on every lane; and
+a **published release** carries the correction — the GitHub release is public,
+immutable and attested, the crate is on crates.io and not yanked, and the
+automatic published-release smoke is green on all five target lanes.
 
 ## 10. Unresolved findings by severity
 
