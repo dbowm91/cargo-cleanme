@@ -82,7 +82,7 @@ and `inquire` were not adopted.
 | 6 | Rendering stays inline | `the_driver_repaints_in_place_without_an_alternate_screen` (`src/interactive.rs:1991`) — no alternate-screen escape anywhere in the captured bytes |
 | 7 | The frame never exceeds the terminal | `the_frame_is_bounded_and_never_overflows_the_width` (`src/interactive.rs:1716`), `the_page_is_capped_by_the_terminal_height` (`src/interactive.rs:1770`) |
 | 8 | `Session` stays pure | `Session` still renders to `Vec<String>` with no terminal in scope; the colour flag is set by the driver, and `colour_can_be_turned_off` proves the flag is honoured |
-| 9 | Colour is opt-out | `color_enabled_with` honours `NO_COLOR` and `TERM=dumb` — `the_colour_decision_honours_no_color_and_a_dumb_terminal` (`src/interactive.rs:2382`) |
+| 9 | Colour is opt-out | `color_enabled_with` honours `NO_COLOR` and `TERM=dumb` — `the_colour_decision_honours_no_color_and_a_dumb_terminal` (`src/interactive.rs:2391`) |
 
 ## The mutation evidence
 
@@ -154,6 +154,27 @@ Measured from the captured bytes, rather than read off the screen:
 The repaint size is the property that matters: it is now a function of the
 page, not of the terminal, and it is the same whatever the candidate count.
 
+## What the hosted lanes caught
+
+The first hosted run (CI `39375009699`) was **red on Windows only**, and the
+failure was worth having: two of the new tests had hard-coded a POSIX path
+separator.
+
+| Test | Linux | Windows | Cause |
+|---|---|---|---|
+| `a_colliding_basename_is_told_apart_by_more_of_the_path` | pass | **fail** | expected `a/x`; the label is joined with the platform separator, so Windows produced `a\x` |
+| `a_long_display_name_is_truncated_from_the_left_not_the_right` | pass | **fail** | expected the frame to contain `deep/project`; on Windows it holds `deep\project` |
+
+Both were **test** bugs, not product bugs: the production code joins the
+label's components with `PathBuf::push`, so it uses the platform separator
+correctly. The fix builds the expectation from a path rather than from a
+literal.
+
+This is the AGENTS.md §3.1 rule in action — a change touching path rendering
+is not verified until the hosted lanes run — and it is the argument for
+running them rather than trusting a green local suite: the local suite could
+not have caught either.
+
 ## The citation re-derivation
 
 `src/interactive.rs` grew from 1627 to 2417 lines and `src/cli.rs` from 1273
@@ -164,9 +185,10 @@ machine-checkable property than "the numbers look right".
 
 | Checked | Count | Result |
 |---|---:|---|
-| Explicit `file.rs:N` citations into the changed modules | 346 | all resolve to an existing file and an in-range line |
-| … of those, content-exact against the baseline | 324 | the map moved them to the same text |
+| Explicit `file.rs:N` citations into the changed modules | 354 | all resolve to an existing file and an in-range line |
+| … of those, content-exact against the baseline | 327 | the map moved them to the same text |
 | … of those, pointing into rewritten code | 7 | hand re-derived against the new source |
+| … of those, pointing into code that did not exist at the baseline | 20 | new code; no baseline counterpart to be exact against |
 | Baseline-relative by design (the C039 plan's evidence section, which says so) | 12 | not live pointers |
 | Bare `:N` citations in `architecture/16-interactive.md` | 0 | the rewritten deep dive uses the explicit form throughout |
 | `check-doc-citations.py` | 17 documents | clean |

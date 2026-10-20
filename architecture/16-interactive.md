@@ -372,7 +372,7 @@ ownership annotation yellow (`src/interactive.rs:186-197`,
 `src/interactive.rs:720-784`). The escape sequences are emitted by the renderer
 as part of the line, so the `Terminal` trait and its `draw(&[String])` seam are
 unchanged, and a frame with colour off is byte-identical to one with it on
-minus the escapes (`src/interactive.rs:2347-2363`).
+minus the escapes (`src/interactive.rs:2356-2372`).
 
 ## 8. Known gaps
 

@@ -1779,7 +1779,7 @@ mod tests {
         let frame = render_to_string(&s);
         assert!(frame.contains('…'), "{frame}");
         assert!(
-            frame.contains("deep/project"),
+            frame.contains(&PathBuf::from("deep").join("project").display().to_string()),
             "the distinguishing tail must survive: {frame}"
         );
     }
@@ -2226,9 +2226,18 @@ mod tests {
     fn a_colliding_basename_is_told_apart_by_more_of_the_path() {
         // Two workspaces called `x` must not be rendered as two rows called
         // `x`: the name has to grow until it identifies the row.
+        //
+        // The label is joined with the *platform* separator, so the
+        // expectation is built from a path rather than written as a literal.
         let candidates = vec![private("/a/x"), private("/b/x")];
         let labels = unique_labels(&candidates);
-        assert_eq!(labels, vec!["a/x", "b/x"]);
+        assert_eq!(
+            labels,
+            vec![
+                PathBuf::from("a").join("x").display().to_string(),
+                PathBuf::from("b").join("x").display().to_string(),
+            ]
+        );
         assert_ne!(labels[0], labels[1]);
     }
 
