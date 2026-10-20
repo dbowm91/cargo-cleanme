@@ -75,7 +75,7 @@ And one more, which is the sharpest of them:
 6. **A test that pins the defect.** A test can be green *because* it asserts
    the wrong thing — including the thing you are about to fix.
    `the_driver_shows_the_hardware_cursor_only_in_insert_mode`
-   (`src/interactive.rs:1385-1401`) asserts that the terminal cursor's **last**
+   (`src/interactive.rs:1958-1974`) asserts that the terminal cursor's **last**
    recorded visibility is `Some(false)`. The interactive session never restores
    the cursor, so that test is green by asserting the bug. Fixing the cursor
    without fixing the test would leave a green test pinning the *new* bug.
@@ -124,13 +124,13 @@ set is valuable.
 
 ## Coverage shape, honestly
 
-**458** inline `#[test]` functions are **declared** in `src/`; **456** compile
+**474** inline `#[test]` functions are **declared** in `src/`; **472** compile
 and run on Linux. Two are excluded there: one `#[cfg(windows)]`
 (`src/config.rs:997`) and one `#[cfg(any(target_os = "macos", windows))]`
 (`src/discovery.rs:1554`). A further **35** carry `#[cfg(unix)]` and **4** are
 Linux-only (`src/config.rs:1445`, `src/discovery.rs:1574`, `src/output.rs:282`,
-`src/workspace.rs:5339`), so the three hosted lanes compile **456 of 458 on
-Linux**, **419 of 458 on Windows**, and **453 of 458 on macOS** —
+`src/workspace.rs:5339`), so the three hosted lanes compile **472 of 474 on
+Linux**, **435 of 474 on Windows**, and **469 of 474 on macOS** —
 `#[cfg(unix)]` is true *on* macOS, which is the half people get wrong. A green
 local run is not a green run elsewhere — that is what the OS matrix in `ci.yml`
 is for, and why `check-fixture-portability.py` exists to catch a *new* ungated
@@ -144,7 +144,7 @@ fixture before a lane disagrees about it.
 > `cargo test --lib -- --list` on the host platform; anything else silently
 > disagrees by a few.
 
-State which number you mean. "458 tests" (declared) and "456 passing" (on
+State which number you mean. "474 tests" (declared) and "472 passing" (on
 Linux) are both true, and a record that gives one while meaning the other is
 ambiguous in the direction that matters.
 

@@ -9,19 +9,19 @@
 > `scan` demands an explicit scope selector, and `-i` opens a selection
 > session. **M017 / ADR 007.** Scoped proof is the default; M016's
 > `--partitioned` flag was removed before publication and has no alias
-> (`src/cli.rs:933`).
+> (`src/cli.rs:936`).
 >
 > **One known defect lives in the code, not here.** The root `long_about`
 > (`src/cli.rs:21-30`) still says that *"`cargo cleanme scan` with no ROOT is
 > the full read-only machine reconciliation"*. Since M014 that shape is a
 > **usage error** — `scan` requires one of ROOT / `--known` / `--all`
-> (`src/cli.rs:83`). The *behaviour* is correct and pinned by a test
-> (`src/cli.rs:648`); only the help text is stale. Corrective C036 proposes the
+> (`src/cli.rs:86`). The *behaviour* is correct and pinned by a test
+> (`src/cli.rs:651`); only the help text is stale. Corrective C036 proposes the
 > rewrite and is **not accepted**, so this deep dive describes the code as it
 > stands and says so where the text is wrong. See §2.1.
 
 `src/cli.rs` is 1273 lines: 481 production, 792 inside an inline
-`#[cfg(test)]` module beginning at `src/cli.rs:482`. It is the entire
+`#[cfg(test)]` module beginning at `src/cli.rs:485`. It is the entire
 user-facing contract of the binary — the clap command model, the
 resolved-invocation model, the shim that makes `cargo cleanme …` parse at all,
 and the lexical path helper that lets a relative `ROOT` reach the cleanup
@@ -35,10 +35,10 @@ safety boundary.
 `ConfigCommand`, `OutputFormat`); the **resolved-invocation model**
 (`CleanupScope`, `ScanIntent`, `CleanupOverrides`, `CleanupRequest`,
 `Invocation`, `Cli::invocation`, `clean_mode`); **argv normalization**
-(`normalize_cargo_argv`, `src/cli.rs:413`), which undoes Cargo's
+(`normalize_cargo_argv`, `src/cli.rs:416`), which undoes Cargo's
 external-subcommand argv injection; and **scan-root absolutization**
-(`absolutize_root` `src/cli.rs:432`, `absolutize_root_for_test`
-`src/cli.rs:448`, shared worker `absolutize_relative` `src/cli.rs:455`).
+(`absolutize_root` `src/cli.rs:435`, `absolutize_root_for_test`
+`src/cli.rs:451`, shared worker `absolutize_relative` `src/cli.rs:458`).
 
 The resolved-invocation model exists so that "no subcommand" is an *explicit*
 Routine cleanup intent rather than a fallthrough. Before M012A, `main.rs`
@@ -46,7 +46,7 @@ matched `None => run_scan(None, false, …)`, and that one line decided what the
 front door meant. Now the decision is data: `Cli::invocation()` maps argv onto
 exactly one of **five** `Invocation` values, and `main.rs:80-90` dispatches on
 that value alone. A bare invocation and `clean` with no scope selector produce
-the *same* `CleanupRequest` (`src/cli.rs:312-318` and `src/cli.rs:363-369`),
+the *same* `CleanupRequest` (`src/cli.rs:315-321` and `src/cli.rs:366-372`),
 so they cannot drift apart in root selection, policy, proof, or reporting.
 
 What it deliberately does **not** do:
@@ -56,7 +56,7 @@ What it deliberately does **not** do:
   `policy::resolve`, called from `main.rs:773` (maintenance scope) and
   `main.rs:1045` (scan scope).
 - **No filesystem discovery.** The only filesystem call is
-  `std::env::current_dir()` (`src/cli.rs:436`); there is no `exists`, `is_dir`,
+  `std::env::current_dir()` (`src/cli.rs:439`); there is no `exists`, `is_dir`,
   or `read_dir`. Root existence/directory/symlink checks are later layers' job
   — e.g. `src/discovery.rs:506` refuses a symlinked scan root.
 - **No config loading.** `Cli` holds `config: Option<PathBuf>`
@@ -85,7 +85,7 @@ cannot name a mode the engine does not implement. `cleanup` does not depend on
 
 ## 2. The command surface
 
-### 2.1 Global options on `Cli` (`src/cli.rs:32-71`)
+### 2.1 Global options on `Cli` (`src/cli.rs:32-74`)
 
 `config`, `no_progress`, `stats`, `format`, and `interactive` are
 `global = true`, so each is accepted before *or* after the subcommand name.
@@ -95,7 +95,7 @@ have to be reconciled deliberately rather than by making one of them
 disappear.
 
 That is why `invocation()` re-reads the root flag on the `Clean` and `Update`
-arms (`src/cli.rs:341-343`, `src/cli.rs:381-385`) rather than trusting clap to
+arms (`src/cli.rs:344-346`, `src/cli.rs:384-388`) rather than trusting clap to
 have done it. Being non-global used to mean **silently discarded**: clap
 happily accepts `cargo cleanme --dry-run clean ROOT` — the spelling Cargo itself
 passes — and the `Clean` arm read only its *own* three flags, so the mode fell
@@ -105,7 +105,7 @@ failure mode this tool has.
 
 Because clap cannot make a root flag mutually exclusive with a subcommand's
 flags, `--dry-run` plus `clean --cargo-preview` reaches `invocation()` together.
-It resolves to `Simulate` (`src/cli.rs:381-385`): simulation is the mode that
+It resolves to `Simulate` (`src/cli.rs:384-388`): simulation is the mode that
 spawns no Cargo process at all, and a user who asked for it before the
 subcommand must not be handed a Cargo invocation instead. It is resolved *before*
 `clean_mode`, so that function's `debug_assert!` keeps its premise — clap really
@@ -119,13 +119,13 @@ does reject conflicting mode flags *on the subcommand*.
 | `--format <FORMAT>` | — | `OutputFormat` (value enum) | `human` | selects `output::scan` / `output::cleanup` / `report::render` → `main.rs:1287`, `main.rs:915`, `main.rs:1299`; the bounded `output::log::*` line → `main.rs:1296`, `main.rs:925` |
 | `--dry-run` | — | `bool` | `false` | `CleanMode::Simulate` for a bare invocation *and* for `clean` / `update`, whichever side of the subcommand it was given on |
 | `--dryrun` (hidden) | — | `bool` | `false` | same, as a compatibility alias |
-| `-i`, `--interactive` | `-i` | `bool` | `false` | `CleanupRequest::interactive` (`src/cli.rs:249`, set at `src/cli.rs:395`) → read at `main.rs:528`; the session itself is `interactive::run_interactive` (`main.rs:587`) |
+| `-i`, `--interactive` | `-i` | `bool` | `false` | `CleanupRequest::interactive` (`src/cli.rs:252`, set at `src/cli.rs:398`) → read at `main.rs:528`; the session itself is `interactive::run_interactive` (`main.rs:587`) |
 | `--help` / `-h` | `-h` | clap built-in | — | clap help path |
 | `--version` / `-V` | `-V` | clap built-in (from `version`, `src/cli.rs:19`) | — | `cargo-cleanme 0.2.9` |
 
 **Two short forms exist, and only one of them is global.** `-i` is the global
-`--interactive` (`src/cli.rs:67`); `-a` is the `scan`-only short for `--all`
-(`src/cli.rs:96`). Clap's own `-h`/`-V` complete the set. The root command has
+`--interactive` (`src/cli.rs:70`); `-a` is the `scan`-only short for `--all`
+(`src/cli.rs:99`). Clap's own `-h`/`-V` complete the set. The root command has
 no other short form.
 
 `--config` carries no doc comment (`src/cli.rs:33-34`), which is why
@@ -133,25 +133,25 @@ no other short form.
 help text asserts the contract it must keep: *"Never changes deterministic
 stdout"* (`src/cli.rs:38-40`).
 
-`command: Option<Command>` (`src/cli.rs:69-70`) is **optional**, and that is
+`command: Option<Command>` (`src/cli.rs:72-73`) is **optional**, and that is
 load-bearing: a bare invocation parses successfully and produces
 `Invocation::Cleanup(CleanupRequest { scope: CleanupScope::Maintenance, mode:
-Execute, .. })` (`src/cli.rs:312-318`), pinned by
+Execute, .. })` (`src/cli.rs:315-321`), pinned by
 `bare_invocation_is_routine_execute_maintenance_not_scan`
-(`src/cli.rs:509`). That test's doc comment names the exact production code it
+(`src/cli.rs:512`). That test's doc comment names the exact production code it
 guards: before M012A, `Cli::command` being `None` sent `main.rs` to
 `run_scan(None, false, …)`.
 
 > **The root `long_about` is stale.** `src/cli.rs:21-30` still advertises
 > "`cargo cleanme scan` with no ROOT is the full read-only machine
-> reconciliation". The `ArgGroup` at `src/cli.rs:83` makes that shape a usage
-> error, and `scan --all` (`src/cli.rs:96`) is the canonical Full spelling.
+> reconciliation". The `ArgGroup` at `src/cli.rs:86` makes that shape a usage
+> error, and `scan --all` (`src/cli.rs:99`) is the canonical Full spelling.
 > The text is the *only* surface that is wrong: the behaviour, the group, and
 > the test that pins it are all correct. Corrective C036 proposes the rewrite
 > and has no implementation authority yet, so this document reports the
 > defect rather than describing a fix that has not shipped.
 
-### 2.2 `scan` (`src/cli.rs:83-101`)
+### 2.2 `scan` (`src/cli.rs:86-104`)
 
 > **M014.** `scan` with no selector is **no longer Full**. It is a usage error.
 > Full now requires an explicit `-a`/`--all`, because bare `cargo cleanme` is
@@ -168,7 +168,7 @@ guards: before M012A, `Cli::command` being `None` sent `main.rs` to
 
 **Exactly one selector is required**, expressed as a
 `clap::ArgGroup::new("scan-scope").required(true).args(["root", "known", "all", "full"])`
-on the variant (`src/cli.rs:83`). The rendered usage line reads
+on the variant (`src/cli.rs:86`). The rendered usage line reads
 `cargo-cleanme scan [OPTIONS] <ROOT|--known|--all|--full>`.
 
 The `ArgGroup` is not decoration. The obvious spelling —
@@ -185,9 +185,9 @@ reconciliation command by accident — `policy::resolve` returns
 `ScanScope::Global` before it ever looks at configuration
 (`full_resolution_ignores_a_configured_root`, `src/policy.rs:821`). `Cli::invocation`
 turns the three shapes into `ScanIntent::Full` / `Explicit(root)` /
-`Maintenance` at `src/cli.rs:319-335`.
+`Maintenance` at `src/cli.rs:322-338`.
 
-### 2.3 `config` (`src/cli.rs:102-105`) → `ConfigCommand` (`src/cli.rs:165-170`)
+### 2.3 `config` (`src/cli.rs:105-108`) → `ConfigCommand` (`src/cli.rs:168-173`)
 
 A container with no options of its own, only a required nested subcommand.
 
@@ -197,13 +197,13 @@ A container with no options of its own, only a required nested subcommand.
 | `config show` | `config::show(&config::load_or_create(path)?)` → `main.rs:249` | creates the file if absent |
 | `config edit` | `editor::resolve_editor()`, spawn, re-validate → `main.rs:256-292` | two fail-closed checks live here, not in `cli.rs` |
 
-`ConfigCommand` is `Copy` (`src/cli.rs:165`), so `Cli::invocation` hands it over
-by value (`src/cli.rs:336`) and `main.rs:82` matches on it directly.
+`ConfigCommand` is `Copy` (`src/cli.rs:168`), so `Cli::invocation` hands it over
+by value (`src/cli.rs:339`) and `main.rs:82` matches on it directly.
 
 There is no `config init`: the variant does not exist. Asserted twice —
-`src/cli.rs:989` and `src/cli.rs:1192`.
+`src/cli.rs:992` and `src/cli.rs:1195`.
 
-### 2.4 `clean` (`src/cli.rs:107-150`)
+### 2.4 `clean` (`src/cli.rs:110-153`)
 
 The two orchestration selectors, the advanced policy flags, and the three clean
 modes are disjoint sets by construction.
@@ -213,7 +213,7 @@ modes are disjoint sets by construction.
 | `[ROOT]` | optional positional | `None` | `--known`, `--full` | `CleanupScope::Root` → `cli::absolutize_root` → `main.rs:731` |
 | `--known` | `bool` | `false` | ROOT, `--full` | `CleanupScope::Maintenance` → `policy::resolve` → `main.rs:773` |
 | `--full` | `bool` | `false` | ROOT, `--known` | `CleanupScope::Full` → Full scan first (`main.rs:758`), then `discovery_state::load_default()` learned roots → `main.rs:764-766` |
-| *(no selector)* | — | — | — | `CleanupScope::Maintenance`, identical to bare invocation (`src/cli.rs:363-369`) |
+| *(no selector)* | — | — | — | `CleanupScope::Maintenance`, identical to bare invocation (`src/cli.rs:366-372`) |
 | `--min-reclaimable-bytes <N>` | `Option<u64>` | `None` → `config.cleanup.policy.min_reclaimable_bytes` | — | `CleanupOverrides.min_reclaimable_bytes` → `CleanupPolicy.min_reclaimable_bytes` via `.unwrap_or(configured…)` → `main.rs:329-331` |
 | `--older-than <SECONDS>` | `Option<u64>` | `None` → `config.cleanup.policy.min_inactive_seconds` | — | `CleanupPolicy.min_inactive_seconds` via `.or(configured…)` → `main.rs:332` |
 | `--include <GLOB>` | `Vec<String>`, repeatable | empty → `config.cleanup.policy.include` | — | `CleanupPolicy.include` → `main.rs:333-337` |
@@ -227,7 +227,7 @@ modes are disjoint sets by construction.
 | `--dryrun` (hidden) | `bool` | `false` | `--dry-run`, `--cargo-preview`, `--yes` | `CleanMode::Simulate` |
 
 - **Advanced flags live only on `clean`,** deliberately. Bare invocation carries
-  `CleanupOverrides::default()` (`src/cli.rs:315`), so the front door uses the
+  `CleanupOverrides::default()` (`src/cli.rs:318`), so the front door uses the
   configured or default policy rather than cloning the whole advanced surface
   onto the root command. The consequence is that
   `cargo cleanme --min-reclaimable-bytes N` is a usage error; the policy is set
@@ -241,7 +241,7 @@ modes are disjoint sets by construction.
   `CleanupPolicy` default belongs in `config.rs`, not here.
 - **`--profile`/`--package` are not free-standing.**
   `NonEmptyStringValueParser` rejects an empty value at parse time, and their
-  mutual exclusion is enforced by clap (`src/cli.rs:130-134`).
+  mutual exclusion is enforced by clap (`src/cli.rs:133-137`).
 
 > **`--full` is a `clean`-only flag.** `cargo cleanme --full` is a usage error
 > (clap, exit 2): there is no root-level `--full` in the current tree. ADR 008
@@ -257,7 +257,7 @@ pub fn clean_mode(dry_run: bool, cargo_preview: bool, dryrun_legacy: bool) -> Cl
     debug_assert!(
         !((dry_run || dryrun_legacy) && cargo_preview),
         "clap rejects conflicting mode flags before this mapping runs"
-    );                                                  // src/cli.rs:282-285
+    );                                                  // src/cli.rs:285-288
     if dry_run || dryrun_legacy {
         CleanMode::Simulate
     } else if cargo_preview {
@@ -270,7 +270,7 @@ pub fn clean_mode(dry_run: bool, cargo_preview: bool, dryrun_legacy: bool) -> Cl
 
 The whole mode contract is this one function, and it is the **only** place in
 the tree that maps a flag to a mode. `Cli::invocation` calls it for both the bare
-front door (`src/cli.rs:314`) and `clean` (`src/cli.rs:384`), and
+front door (`src/cli.rs:317`) and `clean` (`src/cli.rs:387`), and
 `cleanup.rs`'s inline test asserts the mapping against the stable labels rather
 than against a `Default` (`cli_modes_map_to_preview_simulate_execute`,
 `src/cleanup.rs:4126`).
@@ -278,7 +278,7 @@ than against a `Default` (`cli_modes_map_to_preview_simulate_execute`,
 Three properties are load-bearing:
 
 1. **Execute is the `else` branch, not a flag.** `--yes` is accepted and
-   deliberately *not* bound in `Cli::invocation` (`src/cli.rs:344-347`): it used
+   deliberately *not* bound in `Cli::invocation` (`src/cli.rs:347-350`): it used
    to be the only way to ask for Execute, so accepting it keeps scripts working
    while printing nothing. That is the whole reason the `try_parse_normalized_from`
    caller and the alias test exist.
@@ -290,18 +290,18 @@ Three properties are load-bearing:
 3. **The conflicting pairs are rejected by clap, not by precedence.** All six
    mode-flag pairs are `conflicts_with_all` declarations, asserted in
    `cleanup_modes_default_to_execute_and_expose_cargo_preview`
-   (`src/cli.rs:867`).
+   (`src/cli.rs:870`).
 
 `CleanMode` has **no `Default`** (`src/cleanup.rs:30-46`), and `CleanReport` does
 not derive one either (`src/cleanup.rs:391-395`). That is the structural guard
 against a future call site inheriting the weaker mode by accident: every report
 states its mode in full.
 
-### 2.6 `update` (`src/cli.rs:151-163`)
+### 2.6 `update` (`src/cli.rs:154-166`)
 
 Exactly one option: `--dry-run` (`bool`) → `update::update(dry_run)` at
 `main.rs:94`, which also selects between the `update_json` document and the
-human lines at `main.rs:186-199`. Its long doc comment (`src/cli.rs:151-158`)
+human lines at `main.rs:186-199`. Its long doc comment (`src/cli.rs:154-161`)
 is the provenance/safety contract — registry is the version authority, the tag
 is constructed not scraped, `.sha256` must verify, the binary must self-identify
 as the target version, and a Cargo-managed install is refused. That comment is
@@ -314,7 +314,7 @@ replacing bytes; `update_keeps_its_own_dry_run_meaning` pins that it still
 parses and reaches `Invocation::Update`.
 
 It is, however, **not** immune to the root-level flag: the arm ORs the two
-(`src/cli.rs:341-343`), so `cargo cleanme --dry-run update` is also a plan-only
+(`src/cli.rs:344-346`), so `cargo cleanme --dry-run update` is also a plan-only
 run. The same discarding bug reached this arm by the same route; whether a
 replacement actually committed could not be exercised in the sandbox that found
 it, so it is fixed by construction and by test rather than by observation.
@@ -335,7 +335,7 @@ it, so it is fixed by construction and by test rather than by observation.
 (`tests/cli_contract.rs:172`), which asserts `plain.stdout == with_stats.stdout`.
 
 `log` is opt-in and never inferred: a non-TTY stdout does not select it
-(`format_log_parses_globally`, `src/cli.rs:956`). The `config` subcommand
+(`format_log_parses_globally`, `src/cli.rs:959`). The `config` subcommand
 **rejects** `--format json` outright rather than emitting non-JSON on stdout
 (`main.rs:230-234`).
 
@@ -353,7 +353,7 @@ What is **not** an alias: the `scan` front door. `scan` now requires an
 explicit selector; `scan --known` is the Routine inventory and `scan --all` is
 the Full reconciliation. `scan --full` survives as a hidden alias for `--all`,
 and `hidden_full_alias_is_not_advertised_in_scan_help`
-(`src/cli.rs:825`) asserts the alias does not appear in `scan --help`, so a
+(`src/cli.rs:828`) asserts the alias does not appear in `scan --help`, so a
 reader of the help text is never offered two spellings for one operation.
 
 Since M014 the bare front door also *changed meaning*: it is no longer "the
@@ -379,7 +379,7 @@ argv[3] = "/x"
 
 clap's first positional is the subcommand name, so it would try to match
 `cleanme` against `scan`/`config`/`clean`/`update` and fail. The doc comment at
-`src/cli.rs:402-412` gives the full argument: `cleanme` is *not* a
+`src/cli.rs:405-415` gives the full argument: `cleanme` is *not* a
 `cargo-cleanme` subcommand, so the only valid first arguments after
 normalization are `scan`/`config`/`clean`/`update`/help/version flags or no
 argument at all — which is what makes stripping position 1 safe.
@@ -393,7 +393,7 @@ pub fn normalize_cargo_argv(args: impl IntoIterator<Item = OsString>) -> Vec<OsS
         argv.remove(1);
     }
     argv
-}                                                       // src/cli.rs:413-419
+}                                                       // src/cli.rs:416-422
 ```
 
 1. **Collect** the whole iterator into a `Vec<OsString>`. It must own the
@@ -410,7 +410,7 @@ pub fn normalize_cargo_argv(args: impl IntoIterator<Item = OsString>) -> Vec<OsS
 
 Everything after index 1 is left byte-for-byte alone, so `scan cleanme` keeps
 its root and `clean ./cleanme --yes` keeps its path
-(`later_literal_cleanme_values_are_preserved`, `src/cli.rs:1121`).
+(`later_literal_cleanme_values_are_preserved`, `src/cli.rs:1124`).
 
 **Accepted trade-off.** Because the strip is unconditional on position, a
 *direct* invocation of `cargo-cleanme cleanme` also loses the token and parses
@@ -427,11 +427,11 @@ argument must account for the delete, not just the parse.
 ### 3.3 The two entry points
 
 ```rust
-pub fn parse_normalized() -> Self {                    // src/cli.rs:297
+pub fn parse_normalized() -> Self {                    // src/cli.rs:300
     Self::parse_from(normalize_cargo_argv(std::env::args_os()))
 }
 
-pub fn try_parse_normalized_from(                        // src/cli.rs:302
+pub fn try_parse_normalized_from(                        // src/cli.rs:305
     args: impl IntoIterator<Item = OsString>,
 ) -> Result<Self, clap::Error> {
     Self::try_parse_from(normalize_cargo_argv(args))
@@ -450,7 +450,7 @@ caller can assert the *real* production path — normalize-then-parse — over a
 synthetic argv, instead of reaching past the parser and calling
 `try_parse_from` on a hand-normalized vector. It is `pub` and not
 `#[cfg(test)]`, so it is public surface even though only inline tests and one
-integration test consume it (`src/cli.rs:1072`, `tests/cli_contract.rs:2435`).
+integration test consume it (`src/cli.rs:1075`, `tests/cli_contract.rs:2435`).
 
 ---
 
@@ -468,7 +468,7 @@ pub fn absolutize_root(root: &Path) -> Result<PathBuf, crate::error::AppError> {
         reason: format!("cannot resolve current directory: {e}"),
     })?;
     Ok(absolutize_relative(&base, root))
-}                                                       // src/cli.rs:432-441
+}                                                       // src/cli.rs:435-444
 ```
 
 - An **absolute** input is returned **completely untouched** — not normalized,
@@ -477,12 +477,12 @@ pub fn absolutize_root(root: &Path) -> Result<PathBuf, crate::error::AppError> {
   `current_dir()` fails (deleted cwd, permission), the function now returns
   `AppError::InvalidRoot` — a usage error, exit 2. It **used to** degrade
   silently to `/`, which rewrote `clean ./p` into `clean /p`; the doc comment at
-  `src/cli.rs:429-431` records that the fallback was the defect.
+  `src/cli.rs:432-434` records that the fallback was the defect.
 - The function is **purely lexical**. Beyond that `current_dir` lookup it makes
   no syscall, so it never fails on a non-existent target and can never follow a
   symlink.
 
-`absolutize_root_for_test(base, root)` (`src/cli.rs:448`) is the same function
+`absolutize_root_for_test(base, root)` (`src/cli.rs:451`) is the same function
 with the base injected. Its doc comment gives the reason: production uses the
 current directory, tests use the helper *"to avoid mutating the process-global
 current directory"* — correct, because `set_current_dir` is process-global and
@@ -493,7 +493,7 @@ races any parallel test. It is `#[doc(hidden)]` and, in the current tree, has
 ### 4.2 `absolutize_relative` — the lexical algorithm
 
 ```rust
-pub(crate) fn absolutize_relative(base: &Path, relative: &Path) -> PathBuf {   // src/cli.rs:455
+pub(crate) fn absolutize_relative(base: &Path, relative: &Path) -> PathBuf {   // src/cli.rs:458
     let mut out = if base.is_absolute() {
         base.to_path_buf()
     } else {
@@ -526,7 +526,7 @@ pub(crate) fn absolutize_relative(base: &Path, relative: &Path) -> PathBuf {   /
   regardless of what it is handed. That is the invariant which makes it safe
   for the cleanup boundary.
 - `CurDir` is a no-op — how `./project` becomes `<base>/project`, asserted by
-  `relative_root_becomes_absolute` (`src/cli.rs:1207`).
+  `relative_root_becomes_absolute` (`src/cli.rs:1210`).
 - `ParentDir` is `PathBuf::pop` with its failure discarded via `let _ =`, so a
   `..` that would rise above the root **saturates at the root** rather than
   escaping: `absolutize_relative("/a", "../../x") == "/x"`. Intermediate `..`
@@ -576,7 +576,7 @@ must be reasoned about on the cleanup side only.
 canonicalizes. Its first act is a *different* operation:
 `.map(|p| std::fs::canonicalize(&p).unwrap_or(p))` (`main.rs:968`).
 
-| | `absolutize_root` (`src/cli.rs:432`) | `canonicalize` (`main.rs:968`) |
+| | `absolutize_root` (`src/cli.rs:435`) | `canonicalize` (`main.rs:968`) |
 |---|---|---|
 | Symlinks in the path | left intact | resolved to their targets |
 | `..` | folded lexically | folded *after* symlink resolution, so it means something different |
@@ -617,7 +617,7 @@ into its target and hidden the invalid identity (`main.rs:821-824`).
 ### 5.1 `parse_normalized` uses clap's own exit path
 
 `Cli::parse_normalized` returns `Self`, not `Result<Self, clap::Error>`, because
-it delegates to `Parser::parse_from` (`src/cli.rs:298`), which is
+it delegates to `Parser::parse_from` (`src/cli.rs:301`), which is
 `try_parse_from(…).unwrap_or_else(|e| e.exit())`. On a usage error clap
 **prints its own message and exits the process**; it never returns to `main()`.
 There is no funnel from parse failure into `AppError`, which is visible in
@@ -662,7 +662,7 @@ Before M012A, `cli.rs` modelled only the *pairwise* exclusions, and "ROOT or
 `AppError`: same exit code, different message provenance.
 
 M012A removed that runtime rule. `clean` with no selector now resolves to
-`CleanupScope::Maintenance` (`src/cli.rs:363-369`), identical to bare
+`CleanupScope::Maintenance` (`src/cli.rs:366-372`), identical to bare
 invocation, so **every** scope conflict is a clap usage error and there is no
 third style to remember. The price is a real behaviour change, recorded in
 `CHANGELOG.md`: `cargo cleanme clean` used to exit 2 and now cleans.
@@ -674,10 +674,10 @@ that point.
 
 ### 5.3 `Invocation::UsageError` is a deliberate dead end
 
-`Invocation` has five variants (`src/cli.rs:257-274`): `Cleanup`, `Scan`,
+`Invocation` has five variants (`src/cli.rs:260-277`): `Cleanup`, `Scan`,
 `Config`, `Update`, and `UsageError(String)`. The last one is **unreachable
 through the parser** — `scan`'s `ArgGroup` guarantees one of ROOT / `--known` /
-`--all` — and its doc comment (`src/cli.rs:265-272`) says why it exists: the
+`--all` — and its doc comment (`src/cli.rs:268-275`) says why it exists: the
 compiler cannot see clap's invariant, and the two available fallbacks were both
 wrong. Defaulting to Full would silently run the machine-wide reconciliation the
 flag exists to gate; panicking would exit 101, outside the 0/1/2 contract.
@@ -704,7 +704,7 @@ clap uses for a usage error.
    `src/cli.rs:27-28` never reached a generated artifact and no drift gate ever
    saw it.*
 2. **Direct and external forms must parse identically.** Unit guard:
-   `direct_and_external_forms_parse_equivalently` (`src/cli.rs:1153`), comparing
+   `direct_and_external_forms_parse_equivalently` (`src/cli.rs:1156`), comparing
    `Invocation` equality on the parsed value. Process guard:
    `tests/cli_contract.rs:115` and `:149`, diffing real stdout. A `PathBuf` or
    ordering-sensitive `Vec` value is where a normalization bug would hide. Since
@@ -721,7 +721,7 @@ clap uses for a usage error.
    `cleanme clean -- --yes` treats `--yes` as the `ROOT` path, not as a mode
    flag. (Derived from the absence of those attributes rather than an executed
    run; no test pins `--`.) The one `ArgGroup` in the file is the `scan-scope`
-   group at `src/cli.rs:83`, and it constrains `scan`'s selectors only.
+   group at `src/cli.rs:86`, and it constrains `scan`'s selectors only.
 5. **Unknown flags fail closed.** Clap rejects them at parse time with exit 2
    before any filesystem or config access. No prefix-matching or
    suggestion-suppression is configured, so clap's did-you-mean output is
@@ -729,14 +729,14 @@ clap uses for a usage error.
    `--partitioned` is the worked example: it was removed before publication, so
    it is a plain unknown argument today
    (`partitioned_flag_is_gone_scoped_proof_is_the_only_behavior`,
-   `src/cli.rs:933`).
+   `src/cli.rs:936`).
 6. **Path-like values are unvalidated here.** `ROOT`, `--config`, the
    `--include`/`--exclude` globs and the `--package` spec are taken as typed. A
    value starting with `-` needs `--` or `=` (`--package=--weird`).
    `--profile`/`--package` additionally reject the empty string at parse time
-   (`src/cli.rs:130`, `src/cli.rs:133`); nothing else does.
+   (`src/cli.rs:133`, `src/cli.rs:136`); nothing else does.
 7. **Platform behaviour.** `absolutize_relative`'s `Prefix`/`RootDir` arms are
-   the Windows path logic; `relative_root_becomes_absolute` (`src/cli.rs:1207`)
+   the Windows path logic; `relative_root_becomes_absolute` (`src/cli.rs:1210`)
    mixes POSIX-only expectations (`/a/b`) with one `cfg!(windows)`-conditional
    assertion.
    Fifty-six `#[cfg(unix)]` attributes gate code in `tests/cli_contract.rs`,
@@ -749,9 +749,9 @@ clap uses for a usage error.
    "never executed".
 8. **Threading a new flag** touches, in order: the parser field here → the
    destructuring pattern and branch in `Cli::invocation`
-   (`src/cli.rs:348-397` enumerates every `Clean` field explicitly, so a new
+   (`src/cli.rs:351-400` enumerates every `Clean` field explicitly, so a new
    field is a compile error until handled) → `CleanupOverrides`
-   (`src/cli.rs:212-220`) → `CleanupPolicy` / `CleanupSelector` construction at
+   (`src/cli.rs:215-223`) → `CleanupPolicy` / `CleanupSelector` construction at
    `main.rs:328-353`, which is also where the config fallback is decided →
    `output.rs` if it changes the machine contract, since
    `output::cleanup`/`output::scan` are the versioned `schema_version: 1`
@@ -759,22 +759,22 @@ clap uses for a usage error.
    reach the JSON shape implicitly.
 9. **One mode, one definition site.** Adding a fourth cleanup mode must touch
    `cleanup::CleanMode` (`src/cleanup.rs:30-46`) and `cli::clean_mode`
-   (`src/cli.rs:281-293`). A new mode that is reachable from `clean` but not
+   (`src/cli.rs:284-296`). A new mode that is reachable from `clean` but not
    from the bare front door — or vice versa — is a safety bug, because the two
    callers of `clean_mode` are the only places the mapping exists.
 10. **Bare invocation must never be weaker than `clean --known`.** They are the
-    same `CleanupScope::Maintenance` value (`src/cli.rs:312-318`,
-    `src/cli.rs:363-369`) reaching the same `run_cleanup`. A future change that
+    same `CleanupScope::Maintenance` value (`src/cli.rs:315-321`,
+    `src/cli.rs:366-372`) reaching the same `run_cleanup`. A future change that
     special-cases `None` in `main.rs` would give the front door a weaker proof
     path than an explicit spelling, which is the one regression this milestone
     exists to make impossible.
 11. **The working-directory anchor belongs to the maintenance spellings only.**
     Bare invocation and `clean --known` (and `clean` with no selector) resolve
     to `CleanupSelection::WorkingDirectory`; `clean ROOT` and `clean --full`
-    resolve to `CleanupSelection::All` (`src/cli.rs:375-378`). The anchor is
+    resolve to `CleanupSelection::All` (`src/cli.rs:378-381`). The anchor is
     emitted **unresolved** — `cli.rs` must not do IO — and
     `CleanupSelection::admits` is fail-closed until `main.rs` resolves it
-    (`src/cli.rs:797`).
+    (`src/cli.rs:800`).
 
 ---
 
@@ -783,8 +783,8 @@ clap uses for a usage error.
 ### 7.1 Inline module: 32 `#[test]` functions
 
 `src/cli.rs` has **32** `#[test]` functions (plus two helper constructors and one
-`argv` helper). `#[cfg(test)]` is at `src/cli.rs:482`, `mod tests {` opens at
-`src/cli.rs:483`, and the module runs to end of file (792 of 1273 lines,
+`argv` helper). `#[cfg(test)]` is at `src/cli.rs:485`, `mod tests {` opens at
+`src/cli.rs:486`, and the module runs to end of file (792 of 1273 lines,
 including helpers).
 
 | Test | Line | What it pins |
@@ -875,7 +875,7 @@ failure grouping, and the interactive TTY.
   `trailing_var_arg`/`allow_hyphen_values`, not on a test.
 - **No test for invalid numeric values**: a non-numeric, negative, or
   overflowing `--min-reclaimable-bytes` or `--older-than`. An invalid
-  `--format` value *is* covered now, at both levels (`src/cli.rs:982` for
+  `--format` value *is* covered now, at both levels (`src/cli.rs:985` for
   `yaml`, `tests/cli_contract.rs:3060` for `jsonl`).
   `NonEmptyStringValueParser` is exercised for the `--profile`/`--package`
   *conflict*, not for an actually-empty value.
@@ -888,7 +888,7 @@ failure grouping, and the interactive TTY.
   platform; the suite keeps every case bounded on purpose. The invariant it
   would prove is instead asserted where it is decided:
   `full_resolution_ignores_a_configured_root` (`src/policy.rs:821`) plus
-  `scan_scope_selection_is_full_explicit_or_maintenance` (`src/cli.rs:648`).
+  `scan_scope_selection_is_full_explicit_or_maintenance` (`src/cli.rs:651`).
   That pair is an argument, not an observation — a reader should weigh it as
   such. (`scan_emits_exactly_one_json_document`,
   `tests/cli_contract.rs:3095`, records the same limitation for the
@@ -914,46 +914,46 @@ failure grouping, and the interactive TTY.
    model comes from `cargo_cleanme::cli::Cli::command()` at
    `xtask/src/main.rs:96`.
 2. **Does the flag work in both invocation forms?** Add it to
-   `direct_and_external_forms_parse_equivalently` (`src/cli.rs:1153`), or use
-   the production `try_parse_normalized_from` path as `src/cli.rs:1072` does. A
+   `direct_and_external_forms_parse_equivalently` (`src/cli.rs:1156`), or use
+   the production `try_parse_normalized_from` path as `src/cli.rs:1075` does. A
    `Vec` or `PathBuf` value is where an order-sensitive mismatch appears.
 3. **Is `normalize_cargo_argv` still correct after your change?** Its whole
    safety argument is that no valid command can have `cleanme` at argv[1]
-   (`src/cli.rs:402-412`). If a new subcommand or positional could produce that
+   (`src/cli.rs:405-415`). If a new subcommand or positional could produce that
    shape, the shim must change with it;
-   `later_literal_cleanme_values_are_preserved` (`src/cli.rs:1121`) encodes the
+   `later_literal_cleanme_values_are_preserved` (`src/cli.rs:1124`) encodes the
    current position rule.
 4. **Did you handle the field in `Cli::invocation`?** The `Clean` arm
-   (`src/cli.rs:348-397`) destructures every field explicitly, so a new field is
+   (`src/cli.rs:351-400`) destructures every field explicitly, so a new field is
    a compile error — verify you added the *semantics* at `main.rs:328-353`, not
    just the binding. Decide whether the new flag **replaces** or **merges**
    with the config value: `--include`/`--exclude` replace (`main.rs:333-342`)
    while `--min-reclaimable-bytes`/`--older-than` fall back
    (`main.rs:329-332`). A field added to `Command::Clean` must also appear in
-   `CleanupOverrides` (`src/cli.rs:212-220`) or it will not reach the engine.
+   `CleanupOverrides` (`src/cli.rs:215-223`) or it will not reach the engine.
 5. **Are you adding a mode or a spelling?** A *new spelling* belongs in
-   `clean_mode` (`src/cli.rs:281-293`) with a hidden flag and a test proving it
+   `clean_mode` (`src/cli.rs:284-296`) with a hidden flag and a test proving it
    maps to an existing mode. A *new mode* is a different thing: it needs a
    `CleanMode` variant, a reason about what the cleanup engine may do, and a
    decision about whether the bare front door may reach it. Never let a new
    flag create a mode the front door cannot express — and never let it create a
    mode the front door *can* reach by accident.
 6. **Does bare invocation still mean the same thing as `clean --known`?** They
-   share the `CleanupScope::Maintenance` variant (`src/cli.rs:312-318`,
-   `src/cli.rs:363-369`) **and** the same `CleanupSelection::WorkingDirectory`
-   anchor (`src/cli.rs:375-378`). Any change that gives one of them a
+   share the `CleanupScope::Maintenance` variant (`src/cli.rs:315-321`,
+   `src/cli.rs:366-372`) **and** the same `CleanupSelection::WorkingDirectory`
+   anchor (`src/cli.rs:378-381`). Any change that gives one of them a
    different root set, policy, or gate is a safety regression, not a
    convenience.
 7. **Does the error path match your expectation?** Parse failures never reach
-   `AppError`; clap prints and exits (`src/cli.rs:298` → `main.rs:11-37`).
+   `AppError`; clap prints and exits (`src/cli.rs:301` → `main.rs:11-37`).
    Anything that must read `cargo-cleanme: …` with exit 2 has to be raised from
    `main.rs`, not from a `value_parser` or a `conflicts_with`.
 8. **Have you checked the root path arithmetic?** If you touch
-   `absolutize_relative` (`src/cli.rs:455-481`), re-assert the three
+   `absolutize_relative` (`src/cli.rs:458-484`), re-assert the three
    properties: output is always absolute even for a relative `base`; `..`
    saturates at the root (`let _ = out.pop()`); symlinks are never followed.
    And remember `absolutize_root` leaves an already-absolute input entirely
-   alone (`src/cli.rs:433-435`), `..` components included.
+   alone (`src/cli.rs:436-438`), `..` components included.
 9. **Does your change alter the machine contract?** If it changes what
    `output::scan`/`output::cleanup`/`update_json` emit, it needs a
    `schema_version` decision in `output.rs`; the single-newline,
@@ -968,7 +968,7 @@ failure grouping, and the interactive TTY.
     that cannot fail for the right reason is decoration.
 11. **Does the help text say anything the parser does not do?** The root
     `long_about` at `src/cli.rs:21-30` is the standing counter-example: it
-    still describes a rootless `scan` that the `ArgGroup` at `src/cli.rs:83`
+    still describes a rootless `scan` that the `ArgGroup` at `src/cli.rs:86`
     rejects. The manpage is rendered from `about`, so no drift gate sees
     `long_about`; only `cargo cleanme --help` does, and nothing checks it.
     A user-facing sentence about scope selection must state the condition

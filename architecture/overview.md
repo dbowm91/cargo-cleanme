@@ -19,7 +19,7 @@ distinction matters.
 - **What it is:** a Cargo subcommand (`cargo cleanme`) that finds inactive Cargo
   build artifacts on a machine and either reports or safely reclaims them.
 - **Shape:** one binary (`src/main.rs`) over one library (`src/lib.rs`) of 16
-  modules, 18 source files, 33,067 lines in `src/` (14,981 of them outside
+  modules, 18 source files, 33,870 lines in `src/` (15,230 of them outside
   every `#[cfg(test)]` scope), no async runtime of its own, and exactly one
   binary dependency that matters for safety (`cargo metadata`).
 - **Version:** 0.2.9 (unpublished; latest published tag `v0.2.8`) ·
@@ -97,9 +97,9 @@ Execute mode). `scan --full` is a hidden alias of `scan --all`.
 |---|---|---|
 | Source files | 18 | `src/` |
 | Library modules | 16 | `src/lib.rs` |
-| Total lines in `src/` | 33,067 | `wc -l src/*.rs` |
-| Production lines | 14,981 | total minus every `#[cfg(test)]` scope |
-| Inline `#[test]` functions | 458 | `#[test]` attributes in `src/` |
+| Total lines in `src/` | 33,870 | `wc -l src/*.rs` |
+| Production lines | 15,230 | total minus every `#[cfg(test)]` scope |
+| Inline `#[test]` functions | 474 | `#[test]` attributes in `src/` |
 | Integration test files | 2 | `tests/cli_contract.rs`, `tests/end_to_end.rs` |
 | Contract-checker scripts | 17 | `scripts/` — the set is machine-gated, see §9 |
 | GitHub workflows | 6 | `.github/workflows/` |
@@ -133,15 +133,15 @@ the file itself; the integration suites in `tests/` are counted separately in
 | `workspace.rs` | 6068 | 2093 | 76 | `progress.rs` | 873 | 533 | 13 |
 | `update.rs` | 2886 | 1289 | 47 | `report.rs` | 195 | 71 | 7 |
 | `discovery.rs` | 2363 | 1000 | 39 | `traverse.rs` | 624 | 494 | 6 |
-| `interactive.rs` | 1627 | 811 | 42 | `domain.rs` | 435 | 406 | 1 |
+| `interactive.rs` | 2427 | 1325 | 58 | `domain.rs` | 435 | 406 | 1 |
 | `config.rs` | 1499 | 613 | 20 | `editor.rs` | 215 | 155 | 2 |
 | `main.rs` | 1562 | 1425 | 4 | `error.rs` | 16 | 16 | 0 |
-| `cli.rs` | 1273 | 481 | 32 | `lib.rs` | 16 | 16 | 0 |
+| `cli.rs` | 1276 | 484 | 32 | `lib.rs` | 16 | 16 | 0 |
 | `policy.rs` | 1238 | 712 | 17 | | | | |
 | `discovery_state.rs` | 1129 | 580 | 17 | | | | |
 
 Two observations a reader should carry forward. **Coverage is concentrated**:
-`cleanup.rs` and `workspace.rs` alone hold 190 of the 458 inline tests, and
+`cleanup.rs` and `workspace.rs` alone hold 190 of the 474 inline tests, and
 `main.rs` — where the two pipelines are stitched together — is where the
 orchestration decisions live. And **the biggest files are the biggest risk**:
 `cleanup.rs` is where bytes get deleted.
@@ -203,12 +203,12 @@ responsible for; the **Breaks** line says what a defect there would cost.
 
 - **Owns:** the clap definition, the `cargo cleanme` → `cargo-cleanme` argv
   normalization, and the reduction of *every* accepted spelling to one
-  `Invocation` (`src/cli.rs:258`) carrying a `CleanupRequest`
-  (`src/cli.rs:228`), a `ScanIntent` (`src/cli.rs:194`), a `ConfigCommand`
-  (`src/cli.rs:166`), or an update intent. The `scan-scope` `ArgGroup`
-  (`src/cli.rs:83`) expresses "exactly one scope selector" once, so
+  `Invocation` (`src/cli.rs:261`) carrying a `CleanupRequest`
+  (`src/cli.rs:231`), a `ScanIntent` (`src/cli.rs:197`), a `ConfigCommand`
+  (`src/cli.rs:169`), or an update intent. The `scan-scope` `ArgGroup`
+  (`src/cli.rs:86`) expresses "exactly one scope selector" once, so
   requiredness and mutual exclusion cannot drift apart.
-- **Also owns:** the mode mapping `clean_mode` (`src/cli.rs:281`) that turns
+- **Also owns:** the mode mapping `clean_mode` (`src/cli.rs:284`) that turns
   the `--dry-run` / `--cargo-preview` flag triple into one `CleanMode`, and
   the hidden-alias declarations.
 - **Depends on:** `cleanup` (for `CleanMode` and `CleanupSelection`),
@@ -388,14 +388,22 @@ responsible for; the **Breaks** line says what a defect there would cost.
 ### 4.17 `interactive.rs` — the selection TUI
 
 - **Owns:** the operator-facing selection surface behind `-i`. `Session`
-  (`src/interactive.rs:147`) is a pure state machine — mode, cursor, filter,
-  selection — that renders itself to a `Vec<String>` and performs no IO. The
-  `Terminal` trait (`src/interactive.rs:111`) is the only thing that touches a
-  real terminal; `drive` (`src/interactive.rs:624`) is the loop, and
-  `run_interactive` (`src/interactive.rs:780`) is the entry point.
+  (`src/interactive.rs:204`) is a pure state machine — mode, cursor, filter,
+  selection, geometry — that renders itself to a `Vec<String>` and performs no
+  IO. The `Terminal` trait (`src/interactive.rs:120`) is the only thing that
+  touches a real terminal; `drive` (`src/interactive.rs:1120`) is the loop, and
+  `run_interactive` (`src/interactive.rs:1280`) is the entry point.
 - **Depends on:** `cleanup`, `report` (plus `domain` test-only).
 - **Breaks:** a tool that can leave a terminal in raw mode is not shippable.
   The `RawModeGuard` restores on every exit path, including a panic.
+- **Shape since C039:** the frame is a **bounded page** of at most fifteen
+  candidate rows (`src/interactive.rs:354-361`), never more than the terminal
+  has room for; a row is **named** by the shortest path suffix that identifies
+  it (`src/interactive.rs:919-944`); the reclaimable size is right-aligned; the
+  ownership column is dropped when it would say the same thing on every row;
+  and the surface is the only one in the crate that renders colour
+  (`src/interactive.rs:1100-1116`). The NOR/INS model and the published key
+  table are unchanged.
 - **Deep dive:** [16 — Interactive](16-interactive.md)
 
 ### 4.18 `main.rs` — the orchestration spine
@@ -568,7 +576,7 @@ unprovable is informational, not a coverage loss.
 
 `clean` is not a scan plus a `rm`. It is a separate, guarded transaction. The
 modes are `CleanMode` in `cleanup.rs:36`, mapped from flags by
-`cli::clean_mode` (`src/cli.rs:281`):
+`cli::clean_mode` (`src/cli.rs:284`):
 
 | Mode | Flag | What it does |
 |---|---|---|
@@ -699,7 +707,7 @@ the same pass, so these rows point at completed work rather than at a plan.
 | 33 | **No test covers a conflicting member→root mapping.** `member_to_root.entry(..).or_insert(..)` (`src/workspace.rs:907-919`) is first-writer-wins; a conflict is neither detected nor diagnosed, and the fast path (`src/workspace.rs:772-778`) means a mis-mapped manifest is never re-located in that pass. `TwoWsRunner` (`src/workspace.rs:3512`) covers only the legitimate two-workspace case. | **Open — not yet planned.** |
 | 34 | **`workspace::GroupAnalysisInput` (`src/workspace.rs:1480`) is dead** — declared, never constructed, never referenced in `src/` or `tests/`. It is `pub`, so it is semver-visible. | **Open — not yet planned.** It joins the §10.1 dead-API list if the owner decides to record it there. |
 | 35 | **The doc-citation gate checks only the `file.rs:N` form, not the bare `:N` form** — and the bare form is the *dominant* convention inside the deep dives: **2,742** bare `:N` citations across the set, against **2,836** explicit `file.rs:N` citations (the checker's own regex). `architecture/09-cleanup.md` alone has 689, `architecture/07-workspace.md` 448, `architecture/13-orchestration.md` 328, `architecture/05-discovery.md` 327. So most in-file citations are **not** machine-gated; only their file existence and range are. | **Open — not yet planned.** The reviewers compensated by resolving the bare citations against their anchored file in a separate pass and converting script citations to an explicit "script lines N" form. The gate itself was not changed. |
-| 48 | **The `-i` selection surface is covered only by its usage-error refusals.** The `Terminal` trait (`src/interactive.rs:111`) is an injectable seam and its `restore` is asserted on unwind (`src/interactive.rs:1460`), but the integration suite runs without a terminal, so the selection session itself has no integration coverage — only the refusals do. | **Open — not yet planned.** A pty-backed integration case would close it; the repo already knows a pty harness is the missing piece (C023 §11.4). |
+| 48 | **The `-i` selection surface is covered only by its usage-error refusals.** The `Terminal` trait (`src/interactive.rs:120`) is an injectable seam and its `restore` is asserted on unwind (`src/interactive.rs:2042`), but the integration suite runs without a terminal, so the selection session itself has no integration coverage — only the refusals do. | **Open — not yet planned.** A pty-backed integration case would close it; the repo already knows a pty harness is the missing piece (C023 §11.4). |
 | 49 | **`scripts/validate-staged-release.py` discards the evidence it collects.** `report()` is `for message in notes: pass` (`scripts/validate-staged-release.py:410-412`). The gate still fails closed and the exit code is right, but the measured glibc floor per Linux target, the manifest-agreement summary, and the "installed bytes match the release asset digest exactly" confirmation never reach the operator or the CI log. | **Open — not yet planned.** The verdict is trustworthy; the supporting numbers are invisible. |
 | 50 | **`docs/INSTALLING.md` says "Fifteen releases are published"**; there are **sixteen** (v0.1.0 through v0.2.8). `AGENTS.md` §8 states the correct count. | **Open — not yet planned.** Documentation drift, same class as D11–D13. |
 | 51 | **`scripts/check-post-release-smoke-contract.py` has a stale docstring.** It still says the smoke workflow "is manually dispatched only, so it cannot run on a push" (`scripts/check-post-release-smoke-contract.py:15`), but M011C made the automatic `release: published` trigger the primary path. The *code* (`scripts/check-post-release-smoke-contract.py:174-208`) was correctly updated and requires exactly `workflow_dispatch` **and** `release: types: [published]` — so the guard is right and only its prose is wrong. | **Open — not yet planned.** The same shape as D2: a guard that is correct while its explanation is not. |
@@ -708,11 +716,12 @@ the same pass, so these rows point at completed work rather than at a plan.
 | 54 | **The doc-citation gate covers `architecture/*.md` and nothing else.** `scripts/check-doc-citations.py` resolves the `file.rs:N` form inside `architecture/` only. `.skills/`, `docs/`, and `README.md` are **ungated**, so a skill or a user-facing document can drift indefinitely with no mechanical signal — and it did, in both places. | **Open — not yet planned.** A citation gate over `.skills/` and `docs/` is the mechanical fix; it is not one, because those files are prose-heavy and their citation forms are inconsistent. Until it exists, re-derive skill and doc claims from source rather than copying them forward. |
 | 55 | **`architecture/07-workspace.md` carried the superseded ADR 007 whole-scope block** in two places — naming a `Preview` mode that does not exist and saying an unresolved manifest "blocks the whole scope", while `architecture/09-cleanup.md` correctly documented the scoped boundary in the same repository. | **Fixed in this pass.** Corrected to the ADR 007 three-way split, with the boundary rule and the regression test named. |
 | 56 | **`architecture/05-discovery.md` asserted that the uncertainty vector "still carries known, path-specific uncertainty into `reconcile_full`"** — while `architecture/06-discovery-state.md` correctly documented that it is always empty. All three uncertainty categories are emitted with `path: None` (`src/discovery.rs:783-797`, `:978-996`), so `filter_map(|d| d.path.clone())` (`src/main.rs:1094-1102`) drops every one of them. | **Fixed in this pass.** |
-| 57 | **The per-platform inline-test census disagreed across three documents and with itself.** `test-evidence/SKILL.md` claimed 320 declared / 318 Linux / 296 Windows / 317 macOS; `architecture/14-testing-and-verification.md` claimed 450 / 448 / 420 Windows; and a figure of 443/415 was in circulation. The truth is **450 declared, 448 Linux, 411 Windows, 445 macOS** — 35 `#[cfg(unix)]` and 4 Linux-only gates. A naive grep for `#[cfg(unix)]` immediately above `#[test]` finds 26, because nine of the 35 have the gate *after* the `#[test]`. | **Fixed in this pass.** All three documents now state the current census — 458/456/419/453 after C038 — and the derivation method (a brace-tracking evaluation against `rustc --print cfg --target <triple>`, cross-checked against `cargo test --lib -- --list`) is recorded so the next reader can re-derive rather than copy. |
+| 57 | **The per-platform inline-test census disagreed across three documents and with itself.** `test-evidence/SKILL.md` claimed 320 declared / 318 Linux / 296 Windows / 317 macOS; `architecture/14-testing-and-verification.md` claimed 450 / 448 / 420 Windows; and a figure of 443/415 was in circulation. The truth is **450 declared, 448 Linux, 411 Windows, 445 macOS** — 35 `#[cfg(unix)]` and 4 Linux-only gates. A naive grep for `#[cfg(unix)]` immediately above `#[test]` finds 26, because nine of the 35 have the gate *after* the `#[test]`. | **Fixed in this pass.** All three documents now state the current census — 474/472/435/469 after C039 — and the derivation method (a brace-tracking evaluation against `rustc --print cfg --target <triple>`, cross-checked against `cargo test --lib -- --list`) is recorded so the next reader can re-derive rather than copy. |
 | 58 | **Thirteen source doc comments still describe the pre-ADR 007 whole-scope block.** `src/cleanup.rs:300`, `:328`, `:1141`, `:2044`, `src/workspace.rs:394`, `:978`, and `src/main.rs:304`, `:366`, `:590`, `:831` say "whole-scope" where the behaviour is boundary-scoped; `src/cleanup.rs:315-316` says "coverage of the selected scope is unproven" for the same reason. `tests/cli_contract.rs:1929-1930` carries the same wording on a test whose *behaviour* is correct (its unresolved manifest is inside the anchor, so it does block). | **Open — not yet planned.** Deliberately **not** fixed in this pass: the diff is documentation-only by design, and editing `src/` shifts line numbers that 2,742 bare citations depend on — which `AGENTS.md` §5 forbids doing casually. The correction needs a corrective that re-derives the affected citations in the same change. Recorded as C036 D27. |
 | 59 | **Several inline tests assert on wall-clock and thread-scheduling observations, so the suite is load-sensitive.** `cleanup::tests::proof_refresh_parallelism_is_bounded_and_results_stay_deterministic` asserts the observed peak proof-refresh concurrency equals the reported counter, and `cleanup::tests::real_temp_project_preview_and_execute_with_redirected_target` asserts a recency-window reason code. Under CPU contention the observations move and the assertions fail. Measured: on the C038 tree, 8 consecutive `cargo test --all-targets --all-features` runs with an idle host all passed, and the same tree run concurrently with a build failed; on the **unmodified baseline** (`426cb72`) under the same contention, three tests failed — the same two plus `workspace::tests::real_conventional_workspace_is_private_bounded`. | **Open — not yet planned.** Pre-existing, and not a C038 regression: the baseline fails under the same load. The lesson is the repository's own — *a green test proves only that its own premises hold*, and here one of the premises is an unloaded host. A fix belongs with the real-Cargo fixtures, not with a corrective that changed no fixture. |
-| 36 | **`cargo cleanme -i` leaves the terminal cursor hidden when the session ends in NOR mode.** `session_loop` hides the cursor at `src/interactive.rs:649` and the per-frame call at `src/interactive.rs:659` sets it to `mode == Insert`. The commit and quit arms (`src/interactive.rs:663-672`) rewind and clear **without restoring it**, and `set_cursor_visible(true)` is never called anywhere in the crate. `RawModeGuard` restores the terminal *mode* (`disable_raw_mode`) but cursor visibility is a separate escape sequence; `main.rs` has no cursor handling at all. The existing test `the_driver_shows_the_hardware_cursor_only_in_insert_mode` (`src/interactive.rs:1386-1401`) asserts the *last* recorded value is `Some(false)` — it **pins** the behaviour rather than catching it. | **Open — not yet planned. Verified live.** Driven over a raw pty: the tool emitted `ESC[?25l` (Hide) twice and `ESC[?25h` (Show) **zero** times, then exited 0 with `cargo-cleanme: interactive selection cancelled; no cleanup commands were run`. The operator's shell is left with no visible caret. The module's own argument — "a tool that can leave a terminal in raw mode is not shippable" — applies verbatim to the cursor. |
-| 37 | **`-i` and non-`-i` disagreed on the exit code for a scope that has roots but no cleanup units.** `run_interactive` refused an empty candidate list (`src/interactive.rs:781-783`), and the orchestrator mapped that to `AppError::Config` (`src/main.rs:597-610` at the time) → **exit 2**. The same scope without `-i` reported zero units and exited 0. | **Fixed in C038.** The empty surface is now a plain negative result: `SessionResult::NothingToClean` → one line, `Nothing to clean.`, on stdout, exit 0. The two spellings of one scope now agree. |
+| 60 | **The `-i` selection surface was a *list*, not a *finder*, and it was built that way on purpose.** The frame was exactly the terminal height (`list_rows()` returned `height - CHROME_LINES`), so the list filled the screen instead of being a window; there was no scroll-position indicator, no paging key (`Key` had no PageUp/PageDown/Home/End), and the absolute path of every row occupied most of the width while the part that distinguishes one workspace from another sat at its far end. Every row repeated the word `private`, whether or not that was news. The surface was **functionally correct** — every defect here is a presentation defect — but the module's own tests asserted the *shape* rather than the *usability*, and one of them (`the_frame_is_exactly_the_terminal_height_and_never_overflows_the_width`) **pinned the defect as the contract**. | **Fixed in C039.** The frame is now a bounded page of at most fifteen rows that never outgrows the terminal; a row is named by the shortest path suffix that identifies it uniquely among the candidates; the reclaimable size is right-aligned; the ownership column is omitted when it would say the same thing on every row; the gutter marks the window edges and the cursor; and the surface renders colour, opt-out via `NO_COLOR`. The NOR/INS model and the published key table are unchanged. The test that pinned the old shape was rewritten to pin the new property, and the evidence is a pty capture of the real binary, not a string comparison — the repository has no pty harness (finding **48**), so the rendered surface had never been observed by a test. |
+| 36 | **`cargo cleanme -i` leaves the terminal cursor hidden when the session ends in NOR mode.** `session_loop` hides the cursor at `src/interactive.rs:1145` and the per-frame call at `src/interactive.rs:1155` sets it to `mode == Insert`. The commit and quit arms (`src/interactive.rs:1159-1168`) rewind and clear **without restoring it**, and `set_cursor_visible(true)` is never called anywhere in the crate. `RawModeGuard` restores the terminal *mode* (`disable_raw_mode`) but cursor visibility is a separate escape sequence; `main.rs` has no cursor handling at all. The existing test `the_driver_shows_the_hardware_cursor_only_in_insert_mode` (`src/interactive.rs:1959-1974`) asserts the *last* recorded value is `Some(false)` — it **pins** the behaviour rather than catching it. | **Open — not yet planned. Verified live.** Driven over a raw pty: the tool emitted `ESC[?25l` (Hide) twice and `ESC[?25h` (Show) **zero** times, then exited 0 with `cargo-cleanme: interactive selection cancelled; no cleanup commands were run`. The operator's shell is left with no visible caret. The module's own argument — "a tool that can leave a terminal in raw mode is not shippable" — applies verbatim to the cursor. |
+| 37 | **`-i` and non-`-i` disagreed on the exit code for a scope that has roots but no cleanup units.** `run_interactive` refused an empty candidate list (`src/interactive.rs:1281-1283`), and the orchestrator mapped that to `AppError::Config` (`src/main.rs:597-610` at the time) → **exit 2**. The same scope without `-i` reported zero units and exited 0. | **Fixed in C038.** The empty surface is now a plain negative result: `SessionResult::NothingToClean` → one line, `Nothing to clean.`, on stdout, exit 0. The two spellings of one scope now agree. |
 | 38 | **`plans/output-schema-v1.md` is missing a reason code the code actually emits.** The schema lists 19 `reason_code` values; the code has **20** (`src/cleanup.rs:263-286`). The missing one is `skipped_outside_selection` — the value M014 actually emits for a workspace outside the selected scope (`src/cleanup.rs:1431`). | **Open — not yet planned.** Fits the C036 drift remit, but C036 is `proposed` and not accepted. |
 | 39 | **`plans/output-schema-v1.md` describes a non-UTF-8 path as using "the platform escaped debug form".** `output::path` (`src/output.rs:262-266`) now uses `to_string_lossy()`, so both the human and the machine output render `U+FFFD` and **agree** — the schema's description of a divergence that no longer exists is stale. The schema's own wording ("are UTF-8 strings when representable") is also wrong: a path is always a UTF-8 `String`, representable or not. | **Open — not yet planned.** Note the consequence: `output::path` is lossy and therefore **not injective**, so a JSON path string must not be used as a join key. |
 | 40 | **`plans/registry.md` contradicts itself about the self-update smoke.** The M011C row says the automatic smoke is "demonstrated three times" while the evidence table below it lists **seven** green automatic smokes. | **Open — not yet planned.** A registry is a control surface; a self-contradicting one is worse than a stale one, because a reader cannot tell which number to trust. |

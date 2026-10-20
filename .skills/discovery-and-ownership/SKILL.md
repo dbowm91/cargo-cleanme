@@ -133,7 +133,7 @@ Learned state is **advisory, never authority**. Rules that are not negotiable:
 "Always overrides the discovered root set" was the old, wrong version of this
 claim. The other half is easy to get wrong too: `scan.root` narrows the
 **scan scope**, but the **working-directory anchor still narrows the
-selection** for a cleanup (`src/cli.rs:375-378` →
+selection** for a cleanup (`src/cli.rs:378-381` →
 `CleanupSelection::WorkingDirectory`). A configured root therefore does *not*
 mean "cleanup targets exactly that root" — running from outside it yields
 zero units.

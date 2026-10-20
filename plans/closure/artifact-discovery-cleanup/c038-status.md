@@ -280,7 +280,7 @@ property than "the numbers look right", and it is machine-checkable.
 
 | Checked | Count | Result |
 |---|---:|---|
-| Explicit `file.rs:N` citations into the three changed modules | 859 | 855 content-exact; 4 are the `interactive.rs:781-783` range, whose lines did not move but whose content did — the citation is correct as written |
+| Explicit `file.rs:N` citations into the three changed modules | 859 | 855 content-exact; 4 are the `interactive.rs:1281-1283` range, whose lines did not move but whose content did — the citation is correct as written |
 | Bare `:N` and backticked `` `N` `` citations in the deep dives whose subject is a changed module | 381 | 381 content-exact |
 | Citations across the whole repository | 6,991 tokens in 193 Markdown files | every `file.rs:N` form resolves to an existing file and an in-range line (`check-doc-citations.py`: 17 documents clean) |
 
@@ -298,7 +298,7 @@ and is now verified by hand against it:
 | `architecture/13-orchestration.md` — `src/main.rs:898-907` | `src/main.rs:936-944` | same reorder |
 | `architecture/16-interactive.md` — `src/main.rs:574-580` | `src/main.rs:597-610` | the mapping was extracted |
 | `architecture/overview.md` — `src/main.rs:574-580` | `src/main.rs:597-610` | the mapping was extracted |
-| `architecture/16-interactive.md`, `architecture/overview.md`, `.skills/terminal-and-interactive/SKILL.md` — `interactive.rs:781-783` | unchanged | the range is the same by coincidence; the content inside it is not |
+| `architecture/16-interactive.md`, `architecture/overview.md`, `.skills/terminal-and-interactive/SKILL.md` — `interactive.rs:1281-1283` | unchanged | the range is the same by coincidence; the content inside it is not |
 
 Two further ranges that were *already* over-long at the baseline — `:422-438`
 and `:422-439`, which claimed the cancellation arm plus four unrelated lines —

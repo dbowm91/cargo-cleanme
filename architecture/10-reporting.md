@@ -1374,8 +1374,8 @@ caller-supplied `String` with no validation — nothing in `output.rs` would rej
 a wrong value, so the guarantee is entirely the caller's. `scan ROOT` reports
 `"explicit"` (`main.rs:1042`, `941`). The four scan scope selectors — `root`,
 `known`, `all`, `full` — are mutually exclusive and exactly one is required, by
-a single clap `ArgGroup` (`cli.rs:83`); `scan ROOT --full` is therefore rejected
-rather than resolved, and `--full` is a hidden alias (`cli.rs:99-100`) for the
+a single clap `ArgGroup` (`cli.rs:86`); `scan ROOT --full` is therefore rejected
+rather than resolved, and `--full` is a hidden alias (`cli.rs:102-103`) for the
 rootless Full form.
 
 **Exit-code contract, and is success in the JSON?** Exit codes are stable and

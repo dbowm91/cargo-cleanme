@@ -87,7 +87,7 @@ Two details the shorthand hides:
 
 - The three flags conflict pairwise **on `clean`**. The **root-level**
   `--dry-run` does *not* conflict with the clean-level `--cargo-preview`; the
-  root flag wins and selects `Simulate` (`src/cli.rs:381-385`), because
+  root flag wins and selects `Simulate` (`src/cli.rs:384-388`), because
   simulation spawns nothing. See
   [`cli-surface-and-argv`](../cli-surface-and-argv/SKILL.md).
 - There is **no `Preview` mode**. `CargoPreview` maps to the *wire* label

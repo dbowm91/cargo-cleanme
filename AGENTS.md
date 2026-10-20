@@ -228,8 +228,8 @@ source of truth for module line counts and the inline-test total; verify each
 against `src/`, fix the overview first, then align the deep dives.
 
 The same rule applies to **per-platform test counts**, which have disagreed
-across three documents: they are 458 declared, 456 on Linux, 419 on Windows,
-453 on macOS. Derive them with a brace-tracking parser evaluated against
+across three documents: they are 474 declared, 472 on Linux, 435 on Windows,
+469 on macOS. Derive them with a brace-tracking parser evaluated against
 `rustc --print cfg --target <triple>`, and cross-check against
 `cargo test --lib -- --list`. A grep for `#[cfg(unix)]` immediately above
 `#[test]` finds 26 of the 35, because Rust allows `#[test]` to come first —

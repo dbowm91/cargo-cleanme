@@ -13,7 +13,7 @@ still holds, and only then acts.
 ## 1. Responsibility
 
 `cleanup.rs` owns the entire destructive path: mode selection semantics
-(`CleanMode` `:36`, mapped by `cli::clean_mode` at `cli.rs:281`), the
+(`CleanMode` `:36`, mapped by `cli::clean_mode` at `cli.rs:284`), the
 authorization gate (`covering_is_authorized_roots` `:800`), the unit-wide
 destructive gate (`unit_block_reason_roots` `:929`), the final ownership proof
 (`final_cleanup_proof_roots` `:3088`), the frozen Cargo invocation
@@ -264,18 +264,18 @@ a real target tree.
 | `Simulate` | `simulate` | `--dry-run` (hidden alias `--dryrun`) | Identical gate set; the unit reached the spawn point. | No `cargo clean` of any kind, and no Cargo process for the clean at all. Reported as `Simulated`, never as recovered space (`:1764-1770`). |
 | `CargoPreview` | `preview` | `--cargo-preview` | Every gate through the final proof ran; Cargo itself reported what it *would* remove. | Nothing removed by us — but Cargo *was* spawned. |
 
-The mapping lives in `cli::clean_mode` (`cli.rs:281-293`): `--dry-run` (or the
+The mapping lives in `cli::clean_mode` (`cli.rs:284-296`): `--dry-run` (or the
 hidden `--dryrun`) ⇒ `Simulate`; `--cargo-preview` ⇒ `CargoPreview`; no mode
 flag ⇒ `Execute`. Clap makes the three flags mutually exclusive
-(`cli.rs:136-149`), and `clean_mode` carries a `debug_assert!` that the
-conflicting pair never reaches it (`cli.rs:282-285`). The `clean` subcommand
-resolves the same way at `cli.rs:381-385`, and a root-level `--dry-run` is
-honoured on the bare front door too (`cli.rs:314`), so
+(`cli.rs:139-152`), and `clean_mode` carries a `debug_assert!` that the
+conflicting pair never reaches it (`cli.rs:285-288`). The `clean` subcommand
+resolves the same way at `cli.rs:384-388`, and a root-level `--dry-run` is
+honoured on the bare front door too (`cli.rs:317`), so
 `cargo cleanme --dry-run clean ROOT` never silently falls back to Execute.
 
 **`--yes` is now a hidden no-op alias.** It used to be the only way to ask for
 Execute; Execute is the default, so the flag carries no intent of its own
-(`cli.rs:143-146`, and the comment at `cli.rs:344-347`). The comment there is explicit that
+(`cli.rs:146-149`, and the comment at `cli.rs:347-350`). The comment there is explicit that
 printing nothing about it is what keeps unattended runs quiet.
 
 **Bare `cargo cleanme` is Routine Execute** (ADR 003), with `--dry-run` the
@@ -714,11 +714,11 @@ virtual-workspace layout a silent no-op. `resolved` (`:122-135`) turns
 an `AppError::InvalidRoot` usage error, never a silent fallback to `All`.
 
 `cli.rs` resolves argv but must not perform IO, so the maintenance spellings
-emit the *unresolved* `CleanupSelection::WorkingDirectory` (`cli.rs:316`,
-`cli.rs:375-378`, and the `Cli::cleanup` mirror at `cli.rs:496-499`), and
+emit the *unresolved* `CleanupSelection::WorkingDirectory` (`cli.rs:319`,
+`cli.rs:378-381`, and the `Cli::cleanup` mirror at `cli.rs:499-502`), and
 `main.rs` calls `CleanupSelection::resolved` before the engine runs
 (`main.rs:529`, and `main.rs:568` on the `-i` path). The `CleanupRequest`
-doc comment says so at `cli.rs:236-237`. `clean ROOT` and `clean --full`
+doc comment says so at `cli.rs:239-240`. `clean ROOT` and `clean --full`
 use `CleanupSelection::All` because they already bound their own scope.
 
 **Units removed by the selection are reported, never dropped.** The engine
@@ -874,7 +874,7 @@ the `CargoPreview | Execute` arm (`:1819`) and adds `--dry-run --verbose` only
 for `CargoPreview` (`:3593-3596`). So `Simulate` is prevented twice over: it
 never reaches the dispatch, and if it somehow did, the arg builder would not
 produce a non-dry-run clean. No flag combination turns `Simulate` into a clean;
-`cli.rs:136-149` makes the mode flags mutually exclusive. `Simulate` does run
+`cli.rs:139-152` makes the mode flags mutually exclusive. `Simulate` does run
 the *full* proof — it is a rehearsal of the destructive path, not a cheaper one.
 
 ### What happens when the ownership universe is incomplete?

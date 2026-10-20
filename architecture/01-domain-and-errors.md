@@ -446,7 +446,7 @@ everything else qualifies the path inline.
 | `UnknownCapability` | 1 | `output.rs` (test module only, `output.rs:641`) |
 | `UnresolvedOwnershipParticipant` | 1 | `output.rs` (test module only, `output.rs:637`) |
 | `ScanScope`, `ScanDiagnostic`, `EligibleOutputGroup`, `OutputRootKind` | 1 each | `main.rs`, `cleanup.rs` |
-| `OutputOwnershipClass` | 1 | `interactive.rs` (test module only, `interactive.rs:815`) |
+| `OutputOwnershipClass` | 1 | `interactive.rs` (test module only, `interactive.rs:1315`) |
 | `OutputRoot`, `OutputSet`, `ResolvedWorkspace`, `WorkspaceId`, `WorkspaceMember`, `WorkspacePackage` | 0 (glob) | `workspace.rs`, `cleanup.rs` |
 | `CargoBuildDirCapability`, `CargoCapabilities`, `CargoCleanCapabilities` | 0 (glob) | `workspace.rs`, `cleanup.rs` |
 | `UnresolvedOwnershipParticipant`, `ResolutionCoverage` | 0 (glob, production) | `workspace.rs`, `cleanup.rs` |
@@ -456,7 +456,7 @@ everything else qualifies the path inline.
 `AppError` is referenced 64 times in production code across seven files:
 `config.rs` 21, `main.rs` 21, `cleanup.rs` 11, `policy.rs` 6, `discovery.rs` 2,
 `update.rs` 2, `cli.rs` 1. `workspace.rs` never constructs it; `cli.rs` now
-does, once (`cli.rs:436`).
+does, once (`cli.rs:439`).
 
 **No type is used only from tests.** The four test-referenced types
 (`ScanRequest`, `ScanReport`, `EligibleOutputGroup`, `OutputOwnershipClass`) are
@@ -515,15 +515,18 @@ saturating-adds, now call the helper (`workspace.rs:564`, `workspace.rs:627`).
 
 **5.5 Saturating vs checked arithmetic.** `saturating_add` appears on 43 lines
 in `src/`, 6 of them in `merge_proof` (`domain.rs:363-382`).
-`saturating_sub` appears 13 times in production: the `SystemTime` clamps where
+`saturating_sub` appears 21 times in production: the `SystemTime` clamps where
 clamping to the epoch is intended (`policy.rs:495`, `policy.rs:542`,
 `discovery_state.rs:320`), the byte-decrease clamp at
 `cleanup.rs:1885` (`proof.pre_bytes.saturating_sub(after)` — clamping to `0`
 when output *grew* between proof and verification, the only safe reading), the
 count clamps at `cleanup.rs:489`, `cleanup.rs:2010`,
 `discovery.rs:795`, `discovery.rs:994` and `main.rs:1359`, and the
-scroll/index clamps in the interactive list (`interactive.rs:204`,
-`interactive.rs:260`, `interactive.rs:339`, `interactive.rs:408`).
+scroll/index clamps in the interactive list (`interactive.rs:284`,
+`interactive.rs:355`, `interactive.rs:441`, `interactive.rs:471`,
+`interactive.rs:539`, `interactive.rs:646`, `interactive.rs:648`,
+`interactive.rs:701`, `interactive.rs:836`, `interactive.rs:850`,
+`interactive.rs:865`, `interactive.rs:867`).
 `checked_sub` appears 16 times but only **4** in production code (`main.rs:1226`,
 `cleanup.rs:1686`, `cleanup.rs:2426`, `cleanup.rs:3353`); the other 12 are
 `start.checked_sub(…).unwrap()` inside test modules. The production uses are all
@@ -566,11 +569,11 @@ is the only test in the file, and the only `#[cfg(test)]` module
 (`domain.rs:407-435`). `error.rs` contains zero `#[test]` attributes and zero
 `#[cfg(test)]` modules.
 
-The crate has **451** `#[test]` functions in `src/` — `cleanup.rs` 114,
-`workspace.rs` 76, `update.rs` 47, `interactive.rs` 40, `discovery.rs` 39,
+The crate has **474** `#[test]` functions in `src/` — `cleanup.rs` 114,
+`workspace.rs` 76, `update.rs` 47, `interactive.rs` 58, `discovery.rs` 39,
 `cli.rs` 32, `output.rs` 21, `config.rs` 20, `discovery_state.rs` 17,
 `policy.rs` 16, `progress.rs` 13, `report.rs` 7, `traverse.rs` 6, `editor.rs` 2,
-`domain.rs` 1 — and `error.rs`, `lib.rs` and `main.rs` contribute none.
+`domain.rs` 1, `main.rs` 4 — and `error.rs` and `lib.rs` contribute none.
 
 **The consequence: this layer is covered mostly indirectly**, by tests that
 live in the modules that consume it. That is the right place for them — a test

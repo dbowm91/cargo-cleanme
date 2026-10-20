@@ -13,7 +13,7 @@ tags:
 
 `-i` / `--interactive` is the only part of this tool that **takes over the
 operator's terminal**. It is also the newest surface, the least covered by
-integration tests, and the one with two live defects recorded against it.
+integration tests, and the one with a live defect recorded against it.
 
 The reference is [`architecture/16-interactive.md`](../../architecture/16-interactive.md)
 and [`architecture/11-progress.md`](../../architecture/11-progress.md). This
@@ -41,14 +41,14 @@ by hand. The **cursor** is the case that was missed. Cursor visibility is a
 This is the defect to internalise before you touch this module.
 
 ```text
-src/interactive.rs:649   session_loop hides the cursor on entry
-src/interactive.rs:659   each frame sets it to (mode == Insert)
-src/interactive.rs:663   the commit arm rewinds and clears — no show
-src/interactive.rs:668   the quit arm rewinds and clears — no show
+src/interactive.rs:1145   session_loop hides the cursor on entry
+src/interactive.rs:1155   each frame sets it to (mode == Insert)
+src/interactive.rs:1159   the commit arm rewinds and clears — no show
+src/interactive.rs:1164   the quit arm rewinds and clears — no show
 ```
 
 `set_cursor_visible(true)` is **never called anywhere in the crate**.
-`RawModeGuard::restore` (`src/interactive.rs:576-586`) restores the terminal
+`RawModeGuard::restore` (`src/interactive.rs:1052-1062`) restores the terminal
 *mode* (`disable_raw_mode`) and nothing else. `main.rs` has no cursor handling
 at all.
 
@@ -62,11 +62,11 @@ twice and `ESC[?25h` (Show) **zero** times, then exited 0 with
 Two tests stand next to this defect and neither catches it:
 
 - `the_driver_restores_the_terminal_on_the_quit_path`
-  (`src/interactive.rs:1373-1383`) asserts `!term.raw` — **raw mode only** — and
+  (`src/interactive.rs:1946-1956`) asserts `!term.raw` — **raw mode only** — and
   `term.restored == 1`. The name over-promises: it says "terminal", it means
   "mode".
 - `the_driver_shows_the_hardware_cursor_only_in_insert_mode`
-  (`src/interactive.rs:1385-1401`) asserts the **last** recorded visibility is
+  (`src/interactive.rs:1958-1974`) asserts the **last** recorded visibility is
   `Some(false)`. It *pins the defect*.
 
 That second one is the lesson worth more than the fix: **a test can be green
@@ -83,7 +83,7 @@ session ends, on both the commit and the quit path.
 | `cargo cleanme -i clean ROOT` | says "Nothing to clean." | **0** |
 
 The path: `run_interactive` settles an empty candidate list before the terminal
-precondition (`src/interactive.rs:781-783`) → the orchestrator maps it to
+precondition (`src/interactive.rs:1281-1283`) → the orchestrator maps it to
 `SelectionOutcome::NothingToClean` (`src/main.rs:597-610`) → one line on
 stdout and `Ok(0)` (`src/main.rs:430-438`).
 
@@ -114,8 +114,8 @@ Do not add a "the user checked it, so skip the proof" shortcut.
 
 ## The TTY precondition is checked before raw mode
 
-`ensure_interactive_terminal` (`src/interactive.rs:606-617`) is called by
-`run_interactive` (`src/interactive.rs:784-794`) **before** any mode is
+`ensure_interactive_terminal` (`src/interactive.rs:1082-1093`) is called by
+`run_interactive` (`src/interactive.rs:1284-1294`) **before** any mode is
 requested. A redirected invocation fails as a typed usage error rather than
 driving a session whose keystrokes are going somewhere else.
 
@@ -135,22 +135,52 @@ operator surface, not a report: a machine consumer has no way to say "row 3".
 
 Each of these was pinned by a test that failed first:
 
-- **Row 0 is an all-toggle that ignores the filter** (`src/interactive.rs:354-362`).
+- **Row 0 is an all-toggle that ignores the filter** (`src/interactive.rs:485-493`).
   A toggle that obeyed the filter would make "all" mean "whatever happens to be
   on screen".
-- **`q` quits from NOR and types in INS** (`src/interactive.rs:279-305`). INS is
+- **`q` quits from NOR and types in INS** (`src/interactive.rs:376-406`). INS is
   a text field; `Ctrl-C` is the only key that quits from inside it.
-- **Space is a filter character in INS** (`src/interactive.rs:316-323`) — a
+- **Space is a filter character in INS** (`src/interactive.rs:417-424`) — a
   workspace path can contain a space.
-- **Enter on an empty selection does not commit** (`src/interactive.rs:420-432`).
+- **Enter on an empty selection does not commit** (`src/interactive.rs:551-563`).
   Closing there would look exactly like a session that cleaned nothing — the
   M012A shape, a run that reports a success it never performed.
 - **Nothing is checked initially**, because a selection UI whose default is
   "delete all of it" is a trap wearing a checkbox.
+- **The filter matches the full path, not the displayed name**
+  (`src/interactive.rs:501-522`). A row is *named* by the shortest suffix that
+  identifies it, but the filter still matches the whole path — a filter that
+  only matched the displayed name would silently stop finding workspaces.
+
+## The shape of the surface
+
+C039 rebuilt the surface in the `rip` idiom. Three properties of it are worth
+carrying, because each one was a defect before:
+
+- **The page is bounded.** At most fifteen candidate rows, and never more than
+  the terminal has room for (`src/interactive.rs:354-361`). The old frame
+  filled the terminal exactly, so a long list was a screenful to scroll rather
+  than a list to page through. `PgUp`/`PgDn`/`Home`/`End` move through it.
+- **A row is named, not spelled out.** The workspace column shows the shortest
+  suffix of the path that identifies the row uniquely among all candidates
+  (`src/interactive.rs:919-944`). Siblings read `project-01`, `project-19`;
+  a colliding pair reads `a/x` and `b/x`.
+- **The ownership column is omitted when it would say the same thing on every
+  row** (`src/interactive.rs:876-880`). A column that reads `private` twenty
+  times carries no information and costs a column's width twenty times.
+
+The surface is also the only place in the crate that renders **colour**
+(`src/interactive.rs:1100-1116`): `NO_COLOR` and `TERM=dumb` turn it off, and
+the decision is made in the driver so `Session` stays pure.
+
+The model was **not** changed. `rip`'s own model has no modes — every printable
+key filters, and Space toggles — and the owner considered and declined it, so
+the published NOR/INS model and key table stand. That is also why a space
+remains typeable into the filter.
 
 ## How it is tested, and what that cannot prove
 
-The `Terminal` trait (`src/interactive.rs:111`) is the injectable seam, and the
+The `Terminal` trait (`src/interactive.rs:120`) is the injectable seam, and the
 fake terminal is what makes the raw-mode lifecycle testable at all. But the fake
 **proves our code restores on every exit path; it does not prove the OS honours
 the call.**

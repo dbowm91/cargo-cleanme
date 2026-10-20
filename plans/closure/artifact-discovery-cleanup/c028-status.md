@@ -162,7 +162,7 @@ see §7.
    already stale before C028 — e.g. `06-discovery-state.md`'s `main.rs:383-386`
    / `:402-406` / `:448-452` / `:479-483` / `:590-592` cluster,
    `09-cleanup.md`'s `main.rs:100-110` CleanMode mapping (the mapping lives in
-   `cli.rs:224`), and `04-policy-and-scope.md`'s `main.rs:174-194` /
+   `cli.rs:227`), and `04-policy-and-scope.md`'s `main.rs:174-194` /
    `main.rs:523-535` scope-label cites — and left them for a C026-class
    reconciliation corrective, which is the repository's established pattern
    for citation sweeps (C026 re-derived 20 citations with no Rust changed).

@@ -10,6 +10,23 @@ command-line, JSON, and release-asset contracts are the stable surface.
 
 ### Changed
 
+- **The interactive selection surface is now a compact finder rather than a
+  full-screen list.** `cargo cleanme -i` painted every resolved unit as a row
+  in a frame that occupied the entire terminal, so a scope with hundreds of
+  workspaces was a screenful to scroll rather than a list to read: there was no
+  scroll-position indicator, no paging key, and the absolute path of every row
+  took most of the width while the part that distinguishes one workspace from
+  another sat at its far end. The frame is now a **bounded page** of at most
+  fifteen rows that never outgrows the terminal, and a row is **named** by the
+  shortest part of its path that identifies it among the candidates — siblings
+  read `project-01`, `project-19`. The reclaimable size is right-aligned so the
+  big ones line up, the ownership annotation is dropped entirely when it would
+  say the same thing on every row, the gutter marks the cursor and the edges of
+  the window, and a key-hint bar names the keys. `PgUp`, `PgDn`, `Home` and
+  `End` move through the page. The surface is also the first in the crate to
+  render colour; set `NO_COLOR` (or run with `TERM=dumb`) to turn it off. The
+  interaction model is unchanged: the NOR/INS modes, the all-toggle row, the
+  published key table, and the selection contract all stand.
 - **A run that cleaned nothing now says so, in one line, and exits 0.** The
   interactive surface refused an empty candidate list as a *configuration
   error* (exit `2`) while the same scope cleaned without `-i` exited `0` — two

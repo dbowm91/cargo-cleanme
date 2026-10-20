@@ -8,7 +8,7 @@
 
 The verification apparatus does three distinct jobs. The third is what makes it unusual.
 
-**(a) Product behaviour.** 458 declared inline `#[test]` functions in `src/`, plus two
+**(a) Product behaviour.** 474 declared inline `#[test]` functions in `src/`, plus two
 integration suites: one drives the compiled binary as a subprocess, the other drives the
 library's scan entry point in-process. Between them they cover ownership proof, cleanup
 authorization, the three clean modes, workspace resolution, real Cargo failure presentation,
@@ -41,7 +41,7 @@ were the premises, and is any of them unchecked?*
 
 | Layer | Location | Count | What it can catch | What it cannot catch |
 |---|---|---:|---|---|
-| Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 458 declared `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
+| Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 474 declared `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
 | Integration — CLI contract | `tests/cli_contract.rs` (4,050 lines) | 63 `#[test]` | The subprocess boundary end to end: argv normalization, exit codes, JSON shape, log-line shape, `--stats` stream discipline, selector behaviour, usage conflicts, stale-learned-root admission, repeated-root noise bounds, incomplete-discovery stage counts, real Cargo failure summaries, default Routine execution against real Cargo | Internals of `run()`; anything on a real machine; platform-gated cases are excluded on other lanes |
 | Integration — end to end | `tests/end_to_end.rs` (840 lines) | 4 `#[test]` | Full production-pipeline scans against synthetic trees with real mtimes, under both a filtered Routine scope and an explicit scope | Cleanup, update, config editing |
 | Shared harness | `tests/common/mod.rs` (262 lines) | 0 tests | `set_path_modified` / `backdate_file` (per-platform mtime control), `inactive_project` tree construction, `write_fake_cargo` / `cargo_calls` (unix only) | — |
@@ -101,9 +101,9 @@ from `src/`, never copied between documents.
 | `src/cleanup.rs` | 114 | 3747 | 9983 | 6237 |
 | `src/workspace.rs` | 76 | 2094 | 6068 | 3975 |
 | `src/update.rs` | 47 | 1290 | 2886 | 1597 |
-| `src/interactive.rs` | 42 | 812 | 1627 | 816 |
+| `src/interactive.rs` | 58 | 1326 | 2427 | 1102 |
 | `src/discovery.rs` | 39 | 1001 | 2363 | 1363 |
-| `src/cli.rs` | 32 | 482 | 1273 | 792 |
+| `src/cli.rs` | 32 | 485 | 1276 | 792 |
 | `src/output.rs` | 21 | 273 (`path_tests`), 509 (`mod tests`), 945 (`update_tests`) | 1065 | 793 |
 | `src/config.rs` | 20 | 614 | 1499 | 886 |
 | `src/discovery_state.rs` | 17 | 581 | 1129 | 549 |
@@ -116,15 +116,15 @@ from `src/`, never copied between documents.
 | `src/error.rs` | 0 | — | 16 | — |
 | `src/lib.rs` | 0 | — | 16 | — |
 | `src/main.rs` | 4 | 1426 | 1562 | 137 |
-| **Total** | **458** | | | |
+| **Total** | **474** | | | |
 
-**The count is declared, not executed.** 458 `#[test]` functions exist in `src/`; **456
+**The count is declared, not executed.** 474 `#[test]` functions exist in `src/`; **472
 compile on Linux x86_64**, because two are gated to the other platforms
 (`config.rs:995`, `#[cfg(windows)]`, and `discovery.rs:1552`,
 `#[cfg(any(target_os = "macos", windows))]`). Beyond that, 35 more are `#[cfg(unix)]` and four
 are Linux-only (`config.rs:1443`, `discovery.rs:1572`, `output.rs:280`, `workspace.rs:5337`),
 so the other two lanes compile smaller sets. The three hosted lanes therefore compile different
-sets — 456 on Linux x86_64, 453 on macOS, 419 on Windows. Platform-gated tests mean a green local run does not mean a green run
+sets — 472 on Linux x86_64, 469 on macOS, 435 on Windows. Platform-gated tests mean a green local run does not mean a green run
 elsewhere — which is the whole reason the OS matrix exists, and the reason
 `check-fixture-portability.py` exists to catch a *new* ungated fixture before a lane disagrees
 about it.
@@ -139,7 +139,7 @@ about it.
 > totals are **source-derived, not build-verified** — the hosted CI matrix is
 > the only thing that proves them.
 
-`cleanup.rs` (114) + `workspace.rs` (76) = 190 of 458 = **41.5%**. The two largest and most
+`cleanup.rs` (114) + `workspace.rs` (76) = 190 of 474 = **40.1%**. The two largest and most
 safety-critical modules — authorization, ownership proof, pre-spawn decision, and the `cargo
 metadata` resolution everything depends on — hold roughly two fifths of the unit tests. That
 allocation is correct, and it is the one place the pyramid is emphatically *not* inverted.
@@ -165,7 +165,7 @@ lives.
 
 ### The test-double architecture
 
-Two process seams keep almost all of the 458 declared tests from spawning a real `cargo`:
+Two process seams keep almost all of the 474 declared tests from spawning a real `cargo`:
 
 - **`CargoRunner`** — `src/workspace.rs:29`. `fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput>`.
 - **`CleanupRunner`** — declared in `src/cleanup.rs` for the destructive step, so cleanup is exercised while `cargo clean` is a no-op returning recorded bytes.
@@ -313,18 +313,18 @@ file. See R8.
 ### `interactive.rs`
 
 `src/interactive.rs` arrived with M014. It is 1627 lines with **42** `#[test]` functions
-(test module opens at `src/interactive.rs:812`), which makes it the fourth-largest inline test
+(test module opens at `src/interactive.rs:1312`), which makes it the fourth-largest inline test
 suite in the crate and gives it more tests than `discovery_state.rs` and `policy.rs` combined
 (17 + 17).
 
 The shape is worth recording because it is the one place the project chose a *pure* seam over
-a process seam: `Session` (`src/interactive.rs:147`) is a state machine that owns mode, cursor,
+a process seam: `Session` (`src/interactive.rs:204`) is a state machine that owns mode, cursor,
 filter, and selection and renders itself to a `Vec<String>` with no terminal in scope, while
 everything that touches a real terminal lives behind the `Terminal` trait
-(`src/interactive.rs:111`, whose `restore` is at `src/interactive.rs:118`). The consequence is
+(`src/interactive.rs:120`, whose `restore` is at `src/interactive.rs:127`). The consequence is
 that the failure that actually matters — a session that exits without restoring the terminal —
 is testable at all, and the test suite is where the "restore on unwind" guarantee is pinned
-(`src/interactive.rs:1460` catches the unwind).
+(`src/interactive.rs:2042` catches the unwind).
 
 What the module does **not** change is the reachability of the interactive path from the
 integration suites: `cli_contract.rs` exercises `-i` only through the usage-error and

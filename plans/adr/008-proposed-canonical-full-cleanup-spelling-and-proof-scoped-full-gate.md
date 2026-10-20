@@ -135,8 +135,8 @@ no alias, no deprecation path"* — applies to flags that **never shipped**
 `--full` is a **root-level, non-global** flag, exactly like `--dry-run`.
 
 It must not be `global = true`: the `scan` subcommand already owns a `full`
-field (the hidden alias of `--all`, `src/cli.rs:99-100`) and `clean` owns one
-too (`src/cli.rs:115-116`). A blanket global would collide with those
+field (the hidden alias of `--all`, `src/cli.rs:102-103`) and `clean` owns one
+too (`src/cli.rs:118-119`). A blanket global would collide with those
 argument ids, the same collision `architecture/02-cli.md:75-79` records for
 `--dry-run` versus `update --dry-run`.
 
@@ -145,7 +145,7 @@ precisely how `dry_run` already exists at `src/cli.rs:53-54` and on `Clean`
 and `Update` today.
 
 `Cli::invocation()` then resolves `root.full || clean.full` to
-`CleanupScope::Full` at the existing arm (`src/cli.rs:363-365`).
+`CleanupScope::Full` at the existing arm (`src/cli.rs:366-368`).
 
 ### 3. `--full` with a read-only or local-only subcommand is a usage error
 
@@ -157,7 +157,7 @@ tool has — a root-level flag that clap accepts and the code silently
 discards, so a *dry run deleted the bytes and reported success*. `--full` is a
 **scope selector**, not a mode; silently discarding it would leave the
 operator believing a machine-wide cleanup ran when it did not. The existing
-`Invocation::UsageError` arm (`src/cli.rs:265-273`) is the correct home for
+`Invocation::UsageError` arm (`src/cli.rs:268-276`) is the correct home for
 it, and it is the arm whose doc comment already explains that "defaulting to
 Full would silently run the machine-wide reconciliation the flag exists to
 gate".

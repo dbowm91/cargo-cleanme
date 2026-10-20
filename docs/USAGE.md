@@ -179,6 +179,8 @@ across the complete universe and the engine still re-proves it per spawn.
 | Key | Mode | Effect |
 |---|---|---|
 | `↑`/`k`, `↓`/`j` | NOR | move the cursor |
+| `PgUp`, `PgDn` | NOR | move by one page of visible rows |
+| `Home`, `End` | NOR | move to the first / last candidate |
 | `space` | NOR | toggle the row under the cursor |
 | `i` | NOR | enter INS (filter) |
 | `Esc` | INS | back to NOR, keeping the filter |
@@ -195,6 +197,13 @@ because a selection list is an operator surface, not a report. An **empty
 candidate list** is not a refusal: the scope resolved and proved no cleanup
 unit, so the run prints one plain line, `Nothing to clean.`, and exits `0` —
 the same exit the same scope cleaned *without* `-i` produces.
+
+The list is a **bounded page**, not the whole screen: it shows at most fifteen
+rows whatever the scope holds, and a row is named by the shortest part of its
+path that tells it apart from every other candidate. The reclaimable size is
+right-aligned so the big ones line up, and the ownership annotation is omitted
+entirely when every candidate is private. The surface uses colour; set
+`NO_COLOR` (or run with `TERM=dumb`) to turn it off.
 
 ### Migration from 0.1.x
 

@@ -114,16 +114,16 @@ The specific case of an explicit CLI root *and* `--full` *and* a configured
 `scan.root` resolves to **`ScanScope::Global`**, because the `full` early-return
 at `policy.rs:20` precedes the `or_else` at `policy.rs:30`. That combination
 is unreachable from the command line: `scan` requires exactly one of ROOT /
-`--known` / `--all` through an `ArgGroup` (`cli.rs:83`), so `scan --all` and
+`--known` / `--all` through an `ArgGroup` (`cli.rs:86`), so `scan --all` and
 `scan ROOT` are mutually exclusive, and `clean --full` carries
-`conflicts_with_all = ["root", "known"]` (`cli.rs:115`). No in-repo caller
+`conflicts_with_all = ["root", "known"]` (`cli.rs:118`). No in-repo caller
 constructs the conflicting pair either — `tests/end_to_end.rs:124` and
 `examples/traversal-qualification.rs:26` both pass `cli_root: None`. The
 precedence therefore matters only for a future programmatic caller.
 
 Note the asymmetry with cleanup, which is decided in `cli.rs` rather than here:
 for `clean`, a `ROOT` argument wins over `--full`, because the scope match
-tests `root` first (`cli.rs:363-368`).
+tests `root` first (`cli.rs:366-371`).
 
 ### Fields populated on `EffectiveScanPolicy`
 
@@ -180,9 +180,9 @@ only three of them:
 
 Which spelling reaches which scope is decided in `cli.rs` and `main.rs`, not
 here: `scan ROOT` → Explicit, `scan --known` → Routine, `scan --all` → Global
-(`cli.rs:319-335`, `main.rs:1040-1044`); `clean ROOT` → Explicit, `clean --full`
+(`cli.rs:322-338`, `main.rs:1040-1044`); `clean ROOT` → Explicit, `clean --full`
 → Global, and `clean --known` plus the bare front door → the maintenance scope
-(`cli.rs:363-368`), which resolves to Routine **or** to Explicit when a
+(`cli.rs:366-371`), which resolves to Routine **or** to Explicit when a
 `scan.root` is configured (§7.8).
 
 ### `Explicit(root)` — the user named a place

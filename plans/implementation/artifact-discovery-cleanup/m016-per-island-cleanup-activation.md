@@ -167,7 +167,7 @@ unchanged.
 
 The flag is `--partitioned`: one explicit opt-in long flag on the
 `clean` subcommand (beside `dry_run`/`cargo_preview` at
-`src/cli.rs:135-149`, inside the `Clean` variant at `:107-150`).
+`src/cli.rs:138-152`, inside the `Clean` variant at `:107-150`).
 Decided, not deferred, on the following evidence:
 
 - **Collision-free.** No `partition*` long flag, alias, or prefix
@@ -177,10 +177,10 @@ Decided, not deferred, on the following evidence:
   with all three modes: Simulate predicts per-island spawns with zero
   spawns, CargoPreview runs `cargo clean --dry-run` per proven unit in
   proceed-islands only, Execute cleans. Parity required across all
-  three (§10). `clean_mode` (`src/cli.rs:281-292`) is untouched.
+  three (§10). `clean_mode` (`src/cli.rs:284-295`) is untouched.
 - **No short flag, no hidden alias, no config-file mirror.** Absence of
   the flag is today's behavior, which keeps the kill-switch trivial
-  (§6E). Bare maintenance (`CleanupRequest` at `src/cli.rs:228-250`,
+  (§6E). Bare maintenance (`CleanupRequest` at `src/cli.rs:231-253`,
   built at `:312-317` and `:379-395`) does not set it.
 - **Threading.** New `partitioned: bool` field on `CleanupRequest`,
   through `run_engine_guarded` (`src/main.rs:623-647`) into

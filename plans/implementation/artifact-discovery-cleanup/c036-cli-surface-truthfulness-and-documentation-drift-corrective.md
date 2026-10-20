@@ -43,9 +43,9 @@ a non-root Linux workstation, unless stated otherwise.
 
 | # | Defect | Evidence |
 |---|---|---|
-| D1 | The root `long_about` states that "`cargo cleanme scan` with no ROOT is the full read-only machine reconciliation". Bare `scan` is a **usage error** (clap, exit 2) requiring one of ROOT / `--known` / `--all`. | `src/cli.rs:27-28`; ADR 006 §5; `src/cli.rs:83`; `cargo cleanme scan` → exit 2 |
+| D1 | The root `long_about` states that "`cargo cleanme scan` with no ROOT is the full read-only machine reconciliation". Bare `scan` is a **usage error** (clap, exit 2) requiring one of ROOT / `--known` / `--all`. | `src/cli.rs:27-28`; ADR 006 §5; `src/cli.rs:86`; `cargo cleanme scan` → exit 2 |
 | D2 | The CLI deep dive's own status block repeats D1's stale claim. | `architecture/02-cli.md:8-10` |
-| D3 | A user-facing diagnostic tells the operator to run `scan --full` — a **hidden** alias that does not appear in `scan --help`. The canonical spelling is `scan --all`. | `src/discovery.rs:373-380` (message at `:378`); `src/cli.rs:98-100` |
+| D3 | A user-facing diagnostic tells the operator to run `scan --full` — a **hidden** alias that does not appear in `scan --help`. The canonical spelling is `scan --all`. | `src/discovery.rs:373-380` (message at `:378`); `src/cli.rs:101-103` |
 | D4 | The README's recovery advice for "scan reports 0 groups" is incomplete: it says to backdate *the sources*, but the activity guard also keys on **directory mtimes**. | `README.md:140`; `src/traverse.rs:461-468` |
 | D5 | The cleanup-safety skill states that any unresolved manifest blocks the whole scope. Since ADR 007 §3–§4 and M017, out-of-boundary unprovables are **reported, never blocking**; only in-boundary byte-capable unknowns block. | `.skills/cleanup-safety/SKILL.md:93-97`; ADR 007 §3-§5 |
 | D6 | `docs/USAGE.md` advertises `cargo cleanme clean --full --dry-run` with no note that the operation refuses on a non-root machine, and separately documents that a Full scan is "incomplete" on a typical workstation without connecting the two. | `docs/USAGE.md:115`, `docs/USAGE.md:643-645` |
