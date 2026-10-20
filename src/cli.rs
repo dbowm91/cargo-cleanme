@@ -62,6 +62,9 @@ pub struct Cli {
     /// remove candidates but never add one: ownership is still proven across
     /// the complete universe and the engine still re-proves it per spawn.
     ///
+    /// The list is a bounded page, not the whole screen: PageUp, PageDown,
+    /// Home and End move through it, and `i` filters it by path.
+    ///
     /// Requires a terminal on stdin and stdout. Combine with `--dry-run` to
     /// review a selection without invoking `cargo clean`.
     #[arg(short = 'i', long, global = true)]
