@@ -8,7 +8,7 @@
 
 The verification apparatus does three distinct jobs. The third is what makes it unusual.
 
-**(a) Product behaviour.** 474 declared inline `#[test]` functions in `src/`, plus two
+**(a) Product behaviour.** 481 declared inline `#[test]` functions in `src/`, plus two
 integration suites: one drives the compiled binary as a subprocess, the other drives the
 library's scan entry point in-process. Between them they cover ownership proof, cleanup
 authorization, the three clean modes, workspace resolution, real Cargo failure presentation,
@@ -41,10 +41,10 @@ were the premises, and is any of them unchecked?*
 
 | Layer | Location | Count | What it can catch | What it cannot catch |
 |---|---|---:|---|---|
-| Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 474 declared `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
+| Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 481 declared `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
 | Integration — CLI contract | `tests/cli_contract.rs` (4,050 lines) | 63 `#[test]` | The subprocess boundary end to end: argv normalization, exit codes, JSON shape, log-line shape, `--stats` stream discipline, selector behaviour, usage conflicts, stale-learned-root admission, repeated-root noise bounds, incomplete-discovery stage counts, real Cargo failure summaries, default Routine execution against real Cargo | Internals of `run()`; anything on a real machine; platform-gated cases are excluded on other lanes |
 | Integration — end to end | `tests/end_to_end.rs` (840 lines) | 4 `#[test]` | Full production-pipeline scans against synthetic trees with real mtimes, under both a filtered Routine scope and an explicit scope | Cleanup, update, config editing |
-| Shared harness | `tests/common/mod.rs` (262 lines) | 0 tests | `set_path_modified` / `backdate_file` (per-platform mtime control), `inactive_project` tree construction, `write_fake_cargo` / `cargo_calls` (unix only) | — |
+| Shared harness | `tests/common/mod.rs` (286 lines) | 0 tests | `set_path_modified` / `backdate_file` (per-platform mtime control), `inactive_project` tree construction, `write_fake_cargo` / `cargo_calls` (unix only) | — |
 | Contract checkers | `scripts/` | **17** (see note) | Published-crate contents, fixture portability, installer/shape/smoke contracts, release identity, benchmark regression, and the completeness of this inventory | That a fixture case proves its intended branch (explicitly disclaimed) |
 | CI | `.github/workflows/` | 6 | Cross-platform, cross-toolchain, MSRV, generated-doc freshness, release drift | Doctests (`cargo test --all-targets` skips them) |
 
@@ -99,15 +99,15 @@ from `src/`, never copied between documents.
 | File | `#[test]` | `mod tests` opens at | Total lines | Lines in test module |
 |---|---:|---:|---:|---:|
 | `src/cleanup.rs` | 114 | 3747 | 9983 | 6237 |
-| `src/workspace.rs` | 76 | 2094 | 6068 | 3975 |
+| `src/workspace.rs` | 79 | 2161 | 6301 | 4141 |
 | `src/update.rs` | 47 | 1290 | 2886 | 1597 |
-| `src/interactive.rs` | 58 | 1312 | 2417 | 1106 |
+| `src/interactive.rs` | 58 | 1312 | 2426 | 1115 |
 | `src/discovery.rs` | 39 | 1001 | 2363 | 1363 |
-| `src/cli.rs` | 32 | 485 | 1276 | 792 |
+| `src/cli.rs` | 32 | 493 | 1284 | 792 |
 | `src/output.rs` | 21 | 273 (`path_tests`), 509 (`mod tests`), 945 (`update_tests`) | 1065 | 793 |
 | `src/config.rs` | 20 | 614 | 1499 | 886 |
 | `src/discovery_state.rs` | 17 | 581 | 1129 | 549 |
-| `src/policy.rs` | 17 | 713 | 1238 | 526 |
+| `src/policy.rs` | 21 | 792 | 1444 | 653 |
 | `src/progress.rs` | 13 | 534 | 873 | 340 |
 | `src/report.rs` | 7 | 72 | 195 | 124 |
 | `src/traverse.rs` | 6 | 495 | 624 | 130 |
@@ -115,16 +115,16 @@ from `src/`, never copied between documents.
 | `src/domain.rs` | 1 | 407 | 435 | 29 |
 | `src/error.rs` | 0 | — | 16 | — |
 | `src/lib.rs` | 0 | — | 16 | — |
-| `src/main.rs` | 4 | 1426 | 1562 | 137 |
-| **Total** | **474** | | | |
+| `src/main.rs` | 4 | 1548 | 1684 | 137 |
+| **Total** | **481** | | | |
 
-**The count is declared, not executed.** 474 `#[test]` functions exist in `src/`; **472
+**The count is declared, not executed.** 481 `#[test]` functions exist in `src/`; **479
 compile on Linux x86_64**, because two are gated to the other platforms
 (`config.rs:995`, `#[cfg(windows)]`, and `discovery.rs:1552`,
 `#[cfg(any(target_os = "macos", windows))]`). Beyond that, 35 more are `#[cfg(unix)]` and four
-are Linux-only (`config.rs:1443`, `discovery.rs:1572`, `output.rs:280`, `workspace.rs:5337`),
+are Linux-only (`config.rs:1443`, `discovery.rs:1572`, `output.rs:280`, `workspace.rs:5404`),
 so the other two lanes compile smaller sets. The three hosted lanes therefore compile different
-sets — 472 on Linux x86_64, 469 on macOS, 435 on Windows. Platform-gated tests mean a green local run does not mean a green run
+sets — 479 on Linux x86_64, 476 on macOS, 442 on Windows. Platform-gated tests mean a green local run does not mean a green run
 elsewhere — which is the whole reason the OS matrix exists, and the reason
 `check-fixture-portability.py` exists to catch a *new* ungated fixture before a lane disagrees
 about it.
@@ -139,7 +139,7 @@ about it.
 > totals are **source-derived, not build-verified** — the hosted CI matrix is
 > the only thing that proves them.
 
-`cleanup.rs` (114) + `workspace.rs` (76) = 190 of 474 = **40.1%**. The two largest and most
+`cleanup.rs` (114) + `workspace.rs` (79) = 193 of 481 = **40.1%**. The two largest and most
 safety-critical modules — authorization, ownership proof, pre-spawn decision, and the `cargo
 metadata` resolution everything depends on — hold roughly two fifths of the unit tests. That
 allocation is correct, and it is the one place the pyramid is emphatically *not* inverted.
@@ -148,7 +148,7 @@ allocation is correct, and it is the one place the pyramid is emphatically *not*
 
 The convention is a separate `tests/` tree beside a lean `src/`. This crate does the
 opposite. `cleanup.rs` is 9983 lines of which **6237 are test code** — 62% of that file is
-fake-Cargo runners and assertion bodies. `workspace.rs` is 6068 lines, 3975 of them tests.
+fake-Cargo runners and assertion bodies. `workspace.rs` is 6301 lines, 4141 of them tests.
 `report.rs` runs the other way: its test module opens at line 72, roughly the first third,
 so the rendering tests sit *above* most of the production code they exercise.
 
@@ -171,7 +171,7 @@ Two process seams keep almost all of the 474 declared tests from spawning a real
 - **`CleanupRunner`** — declared in `src/cleanup.rs` for the destructive step, so cleanup is exercised while `cargo clean` is a no-op returning recorded bytes.
 
 Three test sites reach past the seam and drive the real `cargo` deliberately:
-`workspace.rs:5508` (`a_relative_root_resolves_the_same_workspaces_as_its_absolute_spelling`),
+`workspace.rs:5575` (`a_relative_root_resolves_the_same_workspaces_as_its_absolute_spelling`),
 `cleanup.rs:6605` (`real_temp_project_preview_and_execute_with_redirected_target`)
 and `cleanup.rs:6740` / `cleanup.rs:6819` (both inside
 `real_cargo_package_selector_preserves_sibling_workspace_artifacts`).
@@ -197,12 +197,12 @@ Production impls, for contrast: `SystemCargoRunner` (`workspace.rs:78`),
 
 | Test fake | File:line | Failure mode simulated |
 |---|---|---|
-| `FakeCargo` | `workspace.rs:2544` (impl 2554) | Baseline. Flags `fail_locate`, `fail_metadata`, `malformed` cover non-zero exit and unparseable `metadata` JSON |
-| `CountingRunner` | `workspace.rs:2662` (impl 2666) | Asserts `cargo metadata` is invoked exactly N times — the no-redundant-call invariant |
-| `MemberFirstFails` | `workspace.rs:2926` (impl 2931) | `locate-project` fails for the member manifest but not the root; proves the root still resolves |
-| `TwoWsRunner` | `workspace.rs:3512` (impl 3518) | Two independent workspaces; pins *two locates, two metadatas* — no cross-workspace reuse |
-| `FailFirstRunner` | `workspace.rs:3581` (impl 3585) | One workspace's locate fails; proves the failure does not poison an unrelated one |
-| `RecordingRunner` | `workspace.rs:5438` (impl 5442) | Records `(cwd, args)` so a test asserts argument *construction*, not the fake's result |
+| `FakeCargo` | `workspace.rs:2611` (impl 2554) | Baseline. Flags `fail_locate`, `fail_metadata`, `malformed` cover non-zero exit and unparseable `metadata` JSON |
+| `CountingRunner` | `workspace.rs:2729` (impl 2666) | Asserts `cargo metadata` is invoked exactly N times — the no-redundant-call invariant |
+| `MemberFirstFails` | `workspace.rs:2993` (impl 2931) | `locate-project` fails for the member manifest but not the root; proves the root still resolves |
+| `TwoWsRunner` | `workspace.rs:3579` (impl 3518) | Two independent workspaces; pins *two locates, two metadatas* — no cross-workspace reuse |
+| `FailFirstRunner` | `workspace.rs:3648` (impl 3585) | One workspace's locate fails; proves the failure does not poison an unrelated one |
+| `RecordingRunner` | `workspace.rs:5505` (impl 5442) | Records `(cwd, args)` so a test asserts argument *construction*, not the fake's result |
 | `FixtureEnvironment` | `update.rs:1301` (impl 1471) | Replaces network, `curl` discovery, process globals; drives `staging` and a fixed `version`. Records **its own** staging paths (`created_staging`, `update.rs:1316`) so leak evidence is invocation-scoped rather than a scan of the temp directory — see [§7](#7-the-false-green-problem) |
 | `TestObserver` | `progress.rs:65` (impl 107) | Records semantic events (`phases`, `visited`, `pruned`, `manifests`, `workspaces`, `cargo_failures`) — deliberately not refresh counts, which are renderer-side |
 | `FakeCleanupRunner` | `cleanup.rs:3913` (impls 3946 / 4029) | The workhorse. Records every call; `remove_on_execute` and `unresolved_manifest` toggle Execute's delete and the unresolved-manifest block |
@@ -215,7 +215,7 @@ Production impls, for contrast: `SystemCargoRunner` (`workspace.rs:78`),
 | `MetadataMutationRunner` | `cleanup.rs:8155` (impls 8161 / 8206) | Wraps `StagedCargo`, mutating emitted metadata (`MetadataMutation` at `cleanup.rs:8149`: `WorkspaceRoot`, `AddMember`, `Malformed`) after the inner call |
 | `MetadataOnly` | `tests/end_to_end.rs:73` (impl 75) | Integration-suite Cargo stub — the only fake outside `src/` |
 
-Two deserve a note. `RecordingRunner` carries a comment (`workspace.rs:5428-5435`) stating
+Two deserve a note. `RecordingRunner` carries a comment (`workspace.rs:5495-5502`) stating
 the *premise* of its own test: a prior implementation "resolved zero workspaces, exited 0,
 and reported no groups", and a recording runner catches that at the argument level without
 the network. That is the right instinct — assert on the call, not on the outcome the fake
@@ -223,7 +223,7 @@ produces. `RaceRunner`'s `mutate` is a closure parameter, so each race case supp
 mutation rather than the fake hardcoding one scenario.
 
 `RecordingRunner` is also now defined *inside* its test function
-(`workspace.rs:5438`) rather than at module scope, because exactly one case needs it. That
+(`workspace.rs:5505`) rather than at module scope, because exactly one case needs it. That
 is the more honest shape: a fake used once is not a reusable seam.
 
 ### Zero-test modules
@@ -241,7 +241,7 @@ prevent, with the premise stated in the test's own doc comment.
 
 **Not defensible, and significant.**
 
-- **`src/main.rs` (1562 lines, 4 tests).** The composition root. It *is* covered —
+- **`src/main.rs` (1684 lines, 4 tests).** The composition root. It *is* covered —
   `cli_contract.rs` runs the binary as a subprocess, so `main()` and `run()` execute in 62 of
   the 63 cases, and the four inline tests pin the orchestrator's own decisions
   (the interactive surface's three endings, and the report verdict). The Cargo-failure cases check real process behavior, bounded human grouping,
@@ -295,8 +295,8 @@ parallel-probe machinery has a dedicated counting fake in `cleanup.rs`
 
 `source_activity` is declared at `src/traverse.rs:311` and has exactly one call site in the
 crate: `src/traverse.rs:619`, inside the test module opening at 495. **There is no
-production caller** — production uses `workspace_source_activity` (`src/workspace.rs:2076`,
-called from `src/workspace.rs:1625`) instead. So `traverse::source_activity` is a `pub`
+production caller** — production uses `workspace_source_activity` (`src/workspace.rs:2143`,
+called from `src/workspace.rs:1692`) instead. So `traverse::source_activity` is a `pub`
 function with no production consumer whose sole exercise is its own test. That test proves
 the function works and nothing about the system's behaviour: a coverage claim that looks green
 and is empty, and a milder cousin of the C009–C013 incidents.
@@ -354,12 +354,12 @@ with a `MetadataOnly` Cargo stub (`end_to_end.rs:73-75`).
 Consequence: `main.rs` executes end to end in 62 of the 63 `cli_contract.rs` cases — argv
 normalization (`Cli::parse_normalized`), dispatch, exit codes — but only as an opaque process.
 The one case that does not run the binary is `the_json_update_branch_prints_only_the_tested_seam`
-(`tests/cli_contract.rs:3270`), which reads `src/main.rs` as text. `run()`'s internals are
+(`tests/cli_contract.rs:3287`), which reads `src/main.rs` as text. `run()`'s internals are
 untested, and the `update` command has no successful integration case at all.
 
 ### `tests/common/mod.rs`
 
-262 lines, no tests. Exports `set_path_modified` (`tests/common/mod.rs:24`) and
+286 lines, no tests. Exports `set_path_modified` (`tests/common/mod.rs:24`) and
 `backdate_file` (`tests/common/mod.rs:98`), which set file mtimes directly, plus
 `inactive_project` (`tests/common/mod.rs:111`), which writes a manifest-and-source tree.
 `set_path_modified` is hand-rolled per platform because the inactivity threshold is
@@ -408,18 +408,18 @@ Nineteen run on every platform; forty-four are `#[cfg(unix)]` because they need 
 | `hidden_compatibility_aliases_map_exactly_to_the_canonical_modes` | 2207 | `--dryrun`/`--yes` are hidden aliases resolving to the same modes as `--dry-run`/`--yes` |
 | `known_scan_resolves_routine_without_a_configured_root_and_explicit_with_one` | 2454 | Rootless `scan` is Full and ignores `scan.root`; `scan --known` is the Routine inventory |
 | `json_scan_within_an_empty_root_is_a_successful_zero_result_report` | 2511 | An empty root is a valid zero-group report, exit 0 — not an error |
-| `log_mode_routine_execute_is_one_bounded_line_and_a_silent_stderr` | 2617 | M012B: the shared `assert_bounded_log_line` contract (`cli_contract.rs:2578`) — ASCII, ≤ `MAX_BYTES`, exactly one newline, `cargo-cleanme op=` prefix, no control sequences — and nothing on stderr |
+| `log_mode_routine_execute_is_one_bounded_line_and_a_silent_stderr` | 2617 | M012B: the shared `assert_bounded_log_line` contract (`cli_contract.rs:2589`) — ASCII, ≤ `MAX_BYTES`, exactly one newline, `cargo-cleanme op=` prefix, no control sequences — and nothing on stderr |
 | `log_mode_distinguishes_simulate_from_cargo_preview` | 2651 | `mode=simulate` and `mode=preview` are distinct on the wire, matching `CleanMode::as_str` |
 | `log_mode_scope_block_is_one_line_with_a_typed_reason_and_exit_one` | 2684 | Blocked scope → one line, typed `reason=`, exit 1 |
 | `log_mode_failed_cleanup_is_one_line_with_status_failed_and_exit_one` | 2712 | A failed unit degrades to `status=failed` without a scope reason |
 | `log_mode_zero_result_maintenance_is_status_ok` | 2754 | Zero groups is `status=ok`, not a special case |
 | `log_mode_scan_reports_the_resolved_scope` | 2780 | The scan log line carries the same resolved-scope label as the JSON envelope |
-| `log_mode_stats_is_opt_in_stderr_and_leaves_the_single_line_alone` | 2848 | `--stats` stays an explicit stderr override; stdout is byte-identical with and without it (`cli_contract.rs:2877-2881`) |
+| `log_mode_stats_is_opt_in_stderr_and_leaves_the_single_line_alone` | 2848 | `--stats` stays an explicit stderr override; stdout is byte-identical with and without it (`cli_contract.rs:2894-2898`) |
 | `log_mode_suppresses_normal_diagnostic_fan_out` | 2902 | The per-diagnostic stderr fan-out is gated off in log mode; the count rides in `diagnostics=N` |
 | `log_mode_fatal_error_is_one_bounded_stderr_line_and_no_stdout` | 2971 | A fatal error is a bounded stderr line; stdout stays empty, so a consumer reads one stream |
 | `json_and_human_output_are_unchanged_by_log_mode` | 3014 | Adding the third format did not perturb the two existing byte-for-byte outputs |
-| `log_is_an_explicit_value_and_invalid_formats_still_fail_closed` | 3059 | `log` is an accepted `--format` value; an unknown one still exits 2 (`cli_contract.rs:3076`) |
-| `scan_emits_exactly_one_json_document` | 3094 | The one-document-per-invocation invariant, asserted as a **source string**: `src/main.rs` must still contain `enum EmitReport` (`src/main.rs:1005`). This is the closest the evidence base comes to `clean --full`, and it does not run it — see below |
+| `log_is_an_explicit_value_and_invalid_formats_still_fail_closed` | 3059 | `log` is an accepted `--format` value; an unknown one still exits 2 (`cli_contract.rs:3093`) |
+| `scan_emits_exactly_one_json_document` | 3094 | The one-document-per-invocation invariant, asserted as a **source string**: `src/main.rs` must still contain `enum EmitReport` (`src/main.rs:1112`). This is the closest the evidence base comes to `clean --full`, and it does not run it — see below |
 | `json_update_refusal_emits_no_document_and_exits_non_zero` | 3219 | A forbidden-provenance `update` emits zero stdout bytes and exits 2, and its stdout is not even parseable as a success document |
 | `the_json_update_branch_prints_only_the_tested_seam` | 3270 | The only `cli_contract.rs` case that does not execute the binary: it reads `src/main.rs` and asserts the JSON branch has exactly one unterminated stdout write and prints `update_json_stream` |
 | `repeated_routine_runs_bound_stale_root_noise_without_mutating_state` | 3646 | Two Routine Simulate invocations over 100 missing hints retain one bounded summary, preserve state bytes and keep the healthy sibling selected |
@@ -437,20 +437,20 @@ reporting a false green.
 
 There is **no live `clean --full` run anywhere in the evidence base**, and there cannot be one
 on a normal workstation. `clean --full` consumes the generation reconciled by the internal
-Full traversal, and `policy::full_cleanup_roots` (`src/policy.rs:440`) fails closed with an
+Full traversal, and `policy::full_cleanup_roots` (`src/policy.rs:519`) fails closed with an
 `AppError::Config` — exit 2 — whenever that reconciliation reported an incomplete scan
-(`src/policy.rs:444`). A Full traversal is incomplete whenever the host has an unreadable
+(`src/policy.rs:523`). A Full traversal is incomplete whenever the host has an unreadable
 directory, which is the normal case, not the exceptional one. The product behaves correctly;
 the *evidence* cannot reach it.
 
 What exists instead is `scan_emits_exactly_one_json_document`
-(`tests/cli_contract.rs:3094`), and its own doc comment is honest about the substitution: it
+(`tests/cli_contract.rs:3111`), and its own doc comment is honest about the substitution: it
 runs a bounded `scan`, proves one document and one newline, and then asserts that
-`src/main.rs` still contains `enum EmitReport` (`src/main.rs:1005`) — the guard that keeps
+`src/main.rs` still contains `enum EmitReport` (`src/main.rs:1112`) — the guard that keeps
 `clean --full` from emitting two documents in a row. That is a **source-string guard**, the
 weakest link in this document's evidence: it would not notice a change that broke the guard's
 behaviour while leaving the identifier in place. It is the same shape as
-`the_json_update_branch_prints_only_the_tested_seam` (`tests/cli_contract.rs:3270`). Both are
+`the_json_update_branch_prints_only_the_tested_seam` (`tests/cli_contract.rs:3287`). Both are
 recorded here rather than presented as coverage.
 
 ### The machine-contract checklist
@@ -511,7 +511,7 @@ reached.
 ### What the suites deliberately do not pin
 
 - **No `update` success document.** `update_json`'s *failure* direction is pinned through the
-  real binary (`tests/cli_contract.rs:3219`) and its shape in `src/output.rs`, but no case
+  real binary (`tests/cli_contract.rs:3236`) and its shape in `src/output.rs`, but no case
   represents a successful live update: every success path resolves the version authority from
   crates.io and then replaces bytes.
 - **No negative CLI parsing coverage beyond the exit code.** `cli.rs` now has 32 inline tests,
@@ -529,7 +529,7 @@ reached.
   (`cli_contract.rs:178`) to make output deterministic, so `IndicatifRenderer` and the
   terminal-capability detection in `progress.rs` are integration-untested by construction. The
   log-mode cases assert the *absence* of control sequences on stdout
-  (`cli_contract.rs:2596-2599`), which is the closest the suites come.
+  (`cli_contract.rs:2607-2610`), which is the closest the suites come.
 
 ---
 
@@ -861,10 +861,10 @@ one newline byte-for-byte. Two things remain unproven and are recorded rather th
 over: a **successful** run cannot be represented hermetically — every success path resolves the
 version authority from crates.io and then replaces bytes, so proving it needs either published
 release state or a production-only network hook — and `cli_contract.rs` therefore pins the
-*failure* direction through the real binary (`cli_contract.rs:3219`: a forbidden-provenance
+*failure* direction through the real binary (`cli_contract.rs:3236`: a forbidden-provenance
 refusal emits zero stdout bytes and a non-zero exit) and pins the wiring separately, by
 asserting that the JSON branch of `run_update` has exactly one unterminated stdout write and
-that it prints `output::update_json_stream` (`cli_contract.rs:3270`). That last assertion is a
+that it prints `output::update_json_stream` (`cli_contract.rs:3287`). That last assertion is a
 source-string guard, and it is the weakest link in this surface's evidence: it would not notice
 a change that broke the stream inside the library. C016 and C017 both lived on this path.
 
@@ -939,7 +939,7 @@ on a host where the selector was wrongly refused *and* on a host where it was
 wrongly offered. The premise is derived from the runtime table rather than the
 policy file, and the chain is still sound because
 `workspace::tests::runtime_allowlist_agrees_with_the_selector_qualification_policy`
-(`src/workspace.rs:2146`) independently asserts that the table agrees with
+(`src/workspace.rs:2213`) independently asserts that the table agrees with
 `release/selector-qualification.json` — exhaustively, over every
 `major.minor.patch` in `0..3 × 0..110 × 0..3`. A table that drifts from the
 policy fails there; a gate that stops consulting the table fails in the
@@ -1093,8 +1093,8 @@ sees a covered module where the versioned DTOs are exactly as unpinned as before
 
 ### Behaviours a reviewer should treat as under-verified
 
-1. **`main.rs` composition and the exit-code table.** `run()` stitches the two pipelines together and maps outcomes to codes. **All three** codes are pinned: `1` asserted at `cli_contract.rs:754` and `:1153`, `2` at `:674` and `:3076`, and `0` at `:2016`, `:2055`, `:2077`, and `:2107` (the resolved-scope label test is at `:213`). The *distinct failure routes* are not all pinned — a usage error and a config error both surface as `2`, and nothing distinguishes them at the exit-code level. `src/main.rs:1412` shows the `full_incomplete` → 1 path. The cleanup pipeline has its own `Ok(1)` route — a failed unit or a blocked scope (`src/main.rs:483`) — now tested through the `scope_blocked.is_some()` shape M012A introduced, and M012A also made bare `cargo cleanme` a cleanup path, so `run()`'s dispatch is materially larger than when this list was written.
-2. **`clean --full` itself.** No live run exists, and none can exist on a host with an unreadable directory, because `policy::full_cleanup_roots` (`src/policy.rs:440`) fails closed with exit 2 whenever the Full reconciliation was incomplete (`src/policy.rs:444`). The only evidence is a source-string guard on `enum EmitReport` (`tests/cli_contract.rs:3094`, `src/main.rs:1005`). A pty harness, as C023 proposed for the progress-bar ordering, is the shape of thing that would close this properly.
+1. **`main.rs` composition and the exit-code table.** `run()` stitches the two pipelines together and maps outcomes to codes. **All three** codes are pinned: `1` asserted at `cli_contract.rs:754` and `:1153`, `2` at `:674` and `:3076`, and `0` at `:2016`, `:2055`, `:2077`, and `:2107` (the resolved-scope label test is at `:213`). The *distinct failure routes* are not all pinned — a usage error and a config error both surface as `2`, and nothing distinguishes them at the exit-code level. `src/main.rs:1534` shows the `full_incomplete` → 1 path. The cleanup pipeline has its own `Ok(1)` route — a failed unit or a blocked scope (`src/main.rs:489`) — now tested through the `scope_blocked.is_some()` shape M012A introduced, and M012A also made bare `cargo cleanme` a cleanup path, so `run()`'s dispatch is materially larger than when this list was written.
+2. **`clean --full` itself.** No live run exists, and none can exist on a host with an unreadable directory, because `policy::full_cleanup_roots` (`src/policy.rs:519`) fails closed with exit 2 whenever the Full reconciliation was incomplete (`src/policy.rs:523`). The only evidence is a source-string guard on `enum EmitReport` (`tests/cli_contract.rs:3111`, `src/main.rs:1112`). A pty harness, as C023 proposed for the progress-bar ordering, is the shape of thing that would close this properly.
 3. **`update_json` output shape** (`output.rs:903-940`). Bypasses `EnvelopeV1` and has its own `schema_version` literal at `output.rs:905`. C022 added the four missing cases (`output.rs:969`, `:995`, `:1009`, `:1048`) plus the CLI failure-shape case; what remains unpinned is a successful live document and the schema reconciliation itself. See R3.
 4. **`output.rs` envelope field completeness.** `scan()` (`output.rs:105`) and `cleanup()` (`output.rs:161`): adding, removing, or renaming a field breaks no in-crate test. The 17 tests in the log and path modules all live below `pub mod log` or in `path_tests`; the four `update_tests` cover the other contract.
 5. **`report.rs` rendering is covered, but not end to end.** The 7 inline tests are strong; the default `--format text` path is never asserted through the binary.
@@ -1109,11 +1109,11 @@ sees a covered module where the versioned DTOs are exactly as unpinned as before
 
 1. **Does a new external-process fixture prove its own premise?** Add a guard that fails when the fake cannot be reached, before the behaviour assertion. References: C012's premise check; `packaging/tests/test_installers.py::self_test` (script line 1585), which proves each guard rejects a broken setup. Without failing-direction proof, it is a C012 waiting to happen.
 2. **Is a new fixture platform-gated?** Any `#[cfg(test)]` block spawning a process, writing a shell script, or using `os.pathsep` needs `#[cfg(unix)]` / `#[cfg(windows)]` discipline or a portable implementation. `scripts/check-fixture-portability.py` catches the static shape, in `ci.yml` `checks`.
-3. **Is a new external-process fixture actually exercised — not just present?** The premise is untested by default. Confirm the stub is *reached*: assert on what the subject passed to it (the `RecordingRunner` pattern, `workspace.rs:5438`), not only on what came back. C012 was green because an unrelated failure satisfied the assertion.
+3. **Is a new external-process fixture actually exercised — not just present?** The premise is untested by default. Confirm the stub is *reached*: assert on what the subject passed to it (the `RecordingRunner` pattern, `workspace.rs:5505`), not only on what came back. C012 was green because an unrelated failure satisfied the assertion.
 4. **Is a new `scripts/` file wired into a workflow or the operator gate?** All 17 are reachable from an automated surface; the three exceptions (`validate-staged-release.py`, `post-release-smoke.sh`, `verify-release-attestation.py`) are event-specific by construction and say so in the [§5](#5-the-contract-checkers) table — see [§6](#6-ci-as-the-enforcement-point). A new checker reachable from neither repeats that gap. Wire it, or document why not, **in the same change**: `check-doc-citations.py` will fail if the new script is not in the §5 table, so the omission cannot ship.
 5. **Changing a field in `output.rs`?** There is no in-crate test below `pub mod log`. The only assertions are external: `cli_contract.rs:195-197`, `724-728`, `756`, `872-889`, `926`, `964-968`, `1007`, `1047`, `1086-1088`. Update them in the same commit; nothing inside the crate will remind you.
 6. **Changing `update_json` (`output.rs:903`) or `update_json_stream` (`output.rs:941`)?** Four cases in `output.rs:969`, `:995`, `:1009`, `:1048` pin the document and the stream byte-for-byte, and `cli_contract.rs` pins the failure shape and the stdout-write count. What is still unpinned is a *successful* live run; if you need one, the honest route is a published release (the post-release smoke), not a test hook. Routing it through `EnvelopeV1` remains a contract change and needs its own plan and a version bump — it was deliberately not done here.
-7. **Touching `output.rs:143` or `output.rs:212` (`schema_version` literals)?** Confirm the trailing-newline invariant (`cli_contract.rs:199`, `:728`) and stderr-separation invariant (`:198`) still hold for the surface you touched. They are the reason the JSON is safe to parse unattended. The log surface has its own, stronger invariant — `assert_bounded_log_line` (`cli_contract.rs:2578`) — so a log-mode edit should run the eleven log-mode cases in `cli_contract.rs` rather than the JSON ones.
+7. **Touching `output.rs:143` or `output.rs:212` (`schema_version` literals)?** Confirm the trailing-newline invariant (`cli_contract.rs:199`, `:728`) and stderr-separation invariant (`:198`) still hold for the surface you touched. They are the reason the JSON is safe to parse unattended. The log surface has its own, stronger invariant — `assert_bounded_log_line` (`cli_contract.rs:2589`) — so a log-mode edit should run the eleven log-mode cases in `cli_contract.rs` rather than the JSON ones.
 8. **New exit codes in `main.rs`** — add a subprocess assertion in `cli_contract.rs` beside the existing ones (`:754` for `1`, `:674` for `2`, `:2016` for `0`, `:213` for the scope label). The three exit-code *values* are pinned; the distinct *routes* to `2` are not, and nothing distinguishes a usage error from a config error by exit status.
 9. **Touching `traverse.rs`?** 6 tests (module opens at `:495`), and `source_activity` (`:311`) has no production caller — its only call site is `traverse.rs:619`, inside its own test module. If you are adding a caller, say so; if not, its test proves nothing about the system. If you are touching the recency short-circuit, note that the existing case resolves on the *directory's* mtime, not the file's (R8) — a new case must make the file the deciding entry.
 10. **New behaviour in `policy.rs`** — 16 tests, and this module decides the Routine/Full scope boundary, a documented invariant. Cheap to cover, still thinner than the module's importance.

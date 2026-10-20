@@ -180,10 +180,14 @@ max_wait_ms = 86400000
   globbing. Chain jobs with greggd's own dependency support, or run a second
   command as a second job.
 - **The daily job cleans; the weekly job only reads.** Bare
-  `cargo cleanme --format log` is cleanup anchored at the job's working
-  directory, so run the daily job from your home directory (or name an explicit
-  root). `cargo cleanme scan --all --format log` is Full reconciliation and
-  **never deletes
+  `cargo cleanme --format log` is cleanup of the maintenance scope, anchored
+  at the job's working directory, so run the daily job from your home
+  directory (or name an explicit root). The working directory joins that scope
+  only when the Routine scope does not already reach it, and your home
+  directory *contains* the seed roots — so a daily job run from your home
+  keeps the bounded machine-wide sweep and does not widen into everything
+  under your home. `cargo cleanme scan --all --format log` is Full
+  reconciliation and **never deletes
   anything**, but it walks the platform roots and can be expensive on a
   machine with a large filesystem — hence weekly, at night, behind load gating.
 - **Load gating, retry, and max-wait belong to greggd, not to cargo-cleanme.**

@@ -7,7 +7,7 @@ the one architecture deep dive your change touches.
 
 A single Rust crate that finds Cargo build output and cleans it **through
 Cargo**, never by deleting directories. One binary over one library of 16
-modules, 18 source files, 33,067 lines in `src/`. No async runtime of its own.
+modules, 18 source files, 34,438 lines in `src/`. No async runtime of its own.
 `cargo metadata` is the only binary dependency that matters for safety.
 
 The working tree is **0.2.9, which is not published**; `CHANGELOG.md` has an
@@ -228,8 +228,8 @@ source of truth for module line counts and the inline-test total; verify each
 against `src/`, fix the overview first, then align the deep dives.
 
 The same rule applies to **per-platform test counts**, which have disagreed
-across three documents: they are 474 declared, 472 on Linux, 435 on Windows,
-469 on macOS. Derive them with a brace-tracking parser evaluated against
+across three documents: they are 481 declared, 479 on Linux, 442 on Windows,
+476 on macOS. Derive them with a brace-tracking parser evaluated against
 `rustc --print cfg --target <triple>`, and cross-check against
 `cargo test --lib -- --list`. A grep for `#[cfg(unix)]` immediately above
 `#[test]` finds 26 of the 35, because Rust allows `#[test]` to come first —
@@ -263,6 +263,17 @@ closure records.
   keep every resolved unit. Units the anchor excludes are reported as
   `skipped_outside_selection` rows, not dropped — "nothing was selected" must
   never look like "nothing was eligible".
+- **The working directory joins the maintenance scope** (ADR 009, C040 — not
+  yet published). A bare run's scope is the Routine scope **plus** the
+  operator's position — the enclosing workspace and the working directory
+  itself — but only when the Routine scope does not already reach it, and
+  never *instead of* it: the universe may only grow, so a wider universe can
+  only reclassify `shared` → `private`. The exclusion is a measurement, not a
+  taste: an unconditional join turned a bare run from `$HOME` into a 65-second
+  sweep of 264,183 directories that ended **blocked** on 1,357 unresolvable
+  manifests in `~/.local/share/Trash`. `clean ROOT` is the spelling for that
+  wider sweep. The operator's roots carry `RootProvenance::Operator`, exempt
+  from `automatic_root_is_maintainable` only.
 - **Fail-closed means the proof boundary, not the discovered universe.** Under
   [ADR 007](plans/adr/007-accepted-scoped-proof-boundary.md)
   and M017, an unresolved manifest *inside* the selected boundary blocks it; an
@@ -304,14 +315,17 @@ closure records.
 - **C036** (`plans/implementation/artifact-discovery-cleanup/c036-*.md`,
   *proposed*) is the open documentation-drift corrective. It is the right home
   for a newly-found doc or message defect — extend it rather than opening a
-  second one.
+  second one. **Its D1 is discharged by C040**, which rewrote the root
+  `long_about` so it no longer claims a bare `cargo cleanme scan` is the full
+  machine reconciliation, and made the root manpage render from that same
+  `long_about` so the two surfaces cannot drift again.
 
 ## 9. Repository map
 
 | Path | Contents |
 |---|---|
 | `src/` | the crate — 18 files; `main.rs` is the binary, `lib.rs` declares the 16 library modules |
-| `tests/` | `cli_contract.rs` (63 tests), `end_to_end.rs` (4), `common/` |
+| `tests/` | `cli_contract.rs` (70 tests), `end_to_end.rs` (4), `common/` |
 | `architecture/` | `overview.md` + 16 deep dives |
 | `docs/` | `USAGE.md`, `AUTOMATION.md`, `INSTALLING.md`, `RELEASING.md`, `TROUBLESHOOTING.md`, `UPDATE.md` |
 | `plans/` | decision records — see §7 |

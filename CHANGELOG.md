@@ -10,6 +10,34 @@ command-line, JSON, and release-asset contracts are the stable surface.
 
 ### Changed
 
+- **A bare `cargo cleanme` now cleans the directory you are standing in.**
+  The working directory was a *filter* over a universe that did not contain
+  it, so from a directory outside the machine's known roots the run proved
+  nothing at all: on the machine that prompted this, `cargo cleanme` in
+  `~/.codex` reported `0 would-clean` while `cargo cleanme clean ~/.codex`
+  reported four workspaces and 107.15 GiB in the same directory at the same
+  moment. The working directory now **joins the maintenance scope** as an
+  additional root, so a bare run cleans what is under it — the workspace that
+  encloses you and the directory itself. The scope only ever *grows*: the
+  working directory is added to the known roots, never substituted for them,
+  so a target shared with a project outside the scope still stays `shared`
+  and stays inventory-only.
+
+  The working directory joins only when the machine's known roots do not
+  already reach it. Standing inside a known root, or in a directory that
+  contains one — your home directory, for a scheduler — leaves the bounded
+  machine-wide sweep bounded. Sweeping *everything* under your home would
+  also sweep your Trash and your package caches, whose abandoned manifests
+  cannot be resolved and would block the run: measured on that machine, it
+  turned a nine-second sweep of the known roots into a sixty-five-second
+  sweep of 264,183 directories that ended blocked on 1,357 unresolvable
+  manifests. To sweep a whole directory on purpose, name it:
+  `cargo cleanme clean ~`.
+
+  The read-only `cargo cleanme scan --known` inventory covers the same
+  universe, so it stays an inventory of what the cleanup would act on. The
+  scope label in the JSON envelope is unchanged (`routine`), and
+  `selected_roots` carries the actual roots.
 - **The interactive selection surface is now a compact finder rather than a
   full-screen list.** `cargo cleanme -i` painted every resolved unit as a row
   in a frame that occupied the entire terminal, so a scope with hundreds of

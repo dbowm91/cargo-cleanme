@@ -13,7 +13,7 @@ still holds, and only then acts.
 ## 1. Responsibility
 
 `cleanup.rs` owns the entire destructive path: mode selection semantics
-(`CleanMode` `:36`, mapped by `cli::clean_mode` at `cli.rs:284`), the
+(`CleanMode` `:36`, mapped by `cli::clean_mode` at `cli.rs:292`), the
 authorization gate (`covering_is_authorized_roots` `:800`), the unit-wide
 destructive gate (`unit_block_reason_roots` `:929`), the final ownership proof
 (`final_cleanup_proof_roots` `:3088`), the frozen Cargo invocation
@@ -28,12 +28,12 @@ It explicitly does **not** own:
   module consumes timestamps; it never turns them into eligibility. See
   [Traverse](08-traverse.md).
 - **Grouping and classification.** Every physical-group decision is delegated to
-  `workspace.rs`: `resolve_workspaces_with_coverage` `workspace.rs:671`,
-  `build_groups` `workspace.rs:1314`, `analyze_groups_detailed`
-  `workspace.rs:1539`, `build_cleanup_units` `workspace.rs:2003`,
+  `workspace.rs`: `resolve_workspaces_with_coverage` `workspace.rs:738`,
+  `build_groups` `workspace.rs:1381`, `analyze_groups_detailed`
+  `workspace.rs:1606`, `build_cleanup_units` `workspace.rs:2070`,
   `refresh_workspace_from_root_manifest` `workspace.rs:59`,
-  `map_workspace_groups` `workspace.rs:1909`, `outermost` `workspace.rs:1237`,
-  `workspace_member_roots` `workspace.rs:1485`.
+  `map_workspace_groups` `workspace.rs:1976`, `outermost` `workspace.rs:1304`,
+  `workspace_member_roots` `workspace.rs:1552`.
 - **Manifest discovery** — `discovery::discover_manifests`, called at `:1230`,
   `:1717`, and `:2867`.
 - **JSON rendering** — `output::cleanup` `output.rs:161` maps `CleanReport` to
@@ -52,10 +52,10 @@ Line `:684` re-exports
 `workspace::{ProcessOutput, SystemCargoRunner}` so tests can inject I/O through
 this module's own seam.
 
-**The "one-way edge" is test-only.** `workspace.rs:4322` and `workspace.rs:4408`
+**The "one-way edge" is test-only.** `workspace.rs:4389` and `workspace.rs:4475`
 call `crate::cleanup::covering_is_authorized`, but both lines sit inside
 `workspace.rs`'s own `#[cfg(test)] mod tests`, which begins at
-`workspace.rs:2094`. There is no production edge from `workspace.rs` into
+`workspace.rs:2161`. There is no production edge from `workspace.rs` into
 `cleanup.rs`.
 
 **Test-only back edges.** `cleanup.rs` reaches back into `cli`, `domain`,
@@ -143,7 +143,7 @@ variants, omitting `SelectorEstimateUnavailable` (emitted as
 | `final_cleanup_proof` | `pub fn (unit, universe, clean_root, allowed_output_roots, runner, recency_seconds, counters) -> Result<ExecutionProof, ProofFailure>` `:3052` | Single-root wrapper, `refresh_candidate=false`. **No production caller** — §7. |
 | `execute_pre_spawn_decision` | `pub fn (unit, universe, clean_root, allowed_output_roots, runner, recency_seconds) -> Result<ExecutionProof, ProofFailure>` `:3513` | Same gate set with throwaway counters. **No caller at all** — §7. |
 | `is_authorized` | `pub fn (group: &workspace::RawGroup, clean_root: &Path, allowed_roots: &[PathBuf]) -> Result<bool, String>` `:762` | Wrapper. **Test-only callers** (`:5803`, `:5916`, `:5968`). |
-| `covering_is_authorized` | `pub fn (ownership, covering: &[PathBuf], clean_root: &Path, allowed_roots: &[PathBuf]) -> Result<bool, String>` `:786` | Single-root wrapper. **Test-only** (`workspace.rs:4322`, `workspace.rs:4408`). |
+| `covering_is_authorized` | `pub fn (ownership, covering: &[PathBuf], clean_root: &Path, allowed_roots: &[PathBuf]) -> Result<bool, String>` `:786` | Single-root wrapper. **Test-only** (`workspace.rs:4389`, `workspace.rs:4475`). |
 | `covering_is_authorized_roots` | `pub fn (ownership, covering, clean_roots: &[PathBuf], allowed_roots) -> Result<bool, String>` `:800` | The real gate. Production callers `:956` and `:3106`. |
 | `ownership_skip_detail` | `pub fn (ownership: OutputOwnershipClass) -> String` `:893` | The "why wasn't this cleaned" sentence. |
 | `unit_block_reason` | `pub fn (unit: &workspace::CleanupUnit, clean_root: &Path, allowed_output_roots: &[PathBuf]) -> Result<(), String>` `:917` | Single-root wrapper. **Test-only** (`:8629`, `:8633`, `:8641`). |
@@ -158,7 +158,7 @@ weight.
 **Entry-point delegation chain.**
 
 ```text
-clean_with_roots_policy_selector   :1108   ← run_engine_guarded (main.rs:635) calls the guarded form
+clean_with_roots_policy_selector   :1108   ← run_engine_guarded (main.rs:641) calls the guarded form
   └─ clean_with_roots_policy_selector_guarded :1288   (premise = None, selection = All for the unguarded path)
   └─ clean_with_roots_policy       :1086   (selector = None)
        └─ clean_with_roots         :1066   (policy = CleanupPolicy::default())
@@ -197,7 +197,7 @@ pub trait CleanupRunner: Sync {
 `refresh_proof_universe_with_limit` (`:2934-3024`): one `&dyn CleanupRunner` is
 shared across up to `PROOF_REFRESH_CONCURRENCY_CAP = 4` threads (`:2730`).
 `CargoRunner` has no such bound because `resolve_workspaces_with_coverage` is
-sequential and cached (`workspace.rs:671`).
+sequential and cached (`workspace.rs:738`).
 
 **What `SystemCleanupRunner` executes.** `run_with_env` (`:714-732`) builds
 `Command::new("cargo").args(args).current_dir(cwd)`, applies each `(k, v)` with
@@ -264,18 +264,18 @@ a real target tree.
 | `Simulate` | `simulate` | `--dry-run` (hidden alias `--dryrun`) | Identical gate set; the unit reached the spawn point. | No `cargo clean` of any kind, and no Cargo process for the clean at all. Reported as `Simulated`, never as recovered space (`:1764-1770`). |
 | `CargoPreview` | `preview` | `--cargo-preview` | Every gate through the final proof ran; Cargo itself reported what it *would* remove. | Nothing removed by us — but Cargo *was* spawned. |
 
-The mapping lives in `cli::clean_mode` (`cli.rs:284-296`): `--dry-run` (or the
+The mapping lives in `cli::clean_mode` (`cli.rs:292-304`): `--dry-run` (or the
 hidden `--dryrun`) ⇒ `Simulate`; `--cargo-preview` ⇒ `CargoPreview`; no mode
 flag ⇒ `Execute`. Clap makes the three flags mutually exclusive
-(`cli.rs:139-152`), and `clean_mode` carries a `debug_assert!` that the
-conflicting pair never reaches it (`cli.rs:285-288`). The `clean` subcommand
-resolves the same way at `cli.rs:384-388`, and a root-level `--dry-run` is
-honoured on the bare front door too (`cli.rs:317`), so
+(`cli.rs:142-155`), and `clean_mode` carries a `debug_assert!` that the
+conflicting pair never reaches it (`cli.rs:293-296`). The `clean` subcommand
+resolves the same way at `cli.rs:392-396`, and a root-level `--dry-run` is
+honoured on the bare front door too (`cli.rs:325`), so
 `cargo cleanme --dry-run clean ROOT` never silently falls back to Execute.
 
 **`--yes` is now a hidden no-op alias.** It used to be the only way to ask for
 Execute; Execute is the default, so the flag carries no intent of its own
-(`cli.rs:146-149`, and the comment at `cli.rs:347-350`). The comment there is explicit that
+(`cli.rs:149-152`, and the comment at `cli.rs:355-358`). The comment there is explicit that
 printing nothing about it is what keeps unattended runs quiet.
 
 **Bare `cargo cleanme` is Routine Execute** (ADR 003), with `--dry-run` the
@@ -285,7 +285,7 @@ design in which the default was a Cargo-spawning preview: a reader who assumes
 
 **Where roots come from** (C028), all funnelled into
 `clean_with_roots_policy_selector_guarded` via `run_engine_guarded`
-(`main.rs:635`):
+(`main.rs:641`):
 
 | Source | Roots |
 | --- | --- |
@@ -294,10 +294,10 @@ design in which the default was a Cargo-spawning preview: a reader who assumes
 | Maintenance / `--known` | Raw Routine candidates classified `Automatic` before any collapse; a configured `scan.root` takes the strict explicit path instead. |
 | None | `AppError` (unknown scope) or a typed `ScopeBlock` (symlink/unreadable automatic root) — never a silent subset. |
 
-`run_engine_guarded` (`main.rs:623-711`) additionally defends the
+`run_engine_guarded` (`main.rs:629-717`) additionally defends the
 admission→validation race: a fatal `InvalidRoot` over an automatic scope
 triggers one fresh reclassification, and only a now-proven-omittable offender
-rebuilds the universe from scratch (`main.rs:651-689`); anything else becomes a
+rebuilds the universe from scratch (`main.rs:657-695`); anything else becomes a
 typed block, never a sibling cleanup against a stale proof.
 `cleanup.rs:1204` applies `collapse_roots` again and re-validates the collapsed
 set at `:1213-1215` with the comment at `:1211-1212` that collapsing only
@@ -400,7 +400,7 @@ every group the invocation can affect, ownership must be `PrivateBounded`
 (`:946-954`) then `covering_is_authorized_roots` must return `Ok(true)` for that
 group alone (`:956-973`); (c) every group must have `measured.is_some()`
 (`:973-982`), otherwise the fail-fast verdict and its `GroupSkipReason::detail()`
-(`workspace.rs:1505`) become the reason. The doc comment `:906-916` states the
+(`workspace.rs:1572`) become the reason. The doc comment `:906-916` states the
 C003 invariant — every affected group qualifies independently, and "No Cargo
 process is spawned for any subset of a unit" — which is what stops a
 `PrivateBounded` target smuggling an `ExternalUnproven` sibling build group into
@@ -418,11 +418,11 @@ infrastructure path raises `scope_blocked` and exits 1 (`:1568-1578`,
 **Is `allowed_output_roots` actually redundant?** `config.toml:37-38` claims it
 is "currently operationally redundant because PrivateBounded output is normally
 workspace-contained." **Assessment: consistent with the code, with a caveat.** The
-reason is the classification rule at `workspace.rs:1430-1444`:
+reason is the classification rule at `workspace.rs:1497-1511`:
 `PrivateBounded` means "every covering root **strictly below the workspace
 root**"; `ExternalUnproven` means "output **outside workspace root**."
 Classification depends on the *workspace root*, not on the clean root or allowed
-roots — `build_groups` (`workspace.rs:1314`) takes only `&[ResolvedWorkspace]`. So
+roots — `build_groups` (`workspace.rs:1381`) takes only `&[ResolvedWorkspace]`. So
 a `PrivateBounded` group's covering roots are always beneath the workspace root
 and are already authorized by the `canonical_clean` branch at `:870-875` whenever
 the workspace root is inside a clean root. That is the ordinary case.
@@ -442,7 +442,7 @@ configured. An under-verified property, not a defect.
 **A separate divergence.** ADR 001 `:92` defines `PrivateBounded` as "every
 destructive output path is contained by an *authorized cleanup boundary*" — a
 predicate over authorization roots. The code defines it over the *workspace root*
-(`workspace.rs:1430-1436`). Reconciled by the argument above, but not the same
+(`workspace.rs:1497-1503`). Reconciled by the argument above, but not the same
 predicate, and the ADR's phrasing cannot be read literally alongside
 `workspace.rs`.
 
@@ -517,7 +517,7 @@ by root, so output is deterministic regardless of completion order. A thread
 panic degrades to `(ScanCounters::default(), None)`, treated by the caller as a
 re-resolve failure — fail-closed. Peak concurrency lands in
 `counters.proof_metadata_peak_concurrency` and reaches the user through the
-`--stats` line in `main.rs:470-481`.
+`--stats` line in `main.rs:476-487`.
 
 This apparatus is an efficiency concern the project tracked explicitly, not a
 safety mechanism: it keeps the *cost* of proving linear. Pinned by
@@ -714,11 +714,11 @@ virtual-workspace layout a silent no-op. `resolved` (`:122-135`) turns
 an `AppError::InvalidRoot` usage error, never a silent fallback to `All`.
 
 `cli.rs` resolves argv but must not perform IO, so the maintenance spellings
-emit the *unresolved* `CleanupSelection::WorkingDirectory` (`cli.rs:319`,
-`cli.rs:378-381`, and the `Cli::cleanup` mirror at `cli.rs:499-502`), and
+emit the *unresolved* `CleanupSelection::WorkingDirectory` (`cli.rs:327`,
+`cli.rs:386-389`, and the `Cli::cleanup` mirror at `cli.rs:507-510`), and
 `main.rs` calls `CleanupSelection::resolved` before the engine runs
-(`main.rs:529`, and `main.rs:568` on the `-i` path). The `CleanupRequest`
-doc comment says so at `cli.rs:239-240`. `clean ROOT` and `clean --full`
+(`main.rs:535`, and `main.rs:574` on the `-i` path). The `CleanupRequest`
+doc comment says so at `cli.rs:247-248`. `clean ROOT` and `clean --full`
 use `CleanupSelection::All` because they already bound their own scope.
 
 **Units removed by the selection are reported, never dropped.** The engine
@@ -739,7 +739,7 @@ silent-no-op defect in a new place. `outside_selection_is_reported_rather_than_s
 | `include: Vec<String>` | empty | `:1467-1476` | Empty ⇒ no include filtering. |
 | `exclude: Vec<String>` | empty | `:1477-1487` | Always applied; an empty `GlobSet` never matches. |
 
-Config interaction is `main.rs:328-344`. CLI overrides configured per field, and
+Config interaction is `main.rs:334-350`. CLI overrides configured per field, and
 for the two list fields an **empty CLI list falls back to config**:
 `min_reclaimable_bytes: min_reclaimable_bytes.unwrap_or(configured.min_reclaimable_bytes)`,
 `min_inactive_seconds: older_than.or(configured.min_inactive_seconds)`,
@@ -874,7 +874,7 @@ the `CargoPreview | Execute` arm (`:1819`) and adds `--dry-run --verbose` only
 for `CargoPreview` (`:3593-3596`). So `Simulate` is prevented twice over: it
 never reaches the dispatch, and if it somehow did, the arg builder would not
 produce a non-dry-run clean. No flag combination turns `Simulate` into a clean;
-`cli.rs:139-152` makes the mode flags mutually exclusive. `Simulate` does run
+`cli.rs:142-155` makes the mode flags mutually exclusive. `Simulate` does run
 the *full* proof — it is a rehearsal of the destructive path, not a cheaper one.
 
 ### What happens when the ownership universe is incomplete?
@@ -1079,7 +1079,7 @@ Killed during `cargo clean`: the observable state is a partially emptied target
 directory, which Cargo treats as a cache miss and rebuilds; no workspace *sources*
 are damaged, because a source tree used as an output root is classified
 `Uncertain` upstream and can never be a cleanup target
-(`workspace.rs:1431-1434`; test `source_tree_as_output_root_is_never_cleaned` `:9144`). Killed after the spawn but before `measure_union` (`:1883`): the
+(`workspace.rs:1498-1501`; test `source_tree_as_output_root_is_never_cleaned` `:9144`). Killed after the spawn but before `measure_union` (`:1883`): the
 cleanup happened but no `after_bytes`/`observed_decrease` is reported —
 under-reporting, never over-reporting.
 
@@ -1098,7 +1098,7 @@ code says so.**
 | --- | --- |
 | `validate_cleanup_root:2627-2645` | A clean ROOT must be absolute (`:2628-2633`) and a real, non-symlink directory (`:2638-2643`). |
 | `covering_is_authorized_roots:836-841` | A symlink allowed root is `Err`. |
-| `workspace.rs:1431-1434` | A symlink output root marks the whole workspace `Uncertain` upstream. |
+| `workspace.rs:1498-1501` | A symlink output root marks the whole workspace `Uncertain` upstream. |
 | Proof `:3346-3348` → `prove_covering_roots:3478-3506` | Every covering root re-checked with `symlink_metadata`; a symlink is "preflight changed: covering root became symlink". |
 | Proof `:3299-3345` | Symlink/unresolvable *other* roots compared via `provable_output_paths` so they cannot be silently ignored. |
 | `measure_union:3723-3741` | Post-clean measurement refuses a path that changed type or became a symlink (`:3729-3731`). |
@@ -1118,10 +1118,10 @@ would require `cargo clean` to re-verify, outside this design.
 
 **No, and the code is stricter than the ADR's framing.** ADR 001 `:92-93` defines
 `PrivateBounded` relative to "authorized cleanup boundaries". The implementation
-is narrower: `workspace.rs:1430-1436` requires every covering root to be **strictly
+is narrower: `workspace.rs:1497-1503` requires every covering root to be **strictly
 below the workspace root**, disjoint from every member source root, with every
 universe root represented in the graph. Anything outside the workspace root is
-`ExternalUnproven` (`workspace.rs:1443`) and inventory-only, permanently (§5).
+`ExternalUnproven` (`workspace.rs:1510`) and inventory-only, permanently (§5).
 
 Two secondary facts: the *invocation* is still
 `cargo clean --manifest-path <workspace root>`, so what Cargo removes is whatever
@@ -1134,7 +1134,7 @@ once (`equal_and_nested_target_build_are_one_unit_and_one_invocation` `:8672`).
 
 ### Is the exit-code behaviour correct?
 
-`main.rs:483-487` returns `1` if `report.failed > 0 || report.scope_blocked.is_some()`.
+`main.rs:489-493` returns `1` if `report.failed > 0 || report.scope_blocked.is_some()`.
 `report.failed` is incremented only at `:1829` (spawn error) and `:1848` (non-zero
 exit). `scope_blocked` is set only at the typed block sites listed in §8 — the
 two scan-time boundary sites, the zero-unit edge, and the mid-run block sites
@@ -1349,7 +1349,7 @@ statically. Does that risk exist here? **Partly, in a narrower form.**
     (`:9578`) keeps both honest.
 15. **`config.toml:37-38`'s "operationally redundant" claim should be revisited.**
     It holds because `PrivateBounded` requires covering roots below the
-    *workspace* root (`workspace.rs:1430-1436`), but the positive
+    *workspace* root (`workspace.rs:1497-1503`), but the positive
     `allowed_output_roots` branch (`:877-882`) and its advertised remediation
     (`:963-970`) have no end-to-end test. Add one or soften the comment.
 16. **The public wrappers with no production caller are a growing dead-code

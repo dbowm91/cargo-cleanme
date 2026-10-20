@@ -48,6 +48,13 @@ This skill is about *how to change it without weakening it*.
    every physical group it can affect. A private `target` must never carry an
    `ExternalUnproven`/`Shared`/`Uncertain` sibling `build` directory into the
    same invocation; such a unit is skipped **whole**.
+6. **The discovery universe may only ever grow.** ADR 009 widened the
+   maintenance scope by adding the working directory — *added*, never
+   substituted for the Routine roots (`src/main.rs:968-977`). A wider
+   universe can only reclassify `shared` bytes to `private`; it can never
+   promote an unproven shared output. Any change that **narrows** the
+   universe re-opens exactly the hazard invariant 1 exists to prevent, so
+   treat a narrowing change as a safety change, not a cleanup.
 
 ## Invariant 2 is the trap
 

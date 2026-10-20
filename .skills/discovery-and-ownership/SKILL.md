@@ -120,6 +120,39 @@ Learned state is **advisory, never authority**. Rules that are not negotiable:
   reads it. Do not reintroduce the claim.
 - State written by a **newer** binary, or unreadable, is never overwritten.
 
+### The working directory joins the maintenance scope (ADR 009)
+
+Since ADR 009, a bare `cargo cleanme` run's scope is the Routine scope
+**plus the operator's position**: the workspace that encloses the working
+directory, when there is one, and the working directory itself
+(`src/workspace.rs:655`). The rules that make it safe are the ones to carry:
+
+- **The universe may only ever grow.** The operator's roots are *added* to the
+  Routine roots, never substituted for them (`src/main.rs:968-977`). A wider
+  universe can only reclassify `shared` bytes to `private`; the reverse — the
+  only direction that could promote an unproven shared output into something
+  the engine would delete — is unreachable by construction.
+- **The working directory joins only when the Routine scope does not already
+  reach it** (`src/main.rs:931-938`). It may not be *inside* a routine root,
+  and it may not *contain* one. The second exclusion is a measurement, not a
+  taste: without it, a bare run from the home directory became a 65-second
+  sweep of 264,183 directories that ended **blocked** on 1,357 unresolvable
+  manifests in `~/.local/share/Trash`. `clean ROOT` is the spelling for that
+  wider sweep.
+- **The decision is made against the *admitted* routine roots**, so a root the
+  maintainability rule refuses — an agent worktree, say — does not count as
+  the Routine scope reaching the operator's directory.
+- **The operator's roots carry `RootProvenance::Operator`**
+  (`src/policy.rs:100`). They are exempt from the maintainability rule only —
+  standing there is an explicit act, and `clean ROOT` already permits the same
+  subtree. Every other defect keeps the automatic root's handling: a symlink
+  blocks the scope, an absent or non-directory root is omitted.
+- **`clean ROOT` and `clean --full` are unchanged**, and the JSON `scope`
+  label stays `"routine"`.
+- **The read-only `scan --known` inventory applies the same rule**
+  (`src/main.rs:1164-1173`). An inventory that described a smaller universe
+  than the cleanup would not be an inventory of it.
+
 ### `scan.root` is honoured *except* by a Full scan
 
 `policy::resolve` (`src/policy.rs:19-30`) has two arms:

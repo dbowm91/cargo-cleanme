@@ -211,6 +211,30 @@ case "$1" in
         esac
       done
     fi
+    # ADR 009: a `locate-project` with no `--manifest-path` asks "which
+    # workspace owns the directory I am in?". Cargo answers it by walking up
+    # from the working directory for a manifest, and refuses when there is
+    # none. The stub must answer the same way: a stub that hands every
+    # directory the one project the fixture owns would make a fixture standing
+    # outside every workspace look like it is standing inside one -- the
+    # "stub that is not the tool the subject resolves" defect in a new costume.
+    if [ "$1" = locate-project ]; then
+      named=no
+      for arg in "$@"; do [ "$arg" = "--manifest-path" ] && named=yes; done
+      if [ "$named" = no ]; then
+        dir="$PWD"
+        while : ; do
+          if [ -f "$dir/Cargo.toml" ]; then
+            printf '{"root":"%s/Cargo.toml"}\n' "$dir"
+            exit 0
+          fi
+          [ "$dir" = "/" ] && break
+          dir=$(dirname "$dir")
+        done
+        printf 'error: could not find `Cargo.toml` in `%s` or any parent directory\n' "$PWD" >&2
+        exit 101
+      fi
+    fi
     # Real Cargo refuses a manifest it cannot parse. Without this check the
     # stub would answer every query, and a fixture built on an unresolvable
     # manifest would look like a clean one -- the "stub that is not the tool

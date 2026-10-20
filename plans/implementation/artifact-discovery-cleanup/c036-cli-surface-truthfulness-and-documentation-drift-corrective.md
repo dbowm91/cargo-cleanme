@@ -22,8 +22,15 @@ bare-invocation path, which changes no exit code and no cleanup behaviour
 D2, D5, D14–D23, D26, and D28 were resolved by the documentation-and-skills
 re-derivation pass of 2026-10-19, which re-derived the eight skills, `AGENTS.md`,
 `README.md`, and all six `docs/` files against the current source. They are
-retained in the table for the record. **Fourteen defects remain open**
-(D1, D3, D4, D6, D7, D8, D9, D10, D11, D12, D13, D24, D25, D27).
+retained in the table for the record. **Thirteen defects remain open**
+(D3, D4, D6, D7, D8, D9, D10, D11, D12, D13, D24, D25, D27).
+
+**D1 was discharged by C040** (ADR 009), which rewrote the root `long_about`
+so it states that `scan` *needs a scope* and that `--all` is the full
+read-only machine reconciliation, and made the root manpage render from that
+same `long_about` rather than from a generator-side block — so the two
+surfaces can no longer drift. D2 was discharged with it. D1 is retained in
+the table for the record.
 
 ## Non-goals
 

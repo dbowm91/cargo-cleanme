@@ -140,9 +140,15 @@ fn render_node(command: &clap::Command, pages: &mut Vec<(String, Vec<u8>)>) -> R
     if command.get_name() == PRODUCT {
         // The only generator-side prose: how the binary is actually spelled.
         // Flag and subcommand syntax still comes solely from the model.
+        //
+        // The description itself is the model's own, so the man page and
+        // `--help` cannot drift apart. The long form is preferred because it
+        // is the one that states what the product does; the short form is the
+        // fallback for a model that declares no long description.
         let about = command
-            .get_about()
+            .get_long_about()
             .map(|about| about.to_string())
+            .or_else(|| command.get_about().map(|about| about.to_string()))
             .unwrap_or_default();
         annotated = annotated.long_about(format!(
             "{about}\n\nINVOCATION\n             After installation the binary is invoked by Cargo as an external\n             subcommand, so the supported spelling is:\n\n             \tcargo cleanme [SUBCOMMAND] [OPTIONS]\n\n             A directly downloaded binary is invoked as\n\

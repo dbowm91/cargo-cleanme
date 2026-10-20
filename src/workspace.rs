@@ -596,6 +596,73 @@ fn locate_one(manifest: &Path, runner: &dyn CargoRunner) -> LocateOutcome {
     }
 }
 
+/// The workspace that encloses `dir`, if any (ADR 009).
+///
+/// Cargo's own answer, obtained by running `cargo locate-project --workspace`
+/// *in* the directory: Cargo walks up from the child's working directory to
+/// the nearest manifest and reports the workspace that owns it. A directory
+/// with no manifest above it has no enclosing workspace, and Cargo says so by
+/// failing — which is a normal answer here, not an error.
+///
+/// The child gets the directory as its working directory and **no**
+/// `--manifest-path`. That option names a manifest to report on, not a place
+/// to search from, so it would answer for a manifest instead of for the
+/// operator's position.
+///
+/// A failure of any kind — a transport error, a Cargo refusal, an
+/// unparseable answer — yields "no enclosing workspace". The working
+/// directory remains a scope root on its own, so the worst case is that the
+/// enclosing workspace is not cleaned, never that something is cleaned
+/// without proof.
+pub fn enclosing_workspace_root(dir: &Path, runner: &dyn CargoRunner) -> Option<PathBuf> {
+    let args: Vec<std::ffi::OsString> = ["locate-project", "--workspace"]
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    let output = runner.run(dir, &args).ok()?;
+    if !output.success {
+        return None;
+    }
+    let locate: LocateOutput = serde_json::from_slice(&output.stdout).ok()?;
+    let manifest = PathBuf::from(&locate.root);
+    // The workspace root is the manifest's directory. An empty parent would
+    // name no directory at all, so it is filtered rather than admitted.
+    let root = manifest
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())?
+        .to_path_buf();
+    Some(root)
+}
+
+/// The scope roots the working directory contributes to the maintenance scope
+/// (ADR 009).
+///
+/// Two roots: the workspace that encloses the working directory, when there
+/// is one, and the working directory itself.
+///
+/// The enclosing workspace is not optional. A member directory's manifest
+/// sits *above* the member, so a root at the member cannot discover it — and
+/// an operator standing in `workspace/crates/member/src` expects that
+/// workspace's output to be reclaimed, exactly as `cargo clean` would. The
+/// anchor already admits that workspace in both directions
+/// (`CleanupSelection::Ancestry`); this is the discovery half of the same
+/// rule.
+///
+/// The enclosing workspace always contains the working directory, so the two
+/// roots collapse to one when there is a workspace; the working directory is
+/// still named separately so the scope reads as the operator's position when
+/// there is not.
+pub fn working_directory_scope_roots(dir: &Path, runner: &dyn CargoRunner) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(workspace) = enclosing_workspace_root(dir, runner)
+        && workspace != dir
+    {
+        roots.push(workspace);
+    }
+    roots.push(dir.to_path_buf());
+    roots
+}
+
 /// One `cargo metadata` spawn for a located group. The worker only spawns;
 /// parsing, member validation, diagnostics, and counters stay in the
 /// sequential emulation so their order matches sequential evaluation.
@@ -6063,6 +6130,172 @@ mod tests {
         assert!(
             !diagnostics.is_empty(),
             "an unreadable output root must leave a diagnostic"
+        );
+    }
+
+    // ADR 009 — the working directory joins the maintenance scope.
+    // ---------------------------------------------------------------------------
+
+    /// ADR 009: the enclosing workspace is Cargo's own answer, asked in the
+    /// operator's directory.
+    ///
+    /// The child gets the directory as its working directory and **no**
+    /// `--manifest-path`: that option names a manifest to report on, not a place
+    /// to search from, so it would answer for a manifest instead of for the
+    /// operator's position.
+    #[test]
+    fn the_enclosing_workspace_is_asked_for_in_the_working_directory() {
+        struct RecordingRunner {
+            seen: std::sync::Mutex<Vec<(PathBuf, Vec<std::ffi::OsString>)>>,
+            root_manifest: PathBuf,
+        }
+        impl CargoRunner for RecordingRunner {
+            fn run(&self, cwd: &Path, args: &[std::ffi::OsString]) -> io::Result<ProcessOutput> {
+                self.seen
+                    .lock()
+                    .unwrap()
+                    .push((cwd.to_path_buf(), args.to_vec()));
+                Ok(ProcessOutput {
+                    success: true,
+                    code: Some(0),
+                    stdout: serde_json::json!({"root": self.root_manifest})
+                        .to_string()
+                        .into_bytes(),
+                    stderr: Vec::new(),
+                })
+            }
+        }
+
+        let d = tempfile::tempdir().unwrap();
+        let workspace = d.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let runner = RecordingRunner {
+            seen: std::sync::Mutex::new(Vec::new()),
+            root_manifest: workspace.join("Cargo.toml"),
+        };
+
+        let member = workspace.join("crates/inner");
+        std::fs::create_dir_all(&member).unwrap();
+        let root = enclosing_workspace_root(&member, &runner).expect("an enclosing workspace");
+        assert_eq!(root, workspace);
+
+        let seen = runner.seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1, "one spawn, not one per candidate: {seen:?}");
+        assert_eq!(
+            seen[0].0, member,
+            "Cargo must be asked from the operator's directory"
+        );
+        let args: Vec<String> = seen[0]
+            .1
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            vec!["locate-project".to_string(), "--workspace".to_string()],
+            "the question is 'which workspace owns this directory', so there is no --manifest-path: {args:?}"
+        );
+    }
+
+    /// ADR 009: Cargo refusing to name an enclosing workspace is a normal answer.
+    ///
+    /// The working directory remains a scope root on its own, so the worst case
+    /// is that the enclosing workspace is not cleaned — never that something is
+    /// cleaned without proof.
+    #[test]
+    fn a_refused_enclosing_workspace_is_not_an_error() {
+        struct RefusingRunner;
+        impl CargoRunner for RefusingRunner {
+            fn run(&self, _cwd: &Path, _args: &[std::ffi::OsString]) -> io::Result<ProcessOutput> {
+                Ok(ProcessOutput {
+                    success: false,
+                    code: Some(101),
+                    stdout: Vec::new(),
+                    stderr: b"error: could not find `Cargo.toml`".to_vec(),
+                })
+            }
+        }
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(
+            enclosing_workspace_root(d.path(), &RefusingRunner),
+            None,
+            "a refusal means no enclosing workspace, not a failure"
+        );
+
+        struct BrokenRunner;
+        impl CargoRunner for BrokenRunner {
+            fn run(&self, _cwd: &Path, _args: &[std::ffi::OsString]) -> io::Result<ProcessOutput> {
+                Err(io::Error::other("transport"))
+            }
+        }
+        assert_eq!(
+            enclosing_workspace_root(d.path(), &BrokenRunner),
+            None,
+            "a transport failure means no enclosing workspace, not a failure"
+        );
+
+        struct GarbageRunner;
+        impl CargoRunner for GarbageRunner {
+            fn run(&self, _cwd: &Path, _args: &[std::ffi::OsString]) -> io::Result<ProcessOutput> {
+                Ok(ProcessOutput {
+                    success: true,
+                    code: Some(0),
+                    stdout: b"not json".to_vec(),
+                    stderr: Vec::new(),
+                })
+            }
+        }
+        assert_eq!(
+            enclosing_workspace_root(d.path(), &GarbageRunner),
+            None,
+            "an unparseable answer means no enclosing workspace, not a failure"
+        );
+    }
+
+    /// ADR 009: the working directory contributes its enclosing workspace *and*
+    /// itself.
+    ///
+    /// The enclosing workspace is not optional. A member directory's manifest sits
+    /// above the member, so a root at the member cannot discover it.
+    #[test]
+    fn the_working_directory_contributes_the_enclosing_workspace_and_itself() {
+        struct FixedRunner {
+            root_manifest: PathBuf,
+        }
+        impl CargoRunner for FixedRunner {
+            fn run(&self, _cwd: &Path, _args: &[std::ffi::OsString]) -> io::Result<ProcessOutput> {
+                Ok(ProcessOutput {
+                    success: true,
+                    code: Some(0),
+                    stdout: serde_json::json!({"root": self.root_manifest})
+                        .to_string()
+                        .into_bytes(),
+                    stderr: Vec::new(),
+                })
+            }
+        }
+
+        let d = tempfile::tempdir().unwrap();
+        let workspace = d.path().join("workspace");
+        let member = workspace.join("crates/inner");
+        std::fs::create_dir_all(&member).unwrap();
+        let runner = FixedRunner {
+            root_manifest: workspace.join("Cargo.toml"),
+        };
+
+        let roots = working_directory_scope_roots(&member, &runner);
+        assert_eq!(
+            roots,
+            vec![workspace.clone(), member.clone()],
+            "the enclosing workspace and the working directory are both scope roots"
+        );
+
+        // Standing in the workspace root itself names it once, not twice.
+        let roots = working_directory_scope_roots(&workspace, &runner);
+        assert_eq!(
+            roots,
+            vec![workspace.clone()],
+            "the working directory and its enclosing workspace are the same root: {roots:?}"
         );
     }
 }

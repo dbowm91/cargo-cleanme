@@ -322,7 +322,13 @@ fn run_cleanup(
 ) -> Result<i32, AppError> {
     let config = config::load_or_create(config_path)?;
     let mode = request.mode;
-    let resolved = resolve_cleanup_roots(&request.scope, config_path, &config, options)?;
+    let resolved = resolve_cleanup_roots(
+        &request.scope,
+        config_path,
+        &config,
+        options,
+        &cargo_cleanme::cleanup::SystemCleanupRunner,
+    )?;
     let configured = &config.cleanup.policy;
     let overrides = &request.overrides;
     let policy = cargo_cleanme::cleanup::CleanupPolicy {
@@ -722,6 +728,7 @@ fn resolve_cleanup_roots(
     config_path: &std::path::Path,
     config: &config::Config,
     options: RunOptions,
+    runner: &dyn cargo_cleanme::workspace::CargoRunner,
 ) -> Result<ResolvedCleanup, AppError> {
     match scope {
         CleanupScope::Root(root) => {
@@ -763,7 +770,7 @@ fn resolve_cleanup_roots(
             }
             let (entries, generation) =
                 cargo_cleanme::policy::full_cleanup_roots(outcome.code, outcome.full_state)?;
-            admit_automatic(entries, "full", generation)
+            admit_automatic(entries, Vec::new(), "full", generation)
         }
         // Bare maintenance and `clean` with no scope selector land here and use
         // exactly the same maintenance policy: a configured legacy
@@ -824,7 +831,7 @@ fn resolve_cleanup_roots(
                     // into its target and hidden the invalid identity.
                     let home = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf());
                     let Some(home) = home else {
-                        return admit_automatic(Vec::new(), "routine", None);
+                        return admit_automatic(Vec::new(), Vec::new(), "routine", None);
                     };
                     let (entries, warning) = cargo_cleanme::policy::routine_cleanup_candidates(
                         &home,
@@ -840,7 +847,18 @@ fn resolve_cleanup_roots(
                         }
                         _ => None,
                     };
-                    admit_automatic(entries, "routine", generation)
+                    // ADR 009: the working directory joins the maintenance
+                    // scope. The universe may only ever grow, so the
+                    // operator's roots are *added* to the routine candidates
+                    // — never substituted for them. A narrower scope would
+                    // promote `shared` bytes to `private`, the only class that
+                    // authorizes deletion (ADR 006).
+                    admit_automatic(
+                        entries,
+                        working_directory_entries(runner),
+                        "routine",
+                        generation,
+                    )
                 }
                 // A non-Full resolve never produces Global. Failing closed
                 // beats silently treating it as "nothing to do".
@@ -854,12 +872,86 @@ fn resolve_cleanup_roots(
     }
 }
 
+/// The working directory's scope roots (ADR 009).
+///
+/// The working directory is read with the same spelling the anchor uses
+/// (`std::env::current_dir`, unresolved), so the scope root and the anchor
+/// agree on one path. An unreadable working directory contributes no root at
+/// all; the anchor's own resolution is what turns that into a usage error, so
+/// the two cannot disagree about whether the operator has a position.
+fn working_directory_scope_paths(
+    runner: &dyn cargo_cleanme::workspace::CargoRunner,
+) -> Vec<std::path::PathBuf> {
+    let Ok(cwd) = std::env::current_dir() else {
+        return Vec::new();
+    };
+    cargo_cleanme::workspace::working_directory_scope_roots(&cwd, runner)
+}
+
+/// The working directory's scope roots as operator-provenance candidates.
+///
+/// The operator chose these roots by standing where they stand, so they carry
+/// operator provenance: the maintainability rule does not apply to them, and
+/// every other defect keeps the automatic root's handling — a symlinked root
+/// blocks the scope rather than being followed.
+fn working_directory_entries(
+    runner: &dyn cargo_cleanme::workspace::CargoRunner,
+) -> cargo_cleanme::policy::CleanupCandidates {
+    working_directory_scope_paths(runner)
+        .into_iter()
+        .map(|path| (path, cargo_cleanme::policy::RootProvenance::Operator))
+        .collect()
+}
+
+/// Whether the working directory lies outside the scope the routine roots
+/// already reach (ADR 009).
+///
+/// The working directory joins the maintenance scope only when the Routine
+/// scope does not already reach it. Two cases are excluded, and both for the
+/// same reason — the bounded machine-wide sweep must stay bounded:
+///
+/// - the working directory is *inside* a routine root: the routine scope
+///   already discovers it, so adding it is redundant;
+/// - the working directory *contains* a routine root: adding it would widen a
+///   bounded sweep of the known roots into a sweep of everything under the
+///   operator's directory. That is a different operation, it drags in the
+///   origins the maintainability rule excludes — a Trash full of abandoned
+///   manifests is the common case — and those unresolvable manifests sit
+///   inside the ADR 007 proof boundary and block the run. Measured on the
+///   operator's machine: a bare run from the home directory went from a
+///   six-second bounded sweep to a sixty-five-second sweep of 264,183
+///   directories that ended blocked on 1,357 unresolvable manifests.
+///
+/// `clean ROOT` is the spelling for that wider sweep, and it has always
+/// carried the same hazard.
+///
+/// The comparison is canonical-or-raw on both sides, so a symlinked prefix
+/// (macOS `/var` vs `/private/var`) cannot make two unrelated roots look
+/// related, nor make related ones look unrelated.
+fn working_directory_is_unreached(routine_roots: &[std::path::PathBuf]) -> bool {
+    let Ok(cwd) = std::env::current_dir() else {
+        return false;
+    };
+    !routine_roots
+        .iter()
+        .any(|root| roots_are_related(root, &cwd))
+}
+
+/// Whether two roots are in an ancestor relationship, one containing the other.
+fn roots_are_related(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let canonical =
+        |path: &std::path::Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let (a, b) = (canonical(a), canonical(b));
+    a.starts_with(&b) || b.starts_with(&a)
+}
+
 /// Admit one automatic (Routine/Full) candidate set: classify by provenance
 /// before collapse, collapse admitted paths only, remember omissions for the
 /// late pre-spawn recheck, and convert symlink/uncertain roots into a typed
 /// whole-scope block instead of a fatal error or a silent scope reduction.
 fn admit_automatic(
     entries: cargo_cleanme::policy::CleanupCandidates,
+    operator_entries: cargo_cleanme::policy::CleanupCandidates,
     scope_label: &'static str,
     state_generation: Option<u64>,
 ) -> Result<ResolvedCleanup, AppError> {
@@ -868,6 +960,21 @@ fn admit_automatic(
     // Propagate as a usage error instead.
     let classified = cargo_cleanme::policy::classify_cleanup_roots(entries)
         .map_err(|e| AppError::Config(format!("automatic cleanup classification failed: {e}")))?;
+    // ADR 009: the working directory joins only when the Routine scope does
+    // not already reach it. The decision is made against the *admitted*
+    // routine roots, so a root the maintainability rule refuses — an agent
+    // worktree, say — does not count as the routine scope reaching the
+    // operator's directory.
+    let operator_classified = if working_directory_is_unreached(&classified.admitted) {
+        cargo_cleanme::policy::classify_cleanup_roots(operator_entries)
+            .map_err(|e| AppError::Config(format!("operator root classification failed: {e}")))?
+    } else {
+        cargo_cleanme::policy::ClassifiedRoots::default()
+    };
+    let mut classified = classified;
+    classified.admitted.extend(operator_classified.admitted);
+    classified.omitted.extend(operator_classified.omitted);
+    classified.blocked.extend(operator_classified.blocked);
     let omitted = classified.omitted.clone();
     let omitted_diagnostics = classified.omission_diagnostics();
     let blocked = if classified.blocked.is_empty() {
@@ -1037,18 +1144,33 @@ fn run_scan(
     // configuration must not be able to silently narrow the canonical
     // reconciliation command. `scan ROOT` is the explicit CLI override, and
     // `scan --known` is the read-only maintenance scope.
+    let is_maintenance = matches!(intent, ScanIntent::Maintenance);
     let (root, full) = match intent {
         ScanIntent::Full => (None, true),
         ScanIntent::Explicit(root) => (Some(root), false),
         ScanIntent::Maintenance => (None, false),
     };
-    let policy = cargo_cleanme::policy::resolve(
+    let mut policy = cargo_cleanme::policy::resolve(
         domain::ScanRequest {
             cli_root: root,
             full,
         },
         &c.scan,
     )?;
+    // ADR 009: the read-only maintenance inventory must cover the same
+    // universe the maintenance cleanup would act on, or it is not an
+    // inventory of it. A configured `scan.root` is an exclusive override and
+    // keeps its own scope.
+    if is_maintenance && let domain::ScanScope::Routine(roots) = &mut policy.scope {
+        // ADR 009: the same rule as the cleanup path — the working directory
+        // joins only when the Routine scope does not already reach it.
+        let routine = roots.clone();
+        if working_directory_is_unreached(&routine) {
+            roots.extend(working_directory_scope_paths(
+                &cargo_cleanme::cleanup::SystemCleanupRunner,
+            ));
+        }
+    }
     let recency = policy.recency;
 
     // Inline progress is transient stderr state; final report remains stdout.

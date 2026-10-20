@@ -20,13 +20,16 @@ pub enum OutputFormat {
     about = "Clean inactive Cargo build artifacts through Cargo, or reconcile the machine read-only",
     long_about = "Clean inactive Cargo build artifacts through Cargo, or reconcile the machine read-only.\n\n\
 Bare `cargo cleanme` runs routine maintenance: it selects the maintenance scope \
-(bounded seed roots plus active learned roots, or a configured scan.root when one exists), \
-re-proves complete ownership for every discovered participant, and executes eligible Cargo \
-cleanup units. `--dry-run` performs the identical decision and proof path while invoking no \
-`cargo clean` process at all.\n\n\
-`cargo cleanme scan` with no ROOT is the full read-only machine reconciliation; it is the only \
-operation allowed to expire learned roots. `cargo cleanme scan ROOT` is a bounded explicit scan, \
-and `cargo cleanme scan --known` is the read-only routine inventory.\n\n\
+(bounded seed roots plus active learned roots plus the working directory, or a \
+configured scan.root when one exists), re-proves complete ownership for every \
+discovered participant, and executes eligible Cargo cleanup units. The working \
+directory is part of that scope, so a bare run cleans what is under it -- and the \
+scope only ever grows, never narrows. `--dry-run` performs the identical decision \
+and proof path while invoking no `cargo clean` process at all.\n\n\
+`cargo cleanme scan` needs a scope: `--all` is the full read-only machine \
+reconciliation and the only operation allowed to expire learned roots, \
+`scan ROOT` is a bounded explicit scan, and `scan --known` is the read-only \
+maintenance inventory.\n\n\
 Deletion is always delegated to Cargo; cargo-cleanme never removes a directory itself."
 )]
 pub struct Cli {
@@ -184,6 +187,11 @@ pub enum CleanupScope {
     /// root and no Full request: a configured legacy `scan.root` wins as an
     /// exclusive Explicit override, otherwise bounded seed roots plus active
     /// learned roots form the Routine scope.
+    ///
+    /// ADR 009 adds the working directory to that scope as an additional
+    /// root. The scope only ever grows: narrowing it would hide the
+    /// out-of-scope claimants of a shared target and promote `shared` bytes
+    /// to `private`, the only class that authorizes deletion.
     Maintenance,
     /// One bounded explicit root supplied as `clean ROOT`.
     Root(PathBuf),

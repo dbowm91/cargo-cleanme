@@ -18,7 +18,7 @@ projection (`show`, `src/config.rs:610-612`); editor resolution
 
 **Does not own** — any policy *decision* (`config.rs` validates shape and range;
 scope and recency belong to `policy::resolve`, `src/policy.rs:19-58`, and the
-CLI-over-config merge of the *cleanup policy* to `src/main.rs:328-343`; see
+CLI-over-config merge of the *cleanup policy* to `src/main.rs:334-349`; see
 [Policy & scope](04-policy-and-scope.md)); any authorization decision
 (`cleanup.allowed_output_roots` is carried and absoluteness-checked here,
 interpreted by `cleanup::is_authorized`, `src/cleanup.rs:762-772`; see
@@ -53,8 +53,8 @@ setting.
 | `[scan]` | `unignore` | `Vec<PathBuf>` | `[]` (`:48-49`, `:59`) | Exact absolute directories re-included beneath ignored trees. Not globs — a component-wise prefix test (`p.starts_with(u)`) resolved by `Filters::disposition` (`src/discovery.rs:68-87`). Must be absolute (`:122-124`). |
 | `[scan]` | `learned_root_retention_days` | `u32` | `30` (`src/config.rs:67-69`, `:50`) | How long a learned developer root survives after the last project observation. `0` disables expiration (`config.toml:14-15`). Accepted range `0..=3650`, enforced in `load` (`:107-111`). |
 | `[cleanup]` | `allowed_output_roots` | `Vec<PathBuf>` | `[]` (`:24-25`) | Authorization for already-private output outside the `clean ROOT` sandbox. Must be absolute (`:125-127`). See below. |
-| `[cleanup.policy]` | `min_reclaimable_bytes` | `u64` | `0` (`:32-33`) | Minimum reclaimable size for a group. `--min-reclaimable-bytes` replaces it when supplied (`src/main.rs:329-331`). |
-| `[cleanup.policy]` | `min_inactive_seconds` | `Option<u64>` | `None` (`:34`) | Optional *extra* quiet age on top of the safety recency guard. `--older-than` wins (`src/main.rs:332`). Values above `u64::MAX / 1_000_000_000` are rejected (`:128-134`). |
+| `[cleanup.policy]` | `min_reclaimable_bytes` | `u64` | `0` (`:32-33`) | Minimum reclaimable size for a group. `--min-reclaimable-bytes` replaces it when supplied (`src/main.rs:335-337`). |
+| `[cleanup.policy]` | `min_inactive_seconds` | `Option<u64>` | `None` (`:34`) | Optional *extra* quiet age on top of the safety recency guard. `--older-than` wins (`src/main.rs:338`). Values above `u64::MAX / 1_000_000_000` are rejected (`:128-134`). |
 | `[cleanup.policy]` | `include` | `Vec<String>` | `[]` (`:35-36`) | Globs a cleanup unit's **workspace root** must match to be selected at all (`src/cleanup.rs:1467`). |
 | `[cleanup.policy]` | `exclude` | `Vec<String>` | `[]` (`:37-38`) | Globs that prune a cleanup unit's workspace root (`src/cleanup.rs:1477`). |
 
@@ -71,10 +71,10 @@ the merged list (`src/cleanup.rs:1300-1301`, `compile_policy_globs`,
 A rootless `cargo cleanme scan` is a Full reconciliation and **never** consults
 the configured root: `policy::resolve` returns from its `full` arm before
 `config.root` is read (`src/policy.rs:20-29`), so configuration cannot narrow
-the canonical reconciliation command (`src/main.rs:1036-1039`). `scan --known` and
+the canonical reconciliation command (`src/main.rs:1143-1146`). `scan --known` and
 the Routine cleanup scope both resolve with `full: false` and no CLI root, so
 *there* the configured root *is* the scope — an exclusive Explicit override
-rather than an extra root to add (`src/policy.rs:30`, `src/main.rs:768-779`). A
+rather than an extra root to add (`src/policy.rs:30`, `src/main.rs:775-786`). A
 CLI root outranks the configured one wherever both are present
 (`src/policy.rs:30`).
 
@@ -270,7 +270,7 @@ migration shim.
 file is missing, then `load`s it. It never overwrites: a malformed file stays
 malformed and stays on disk (`:406-407` — creation is attempted only when the
 file is absent; `malformed_config_is_not_replaced_automatically`,
-`:1238-1249`). Used by `scan` (`src/main.rs:1035`), `clean` (`src/main.rs:323`)
+`:1238-1249`). Used by `scan` (`src/main.rs:1142`), `clean` (`src/main.rs:323`)
 and `config show` (`src/main.rs:249`).
 
 `ensure_exists` (`:422-427`), documented at `:421` as "Ensure a config editor
@@ -373,7 +373,7 @@ struct declaration order.
 
 `ConfigPathResolver` (`src/config.rs:70-89`) holds `override_path:
 Option<PathBuf>`. `src/main.rs:71` constructs it once from `cli.config` (the
-`--config` global flag, `src/cli.rs:33-34`) and resolves the path once per
+`--config` global flag, `src/cli.rs:36-37`) and resolves the path once per
 process, before any command dispatch — including for `update`, which does not use
 the config at all.
 

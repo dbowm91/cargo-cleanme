@@ -64,8 +64,8 @@ and `Serialize` is derived on no domain type — the JSON contract belongs to
 | Item | Kind | Meaning |
 |---|---|---|
 | `DiscoveredProject` | struct | Manifest + logical/target paths (`domain.rs:34-38`). **Never constructed or referenced anywhere in `src/` or `tests/`.** |
-| `ActivityState` | enum | `Active` / `Inactive` / `Uncertain` (`domain.rs:40-44`). **Never referenced outside its own definition** — inactivity is enforced by a cutoff comparison plus `GroupSkipReason` (`workspace.rs:1793-1803`). |
-| `SizeMetric` | enum | `Allocated` (block-rounded) or `Apparent` (logical length) (`domain.rs:46-49`). Selected by `#[cfg]`: `Allocated` on unix/windows (`workspace.rs:1812-1821`). |
+| `ActivityState` | enum | `Active` / `Inactive` / `Uncertain` (`domain.rs:40-44`). **Never referenced outside its own definition** — inactivity is enforced by a cutoff comparison plus `GroupSkipReason` (`workspace.rs:1860-1870`). |
+| `SizeMetric` | enum | `Allocated` (block-rounded) or `Apparent` (logical length) (`domain.rs:46-49`). Selected by `#[cfg]`: `Allocated` on unix/windows (`workspace.rs:1879-1888`). |
 
 ### 2.3 `domain.rs` — diagnostics (the uncertainty channel)
 
@@ -81,7 +81,7 @@ and `Serialize` is derived on no domain type — the JSON contract belongs to
 | `Vanished` | A path disappeared between discovery and inspection. |
 | `Metadata` | Metadata could not be established. |
 | `InvalidEntry` | A directory entry is malformed (bad name, wrong file type). |
-| `PlatformRoot` | A root is a filesystem root or otherwise not a real project root; at `Error` severity this makes a Full scan incomplete (`main.rs:1083-1087`, `main.rs:1249`). |
+| `PlatformRoot` | A root is a filesystem root or otherwise not a real project root; at `Error` severity this makes a Full scan incomplete (`main.rs:1205-1209`, `main.rs:1371`). |
 | `CandidateUncertain` | A *candidate* was dropped or refused: source-tree overlap, filesystem-root target, unmeasurable output. |
 | `OutOfScope` | ADR 007: an unprovable participant *outside* the selected proof boundary. Reported, never blocking; informational by construction (`domain.rs:75-77`, raised at `cleanup.rs:2401-2411`). |
 
@@ -120,7 +120,7 @@ unknown or env-only evidence, handled conservatively. Derivation:
 | `ResolutionCoverage` | struct | `workspaces` + `unresolved` + `discovered_manifest_count: usize` (`domain.rs:203-207`). `Default`-able, so an empty coverage is constructible. |
 
 `stage` and `capability` are **recorded where the failure is classified**, not
-re-parsed from the diagnostic text (`workspace.rs:949-961`): the resolver
+re-parsed from the diagnostic text (`workspace.rs:1016-1028`): the resolver
 keeps an `unresolved_stage` map and stamps each participant as the diagnostic
 is pushed. A copy-edit to a diagnostic message therefore cannot silently
 reclassify a participant. The `reason` string, by contrast, *is* still parsed
@@ -200,14 +200,14 @@ Sixteen `pub mod` declarations, one per line, alphabetical (`lib.rs:1-16`):
 
 `OutputOwnershipClass` is the crate's central safety token
 (`domain.rs:210-215`); its meaning is fixed by the classifier at
-`workspace.rs:1409-1445`.
+`workspace.rs:1476-1512`.
 
 | Variant | Label | Assigned when | Permitted at cleanup time |
 |---|---|---|---|
-| `PrivateBounded` | `private` | Single owner, every covering root strictly below the workspace root, no source overlap, and the group does **not** overlap an unrepresentable root's known aliases (`workspace.rs:1430-1436`) | **The only actionable class** — still subject to path authorization and a fresh ownership proof at the spawn boundary. |
-| `Shared` | `shared` | More than one owner maps to the group (`workspace.rs:1411-1412`), *or* it is inside the root but not provably exclusive because it overlaps an unrepresentable root's known aliases (`workspace.rs:1437-1441`) | Inventory-only: `cleanup.rs:1005` returns `CleanupReasonCode::SkippedShared`. |
-| `ExternalUnproven` | `external-unproven` | Inside no single workspace root — e.g. a `CARGO_TARGET_DIR` outside the project (`workspace.rs:1442-1443`) | Inventory-only *even inside a clean ROOT or a configured `allowed_output_roots`*: `cleanup.rs:1007`, plus the gate at `cleanup.rs:812-814` which fires before any root validation. |
-| `Uncertain` | `uncertain` | The owning workspace is itself uncertain, or a covering root *is or contains* a member source root — cleaning would delete the project (`workspace.rs:1431-1434`) | Never. Dropped before sizing with an explicit `CandidateUncertain` warning (`workspace.rs:1684-1702`). |
+| `PrivateBounded` | `private` | Single owner, every covering root strictly below the workspace root, no source overlap, and the group does **not** overlap an unrepresentable root's known aliases (`workspace.rs:1497-1503`) | **The only actionable class** — still subject to path authorization and a fresh ownership proof at the spawn boundary. |
+| `Shared` | `shared` | More than one owner maps to the group (`workspace.rs:1478-1479`), *or* it is inside the root but not provably exclusive because it overlaps an unrepresentable root's known aliases (`workspace.rs:1504-1508`) | Inventory-only: `cleanup.rs:1005` returns `CleanupReasonCode::SkippedShared`. |
+| `ExternalUnproven` | `external-unproven` | Inside no single workspace root — e.g. a `CARGO_TARGET_DIR` outside the project (`workspace.rs:1509-1510`) | Inventory-only *even inside a clean ROOT or a configured `allowed_output_roots`*: `cleanup.rs:1007`, plus the gate at `cleanup.rs:812-814` which fires before any root validation. |
+| `Uncertain` | `uncertain` | The owning workspace is itself uncertain, or a covering root *is or contains* a member source root — cleaning would delete the project (`workspace.rs:1498-1501`) | Never. Dropped before sizing with an explicit `CandidateUncertain` warning (`workspace.rs:1751-1769`). |
 
 The `Uncertain` source-overlap case deserves attention: a user who sets
 `target-dir` to their source tree would otherwise get silence, so the group is
@@ -217,7 +217,7 @@ dropped with a warning explaining why nothing is reported or cleaned.
 no physical node — a symlink, or a root with no physical identity — is
 invisible to the union-find, yet it can still point into a group. The
 classifier therefore demotes only the groups an unrepresentable root actually
-overlaps (`workspace.rs:1392-1395`, `workspace.rs:1435`); disjoint groups keep
+overlaps (`workspace.rs:1459-1462`, `workspace.rs:1502`); disjoint groups keep
 their private claim. An earlier reading of this code as "one unresolved
 workspace anywhere demotes everything" is wrong, and the distinction is
 load-bearing: it is the difference between one poisoned group and a poisoned
@@ -239,10 +239,10 @@ at the spawn boundary).
 sibling: `Target` and `Build`. Since Cargo 1.91 these can be distinct
 directories, and one `cargo clean` can affect both, so the kind is carried on
 every `OutputRoot` and ordered `Target` before `Build` in the human kind label
-(`workspace.rs:1952-1956`). Four exhaustive matches over it live outside
+(`workspace.rs:2019-2023`). Four exhaustive matches over it live outside
 `domain.rs`: `workspace.rs:275-278`, `workspace.rs:319-322`,
-`workspace.rs:1953-1956` and `cleanup.rs:937-940`. The *label builder* at
-`workspace.rs:1958-1963`, whose `[Target, Build]` arm renders `"target+build"`,
+`workspace.rs:2020-2023` and `cleanup.rs:937-940`. The *label builder* at
+`workspace.rs:2025-2030`, whose `[Target, Build]` arm renders `"target+build"`,
 is a slice match with a `_` arm and is therefore **not** compile-checked.
 
 ### 3.2 `OutputRoot`, `OutputSet`, `ResolvedWorkspace`
@@ -269,7 +269,7 @@ Same idea at two stages, and the field differences are the point.
 that survived the gates, and is the *candidate* form: it carries `covering_roots`
 (the minimal outermost canonical roots, used for measurement and per-group
 authorization, `domain.rs:230-231`) and an `uncertain: bool`.
-`EligibleOutputGroup` is the *report* form, built by the map at `main.rs:1252-1264`
+`EligibleOutputGroup` is the *report* form, built by the map at `main.rs:1374-1386`
 and the equivalent in `tests/end_to_end.rs:177-186`.
 
 Two asymmetries are worth stating. First, `owners: Vec<WorkspaceId>` becomes
@@ -307,7 +307,7 @@ internal callers — `discovery.rs:353-356` destructures it to empty slices.
 of the crate does not use. Discovery actually returns `Vec<PathBuf>` manifests
 plus a parallel `Vec<ScanDiagnostic>`; the manifest→project structuring never
 happened, or was superseded. `ActivityState` is the same story: recency is
-enforced as a cutoff comparison at `workspace.rs:1793-1803` and surfaced as
+enforced as a cutoff comparison at `workspace.rs:1860-1870` and surfaced as
 `GroupSkipReason::ActiveOutput` plus `counters.active_skipped`, never as a value
 on a group.
 
@@ -327,19 +327,19 @@ which is why `category` is a closed enum:
 
 1. **Rendering** — every diagnostic reaches the human report and `DiagnosticV1`
    (`output.rs:122-140`).
-2. **Uncertainty extraction** — `main.rs:1092-1104` filters *exactly*
+2. **Uncertainty extraction** — `main.rs:1214-1226` filters *exactly*
    `PermissionDenied | Metadata | Vanished` and maps them to a `Vec<PathBuf>`
    via `filter_map` on `d.path.clone()`, so a diagnostic with `path: None`
    contributes nothing. This vector decides whether the learned-root state file
    may be trusted and reconciled.
 3. **Scan incompleteness** — a `PlatformRoot` diagnostic at `Error` severity
-   makes a Full scan `full_incomplete` (`main.rs:1083-1087`, `main.rs:1249`),
+   makes a Full scan `full_incomplete` (`main.rs:1205-1209`, `main.rs:1371`),
    suppressing state-destroying reconciliation.
 4. **Durable uncertainty** — the `Uncertain` ownership class exists so
    candidate-level uncertainty becomes a *property attached to a group*, not
    just a transient log line.
 
-`main.rs:1092-1104` is the single most important thing to know about this enum,
+`main.rs:1214-1226` is the single most important thing to know about this enum,
 and it is a `matches!` listing three of seven variants. It compiles whether or
 not an eighth exists. That asymmetry — compile-checked in `output.rs:127-135`,
 silently exhaustive in `main.rs` — is review item 1 in §7. `OutOfScope` is
@@ -363,9 +363,9 @@ decision, not duplication. The proof pass re-resolves the ownership universe at
 the destructive boundary (`cleanup.rs:2981` and `cleanup.rs:3134` call
 `merge_proof`), and that work is real cost. The `proof_*` doc comment gives the
 reason: proof work is kept separate from initial discovery counters "so
-`--stats` cannot hide it" (`domain.rs:291-292`). Accordingly `main.rs:469-482`
+`--stats` cannot hide it" (`domain.rs:291-292`). Accordingly `main.rs:475-488`
 prints **four** lines for `cleanup --stats` — `stats_line`, `timings_line`,
-`proof_stats_line`, `proof_timings_line` — while `main.rs:1387-1394` prints two
+`proof_stats_line`, `proof_timings_line` — while `main.rs:1509-1516` prints two
 for a plain scan.
 
 `merge_proof` is one-directional: six specific fields are copied into `proof_*`
@@ -386,10 +386,10 @@ up, a human-readable `reason`, and — since M015 — the `capability` class tha
 says what the manifest's own byte-ownership is.
 
 **`stage` is recorded, not parsed.** The resolver stamps the stage where the
-diagnostic is pushed (`workspace.rs:949-961`), rather than re-deriving it by
+diagnostic is pushed (`workspace.rs:1016-1028`), rather than re-deriving it by
 substring-matching the message. `reason` is a copy of that message, or the
 literal `"no successful Cargo workspace metadata covered this manifest"`
-(`workspace.rs:946-948`). One parse from message text survives, and it is
+(`workspace.rs:1013-1015`). One parse from message text survives, and it is
 narrower: `believed_workspace_manifest` reads the *named* owner out of a
 Cargo refusal message (`workspace.rs:426`) to decide whether a refused manifest
 is a passenger of a resolved island. A parse that returns `None` fails closed
@@ -456,7 +456,7 @@ everything else qualifies the path inline.
 `AppError` is referenced 64 times in production code across seven files:
 `config.rs` 21, `main.rs` 21, `cleanup.rs` 11, `policy.rs` 6, `discovery.rs` 2,
 `update.rs` 2, `cli.rs` 1. `workspace.rs` never constructs it; `cli.rs` now
-does, once (`cli.rs:439`).
+does, once (`cli.rs:447`).
 
 **No type is used only from tests.** The four test-referenced types
 (`ScanRequest`, `ScanReport`, `EligibleOutputGroup`, `OutputOwnershipClass`) are
@@ -481,11 +481,11 @@ match sites outside `domain.rs`:
 | Adding a variant to | Consequence |
 |---|---|
 | `DiagnosticCategory` | `output.rs:127-135` has no `_` arm → **compile error** |
-| `OutputOwnershipClass` | `cleanup.rs:894-903`, `cleanup.rs:1004-1009` and `cleanup.rs:2170-2181` all list all four → **compile error**. The classifier at `workspace.rs:1409-1445` is an if/else chain, so it compiles — but the new variant would simply be unproducible. |
-| `OutputRootKind` | `workspace.rs:275-278`, `workspace.rs:319-322`, `workspace.rs:1953-1956`, `cleanup.rs:937-940` → **compile error**. The label builder at `workspace.rs:1958-1963` has a `_` arm and is *not* checked. |
+| `OutputOwnershipClass` | `cleanup.rs:894-903`, `cleanup.rs:1004-1009` and `cleanup.rs:2170-2181` all list all four → **compile error**. The classifier at `workspace.rs:1476-1512` is an if/else chain, so it compiles — but the new variant would simply be unproducible. |
+| `OutputRootKind` | `workspace.rs:275-278`, `workspace.rs:319-322`, `workspace.rs:2020-2023`, `cleanup.rs:937-940` → **compile error**. The label builder at `workspace.rs:2025-2030` has a `_` arm and is *not* checked. |
 | `SizeMetric` | `output.rs:114-117` → **compile error** |
 | `DiagnosticSeverity` | `as_str()` at `domain.rs:60-64` is exhaustive → **compile error** |
-| **`DiagnosticCategory` at `main.rs:1096-1101`** | **nothing — compiles silently.** A new uncertainty class would default to *not* feeding the `uncertainty` vector, so an incomplete scan would be treated as complete. The sharpest edge in this file. |
+| **`DiagnosticCategory` at `main.rs:1218-1223`** | **nothing — compiles silently.** A new uncertainty class would default to *not* feeding the `uncertainty` vector, so an incomplete scan would be treated as complete. The sharpest edge in this file. |
 | **`OutputOwnershipClass` at `cleanup.rs:812`, `cleanup.rs:946`, `cleanup.rs:1960`, `cleanup.rs:2234`, `cleanup.rs:3279`** | **nothing — all are `==`/`!=` comparisons.** A new class falls through as "not private", i.e. fails closed. Safe direction, but safe by accident rather than by construction. |
 | **`UnknownCapability` at `workspace.rs:423`** | **nothing — an `!=` comparison.** A new class falls through to `MergeAll`, which merges everything. Fails closed, and again by accident. |
 
@@ -506,44 +506,44 @@ counter is "a silent-wrong-number bug waiting for a slow machine"
 (`domain.rs:303-307`).
 
 **That reasoning is now applied consistently.** Eight call sites use the helper
-(`main.rs:1091`, `cleanup.rs:1235`, `cleanup.rs:3394`, `cleanup.rs:3418`,
-`workspace.rs:564`, `workspace.rs:627`, `workspace.rs:1628`,
-`workspace.rs:1722`) and **no** site in `src/` writes
+(`main.rs:1213`, `cleanup.rs:1235`, `cleanup.rs:3394`, `cleanup.rs:3418`,
+`workspace.rs:564`, `workspace.rs:694`, `workspace.rs:1695`,
+`workspace.rs:1789`) and **no** site in `src/` writes
 `elapsed().as_nanos() as u64`. The `cargo_locate_nanos` and
 `cargo_metadata_nanos` accumulators in `workspace.rs`, which `merge_proof` then
-saturating-adds, now call the helper (`workspace.rs:564`, `workspace.rs:627`).
+saturating-adds, now call the helper (`workspace.rs:564`, `workspace.rs:694`).
 
 **5.5 Saturating vs checked arithmetic.** `saturating_add` appears on 43 lines
 in `src/`, 6 of them in `merge_proof` (`domain.rs:363-382`).
 `saturating_sub` appears 21 times in production: the `SystemTime` clamps where
-clamping to the epoch is intended (`policy.rs:495`, `policy.rs:542`,
+clamping to the epoch is intended (`policy.rs:574`, `policy.rs:621`,
 `discovery_state.rs:320`), the byte-decrease clamp at
 `cleanup.rs:1885` (`proof.pre_bytes.saturating_sub(after)` — clamping to `0`
 when output *grew* between proof and verification, the only safe reading), the
 count clamps at `cleanup.rs:489`, `cleanup.rs:2010`,
-`discovery.rs:795`, `discovery.rs:994` and `main.rs:1359`, and the
+`discovery.rs:795`, `discovery.rs:994` and `main.rs:1481`, and the
 scroll/index clamps in the interactive list (`interactive.rs:284`,
 `interactive.rs:355`, `interactive.rs:441`, `interactive.rs:471`,
 `interactive.rs:539`, `interactive.rs:646`, `interactive.rs:648`,
 `interactive.rs:701`, `interactive.rs:836`, `interactive.rs:850`,
 `interactive.rs:865`, `interactive.rs:867`).
-`checked_sub` appears 16 times but only **4** in production code (`main.rs:1226`,
+`checked_sub` appears 16 times but only **4** in production code (`main.rs:1348`,
 `cleanup.rs:1686`, `cleanup.rs:2426`, `cleanup.rs:3353`); the other 12 are
 `start.checked_sub(…).unwrap()` inside test modules. The production uses are all
 `SystemTime` cutoff computations mapping to `AppError::Config` — see
-`main.rs:1226-1235`, "recency window exceeds system time range". `checked_add`
+`main.rs:1348-1357`, "recency window exceeds system time range". `checked_add`
 appears only at `traverse.rs:151`, `traverse.rs:160`, `traverse.rs:259` and
 `traverse.rs:268`, where overflow is not silently clamped but sets
 `stats.uncertain = true` and aborts the walk. Byte accumulation in hot paths
-is `saturating_add` (`workspace.rs:1756-1757`, `workspace.rs:1808`,
+is `saturating_add` (`workspace.rs:1823-1824`, `workspace.rs:1875`,
 `report.rs:53`, `output.rs:141`).
 
 **5.6 `PhysicalOutputGroup.uncertain` is structurally always `false`.** The
 field exists (`domain.rs:242`) but the single production construction site sets
-it to `false` (`workspace.rs:1836`). That is not a bug: the real gate is a
-*local* `uncertain` flag computed at `workspace.rs:1749-1764`, which when set
+it to `false` (`workspace.rs:1903`). That is not a bug: the real gate is a
+*local* `uncertain` flag computed at `workspace.rs:1816-1831`, which when set
 drops the group with an `Error`/`CandidateUncertain` diagnostic
-(`workspace.rs:1766-1780`). `EligibleOutputGroup` then has no `uncertain` field
+(`workspace.rs:1833-1847`). `EligibleOutputGroup` then has no `uncertain` field
 to lose. A reader who assumes the field carries live information will
 misunderstand the pipeline.
 
@@ -569,10 +569,10 @@ is the only test in the file, and the only `#[cfg(test)]` module
 (`domain.rs:407-435`). `error.rs` contains zero `#[test]` attributes and zero
 `#[cfg(test)]` modules.
 
-The crate has **474** `#[test]` functions in `src/` — `cleanup.rs` 114,
-`workspace.rs` 76, `update.rs` 47, `interactive.rs` 58, `discovery.rs` 39,
+The crate has **481** `#[test]` functions in `src/` — `cleanup.rs` 114,
+`workspace.rs` 79, `update.rs` 47, `interactive.rs` 58, `discovery.rs` 39,
 `cli.rs` 32, `output.rs` 21, `config.rs` 20, `discovery_state.rs` 17,
-`policy.rs` 16, `progress.rs` 13, `report.rs` 7, `traverse.rs` 6, `editor.rs` 2,
+`policy.rs` 21, `progress.rs` 13, `report.rs` 7, `traverse.rs` 6, `editor.rs` 2,
 `domain.rs` 1, `main.rs` 4 — and `error.rs` and `lib.rs` contribute none.
 
 **The consequence: this layer is covered mostly indirectly**, by tests that
@@ -589,7 +589,7 @@ now covered, in `domain.rs:417-434`.
 
 The integration surfaces that exercise this vocabulary:
 
-- **`tests/cli_contract.rs`** (4050 lines, 63 `#[test]`s) drives the real binary
+- **`tests/cli_contract.rs`** (4531 lines, 70 `#[test]`s) drives the real binary
   via `CARGO_BIN_EXE_cargo-cleanme` and asserts the JSON/stderr contract that
   `output.rs` and the counter lines produce.
   `json_scan_is_one_versioned_document_and_stats_stay_on_stderr`
@@ -620,10 +620,10 @@ The integration surfaces that exercise this vocabulary:
 
 1. **Adding a `DiagnosticCategory` variant.** Three things must happen; only one
    is compiler-enforced: fix the exhaustive match at `output.rs:127-135`; decide
-   whether it belongs in the uncertainty filter at `main.rs:1096-1101` (a
+   whether it belongs in the uncertainty filter at `main.rs:1218-1223` (a
    `matches!` that will *not* warn); and decide whether it makes a scan
-   incomplete in the `PlatformRoot` + `Error` sense at `main.rs:1083-1087` /
-   `main.rs:1249`. If it is a new way for the walk to be incomplete and it is
+   incomplete in the `PlatformRoot` + `Error` sense at `main.rs:1205-1209` /
+   `main.rs:1371`. If it is a new way for the walk to be incomplete and it is
    absent from the `main.rs` filter, an incomplete Full scan is treated as
    complete and may delete learned roots it never observed.
 2. **Adding an `OutputOwnershipClass` variant.** It needs a `label()` arm at
@@ -632,11 +632,11 @@ The integration surfaces that exercise this vocabulary:
    the five *inequality* gates (`cleanup.rs:812`, `cleanup.rs:946`,
    `cleanup.rs:1960`, `cleanup.rs:2234`, `cleanup.rs:3279`) will silently accept
    it as "not private". Confirm the new class fails closed in all five, and
-   that `workspace::build_groups` (`workspace.rs:1409-1445`) cannot produce it.
+   that `workspace::build_groups` (`workspace.rs:1476-1512`) cannot produce it.
 3. **Changing `ScanCounters`.** A new field must be classified: is it in
    `stats_line` or `proof_stats_line`? If it is proof-phase work it must be a
    `proof_*` field merged by `merge_proof` (`domain.rs:363-382`) so
-   `cleanup --stats` (`main.rs:469-482`) cannot hide it. If it is a maximum
+   `cleanup --stats` (`main.rs:475-488`) cannot hide it. If it is a maximum
    rather than a sum (like `proof_metadata_peak_concurrency`, set by `.max()` at
    `cleanup.rs:3019-3021`), it must *not* be added to `merge_proof`.
 4. **Any change to `elapsed_nanos` usage.** The helper exists to avoid a silent
@@ -651,11 +651,11 @@ The integration surfaces that exercise this vocabulary:
    contract?** Neither type is `Serialize`. A new field changes nothing on the
    wire until `output.rs` maps it (`output.rs:105-159`), and that mapping is the
    only place a stable name can be given. Separately, `visited_entries` is
-   written at `main.rs:1267` and read nowhere — if you add a report field,
+   written at `main.rs:1389` and read nowhere — if you add a report field,
    decide who reads it.
 7. **Is `PhysicalOutputGroup.uncertain` still meaningful?** It is `false` at the
-   only construction site (`workspace.rs:1836`) because uncertainty is decided by
-   a local flag at `workspace.rs:1749-1764`. If a new path can construct a group
+   only construction site (`workspace.rs:1903`) because uncertainty is decided by
+   a local flag at `workspace.rs:1816-1831`. If a new path can construct a group
    without passing that gate, the field becomes load-bearing and
    `EligibleOutputGroup`'s lack of it becomes real information loss.
 8. **Adding a module to `lib.rs` is not free.** Every `pub mod` is public API

@@ -50,6 +50,14 @@ Bare invocation does not delete directories directly. It delegates deletion only
 
 Learned discovery state selects where to search. It remains advisory and never supplies cleanup proof.
 
+**Amendment 2026-10-20 — ADR 009.** The Routine scope named above now also
+includes the working directory: the workspace that encloses it and the working
+directory itself, added as additional discovery roots. The scope only ever
+grows. It is never narrowed to the working directory, because narrowing
+discovery hides the out-of-scope claimants of a shared target and promotes
+`shared` bytes to `private` — the only class that authorizes deletion (ADR
+006's measurement). Every other decision in this ADR stands.
+
 ### 2. Bare `--dry-run` is the canonical zero-mutation preview
 
 ~~~text
@@ -165,6 +173,18 @@ Documentation should show greggd as a first-class integration example:
 - load threshold, load window, retry interval, and max wait owned by greggd;
 - direct argv, no shell wrapper;
 - user-owned/rootless greggd for developer-home maintenance, because the system service account/sandbox generally cannot access a developer's home tree.
+
+**Amendment 2026-10-20 — ADR 009.** The maintenance scope now includes the
+working directory, so a bare run cleans what is *under* the directory it was
+run from — when the Routine scope does not already reach that directory. A
+scheduler's working directory is normally the account's home directory, and
+the home directory *contains* the seed roots, so the bounded machine-wide
+sweep stays bounded and **this recipe is unchanged**: bare
+`cargo-cleanme --format log` from the home directory still cleans the
+machine's known roots. A scheduler run from somewhere the Routine scope does
+not reach would clean that directory instead; name the scope explicitly if
+that is not what you want. The weekly Full recipe is unchanged. The rest of
+this ADR stands.
 
 Other schedulers remain supported because the contract is ordinary process execution plus exit status/stdout/stderr.
 

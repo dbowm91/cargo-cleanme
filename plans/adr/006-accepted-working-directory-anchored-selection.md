@@ -33,6 +33,21 @@ shared bytes to `PrivateBounded`, the only class that authorizes deletion.
 1. **The working directory anchors selection, not discovery.** Root resolution
    and the ownership universe are unchanged for bare invocation. A selection
    filter runs *after* classification and removes non-matching `CleanupUnit`s.
+
+   **Amendment 2026-10-20 — ADR 009.** The working directory now also joins
+   the *discovery* scope, as an additional root: the workspace that encloses
+   it and the working directory itself. The anchor keeps its job — it still
+   filters after classification, and it still cannot add, reclassify, or
+   unblock — but it now has something to filter when the working directory
+   lies outside the Routine scope, which is the case this ADR's own
+   Consequences promised ("it cleans what is here") and could not deliver.
+
+   The direction of the change is the point: the discovery universe may only
+   ever **grow**. Adding roots can only reclassify `private` as `shared`,
+   never the reverse, so the failure this ADR measured — narrowing discovery
+   promoting `shared` bytes to `private` — stays unreachable. A scope that
+   *replaced* the routine roots with the working directory would reintroduce
+   it, and C040's test suite fails if it ever does.
 2. **Selection can only remove candidates.** It cannot add one, reclassify one,
    or unblock a scope. It is strictly weaker than the status quo, never stronger.
 3. **Anchor matching is bidirectional** — a unit qualifies when its canonical

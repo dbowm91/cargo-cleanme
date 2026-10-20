@@ -84,20 +84,41 @@ pub fn routine_seed_candidates(home: &Path) -> Vec<PathBuf> {
 /// and authoritative: any defect is fatal. Automatic roots (seed hints and
 /// learned state) are search hints only: proven absence/non-directory omits
 /// them from the current invocation, while uncertainty blocks mutation.
+///
+/// Operator roots are the roots the working directory contributes to the
+/// maintenance scope (ADR 009). The operator chose them by standing there, so
+/// the maintainability rule does not apply to them: that rule stops the tool
+/// from *choosing* a transient origin on its own, and `clean ROOT` already
+/// permits the same subtree. Every other defect keeps the automatic root's
+/// handling — a symlink blocks the scope, an absent or non-directory root is
+/// omitted — because a scope that quietly reduced itself is worse than one
+/// that stops.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RootProvenance {
     Explicit,
     Automatic,
+    Operator,
 }
 
 /// A safely omittable automatic root: its absence or non-directory type was
 /// positively established with `symlink_metadata`, so excluding it from this
 /// invocation cannot conceal an expected scan tree.
+///
+/// The operator variants are the working directory's counterparts (ADR 009).
+/// They are separate variants rather than reused `NotFound`/`NonDirectory`
+/// because the cause is carried by the variant: the pre-spawn recheck reads
+/// it to know what premise must still hold, and the diagnostic reads it to
+/// name the root truthfully. An operator root was never a *learned* one, and
+/// the omission vocabulary must not claim it was.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AutomaticOmission {
     NotFound(PathBuf),
     NonDirectory(PathBuf),
     NotMaintainable(PathBuf),
+    /// An operator root that was absent when it was admitted.
+    OperatorUnavailable(PathBuf),
+    /// An operator root that was not a directory when it was admitted.
+    OperatorNonDirectory(PathBuf),
 }
 
 /// An automatic root that cannot be safely omitted: a symlink (never followed,
@@ -126,7 +147,9 @@ impl ClassifiedRoots {
             .map(|o| match o {
                 AutomaticOmission::NotFound(p)
                 | AutomaticOmission::NonDirectory(p)
-                | AutomaticOmission::NotMaintainable(p) => p.clone(),
+                | AutomaticOmission::NotMaintainable(p)
+                | AutomaticOmission::OperatorUnavailable(p)
+                | AutomaticOmission::OperatorNonDirectory(p) => p.clone(),
             })
             .collect()
     }
@@ -141,21 +164,28 @@ impl ClassifiedRoots {
     /// vanished, or one that is no longer a directory, is news, and is
     /// reported with a bounded sample of paths.
     pub fn omission_diagnostics(&self) -> Vec<String> {
-        let mut groups: std::collections::BTreeMap<&str, Vec<&PathBuf>> =
+        // Keyed by (reason, noun) so the learned-root vocabulary stays exactly
+        // as it was, and an operator root's omission never claims to be a
+        // learned one.
+        let mut groups: std::collections::BTreeMap<(&str, &str), Vec<&PathBuf>> =
             std::collections::BTreeMap::new();
         for omission in &self.omitted {
-            let (reason, path) = match omission {
-                AutomaticOmission::NotFound(path) => ("unavailable", path),
-                AutomaticOmission::NonDirectory(path) => ("non-directory", path),
+            let (reason, noun, path) = match omission {
+                AutomaticOmission::NotFound(path) => ("unavailable", "learned", path),
+                AutomaticOmission::NonDirectory(path) => ("non-directory", "learned", path),
                 // By design, not a diagnostic: the origin is transient and
                 // would never have been cleaned. See the doc comment above.
                 AutomaticOmission::NotMaintainable(_) => continue,
+                AutomaticOmission::OperatorUnavailable(path) => ("unavailable", "operator", path),
+                AutomaticOmission::OperatorNonDirectory(path) => {
+                    ("non-directory", "operator", path)
+                }
             };
-            groups.entry(reason).or_default().push(path);
+            groups.entry((reason, noun)).or_default().push(path);
         }
         groups
             .into_iter()
-            .map(|(reason, mut paths)| {
+            .map(|((reason, noun), mut paths)| {
                 paths.sort();
                 let examples = paths
                     .iter()
@@ -174,7 +204,7 @@ impl ClassifiedRoots {
                 } else {
                     format!("; examples: {}", examples.join(", "))
                 };
-                format!("omitting {} {reason} learned root(s){sample}", paths.len())
+                format!("omitting {} {reason} {noun} root(s){sample}", paths.len())
             })
             .collect()
     }
@@ -262,6 +292,27 @@ fn classify_cleanup_roots_with_home(
                     out.omitted.push(AutomaticOmission::NonDirectory(path));
                 }
             }
+            (Ok(meta), RootProvenance::Operator) => {
+                // ADR 009: the operator chose this root by standing in it, so
+                // the maintainability rule does not apply. Every other defect
+                // keeps the automatic root's handling: a symlink blocks the
+                // scope rather than being followed, and a non-directory root
+                // is omitted.
+                if meta.file_type().is_symlink() || path_is_symlink(&path) {
+                    out.blocked.push(AutomaticBlock {
+                        path: path.clone(),
+                        reason: format!(
+                            "operator root {} is a symlink; refusing to follow or omit",
+                            path.display()
+                        ),
+                    });
+                } else if meta.is_dir() {
+                    out.admitted.push(path);
+                } else {
+                    out.omitted
+                        .push(AutomaticOmission::OperatorNonDirectory(path));
+                }
+            }
             (Err(e), RootProvenance::Explicit) => {
                 return Err(AppError::InvalidRoot {
                     path: path.display().to_string(),
@@ -298,6 +349,29 @@ fn classify_cleanup_roots_with_home(
                     });
                 }
             }
+            (Err(e), RootProvenance::Operator) => {
+                // The operator root is present by construction — it is where
+                // the process is running — so an absent one is an omission and
+                // not a maintainability judgement. An indeterminate state
+                // still blocks: the scope cannot be reduced silently.
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    out.omitted
+                        .push(AutomaticOmission::OperatorUnavailable(path));
+                } else if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    out.blocked.push(AutomaticBlock {
+                        path: path.clone(),
+                        reason: format!("cannot access operator root {}: {e}", path.display()),
+                    });
+                } else {
+                    out.blocked.push(AutomaticBlock {
+                        path: path.clone(),
+                        reason: format!(
+                            "indeterminate filesystem state for operator root {}: {e}",
+                            path.display()
+                        ),
+                    });
+                }
+            }
         }
     }
     out.admitted.sort();
@@ -329,6 +403,11 @@ pub fn recheck_admission_premise(
             AutomaticOmission::NotFound(p) => (p, true),
             AutomaticOmission::NonDirectory(p) => (p, false),
             AutomaticOmission::NotMaintainable(p) => (p, false),
+            // ADR 009: an operator root that was absent must stay absent, and
+            // one that was not a directory must stay a non-directory — the
+            // same premises the automatic roots carry.
+            AutomaticOmission::OperatorUnavailable(p) => (p, true),
+            AutomaticOmission::OperatorNonDirectory(p) => (p, false),
         };
         match fs::symlink_metadata(path) {
             Ok(meta) if matches!(omission, AutomaticOmission::NotMaintainable(_)) => {
@@ -714,7 +793,6 @@ fn managed_rust_prunes() -> Vec<PathBuf> {
 mod tests {
     use super::*;
     use crate::config::ScanConfig;
-    use tempfile::tempdir;
 
     #[test]
     #[cfg(unix)]
@@ -775,7 +853,7 @@ mod tests {
     }
     #[test]
     fn cli_root_wins_and_bypasses_filters() {
-        let d = tempdir().unwrap();
+        let d = tempfile::tempdir().unwrap();
         let cli = d.path().to_path_buf();
         let configured = PathBuf::from("/tmp");
         let c = ScanConfig {
@@ -798,7 +876,7 @@ mod tests {
     }
     #[test]
     fn configured_root_wins_over_global() {
-        let d = tempdir().unwrap();
+        let d = tempfile::tempdir().unwrap();
         let c = ScanConfig {
             root: Some(d.path().into()),
             ..Default::default()
@@ -824,7 +902,7 @@ mod tests {
         // `full` arm returns before `config.root` is ever consulted, so this is
         // the whole argument — a real Full walk is not needed to prove it, and
         // deliberately is not run in a test.
-        let d = tempdir().unwrap();
+        let d = tempfile::tempdir().unwrap();
         let c = ScanConfig {
             root: Some(d.path().to_path_buf()),
             ..Default::default()
@@ -866,7 +944,7 @@ mod tests {
 
     #[test]
     fn routine_state_errors_fall_back_to_seeds_with_one_warning() {
-        let d = tempdir().unwrap();
+        let d = tempfile::tempdir().unwrap();
         let seed = d.path().join("Projects");
         fs::create_dir(&seed).unwrap();
         let states = [
@@ -894,7 +972,7 @@ mod tests {
     /// defect stays a fatal `InvalidRoot`.
     #[test]
     fn automatic_roots_classify_by_provenance_and_explicit_roots_stay_strict() {
-        let d = tempdir().unwrap();
+        let d = tempfile::tempdir().unwrap();
         let real = d.path().join("present");
         fs::create_dir(&real).unwrap();
         let missing = d.path().join("deleted-worktree");
@@ -945,7 +1023,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn symlinked_automatic_roots_block_and_are_never_followed_or_omitted() {
-        let d = tempdir().unwrap();
+        let d = tempfile::tempdir().unwrap();
         let target = d.path().join("target");
         fs::create_dir(&target).unwrap();
         let link = d.path().join("link-to-dir");
@@ -984,7 +1062,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn trailing_slash_symlink_roots_classify_like_plain_symlinks() {
-        let d = tempdir().unwrap();
+        let d = tempfile::tempdir().unwrap();
         let target = d.path().join("target");
         fs::create_dir(&target).unwrap();
         let link = d.path().join("link-to-dir");
@@ -1012,7 +1090,7 @@ mod tests {
     /// boundary the proof was built on.
     #[test]
     fn admission_premise_recheck_detects_reappearance_and_disappearance() {
-        let d = tempdir().unwrap();
+        let d = tempfile::tempdir().unwrap();
         let admitted = d.path().join("admitted");
         fs::create_dir(&admitted).unwrap();
         let skipped = d.path().join("skipped");
@@ -1087,7 +1165,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn cleanup_candidates_preserve_symlinked_seed_identity_for_admission() {
-        let home = tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
         // "Developer" has no case-variant among the seed names, so this stays
         // exactly one candidate on case-insensitive macOS runners too
         // ("Projects" would also match "projects" there and block twice).
@@ -1118,7 +1196,7 @@ mod tests {
     /// missing durable location stays `NotFound`. Neither blocks.
     #[test]
     fn missing_transient_roots_classify_as_non_maintainable_not_unavailable() {
-        let d = tempdir().unwrap();
+        let d = tempfile::tempdir().unwrap();
         let home = d.path();
         let missing_transient = home.join(".codex/worktrees/dead-session-id");
         let missing_cache = home.join("Library/Caches/Homebrew/cargo_cache");
@@ -1233,6 +1311,134 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("non-maintainable")),
             "the transient bucket must not reach the operator: {diagnostics:?}"
+        );
+    }
+
+    // ADR 009 — operator provenance.
+    // ---------------------------------------------------------------------------
+
+    /// ADR 009: the operator's roots are exempt from the maintainability rule.
+    ///
+    /// The rule stops the tool from *choosing* a transient origin on its own. An
+    /// operator standing in `~/.codex/worktrees` has chosen it, and `clean ROOT`
+    /// already permits the same subtree. The same path as an *automatic* root is
+    /// still refused — the exemption is the provenance, not the path.
+    #[test]
+    fn operator_provenance_admits_what_the_maintainability_rule_refuses() {
+        let home = tempfile::tempdir().unwrap();
+        let forbidden = home.path().join(".codex/worktrees/agent");
+        std::fs::create_dir_all(&forbidden).unwrap();
+
+        // The home is supplied explicitly: `classify_cleanup_roots` reads the
+        // process's real home, and the forbidden origins are named relative to
+        // it. A test that used the real home would compare a temporary path
+        // against the real `~/.codex/worktrees` and find nothing forbidden.
+        let operator = classify_cleanup_roots_with_home(
+            vec![(forbidden.clone(), RootProvenance::Operator)],
+            Some(home.path()),
+        )
+        .unwrap();
+        assert!(
+            operator.admitted.contains(&forbidden),
+            "the operator's root must be admitted: {:?}",
+            operator.admitted
+        );
+        assert!(
+            operator.blocked.is_empty(),
+            "an operator root at a forbidden origin is not a block: {:?}",
+            operator.blocked
+        );
+
+        let automatic = classify_cleanup_roots_with_home(
+            vec![(forbidden.clone(), RootProvenance::Automatic)],
+            Some(home.path()),
+        )
+        .unwrap();
+        assert!(
+            !automatic.admitted.contains(&forbidden),
+            "the same path as an automatic root is still refused: {:?}",
+            automatic.admitted
+        );
+        assert!(
+            automatic
+                .omitted
+                .contains(&AutomaticOmission::NotMaintainable(forbidden.clone())),
+            "the refusal keeps its reason: {:?}",
+            automatic.omitted
+        );
+    }
+
+    /// ADR 009: an operator root's omission is reported as an operator root's.
+    ///
+    /// The published "learned root(s)" wording belongs to the roots the tool
+    /// chose. An operator root the operator chose is a different thing, and the
+    /// diagnostic must not call it something it is not.
+    #[test]
+    fn an_operator_omission_is_not_reported_as_a_learned_root() {
+        let mut classified = ClassifiedRoots::default();
+        classified
+            .omitted
+            .push(AutomaticOmission::OperatorUnavailable(PathBuf::from(
+                "/home/user/.codex/worktrees/gone",
+            )));
+        let diagnostics = classified.omission_diagnostics();
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0].starts_with("omitting 1 unavailable operator root(s)"),
+            "the operator's root must be named as the operator's: {diagnostics:?}"
+        );
+        assert!(
+            !diagnostics[0].contains("learned"),
+            "an operator root is not a learned root: {diagnostics:?}"
+        );
+    }
+
+    /// ADR 009: the published learned-root wording is unchanged.
+    ///
+    /// C038's diagnostic is quoted in a closed closure record and in two
+    /// integration assertions. Changing it here would make those records
+    /// describe a message that no longer exists.
+    #[test]
+    fn the_learned_root_diagnostic_is_unchanged() {
+        let mut classified = ClassifiedRoots::default();
+        classified
+            .omitted
+            .push(AutomaticOmission::NotFound(PathBuf::from(
+                "/home/user/gone",
+            )));
+        let diagnostics = classified.omission_diagnostics();
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0].starts_with("omitting 1 unavailable learned root(s)"),
+            "the learned-root wording is unchanged: {diagnostics:?}"
+        );
+    }
+
+    /// ADR 009: an operator root's defect handling matches an automatic root's.
+    ///
+    /// A symlinked operator root blocks the scope rather than being followed: the
+    /// scope may not quietly become smaller than the operator asked for.
+    #[test]
+    fn an_operator_root_that_is_a_symlink_blocks_the_scope() {
+        let d = tempfile::tempdir().unwrap();
+        let real = d.path().join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        let link = d.path().join("link");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let classified =
+            classify_cleanup_roots(vec![(link.clone(), RootProvenance::Operator)]).unwrap();
+        assert!(
+            classified.admitted.is_empty(),
+            "a symlinked operator root is never followed: {:?}",
+            classified.admitted
+        );
+        assert_eq!(
+            classified.blocked.len(),
+            1,
+            "a symlinked operator root blocks the scope: {:?}",
+            classified.blocked
         );
     }
 }

@@ -29,14 +29,14 @@
 - **Verdicts.** It emits `SourceActivity`, never an activity *state*. The
    domain's `ActivityState` (`domain.rs:40-44`) has **no construction site anywhere in `src/`** — a
     grep returns the definition and nothing else. Classification of evidence into a decision
-    happens in `workspace.rs:1668-1683` and `cleanup.rs:3372-3391`.
-- **Sizing policy.** It reports bytes and an mtime; `workspace.rs:1794` applies
+    happens in `workspace.rs:1735-1750` and `cleanup.rs:3372-3391`.
+- **Sizing policy.** It reports bytes and an mtime; `workspace.rs:1861` applies
    the recency window, `:1782` the emptiness gate, `:1812-1821` the metric label. The window is
-    supplied by the caller (`main.rs:1226-1235`, `cleanup.rs:3351-3359`).
+    supplied by the caller (`main.rs:1348-1357`, `cleanup.rs:3351-3359`).
 - **Workspaces, manifests, ownership, authorization.** No knowledge of Cargo,
    `Cargo.toml`, or who owns what.
 - **Progress reporting.** It holds no observer. The `observer.group_measured` /
-   `unit_completed` calls bracketing a measurement live in the caller (`workspace.rs:1809-1810`,
+   `unit_completed` calls bracketing a measurement live in the caller (`workspace.rs:1876-1877`,
     `:1738`, `:1774`, `:1785`, `:1798`) — which is what lets this stay a leaf.
 - **Cleanup.** The post-clean measurement referenced in the module doc
    (`:3-4`) is a re-measurement *supplied to* `cleanup.rs`; nothing here deletes.
@@ -98,19 +98,19 @@ Derivation, in order: `std::thread::available_parallelism()`, `map_or(1, ..)` on
 | `uncertain` | `bool` | `true` if any walk, metadata, or sizing step failed. Contract: "callers must treat the candidate as ineligible rather than promoting a partial measurement" (`:82-84`). |
 
 `Default` is derived, so an all-zero `TargetStats` is indistinguishable from a genuinely empty
-  directory. Callers must read `uncertain` to tell them apart — `workspace.rs:1750-1764` does
+  directory. Callers must read `uncertain` to tell them apart — `workspace.rs:1817-1831` does
   exactly that, treating a *missing* map entry as uncertain too.
 
 ### `SourceActivity` — `traverse.rs:294-302`
 
 | Variant | Payload | Caller should |
 |---|---|---|
-| `Recent(SystemTime)` | The **first** recent timestamp encountered, not the maximum (`:376`, `:467`) | Treat the candidate as active; do not size it. `workspace.rs:2086`, `cleanup.rs:3373`. |
+| `Recent(SystemTime)` | The **first** recent timestamp encountered, not the maximum (`:376`, `:467`) | Treat the candidate as active; do not size it. `workspace.rs:2153`, `cleanup.rs:3373`. |
 | `Quiet(Option<SystemTime>)` | Newest observed source timestamp, `None` if nothing could be stat'ed (`:379`, `:470`) | Not-active is *permitted*, not *required* — the timestamp is evidence for the caller's own bookkeeping. `cleanup.rs:3379-3383` folds it into `newest_activity`. |
 
 `Err(())` is a third, implicit outcome: any walk or metadata failure is conservative
   (`traverse.rs:354`, `:454`). `cleanup.rs:3384-3389` turns it into a hard block;
-  `workspace.rs:1641-1650` into a workspace-level uncertainty that later becomes
+  `workspace.rs:1708-1717` into a workspace-level uncertainty that later becomes
   `GroupSkipReason::UncertainSource` (`:1679-1682`).
 
 ### Private helpers worth explaining
@@ -156,14 +156,14 @@ Derivation, in order: `std::thread::available_parallelism()`, `map_or(1, ..)` on
   satisfies the doc contract at `traverse.rs:180` ("Results are returned in input order") *only
   because* callers pass ascending indices.
 
-**Do callers depend on it? The production caller does not.** `workspace.rs:1723-1726` re-keys
+**Do callers depend on it? The production caller does not.** `workspace.rs:1790-1793` re-keys
   every result into a `HashMap<usize, TargetStats>` and looks up by explicit position at
   `:1750-1751`. Order is irrelevant there. The test at `traverse.rs:521` does depend
   on it (`batched.iter().zip(singles.iter())`, positional) and is the only order-sensitive
   consumer.
 
 **The nuance:** the implementation guarantees *index-sorted* order; the doc promises *input*
-  order. Those differ for unsorted indices. `workspace.rs:1709-1713` uses `.enumerate()`, so they
+  order. Those differ for unsorted indices. `workspace.rs:1776-1780` uses `.enumerate()`, so they
   coincide today. Duplicated indices are a second, worse hazard — see §8.
 
 **Open directory handles.** There is **no explicit bound in this module**, and the module makes
@@ -216,7 +216,7 @@ Root guard → `dua_core::walk` with `Order::ParentFirst` and a constant `|_| tr
 **Sparse files — allocated size, not apparent size.** `bytes` comes from
   `filesize::file_real_size_fast` (`:159`), which on Unix is literally `metadata.blocks() * 512`
   (`filesize-0.2.0/src/lib.rs:68-73`). A 1 GiB file with one 4 KiB block reports ~4 KiB — the
-  correct number for a reclaimable-bytes estimate, and why `workspace.rs:1812-1821` labels the
+  correct number for a reclaimable-bytes estimate, and why `workspace.rs:1879-1888` labels the
   metric `SizeMetric::Allocated` on unix/windows.
 
 **Unreadable entries — the information is genuinely lost, and that is the architectural cost of
@@ -224,7 +224,7 @@ Root guard → `dua_core::walk` with `Order::ParentFirst` and a constant `|_| tr
   permission error, a vanished file, and a failed `modified()` all collapse to the same two-word
   outcome — `stats.uncertain = true; break` (`:127-130`, `:138-141`, `:145-148`, `:167-170`). The
   *cause* is discarded. The consequence is contained because `uncertain` is fail-closed:
-  `workspace.rs:1766-1781` drops the group and emits a generic `CandidateUncertain` error naming
+  `workspace.rs:1833-1848` drops the group and emits a generic `CandidateUncertain` error naming
   only the group display path. A user learns *that* a root could not be measured, never *why*.
   That is a deliberate trade — measurement must not be able to abort a scan — but it is the
   sharpest cost in the module.
@@ -263,7 +263,7 @@ Sequence: copy + stable-sort by index (`:186-187`) → drop repeated indices, th
   stream, and `PathBuf` is the wrong key: the same physical output root can be a `covering` entry
   of several groups, and `workspace.rs` emits one entry per *group position*, not per path. The
   `usize` lets the caller address results positionally while the engine addresses them by root id.
-  `workspace.rs:1709-1713` produces indices with `.enumerate()`, which is why index order equals
+  `workspace.rs:1776-1780` produces indices with `.enumerate()`, which is why index order equals
   input order there. **The index must be unique** — the engine asserts it — and this module now
   enforces that itself rather than inheriting the engine's panic; see §8.
 
@@ -350,7 +350,7 @@ Consequence: **backdating a workspace's files is not sufficient to make it eligi
   fixture does this correctly (`tests/end_to_end.rs:50-70` backdates the project directory and
   `src/`, `target/`, and `target/debug/` alongside the files, with the comment "The workspace
   directory's own mtime is part of the recency verdict"), and the portable in-repo helper that
-  does it is `workspace.rs:4809-4910` (`set_path_modified` plus `backdate_tree`).
+  does it is `workspace.rs:4876-4977` (`set_path_modified` plus `backdate_tree`).
 
 > **Known defect (C036 D4, proposed — not fixed).** `README.md:138-140` tells a user whose scan
 > reports zero groups to "backdate the sources", which is incomplete advice: the guard also keys
@@ -367,7 +367,7 @@ Structurally identical; the only differences are (a) one output root becomes N (
 **Why a member-aware version is required.** In a Cargo workspace the source activity of the
   *virtual* root is meaningless — the root typically has only `Cargo.toml` and member directories.
   Worse, all members may share one `target/`, so excluding only "the" output root is not
-  expressible. `workspace.rs:2083-2090` therefore loops over `workspace_member_roots(ws)` and ORs
+  expressible. `workspace.rs:2150-2157` therefore loops over `workspace_member_roots(ws)` and ORs
   the members: any one recent member protects the whole workspace. `cleanup.rs:3371-3391` repeats
   the loop during revalidation. The single-output `source_activity` is the one-project shape.
 
@@ -375,7 +375,7 @@ Structurally identical; the only differences are (a) one output root becomes N (
 
 **`source_activity` has no production caller.** A repo-wide grep returns the definition
   (`traverse.rs:311`) and exactly one call site: the inline test at `:619`. Production reaches
-   source activity only through `workspace_member_activity`, via `workspace.rs:2085` and
+   source activity only through `workspace_member_activity`, via `workspace.rs:2152` and
    `cleanup.rs:3372`. `measure_single_target` *is* live in production (`cleanup.rs:3398`,
    `:3734`). `source_activity` is `pub`, so nothing warns about it; it is recorded as
    deliberately-kept dead public API in [overview §10.1](overview.md).
@@ -386,18 +386,18 @@ The cutoff never enters this module's arithmetic; it arrives as a parameter (`:3
   applied per entry (`:375`). Composition lives upstream:
 
 ```text
-main.rs:1226        clock_cutoff = scan_start.checked_sub(recency)
-workspace.rs:1625   workspace_source_activity(ws, &all_outputs, clock_start, clock_cutoff)
-workspace.rs:1671   any owner source-recent -> GroupSkipReason::ActiveSource
-workspace.rs:1679   any owner uncertain     -> GroupSkipReason::UncertainSource
-workspace.rs:1718   traverse::measure_many_targets(&measure_targets)
-workspace.rs:1794   output gate: newest >= clock_cutoff || newest > clock_start
+main.rs:1348        clock_cutoff = scan_start.checked_sub(recency)
+workspace.rs:1692   workspace_source_activity(ws, &all_outputs, clock_start, clock_cutoff)
+workspace.rs:1738   any owner source-recent -> GroupSkipReason::ActiveSource
+workspace.rs:1746   any owner uncertain     -> GroupSkipReason::UncertainSource
+workspace.rs:1785   traverse::measure_many_targets(&measure_targets)
+workspace.rs:1861   output gate: newest >= clock_cutoff || newest > clock_start
 ```
 
 Source activity is the **cheap gate that runs before the expensive one**: a recent member
-  short-circuits at `workspace.rs:1668-1678` and the group's output roots are never walked at all.
+  short-circuits at `workspace.rs:1735-1745` and the group's output roots are never walked at all.
   A candidate the source gate clears is then re-checked in the opposite direction by the output
-  gate (`workspace.rs:1794`) — *both* must agree the group is idle.
+  gate (`workspace.rs:1861`) — *both* must agree the group is idle.
 
 ### What this signal can and cannot prove
 
@@ -410,7 +410,7 @@ Source activity is the **cheap gate that runs before the expensive one**: a rece
   momentarily unreadable, and one whose only recent file sits inside a nested repo all report
   `Quiet`. A pruned subtree is invisible by construction (`:357-369`). The signal is a **one-sided
   safety test**: `Recent` is authoritative, `Quiet` is merely permissive. Both production callers
-  treat it that way (`workspace.rs:1629-1651` skips a group only on `true`; `cleanup.rs:3373-3378`
+  treat it that way (`workspace.rs:1696-1718` skips a group only on `true`; `cleanup.rs:3373-3378`
   aborts only on `true`).
 
 ## 7. Dependencies and trade-offs
@@ -461,7 +461,7 @@ What it buys: a work-stealing parallel directory-read pool with a `ParentFirst` 
   per physical extent. The figure is a *per-entry allocated-bytes estimate*, not a filesystem-wide
   disk-usage figure. For Cargo `target/` trees — overwhelmingly non-hard-linked, non-reflinked
   regular files — it is close; for anything else it is an upper bound in the safe direction.
-  `workspace.rs:1812-1821` independently re-derives the same label from `cfg(any(unix, windows))`.
+  `workspace.rs:1879-1888` independently re-derives the same label from `cfg(any(unix, windows))`.
   The two cfg pairs agree today, which is what makes the label true, but it *is* a duplicated
   claim about a dependency's internals.
 
@@ -499,7 +499,7 @@ Hot spots for a whole-machine scan, in order: the double `stat` per entry; and �
 
 **The exception:** `SourceActivity::Recent(t)` carries the **first** recent timestamp found, not
   the maximum (`:376`, `:467`), so `t` depends on which worker reached the entry first. In
-  practice no production consumer reads the payload — `workspace.rs:2086` and `cleanup.rs:3373`
+  practice no production consumer reads the payload — `workspace.rs:2153` and `cleanup.rs:3373`
   both match `Recent(_)`. `Quiet(Option<SystemTime>)` *is* read (`cleanup.rs:3379-3383`) and *is*
   deterministic, because it is the `max`. If a future caller starts reading the `Recent` payload,
   it inherits scheduling nondeterminism.
@@ -534,7 +534,7 @@ Hot spots for a whole-machine scan, in order: the double `stat` per entry; and �
 | A directory of only empty files | `bytes: 0` but `entries: N`, `uncertain: false` — not "empty" | `:158-172` |
 | A symlink as the target root | `uncertain: true` (rejected by the guard) | `:109-115` |
 
-The empty-directory row is why `workspace.rs:1782` gates on `entries == 0` rather than `bytes == 0`: a target containing 10 000 zero-byte files is a real build artifact tree with real
+The empty-directory row is why `workspace.rs:1849` gates on `entries == 0` rather than `bytes == 0`: a target containing 10 000 zero-byte files is a real build artifact tree with real
   reclaimable inodes, and gating on bytes would silently classify it as empty.
 
 **Max depth or file-count budget?** **None, in this module.** There is no depth cap, no entry cap,
@@ -604,7 +604,7 @@ Otherwise: no `unwrap`, no `expect`, no slicing, and no integer casts in the pro
 `tests/end_to_end.rs` and `tests/cli_contract.rs` give indirect end-to-end coverage:
   `end_to_end.rs:205-210` asserts a real artifact is *sized* through the JSON contract (`bytes >= 8192`, and the human formatter agrees), and `end_to_end.rs:50-70` backdates both files and
   directories — with a `windows`-specific helper, because directory mtime is part of the verdict
-  (`workspace.rs:4809-4910`).
+  (`workspace.rs:4876-4977`).
 
 `scripts/release-benchmark.py` is a genuine indirect gate: `COUNTER_KEYS` (`:60-70`) includes
   `groups_measured`, `reportable`, and `bytes`, and `TIMING_KEYS` (`:42-49`) includes
@@ -636,21 +636,21 @@ Filesystem measurement is the easiest thing in this project to test against a fi
      never against an expected number. No fixture creates a sparse file, a compressed NTFS file,
      an APFS clone, or a hard link. So the §7 claim — sparse files report allocated bytes, hard
      links are counted N times, `SizeMetric::Allocated` is the truthful label — is supported by
-     reading `filesize-0.2.0` and `workspace.rs:1812-1821`, **not by any test in this
+     reading `filesize-0.2.0` and `workspace.rs:1879-1888`, **not by any test in this
      repository.** A `filesize` change to its Unix branch, or a divergence between its cfg and
      `workspace.rs`'s duplicate cfg, would pass the suite.
 2. **The uncertainty paths are almost entirely untested.** No test in
    `traverse.rs` constructs a permission error, a mid-walk deletion, an EMFILE, or a vanished
      file; the batch-vs-single parity test (`:507-526`) runs on a healthy temp dir where every
   `stat` succeeds. The *consequences* of uncertainty are well covered
-   (`workspace.rs:1766-1781`, `cleanup.rs:3399-3404`), but the module's ability to *produce*
+   (`workspace.rs:1833-1848`, `cleanup.rs:3399-3404`), but the module's ability to *produce*
      `uncertain` from each failure mode (walk error `:127-130`, `symlink_metadata` error
      `:138-141`, `modified()` error `:145-148`, `filesize` error `:167-170`, `entries` overflow
      `:151-157`, `bytes` overflow `:160-166`) is untested per mode. The two overflow branches are
      unreachable in practice and untestable without injection.
 3. **The nested-repository boundary rule** — specifically the decision to
    exclude the boundary directory's own mtime (`:357-360`) — is verified only indirectly, by
-   `workspace.rs:2883-2913`, which tests that a *recent output file* does not protect a
+   `workspace.rs:2950-2980`, which tests that a *recent output file* does not protect a
    workspace and a *recent source file* does. The nested-repo case the comment describes is not
    covered by any test I could find.
 4. **The directory-mtime rule is untested, and the one test that looks like it covers the rule
@@ -675,14 +675,14 @@ Filesystem measurement is the easiest thing in this project to test against a fi
      producer of indices, keep the dedup — and remember that the *first* occurrence of an index
      wins, so a repeated index now silently drops the second path rather than measuring it.
 3. **`traverse.rs:186-187` vs `:180`** — the doc promises "input order", the
-   code delivers "index-sorted order". They agree only because `workspace.rs:1709-1713` uses
+   code delivers "index-sorted order". They agree only because `workspace.rs:1776-1780` uses
      `.enumerate()`. Either fix the doc or document the uniqueness + ascending precondition.
 4. **`traverse.rs:136` + `:244`** — the re-`stat` that duplicates the engine's
    eager `entry.metadata()` (`dua-core lib.rs:776`). This is the module's largest avoidable
      syscall cost, and it exists for a stated reason (`traverse.rs:9-12`). If anyone "optimises"
      it away by reading `entry.metadata()`, the allocated-bytes metric and the error-conservatism
      guarantee both move.
-5. **`workspace.rs:1812-1821` vs `filesize-0.2.0/src/lib.rs:58-126`**
+5. **`workspace.rs:1879-1888` vs `filesize-0.2.0/src/lib.rs:58-126`**
    — the `SizeMetric` label is a second, hand-maintained statement about which platform branch of
      a dependency actually ran. Change one cfg, change both.
 6. **`traverse.rs:330-348` vs `:382-402`** (and `:429-449` vs `:473-493`) —
@@ -693,14 +693,14 @@ Filesystem measurement is the easiest thing in this project to test against a fi
      documented at `traverse.rs:309-310`; confirm it is still wanted rather than inherited.
 8. **`traverse.rs:127-130`, `:138-141`, `:145-148`, `:167-170`** — the four
    `uncertain` sites in the single path. They discard the error, so the diagnostic a user can
-     eventually see (`workspace.rs:1768-1772`) names the group but not the cause. If the project
+     eventually see (`workspace.rs:1835-1839`) names the group but not the cause. If the project
      ever wants actionable "permission denied on X", this is the place to thread it.
 9. **`traverse.rs:158`** — `meta.is_file()` is the only byte-contributing
    branch. Adding sockets, or trusting `entry.file_type` from the walk instead of the fresh
      `symlink_metadata`, changes the byte total and the Windows behaviour of `filesize`'s
      `canonicalize` in ways nothing in the suite would catch.
 10. **`traverse.rs:376` / `:467`** — `Recent(t)` carries the first recent
-    timestamp, not the max. Every current caller discards it (`workspace.rs:2086`,
+    timestamp, not the max. Every current caller discards it (`workspace.rs:2153`,
       `cleanup.rs:3373`), which is the only reason this is not a determinism bug. A caller that
       starts reading `t` inherits scheduling nondeterminism.
 11. **`traverse.rs:370-377` / `:461-468`** — the activity guard reads the mtime of every entry

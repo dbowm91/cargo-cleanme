@@ -1910,6 +1910,12 @@ fn bare_cleanup_with_no_known_roots_is_a_successful_no_op() {
     let output = command
         .env("HOME", home.path())
         .env("PATH", path_with(&fixture.bin))
+        // ADR 009: the working directory joins the maintenance scope, so the
+        // scenario's "no known roots" has to include "no workspace under the
+        // working directory". The empty home is that directory; without this
+        // pin the test would silently scope to whatever directory the test
+        // runner happened to start in.
+        .current_dir(home.path())
         .output()
         .unwrap();
     assert!(
@@ -2485,6 +2491,11 @@ fn known_scan_resolves_routine_without_a_configured_root_and_explicit_with_one()
             .env("FIXTURE_TARGET", root.join("target"))
             .env("CARGO_LOG", &fixture.log)
             .env("CARGO_ARGS_LOG", &fixture.args_log)
+            // ADR 009: the read-only maintenance inventory covers the working
+            // directory too, so the scenario's home is the directory it
+            // stands in. The seeded project is under it, so the manifest
+            // count the assertion checks is unchanged.
+            .current_dir(home.path())
             .output()
             .unwrap();
         serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
@@ -2766,6 +2777,9 @@ fn log_mode_zero_result_maintenance_is_status_ok() {
     let output = command
         .env("HOME", home.path())
         .env("PATH", path_with(&fixture.bin))
+        // ADR 009: the working directory joins the maintenance scope; the
+        // empty home is the scenario's zero-result directory.
+        .current_dir(home.path())
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -2800,6 +2814,9 @@ fn log_mode_scan_reports_the_resolved_scope() {
             .env("FIXTURE_TARGET", seeded.join("target"))
             .env("CARGO_LOG", &fixture.log)
             .env("CARGO_ARGS_LOG", &fixture.args_log)
+            // ADR 009: the read-only maintenance inventory covers the working
+            // directory too; the home is the scenario's directory.
+            .current_dir(home.path())
             .output()
             .unwrap();
         assert_bounded_log_line(&output.stdout)
@@ -4046,5 +4063,469 @@ fn a_cleanup_with_nothing_to_report_says_nothing_to_clean_and_exits_zero() {
         json["result"]["selected_roots"].as_array().unwrap().len(),
         1,
         "the machine contract still names the scope it considered: {json}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// C040 — ADR 009: the working directory joins the maintenance scope.
+//
+// Platform scope: every case below substitutes the POSIX Cargo stub from
+// `common::write_fake_cargo`, which is deliberately Unix-only, and every case
+// isolates `$HOME` so the Routine seed scope is empty unless a case says
+// otherwise. The Windows lane covers the equivalent strict explicit-root path
+// through the existing invalid-root cases.
+// ---------------------------------------------------------------------------
+
+/// A maintenance scope whose only route to a project is the working directory.
+///
+/// `$HOME` holds none of the Routine seed names and the learned state is
+/// empty, so the project under the sandbox is reachable *only* through the
+/// working directory. That is the shape the previous implementation could not
+/// see at all: the working directory was a filter over a universe that did
+/// not contain it, so the run proved nothing and reported a zero result.
+#[cfg(unix)]
+struct WorkingDirectoryScopeFixture {
+    temp: tempfile::TempDir,
+    home: PathBuf,
+    state_home: PathBuf,
+    sandbox: PathBuf,
+    project: PathBuf,
+    target: PathBuf,
+    config: PathBuf,
+    log: PathBuf,
+    args_log: PathBuf,
+    bin: PathBuf,
+}
+
+#[cfg(unix)]
+impl WorkingDirectoryScopeFixture {
+    fn new() -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let state_home = temp.path().join("state-home");
+        // The sandbox is neither a seed name nor a learned root.
+        let sandbox = temp.path().join("sandbox");
+        std::fs::create_dir_all(&sandbox).unwrap();
+        let project = common::inactive_project(&sandbox, "project");
+        let target = project.join("target");
+        let bin = temp.path().join("bin");
+        common::write_fake_cargo(&bin, temp.path());
+        let config = temp.path().join("config.toml");
+        fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
+        Self {
+            log: temp.path().join("cargo.log"),
+            args_log: temp.path().join("cargo-args.log"),
+            temp,
+            home,
+            state_home,
+            sandbox,
+            project,
+            target,
+            config,
+            bin,
+        }
+    }
+
+    /// The learned-state file, computed rather than hardcoded, for the
+    /// platform's own convention.
+    fn state_file(&self) -> PathBuf {
+        #[cfg(target_os = "macos")]
+        {
+            self.home
+                .join("Library/Application Support/cargo-cleanme/discovery-state.json")
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.state_home.join("cargo-cleanme/discovery-state.json")
+        }
+    }
+
+    /// Write a learned root, so the Routine scope has one to keep.
+    fn write_learned_root(&self, path: &std::path::Path) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let state = serde_json::json!({
+            "schema_version": 2,
+            "last_full_at": now,
+            "projects": [],
+            "learned_roots": [{"path": path, "last_project_seen_at": now}],
+        });
+        let file = self.state_file();
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, serde_json::to_string(&state).unwrap()).unwrap();
+    }
+
+    /// A maintenance run from `cwd`, against the fixture's one project.
+    fn run_from(&self, cwd: &std::path::Path, args: &[&str]) -> std::process::Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args([
+            "--config",
+            self.config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "json",
+            "--dry-run",
+        ]);
+        command.args(args);
+        command
+            .env("HOME", &self.home)
+            .env("XDG_STATE_HOME", &self.state_home)
+            .env("PATH", path_with(&self.bin))
+            .env("FIXTURE_ROOT", &self.project)
+            .env("FIXTURE_TARGET", &self.target)
+            .env("CARGO_LOG", &self.log)
+            .env("CARGO_ARGS_LOG", &self.args_log)
+            .current_dir(cwd)
+            .output()
+            .unwrap()
+    }
+}
+
+/// ADR 009: a maintenance run from a directory outside the Routine scope
+/// cleans the project underneath it.
+///
+/// The premise is asserted first — the project is under no seed name and the
+/// learned state is empty — so a green run cannot be explained by the scope
+/// having found it another way. Before ADR 009 this run proved nothing: the
+/// working directory was a filter over a universe that did not contain it.
+#[cfg(unix)]
+#[test]
+fn a_maintenance_run_from_a_directory_outside_the_known_roots_cleans_the_project_underneath_it() {
+    let fixture = WorkingDirectoryScopeFixture::new();
+    assert!(
+        !fixture.project.starts_with(&fixture.home),
+        "the project must be outside the home, or the seed scope could have found it: {:?}",
+        fixture.project
+    );
+    assert!(
+        !fixture.state_file().exists(),
+        "the learned state must be empty, or a learned root could have found it"
+    );
+
+    let output = fixture.run_from(&fixture.sandbox, &[]);
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["operation"], "clean", "{json}");
+    assert_eq!(
+        json["scope"], "routine",
+        "the machine contract's scope label is unchanged: {json}"
+    );
+    assert_eq!(
+        json["result"]["summary"]["simulated"], 1,
+        "the project under the working directory must be simulated: {json}"
+    );
+    assert_eq!(
+        json["result"]["units"][0]["workspace_root"],
+        fixture.project.to_str().unwrap(),
+        "{json}"
+    );
+    assert_eq!(
+        json["result"]["units"][0]["outcome"], "simulated",
+        "a dry run simulates and never cleans: {json}"
+    );
+}
+
+/// ADR 009: the maintenance scope *adds* the working directory to the routine
+/// roots. It never replaces them.
+///
+/// This is the invariant the whole change rests on. A scope that narrowed to
+/// the working directory would hide the out-of-scope claimants of a shared
+/// target and promote `shared` bytes to `private` — the only class that
+/// authorizes deletion (ADR 006). The assertion is a superset, so a
+/// substitution fails it.
+#[cfg(unix)]
+#[test]
+fn the_maintenance_scope_adds_the_working_directory_to_the_routine_roots() {
+    let fixture = WorkingDirectoryScopeFixture::new();
+    // A seed root: "Developer" is a seed name with no case-variant among the
+    // seed names, so exactly one seed candidate exists even on
+    // case-insensitive macOS runners.
+    let developer = fixture.home.join("Developer");
+    std::fs::create_dir_all(&developer).unwrap();
+    let _seeded = common::inactive_project(&developer, "seeded");
+    // A learned root.
+    let learned = fixture.home.join("learned");
+    std::fs::create_dir_all(&learned).unwrap();
+    common::inactive_project(&learned, "learned-project");
+    fixture.write_learned_root(&learned);
+
+    let output = fixture.run_from(&fixture.sandbox, &[]);
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let roots: Vec<String> = json["result"]["selected_roots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r.as_str().unwrap().to_string())
+        .collect();
+
+    assert!(
+        roots.contains(&developer.to_str().unwrap().to_string()),
+        "the seed root must survive: {roots:?}"
+    );
+    assert!(
+        roots.contains(&learned.to_str().unwrap().to_string()),
+        "the learned root must survive: {roots:?}"
+    );
+    assert!(
+        roots.contains(&fixture.sandbox.to_str().unwrap().to_string()),
+        "the working directory must be added: {roots:?}"
+    );
+}
+
+/// ADR 009: standing in a member directory still cleans the enclosing
+/// workspace.
+///
+/// A member directory's manifest sits *above* the member, so a root at the
+/// member cannot discover it. The enclosing workspace is what makes this
+/// work, and it is the reason the scope asks Cargo which workspace owns the
+/// operator's directory.
+#[cfg(unix)]
+#[test]
+fn standing_in_a_member_directory_still_cleans_the_enclosing_workspace() {
+    let fixture = WorkingDirectoryScopeFixture::new();
+    let member = fixture.project.join("src");
+    assert!(
+        member.is_dir(),
+        "the fixture must have a member directory: {member:?}"
+    );
+
+    let output = fixture.run_from(&member, &[]);
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        json["result"]["summary"]["simulated"], 1,
+        "the enclosing workspace must be found from inside a member: {json}"
+    );
+    assert_eq!(
+        json["result"]["units"][0]["workspace_root"],
+        fixture.project.to_str().unwrap(),
+        "{json}"
+    );
+}
+
+/// ADR 009: the working directory is exempt from the maintainability rule.
+///
+/// `~/.codex/worktrees` is a known-transient origin the tool refuses to
+/// choose as an automatic root. An operator standing in it has chosen it, and
+/// `clean ROOT` already permits the same subtree. The same path as an
+/// *automatic* root is still refused — the exemption is the provenance, not
+/// the path.
+#[cfg(unix)]
+#[test]
+fn the_working_directory_is_exempt_from_the_maintainability_rule() {
+    let fixture = WorkingDirectoryScopeFixture::new();
+    // The forbidden origin, under the fixture's own home, and a learned root
+    // that names it: the tool's own choice, which the rule refuses.
+    let agent = fixture.home.join(".codex/worktrees/agent");
+    std::fs::create_dir_all(&agent).unwrap();
+    let project = common::inactive_project(&agent, "project");
+    let target = project.join("target");
+    fixture.write_learned_root(&agent);
+
+    // A directory that is not an ancestor of the forbidden origin, so the
+    // working directory cannot reach it.
+    let elsewhere = fixture.temp.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+
+    let run = |cwd: &std::path::Path| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args([
+            "--config",
+            fixture.config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "json",
+            "--dry-run",
+        ]);
+        let output = command
+            .env("HOME", &fixture.home)
+            .env("XDG_STATE_HOME", &fixture.state_home)
+            .env("PATH", path_with(&fixture.bin))
+            .env("FIXTURE_ROOT", &project)
+            .env("FIXTURE_TARGET", &target)
+            .env("CARGO_LOG", &fixture.log)
+            .env("CARGO_ARGS_LOG", &fixture.args_log)
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+
+    // The tool's own choice: the learned root at a transient origin is
+    // refused. This is what makes the case discriminating rather than a
+    // tautology.
+    let automatic = run(&elsewhere);
+    assert_eq!(
+        automatic["result"]["summary"]["simulated"], 0,
+        "the automatic scope must still refuse the forbidden origin: {automatic}"
+    );
+
+    // Standing in it is the operator's choice, so it is in scope.
+    let operator = run(&agent);
+    assert_eq!(
+        operator["result"]["summary"]["simulated"], 1,
+        "the operator's own directory must be in scope: {operator}"
+    );
+}
+
+/// ADR 009: the configured ignore list still prunes the working directory's
+/// subtree in the read-only inventory.
+///
+/// The exemption is from the maintainability rule only. An explicit operator
+/// exclusion outranks a default, so a configured `ignore` still prunes the
+/// subtree the operator is standing in.
+///
+/// This is asserted where the filters apply. Every cleanup scope bypasses the
+/// discovery filters — ADR 007 §1: "`clean ROOT` proves exactly those roots" —
+/// so `scan.ignore` has never applied to a cleanup, before or after ADR 009.
+#[cfg(unix)]
+#[test]
+fn a_configured_ignore_still_covers_the_working_directory() {
+    let fixture = WorkingDirectoryScopeFixture::new();
+    let config = fixture.temp.path().join("ignoring.toml");
+    fs::write(
+        &config,
+        format!(
+            "[scan]\nrecency_seconds = 300\nignore = [{}]\n",
+            toml::Value::String(fixture.sandbox.to_str().unwrap().replace('\\', "\\\\"))
+        ),
+    )
+    .unwrap();
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+    command.args([
+        "--config",
+        config.to_str().unwrap(),
+        "--no-progress",
+        "--format",
+        "json",
+        "scan",
+        "--known",
+    ]);
+    let output = command
+        .env("HOME", &fixture.home)
+        .env("XDG_STATE_HOME", &fixture.state_home)
+        .env("PATH", path_with(&fixture.bin))
+        .env("FIXTURE_ROOT", &fixture.project)
+        .env("FIXTURE_TARGET", &fixture.target)
+        .env("CARGO_LOG", &fixture.log)
+        .env("CARGO_ARGS_LOG", &fixture.args_log)
+        .current_dir(&fixture.sandbox)
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        json["result"]["summary"]["group_count"], 0,
+        "a configured ignore must still prune the working directory's subtree: {json}"
+    );
+
+    // The premise: without the ignore, the same run does find it.
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+    command.args([
+        "--config",
+        fixture.config.to_str().unwrap(),
+        "--no-progress",
+        "--format",
+        "json",
+        "scan",
+        "--known",
+    ]);
+    let output = command
+        .env("HOME", &fixture.home)
+        .env("XDG_STATE_HOME", &fixture.state_home)
+        .env("PATH", path_with(&fixture.bin))
+        .env("FIXTURE_ROOT", &fixture.project)
+        .env("FIXTURE_TARGET", &fixture.target)
+        .env("CARGO_LOG", &fixture.log)
+        .env("CARGO_ARGS_LOG", &fixture.args_log)
+        .current_dir(&fixture.sandbox)
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        json["result"]["summary"]["group_count"], 1,
+        "without the ignore the working directory's project must be found, or the \
+         prune proves nothing: {json}"
+    );
+}
+
+/// ADR 009: `clean ROOT` keeps its own scope and does not gain the working
+/// directory.
+///
+/// An explicit root is already bounded by its own selection. ADR 009 changes
+/// the maintenance spelling and nothing else.
+#[cfg(unix)]
+#[test]
+fn an_explicit_root_keeps_its_own_scope() {
+    let fixture = WorkingDirectoryScopeFixture::new();
+    let output = fixture.run_from(
+        &fixture.sandbox,
+        &["clean", fixture.project.to_str().unwrap()],
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        json["scope"], "explicit",
+        "an explicit root keeps its own label: {json}"
+    );
+    let roots: Vec<String> = json["result"]["selected_roots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        roots,
+        vec![fixture.project.to_str().unwrap().to_string()],
+        "an explicit root is the whole scope: {roots:?}"
+    );
+}
+
+/// ADR 009: the working directory does not widen a Routine scope that
+/// already reaches it.
+///
+/// The bounded machine-wide sweep must stay bounded. Adding the home
+/// directory to a scope whose seed roots are under it would widen the sweep
+/// from "the known roots" to "everything under the operator's directory" —
+/// which drags in the origins the maintainability rule excludes, and whose
+/// unresolvable manifests sit inside the ADR 007 proof boundary and block
+/// the run. Measured on the operator's machine, that widening turned a
+/// six-second bounded sweep into a sixty-five-second sweep of 264,183
+/// directories that ended blocked on 1,357 unresolvable manifests.
+#[cfg(unix)]
+#[test]
+fn a_working_directory_that_already_contains_a_routine_root_does_not_widen_the_scope() {
+    let fixture = WorkingDirectoryScopeFixture::new();
+    // A seed root under the home: "Developer" is a seed name with no
+    // case-variant among the seed names, so exactly one seed candidate
+    // exists even on case-insensitive macOS runners.
+    let developer = fixture.home.join("Developer");
+    std::fs::create_dir_all(&developer).unwrap();
+    common::inactive_project(&developer, "seeded");
+    // A second project under the home, outside every seed name.
+    let elsewhere = fixture.home.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    common::inactive_project(&elsewhere, "other");
+
+    // The working directory contains the seed root.
+    let output = fixture.run_from(&fixture.home, &[]);
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let roots: Vec<String> = json["result"]["selected_roots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r.as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        !roots.contains(&fixture.home.to_str().unwrap().to_string()),
+        "the working directory must not widen a scope the routine roots already reach: {roots:?}"
+    );
+    assert!(
+        roots.contains(&developer.to_str().unwrap().to_string()),
+        "the seed root must survive: {roots:?}"
+    );
+    assert_eq!(
+        json["result"]["discovered_manifests"], 1,
+        "only the seed root's project may be discovered: {json}"
     );
 }

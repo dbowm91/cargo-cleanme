@@ -21,7 +21,7 @@ quickstart; this document has the detail.
 
 | Command | Effect |
 |---|---|
-| *(none)* | **Cleanup** anchored at the working directory (Execute) |
+| *(none)* | **Cleanup** of the maintenance scope: the machine's known roots plus the working directory (Execute) |
 | `--dry-run` | Same selection simulated end to end, zero `cargo clean` processes |
 | `-i` / `--interactive` | Terminal selection list over the resolved units, then clean |
 | `cargo cleanme scan --all` | Full read-only reconciliation |
@@ -74,7 +74,22 @@ same way:
 1. a configured legacy `scan.root`, if set, is an **exclusive explicit
    override** — nothing else is searched and cleanup targets exactly that root;
 2. otherwise the **Routine scope**: bounded seed roots under your home plus
-   active learned roots from prior Full reconciliations.
+   active learned roots from prior Full reconciliations, **plus the working
+   directory** — the workspace that encloses it and the directory itself.
+
+The working directory is part of the scope, so a bare run cleans what is under
+where you are standing, wherever that is. The scope only ever *grows*: the
+working directory is added to the roots, never substituted for them. A narrower
+scope would hide the out-of-scope claimants of a shared target and promote
+`shared` bytes to `private` — the only class that authorizes deletion — so
+ownership is still proven across the whole resolved universe.
+
+The working directory joins only when the Routine scope does not already reach
+it. Standing inside a known root, or standing in a directory that contains
+one, leaves the bounded machine-wide sweep bounded: sweeping *everything*
+under your home would also sweep your Trash and your package caches, whose
+abandoned manifests cannot be resolved and would block the run. To sweep a
+whole directory on purpose, name it: `cargo cleanme clean ~`.
 
 Bare invocation and `clean --known` then anchor the **selection** to the working
 directory: a resolved unit is a candidate when its canonical workspace root is
@@ -108,6 +123,10 @@ Cargo manifests, including package-manager content; cache, Trash, temporary,
 `node_modules`, and transient Codex worktree paths are not automatically
 selected for Routine maintenance. Explicit roots remain available and keep
 their existing strict safety checks.
+
+Standing in one of those locations is a different matter: the working
+directory joins the maintenance scope whatever it is, because you chose it by
+standing there. `clean ROOT` permits the same subtree and has always done so.
 
 ### scan
 
@@ -246,7 +265,7 @@ the editor exits and rejects an invalid file.
 | Scope | How to ask | What it walks |
 |---|---|---|
 | explicit | `clean ROOT` / `scan ROOT` | that directory, recursively |
-| Routine | `scan --known` | seed roots under Projects/projects, Developer, dev, Code/code, src, repos/Repos, GitHub/github, workspace/workspaces, **plus** active learned roots |
+| Routine | `scan --known` | seed roots under Projects/projects, Developer, dev, Code/code, src, repos/Repos, GitHub/github, workspace/workspaces, **plus** active learned roots, **plus** the working directory when the Routine scope does not already reach it |
 | Full | `scan --all` | the full platform roots, exhaustively |
 
 Explicit CLI roots take precedence over `scan.root`. Either explicit scope

@@ -124,13 +124,13 @@ set is valuable.
 
 ## Coverage shape, honestly
 
-**474** inline `#[test]` functions are **declared** in `src/`; **472** compile
+**481** inline `#[test]` functions are **declared** in `src/`; **479** compile
 and run on Linux. Two are excluded there: one `#[cfg(windows)]`
-(`src/config.rs:997`) and one `#[cfg(any(target_os = "macos", windows))]`
-(`src/discovery.rs:1554`). A further **35** carry `#[cfg(unix)]` and **4** are
-Linux-only (`src/config.rs:1445`, `src/discovery.rs:1574`, `src/output.rs:282`,
-`src/workspace.rs:5339`), so the three hosted lanes compile **472 of 474 on
-Linux**, **435 of 474 on Windows**, and **469 of 474 on macOS** —
+(`src/config.rs:995`) and one `#[cfg(any(target_os = "macos", windows))]`
+(`src/discovery.rs:1552`). A further **35** carry `#[cfg(unix)]` and **4** are
+Linux-only (`src/config.rs:1443`, `src/discovery.rs:1572`, `src/output.rs:280`,
+`src/workspace.rs:5404`), so the three hosted lanes compile **479 of 481 on
+Linux**, **442 of 481 on Windows**, and **476 of 481 on macOS** —
 `#[cfg(unix)]` is true *on* macOS, which is the half people get wrong. A green
 local run is not a green run elsewhere — that is what the OS matrix in `ci.yml`
 is for, and why `check-fixture-portability.py` exists to catch a *new* ungated
@@ -144,7 +144,7 @@ fixture before a lane disagrees about it.
 > `cargo test --lib -- --list` on the host platform; anything else silently
 > disagrees by a few.
 
-State which number you mean. "474 tests" (declared) and "472 passing" (on
+State which number you mean. "481 tests" (declared) and "479 passing" (on
 Linux) are both true, and a record that gives one while meaning the other is
 ambiguous in the direction that matters.
 

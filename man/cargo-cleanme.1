@@ -6,7 +6,13 @@ cargo\-cleanme \- Clean inactive Cargo build artifacts through Cargo, or reconci
 .SH SYNOPSIS
 \fBcargo\-cleanme\fR [\fB\-\-config\fR] [\fB\-\-no\-progress\fR] [\fB\-\-stats\fR] [\fB\-\-format\fR] [\fB\-\-dry\-run\fR] [\fB\-i\fR|\fB\-\-interactive\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIsubcommands\fR]
 .SH DESCRIPTION
-Clean inactive Cargo build artifacts through Cargo, or reconcile the machine read\-only
+Clean inactive Cargo build artifacts through Cargo, or reconcile the machine read\-only.
+.PP
+Bare `cargo cleanme` runs routine maintenance: it selects the maintenance scope (bounded seed roots plus active learned roots plus the working directory, or a configured scan.root when one exists), re\-proves complete ownership for every discovered participant, and executes eligible Cargo cleanup units. The working directory is part of that scope, so a bare run cleans what is under it \-\- and the scope only ever grows, never narrows. `\-\-dry\-run` performs the identical decision and proof path while invoking no `cargo clean` process at all.
+.PP
+`cargo cleanme scan` needs a scope: `\-\-all` is the full read\-only machine reconciliation and the only operation allowed to expire learned roots, `scan ROOT` is a bounded explicit scan, and `scan \-\-known` is the read\-only maintenance inventory.
+.PP
+Deletion is always delegated to Cargo; cargo\-cleanme never removes a directory itself.
 .PP
 INVOCATION
              After installation the binary is invoked by Cargo as an external

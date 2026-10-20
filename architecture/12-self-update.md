@@ -526,7 +526,7 @@ changes the answer." A mutating run on forbidden provenance therefore makes
 `a_mutating_run_on_forbidden_provenance_makes_zero_registry_requests`
 (`src/update.rs:2212`) and by the integration test
 `json_update_refusal_emits_no_document_and_exits_non_zero`
-(`tests/cli_contract.rs:3220`).
+(`tests/cli_contract.rs:3237`).
 
 **The one path that still contacts the registry on forbidden provenance is
 `--dry-run`,** and that is deliberate: "reporting a candidate is the entire
@@ -1047,17 +1047,17 @@ target is recomputed independently at `src/update.rs:988`.
 cases in `tests/cli_contract.rs` now drive it —
 
 - `update_dry_run_reaches_the_same_non_mutating_path_from_either_spelling`
-  (`tests/cli_contract.rs:2429`) — both spellings resolve to the same
+  (`tests/cli_contract.rs:2435`) — both spellings resolve to the same
   non-mutating updater request.
 - `json_update_refusal_emits_no_document_and_exits_non_zero`
-  (`tests/cli_contract.rs:3220`) — drives the **real binary** staged under a
-  Cargo root with a verbatim `v1` record (`tests/cli_contract.rs:3193-3208`) and
+  (`tests/cli_contract.rs:3237`) — drives the **real binary** staged under a
+  Cargo root with a verbatim `v1` record (`tests/cli_contract.rs:3210-3225`) and
   asserts exit 2 and no document on stdout. Its doc comment
-  (`tests/cli_contract.rs:3210-3218`) is the reason this is meaningful: the
+  (`tests/cli_contract.rs:3227-3235`) is the reason this is meaningful: the
   mutating refusal happens *before* the registry is asked anything, so the case
   is hermetic and cannot pass for an unrelated network failure.
 - `the_json_update_branch_prints_only_the_tested_seam`
-  (`tests/cli_contract.rs:3271`) — pins that the JSON branch of `run_update`
+  (`tests/cli_contract.rs:3288`) — pins that the JSON branch of `run_update`
   prints exactly `output::update_json_stream` and nothing else, so the
   library's one-document/one-newline guarantee becomes a statement about the
   process's stdout.
@@ -1264,11 +1264,11 @@ Concrete checks, each anchored to a line observed. Priority reflects blast radiu
     refusal with the exact remediation string
     (`scripts/post-release-smoke.sh:257-275`).
 11. **Integration coverage.** The updater now has three integration cases
-    (`tests/cli_contract.rs:2429`, `tests/cli_contract.rs:3220`,
-    `tests/cli_contract.rs:3271`), but none of them reaches the network or the
+    (`tests/cli_contract.rs:2435`, `tests/cli_contract.rs:3237`,
+    `tests/cli_contract.rs:3288`), but none of them reaches the network or the
     commit path. A hermetic *successful* update is not representable: every
     success path resolves the version authority from crates.io and then
-    replaces bytes (`tests/cli_contract.rs:3262-3269`). The cheapest real
+    replaces bytes (`tests/cli_contract.rs:3279-3286`). The cheapest real
     improvement is therefore an **environment override for the version
     authority** — the updater has none (`crates_io_metadata_url`,
     `src/update.rs:154-156`, is a hard-coded const format), unlike

@@ -19,7 +19,7 @@ distinction matters.
 - **What it is:** a Cargo subcommand (`cargo cleanme`) that finds inactive Cargo
   build artifacts on a machine and either reports or safely reclaims them.
 - **Shape:** one binary (`src/main.rs`) over one library (`src/lib.rs`) of 16
-  modules, 18 source files, 33,860 lines in `src/` (15,216 of them outside
+  modules, 18 source files, 34,438 lines in `src/` (15,760 of them outside
   every `#[cfg(test)]` scope), no async runtime of its own, and exactly one
   binary dependency that matters for safety (`cargo metadata`).
 - **Version:** 0.2.9 (unpublished; latest published tag `v0.2.8`) ·
@@ -55,7 +55,7 @@ documented twin.
 
 | Operation | Spellings | What it does | Mutates bytes? |
 |---|---|---|---|
-| **Maintenance cleanup** | `cargo cleanme` (bare) | Routine scope: bounded seed roots plus active learned roots, or a configured `scan.root`. Proves ownership per candidate and cleans eligible units. | Yes — via `cargo clean` |
+| **Maintenance cleanup** | `cargo cleanme` (bare) | Routine scope: bounded seed roots plus active learned roots, **plus the working directory** when the Routine scope does not already reach it — or a configured `scan.root`, which is an exclusive override. Proves ownership per candidate and cleans eligible units. | Yes — via `cargo clean` |
 | **Explicit cleanup** | `cargo cleanme clean ROOT` | One bounded root. Bypasses discovery filters. | Yes — via `cargo clean` |
 | **Full cleanup** | `cargo cleanme clean --full` | Runs a complete Full reconciliation first, then cleans the learned roots it retained. | Yes — via `cargo clean` |
 | **Read-only scan** | `cargo cleanme scan --all`<br>`cargo cleanme scan ROOT`<br>`cargo cleanme scan --known` | The machine reconciliation, a bounded explicit scan, or the routine inventory. **A bare `cargo cleanme scan` is a usage error** (exit 2) — the `scan-scope` ArgGroup requires exactly one selector. | No |
@@ -97,9 +97,9 @@ Execute mode). `scan --full` is a hidden alias of `scan --all`.
 |---|---|---|
 | Source files | 18 | `src/` |
 | Library modules | 16 | `src/lib.rs` |
-| Total lines in `src/` | 33,860 | `wc -l src/*.rs` |
-| Production lines | 15,216 | total minus every `#[cfg(test)]` scope |
-| Inline `#[test]` functions | 474 | `#[test]` attributes in `src/` |
+| Total lines in `src/` | 34,438 | `wc -l src/*.rs` |
+| Production lines | 15,760 | total minus every `#[cfg(test)]` scope |
+| Inline `#[test]` functions | 481 | `#[test]` attributes in `src/` |
 | Integration test files | 2 | `tests/cli_contract.rs`, `tests/end_to_end.rs` |
 | Contract-checker scripts | 17 | `scripts/` — the set is machine-gated, see §9 |
 | GitHub workflows | 6 | `.github/workflows/` |
@@ -130,18 +130,18 @@ the file itself; the integration suites in `tests/` are counted separately in
 | Module | total | prod | tests | Module | total | prod | tests |
 |---|---:|---:|---:|---|---:|---:|---:|
 | `cleanup.rs` | 9983 | 3746 | 114 | `output.rs` | 1065 | 540 | 21 |
-| `workspace.rs` | 6068 | 2093 | 76 | `progress.rs` | 873 | 533 | 13 |
+| `workspace.rs` | 6301 | 2160 | 79 | `progress.rs` | 873 | 533 | 13 |
 | `update.rs` | 2886 | 1289 | 47 | `report.rs` | 195 | 71 | 7 |
 | `discovery.rs` | 2363 | 1000 | 39 | `traverse.rs` | 624 | 494 | 6 |
-| `interactive.rs` | 2417 | 1311 | 58 | `domain.rs` | 435 | 406 | 1 |
+| `interactive.rs` | 2426 | 1311 | 58 | `domain.rs` | 435 | 406 | 1 |
 | `config.rs` | 1499 | 613 | 20 | `editor.rs` | 215 | 155 | 2 |
-| `main.rs` | 1562 | 1425 | 4 | `error.rs` | 16 | 16 | 0 |
-| `cli.rs` | 1276 | 484 | 32 | `lib.rs` | 16 | 16 | 0 |
-| `policy.rs` | 1238 | 712 | 17 | | | | |
+| `main.rs` | 1684 | 1547 | 4 | `error.rs` | 16 | 16 | 0 |
+| `cli.rs` | 1284 | 492 | 32 | `lib.rs` | 16 | 16 | 0 |
+| `policy.rs` | 1444 | 791 | 21 | | | | |
 | `discovery_state.rs` | 1129 | 580 | 17 | | | | |
 
 Two observations a reader should carry forward. **Coverage is concentrated**:
-`cleanup.rs` and `workspace.rs` alone hold 190 of the 474 inline tests, and
+`cleanup.rs` and `workspace.rs` alone hold 193 of the 481 inline tests, and
 `main.rs` — where the two pipelines are stitched together — is where the
 orchestration decisions live. And **the biggest files are the biggest risk**:
 `cleanup.rs` is where bytes get deleted.
@@ -203,12 +203,12 @@ responsible for; the **Breaks** line says what a defect there would cost.
 
 - **Owns:** the clap definition, the `cargo cleanme` → `cargo-cleanme` argv
   normalization, and the reduction of *every* accepted spelling to one
-  `Invocation` (`src/cli.rs:261`) carrying a `CleanupRequest`
-  (`src/cli.rs:231`), a `ScanIntent` (`src/cli.rs:197`), a `ConfigCommand`
-  (`src/cli.rs:169`), or an update intent. The `scan-scope` `ArgGroup`
-  (`src/cli.rs:86`) expresses "exactly one scope selector" once, so
+  `Invocation` (`src/cli.rs:269`) carrying a `CleanupRequest`
+  (`src/cli.rs:239`), a `ScanIntent` (`src/cli.rs:205`), a `ConfigCommand`
+  (`src/cli.rs:172`), or an update intent. The `scan-scope` `ArgGroup`
+  (`src/cli.rs:89`) expresses "exactly one scope selector" once, so
   requiredness and mutual exclusion cannot drift apart.
-- **Also owns:** the mode mapping `clean_mode` (`src/cli.rs:284`) that turns
+- **Also owns:** the mode mapping `clean_mode` (`src/cli.rs:292`) that turns
   the `--dry-run` / `--cargo-preview` flag triple into one `CleanMode`, and
   the hidden-alias declarations.
 - **Depends on:** `cleanup` (for `CleanMode` and `CleanupSelection`),
@@ -292,9 +292,9 @@ responsible for; the **Breaks** line says what a defect there would cost.
   (`src/workspace.rs:29`) so tests can substitute a fake. It owns capability
   probing (which `cargo clean` features this Cargo supports),
   `attribute_unknown` (`src/workspace.rs:419`) for classifying a resolution
-  failure, physical grouping — `build_groups` (`src/workspace.rs:1314`)
+  failure, physical grouping — `build_groups` (`src/workspace.rs:1381`)
   collapses nested and duplicate output roots so bytes are counted once — and
-  `analyze_groups` (`src/workspace.rs:1853`), which measures and classifies.
+  `analyze_groups` (`src/workspace.rs:1920`), which measures and classifies.
 - **Depends on:** `domain`, `progress`, and the leaf `traverse` (plus `cleanup`
   test-only).
 - **Breaks:** a group that double-counts or fails to collapse makes the
@@ -411,11 +411,11 @@ responsible for; the **Breaks** line says what a defect there would cost.
 - **Owns:** composition. `main` (`src/main.rs:11`) parses, resolves one
   intent, and dispatches. `run` (`src/main.rs:70`) is the switch over the
   four intents. `run_cleanup` (`src/main.rs:318`) is the cleanup pipeline,
-  `run_scan` (`src/main.rs:1024`) is the read-only pipeline,
-  `resolve_cleanup_roots` (`src/main.rs:720`) decides the root set,
-  `collapse_roots` (`src/main.rs:965`) canonicalizes and de-duplicates it,
-  `run_engine_guarded` (`src/main.rs:623`) wraps the engine with the
-  admission premise, and `emit_cleanup` (`src/main.rs:905`) projects the
+  `run_scan` (`src/main.rs:1131`) is the read-only pipeline,
+  `resolve_cleanup_roots` (`src/main.rs:726`) decides the root set,
+  `collapse_roots` (`src/main.rs:1072`) canonicalizes and de-duplicates it,
+  `run_engine_guarded` (`src/main.rs:629`) wraps the engine with the
+  admission premise, and `emit_cleanup` (`src/main.rs:1012`) projects the
   result.
 - **Depends on:** the whole library. It is the only module with no tests.
 - **Breaks:** it is the only place the two pipelines are stitched together, so
@@ -503,9 +503,9 @@ The edges that close them are:
 
 | Edge | Line | Code |
 |---|---|---|
-| `policy → discovery` | `src/policy.rs:708` | `crate::discovery::effective_rustup_home()` |
+| `policy → discovery` | `src/policy.rs:787` | `crate::discovery::effective_rustup_home()` |
 | `discovery → policy` | `src/discovery.rs:337` | `crate::policy::global_discovery_policy()` |
-| `policy → discovery_state` | `src/policy.rs:248` | the learned-root classification helpers |
+| `policy → discovery_state` | `src/policy.rs:278` | the learned-root classification helpers |
 | `discovery_state → discovery` | `src/discovery_state.rs:143` | `crate::discovery::effective_cargo_home()` |
 
 Each side asks the other one question and neither recurses, so the cycles are
@@ -543,7 +543,7 @@ production edge.
 
 ## 6. The scan pipeline
 
-`run_scan` in `main.rs:1024` is the read-only pipeline. Nine steps, in order:
+`run_scan` in `main.rs:1131` is the read-only pipeline. Nine steps, in order:
 
 1. **Resolve config** — `config::load_or_create`.
 2. **Resolve scope** — `policy::resolve` turns `{cli_root, full}` into concrete
@@ -567,16 +567,23 @@ Steps 3–5 and 7–8 are the expensive parts; step 6 is the part that makes the
 next run cheap.
 
 Step 4 is where the ADR 007 boundary is drawn. The filter at
-`src/main.rs:1096-1101` pulls out exactly three of the seven
+`src/main.rs:1218-1223` pulls out exactly three of the seven
 `DiagnosticCategory` variants — `PermissionDenied`, `Metadata`, and
 `Vanished` — and leaves `OutOfScope` out on purpose, because an out-of-scope
 unprovable is informational, not a coverage loss.
+
+**The read-only maintenance inventory covers the same universe the cleanup
+would act on (ADR 009).** `scan --known` is the inventory of the maintenance
+scope, so it applies the same rule the cleanup path does: the working
+directory joins the Routine scope when the Routine scope does not already
+reach it (`src/main.rs:1164-1173`). An inventory that described a smaller
+universe than the cleanup would not be an inventory of it.
 
 ## 7. The cleanup pipeline
 
 `clean` is not a scan plus a `rm`. It is a separate, guarded transaction. The
 modes are `CleanMode` in `cleanup.rs:36`, mapped from flags by
-`cli::clean_mode` (`src/cli.rs:284`):
+`cli::clean_mode` (`src/cli.rs:292`):
 
 | Mode | Flag | What it does |
 |---|---|---|
@@ -592,10 +599,23 @@ Deletion itself is always performed by `cargo clean`, never by direct
 filesystem removal, so Cargo's own bookkeeping cannot be bypassed.
 
 Cleanup roots come from three sources, resolved by `resolve_cleanup_roots`
-(`src/main.rs:720`): an explicit `ROOT` argument, `--full` (runs a Full scan,
+(`src/main.rs:726`): an explicit `ROOT` argument, `--full` (runs a Full scan,
 then uses learned roots), or `--known` (uses only the Routine scope). They are
-canonicalized and de-duplicated by `collapse_roots` (`src/main.rs:965`) so
+canonicalized and de-duplicated by `collapse_roots` (`src/main.rs:1072`) so
 nested roots cannot produce overlapping deletions.
+
+**The working directory joins the Routine scope (ADR 009).** A bare
+`cargo cleanme` run also contributes the operator's position: the workspace
+that encloses it, when there is one, and the directory itself
+(`src/workspace.rs:655`). The two rules that make this safe are that the
+universe may only ever **grow** — a wider universe can only reclassify
+`shared` bytes to `private`, never the reverse — and that the working
+directory joins **only** when the Routine scope does not already reach it
+(`src/main.rs:931`). The second rule is a measurement, not a taste: without
+it, a bare run from the home directory turned into a 65-second sweep of
+264,183 directories that ended *blocked* on 1,357 unresolvable manifests in
+`~/.local/share/Trash`. `clean ROOT` remains the spelling for that wider
+sweep.
 
 The order matters and is not incidental: the root set is resolved *before* the
 candidate selection, because `-i` needs resolved roots to list anything at
@@ -632,6 +652,12 @@ things a reviewer should check first in any change.
    scope, `2` fatal error — with the caveats in §9 below.
 8. **Learned state is advisory, never authority.** A persistence failure never
    changes an exit code.
+9. **The discovery universe may only ever grow.** A wider scope can only
+   reclassify `shared` bytes to `private` — the class that authorizes
+   deletion — never the reverse. ADR 009's working-directory scope is
+   therefore *added* to the Routine roots and never substituted for them
+   (`main.rs:856-861`). Anything that narrows the universe re-opens
+   ADR 006's shared-output hazard.
 
 ---
 
@@ -663,7 +689,7 @@ allowlist, so none of this documentation ships in the published crate.
 The deep dives surfaced the items below. Each was then **verified against the
 source before any change was made** — three did not survive that check, and one
 was materially misdescribed. Status is current as of the commit that fixed
-items 1, 7, 8, 10 and 11.
+items 1, 7, 8, 10, 11 and 22.
 
 Items 3-6 are re-verified as of the Phase-11 and Phase-12 closures (all of
 C018/C019/C021-C025 are now closed). Their findings were real when recorded and
@@ -688,24 +714,24 @@ the same pass, so these rows point at completed work rather than at a plan.
 | 14 | **`discovery_state`'s `covered` skip can drop a root that also intersects uncertainty, before the uncertainty veto is reached.** | **Not a bug — checked and dismissed.** The collapse always replaces an ancestor with a *descendant*, so the remembered set only ever narrows. Narrowing means less cleanup on the next run, which is fail-safe. |
 | 15 | **The JSON contract drops the `capability` of an unresolvable manifest.** `UnresolvedOwnershipParticipant` carries `capability: UnknownCapability` (`src/domain.rs:198`), and `workspace.rs` uses it to decide whether the participant *blocks* the run or is merely reported — but `UnresolvedParticipantV1` (`src/output.rs:68-72`) has only `manifest` / `stage` / `reason`. A JSON consumer cannot tell a Cargo-refused manifest from one that merges everything. | **Open — not yet planned.** This is a contract decision, not a documentation fix: the fix is to add the field, which is a schema change. |
 | 16 | **`CleanReport.out_of_scope_unresolved` (`src/cleanup.rs:414`) is rendered in the human report (`src/cleanup.rs:518-521`) but has no field in the JSON cleanup DTO.** ADR 007's "the system is not clean, the boundary is" signal exists only in prose. | **Open — not yet planned.** Same shape as item 15: a missing JSON projection. |
-| 17 | **`main.rs`'s uncertainty filter is a silent `matches!` over three of the seven diagnostic categories** (`src/main.rs:1096-1101`) — no `_` arm, so it is not compile-checked. `OutOfScope` is correctly excluded, but a future eighth category would silently reclassify an incomplete scan as complete. | **Open — not yet planned.** The right shape is an exhaustive match or an explicit allow-list with a test that fails on a new variant. |
-| 18 | **`OutputRootKind`'s human label builder has a `_` arm** (`src/workspace.rs:1958-1963`), so it is *not* compile-checked the way the sort key at `src/workspace.rs:1953-1956` is. A new kind renders as `"output"` rather than failing to build. | **Open — not yet planned.** |
+| 17 | **`main.rs`'s uncertainty filter is a silent `matches!` over three of the seven diagnostic categories** (`src/main.rs:1218-1223`) — no `_` arm, so it is not compile-checked. `OutOfScope` is correctly excluded, but a future eighth category would silently reclassify an incomplete scan as complete. | **Open — not yet planned.** The right shape is an exhaustive match or an explicit allow-list with a test that fails on a new variant. |
+| 18 | **`OutputRootKind`'s human label builder has a `_` arm** (`src/workspace.rs:2025-2030`), so it is *not* compile-checked the way the sort key at `src/workspace.rs:2020-2023` is. A new kind renders as `"output"` rather than failing to build. | **Open — not yet planned.** |
 | 19 | **`AutomaticOmission::NotMaintainable` conflated two different causes** — "the path does not exist at a transient origin" and "the path exists but is a non-maintainable location" — and the consequence was that `omission_diagnostics` printed "omitting N *non-maintainable* learned root(s)" for roots that are simply absent. | **Fixed in C038.** The by-design bucket is no longer reported at all: a root omitted because it sits at a known-transient origin is omitted *by design* — the tool would never have cleaned it — so it is not a diagnostic and never reaches the operator. A durable root that has vanished, and a root that is no longer a directory, are still reported. |
 | 20 | **`--include` / `--exclude` match the workspace root, not the physical output root** (`src/cleanup.rs:1467`, `src/cleanup.rs:1477`), and neither the flag help nor the config key name says so. A user writing `include = ["**/target"]` gets no match and no warning. | **Open — not yet planned.** |
-| 21 | **A configured `scan.root` is silently ignored by a rootless `scan`** — `policy::resolve` returns from its `full` arm before the configured root is read. The behaviour is deliberate (`src/main.rs:1036-1039` says configuration must not narrow the canonical reconciliation command), but the config key's own documentation does not mention it. | **Open — not yet planned.** Documentation, not behaviour. |
-| 22 | **The root `long_about` still claims a bare `cargo cleanme scan` is the full machine reconciliation** (`src/cli.rs:27-28`). It is a usage error (exit 2) — the `scan-scope` ArgGroup requires one of ROOT / `--known` / `--all`. Only `cargo cleanme --help` shows the lie; the manpage is unaffected because `xtask` overwrites the root `long_about` with its own block. | **Covered by [C036](../plans/implementation/artifact-discovery-cleanup/c036-cli-surface-truthfulness-and-documentation-drift-corrective.md) D1** (proposed, not accepted). |
+| 21 | **A configured `scan.root` is silently ignored by a rootless `scan`** — `policy::resolve` returns from its `full` arm before the configured root is read. The behaviour is deliberate (`src/main.rs:1143-1146` says configuration must not narrow the canonical reconciliation command), but the config key's own documentation does not mention it. | **Open — not yet planned.** Documentation, not behaviour. |
+| 22 | **The root `long_about` claimed a bare `cargo cleanme scan` is the full machine reconciliation** (`src/cli.rs:27-28`, since rewritten). It was a usage error (exit 2) — the `scan-scope` ArgGroup requires one of ROOT / `--known` / `--all`. Only `cargo cleanme --help` showed the lie; the manpage was unaffected because `xtask` overwrote the root `long_about` with its own block. | **Fixed by C040** (ADR 009). The root `long_about` now states that `scan` **needs a scope** and that `--all` is the full read-only machine reconciliation (`src/cli.rs:29-32`), and the root manpage is generated from that same `long_about` rather than from a generator-side block, so the two surfaces can no longer drift. Discharges [C036](../plans/implementation/artifact-discovery-cleanup/c036-cli-surface-truthfulness-and-documentation-drift-corrective.md) D1. |
 | 23 | **A user-facing diagnostic points the operator at `scan --full`** (`src/discovery.rs:373-380`) — a *hidden* alias that does not appear in `scan --help`. The canonical spelling is `scan --all`. | **Covered by C036 D3** (proposed, not accepted). |
-| 24 | **`cli::absolutize_root` and `main::collapse_roots` disagree about `..`.** The CLI folds `..` lexically; `main.rs:968` canonicalizes, which resolves symlinks first. A relative root whose `..` crosses a symlink names different directories under the two. No test covers the disagreement. | **Open — not yet planned.** |
+| 24 | **`cli::absolutize_root` and `main::collapse_roots` disagree about `..`.** The CLI folds `..` lexically; `main.rs:1075` canonicalizes, which resolves symlinks first. A relative root whose `..` crosses a symlink names different directories under the two. No test covers the disagreement. | **Open — not yet planned.** |
 | 25 | **A root-level `--dry-run` is accepted alongside `scan` and then silently ignored** — the root flag is not global, clap accepts it, and the `Invocation::Scan` arm never reads it. Harmless today because a scan is read-only, but it is the same shape as the discarded-flag defect the `Clean` and `Update` arms were fixed for. | **Open — not yet planned.** |
 | 26 | **One lib test fails on any host whose Cargo version is outside an exact allowlist.** `cleanup::tests::real_temp_project_preview_and_execute_with_redirected_target` expected `Previewed` and got `Skipped`, because `clean_capabilities_from_version` (`src/workspace.rs:146-165`) enables `profile_selector` only for nine exact versions — `1.89.0`, `1.90.0`, `1.91.1`, `1.92.0`, `1.93.1`, `1.94.1`, `1.95.0`, `1.98.1`, `1.99.0` — and the host here is `1.99.1`. The tool skips in the **safe** direction; the *test* was what failed. The defect was the test's **unstated host premise**, and the exact-version allowlist made it structural: the first patch release of any qualified minor is outside the set, so the case had a known expiry date with no alarm before it. | **Corrected by C037** (`plans/implementation/artifact-discovery-cleanup/c037-host-cargo-dependent-selector-premise-corrective.md`); the hosted release is outstanding. The case now derives its expectation from the product's own premise function and asserts a *specific* outcome per premise — a qualified host must preview, an unqualified one must refuse with `SelectorUnsupported` — rather than a disjunction. Proven by mutation in both directions, and the selector-to-Cargo composition is now covered by a host-independent case. No production behaviour changed: `src/workspace.rs` and `release/selector-qualification.json` are byte-identical. |
 | 27 | **`traverse::tests::source_scan_short_circuits_recent_files` does not discriminate what it claims.** It writes one fresh file into a *freshly created* temp dir and walks that dir as the root. The root's own mtime is fresh, the root is not excluded from the walk, and `Order::ParentFirst` yields the root first — so `Recent` is returned on the **directory's** mtime before the file is ever examined. The test would still pass if the file were deleted, if the guard ignored files entirely, or if directories were excluded from the evidence. | **Open — not yet planned.** This is the AGENTS.md §4 "green test" shape exactly: a passing test that cannot fail for the reason it claims. It needs a discriminating fixture pair. |
 | 28 | **The C028 narrow-absence rule has *zero* discriminating coverage.** Verified by mutation on a scratch copy: deleting the probe (`src/discovery_state.rs:308-317`) leaves **all 17** `discovery_state` unit tests green and **all 62** `cli_contract` integration tests green. The nominal test `complete_certain_full_prunes_only_positively_absent_learned_roots` (`src/discovery_state.rs:966`) stages roots under `tempfile::tempdir()` with `home: None`, so the **C030** rule at `src/discovery_state.rs:298-300` drops them first — the temp root is forbidden when `home` is `None` (`src/discovery_state.rs:165-166`). The symmetric mutation (deleting C030 instead) fails two tests, confirming C030 is the rule actually under test. | **Open — not yet planned.** The rule is live in production and untested; only the rule that shadows it is tested. |
 | 29 | **`discovery_state::tests::zero_retention_disables_expiration_and_nested_roots_collapse` no longer demonstrates its name.** Same fixture problem: the assertion is now `learned_roots.is_empty()`, so the zero-retention path and the nested-root containment collapse are both unexercised. Only the exact-duplicate fold (`src/discovery_state.rs:1064`) is covered. | **Open — not yet planned.** |
-| 30 | **Production `uncertainty` is always empty.** All three uncertainty categories now emit `path: None` (`src/discovery.rs:792`, `src/discovery.rs:987`); `main.rs:1103` drops them, and the same events clear `coverage_complete` (`src/discovery.rs:638`, `src/discovery.rs:912`), so the scan is incomplete and never publishes. The fail-open `filter_map` edge is therefore the only path — and it is covered by the completeness gate, not by the uncertainty veto. The unit tests at `src/discovery_state.rs:880` and `src/discovery_state.rs:1029` assert a behaviour the pipeline cannot produce. | **Open — not yet planned.** |
+| 30 | **Production `uncertainty` is always empty.** All three uncertainty categories now emit `path: None` (`src/discovery.rs:792`, `src/discovery.rs:987`); `main.rs:1225` drops them, and the same events clear `coverage_complete` (`src/discovery.rs:638`, `src/discovery.rs:912`), so the scan is incomplete and never publishes. The fail-open `filter_map` edge is therefore the only path — and it is covered by the completeness gate, not by the uncertainty veto. The unit tests at `src/discovery_state.rs:880` and `src/discovery_state.rs:1029` assert a behaviour the pipeline cannot produce. | **Open — not yet planned.** |
 | 31 | **`discovery_state::sweep_own_stale_temps` (`src/discovery_state.rs:506-534`) has no test at all.** Its own-pid and one-hour scoping is a safety property: it must never delete another publisher's in-flight temp file. | **Open — not yet planned.** |
-| 32 | **An unreadable output root is reported as *missing*, not as a diagnostic.** `workspace::has_artifact_entries` returns `Option<bool>`, which cannot distinguish "empty" from "unreadable", so the `None` case folds into `missing_all` (`src/workspace.rs:1570`). An unreadable covering root is therefore reported as absent rather than as a coverage loss — weaker than `output_root`'s own careful "unreadable is not absent" handling (`src/workspace.rs:306-333`). The window is narrow (read permission on the directory only), but it is a fail-closed-reporting hole. | **Open — not yet planned.** |
-| 33 | **No test covers a conflicting member→root mapping.** `member_to_root.entry(..).or_insert(..)` (`src/workspace.rs:907-919`) is first-writer-wins; a conflict is neither detected nor diagnosed, and the fast path (`src/workspace.rs:772-778`) means a mis-mapped manifest is never re-located in that pass. `TwoWsRunner` (`src/workspace.rs:3512`) covers only the legitimate two-workspace case. | **Open — not yet planned.** |
-| 34 | **`workspace::GroupAnalysisInput` (`src/workspace.rs:1480`) is dead** — declared, never constructed, never referenced in `src/` or `tests/`. It is `pub`, so it is semver-visible. | **Open — not yet planned.** It joins the §10.1 dead-API list if the owner decides to record it there. |
+| 32 | **An unreadable output root is reported as *missing*, not as a diagnostic.** `workspace::has_artifact_entries` returns `Option<bool>`, which cannot distinguish "empty" from "unreadable", so the `None` case folds into `missing_all` (`src/workspace.rs:1637`). An unreadable covering root is therefore reported as absent rather than as a coverage loss — weaker than `output_root`'s own careful "unreadable is not absent" handling (`src/workspace.rs:306-333`). The window is narrow (read permission on the directory only), but it is a fail-closed-reporting hole. | **Open — not yet planned.** |
+| 33 | **No test covers a conflicting member→root mapping.** `member_to_root.entry(..).or_insert(..)` (`src/workspace.rs:974-986`) is first-writer-wins; a conflict is neither detected nor diagnosed, and the fast path (`src/workspace.rs:839-845`) means a mis-mapped manifest is never re-located in that pass. `TwoWsRunner` (`src/workspace.rs:3579`) covers only the legitimate two-workspace case. | **Open — not yet planned.** |
+| 34 | **`workspace::GroupAnalysisInput` (`src/workspace.rs:1547`) is dead** — declared, never constructed, never referenced in `src/` or `tests/`. It is `pub`, so it is semver-visible. | **Open — not yet planned.** It joins the §10.1 dead-API list if the owner decides to record it there. |
 | 35 | **The doc-citation gate checks only the `file.rs:N` form, not the bare `:N` form** — and the bare form is the *dominant* convention inside the deep dives: **2,742** bare `:N` citations across the set, against **2,836** explicit `file.rs:N` citations (the checker's own regex). `architecture/09-cleanup.md` alone has 689, `architecture/07-workspace.md` 448, `architecture/13-orchestration.md` 328, `architecture/05-discovery.md` 327. So most in-file citations are **not** machine-gated; only their file existence and range are. | **Open — not yet planned.** The reviewers compensated by resolving the bare citations against their anchored file in a separate pass and converting script citations to an explicit "script lines N" form. The gate itself was not changed. |
 | 48 | **The `-i` selection surface is covered only by its usage-error refusals.** The `Terminal` trait (`src/interactive.rs:120`) is an injectable seam and its `restore` is asserted on unwind (`src/interactive.rs:2042`), but the integration suite runs without a terminal, so the selection session itself has no integration coverage — only the refusals do. | **Open — not yet planned.** A pty-backed integration case would close it; the repo already knows a pty harness is the missing piece (C023 §11.4). |
 | 49 | **`scripts/validate-staged-release.py` discards the evidence it collects.** `report()` is `for message in notes: pass` (`scripts/validate-staged-release.py:410-412`). The gate still fails closed and the exit code is right, but the measured glibc floor per Linux target, the manifest-agreement summary, and the "installed bytes match the release asset digest exactly" confirmation never reach the operator or the CI log. | **Open — not yet planned.** The verdict is trustworthy; the supporting numbers are invisible. |
@@ -715,23 +741,23 @@ the same pass, so these rows point at completed work rather than at a plan.
 | 53 | **The six agent skills in `.skills/` carried fabricated facts, and no gate could have caught them.** `json-and-exit-contract/SKILL.md` asserted exit codes `17` and `18` — neither exists anywhere in `src/`; every `AppError` exits `2` (`src/main.rs:34`). The same file listed four reason codes (`skipped_permission_denied`, `skipped_io_error`, `skipped_never_authoritative`, `skipped_dryrun`) with **zero** occurrences in `src/`, `tests/`, `plans/output-schema-v1.md`, or `docs/`. `cleanup-safety/SKILL.md` named a `Preview` mode (there are three — `Execute`, `Simulate`, `CargoPreview`, `src/cleanup.rs:36-46`) and described the superseded ADR 007 whole-scope block. `discovery-and-ownership/SKILL.md` asserted a `[package] ignore` feature that does not exist and described the duplicate-index panic as live (it was fixed at `src/traverse.rs:191-200`). | **Fixed in this pass.** All six skills were re-derived from source and corrected; two new skills (`cli-surface-and-argv`, `terminal-and-interactive`) cover the trap classes that had none. Root cause is item 54. |
 | 54 | **The doc-citation gate covers `architecture/*.md` and nothing else.** `scripts/check-doc-citations.py` resolves the `file.rs:N` form inside `architecture/` only. `.skills/`, `docs/`, and `README.md` are **ungated**, so a skill or a user-facing document can drift indefinitely with no mechanical signal — and it did, in both places. | **Open — not yet planned.** A citation gate over `.skills/` and `docs/` is the mechanical fix; it is not one, because those files are prose-heavy and their citation forms are inconsistent. Until it exists, re-derive skill and doc claims from source rather than copying them forward. |
 | 55 | **`architecture/07-workspace.md` carried the superseded ADR 007 whole-scope block** in two places — naming a `Preview` mode that does not exist and saying an unresolved manifest "blocks the whole scope", while `architecture/09-cleanup.md` correctly documented the scoped boundary in the same repository. | **Fixed in this pass.** Corrected to the ADR 007 three-way split, with the boundary rule and the regression test named. |
-| 56 | **`architecture/05-discovery.md` asserted that the uncertainty vector "still carries known, path-specific uncertainty into `reconcile_full`"** — while `architecture/06-discovery-state.md` correctly documented that it is always empty. All three uncertainty categories are emitted with `path: None` (`src/discovery.rs:783-797`, `:978-996`), so `filter_map(|d| d.path.clone())` (`src/main.rs:1094-1102`) drops every one of them. | **Fixed in this pass.** |
-| 57 | **The per-platform inline-test census disagreed across three documents and with itself.** `test-evidence/SKILL.md` claimed 320 declared / 318 Linux / 296 Windows / 317 macOS; `architecture/14-testing-and-verification.md` claimed 450 / 448 / 420 Windows; and a figure of 443/415 was in circulation. The truth is **450 declared, 448 Linux, 411 Windows, 445 macOS** — 35 `#[cfg(unix)]` and 4 Linux-only gates. A naive grep for `#[cfg(unix)]` immediately above `#[test]` finds 26, because nine of the 35 have the gate *after* the `#[test]`. | **Fixed in this pass.** All three documents now state the current census — 474/472/435/469 after C039 — and the derivation method (a brace-tracking evaluation against `rustc --print cfg --target <triple>`, cross-checked against `cargo test --lib -- --list`) is recorded so the next reader can re-derive rather than copy. |
-| 58 | **Thirteen source doc comments still describe the pre-ADR 007 whole-scope block.** `src/cleanup.rs:300`, `:328`, `:1141`, `:2044`, `src/workspace.rs:394`, `:978`, and `src/main.rs:304`, `:366`, `:590`, `:831` say "whole-scope" where the behaviour is boundary-scoped; `src/cleanup.rs:315-316` says "coverage of the selected scope is unproven" for the same reason. `tests/cli_contract.rs:1929-1930` carries the same wording on a test whose *behaviour* is correct (its unresolved manifest is inside the anchor, so it does block). | **Open — not yet planned.** Deliberately **not** fixed in this pass: the diff is documentation-only by design, and editing `src/` shifts line numbers that 2,742 bare citations depend on — which `AGENTS.md` §5 forbids doing casually. The correction needs a corrective that re-derives the affected citations in the same change. Recorded as C036 D27. |
+| 56 | **`architecture/05-discovery.md` asserted that the uncertainty vector "still carries known, path-specific uncertainty into `reconcile_full`"** — while `architecture/06-discovery-state.md` correctly documented that it is always empty. All three uncertainty categories are emitted with `path: None` (`src/discovery.rs:783-797`, `:978-996`), so `filter_map(|d| d.path.clone())` (`src/main.rs:1216-1224`) drops every one of them. | **Fixed in this pass.** |
+| 57 | **The per-platform inline-test census disagreed across three documents and with itself.** `test-evidence/SKILL.md` claimed 320 declared / 318 Linux / 296 Windows / 317 macOS; `architecture/14-testing-and-verification.md` claimed 450 / 448 / 420 Windows; and a figure of 443/415 was in circulation. The truth is **450 declared, 448 Linux, 411 Windows, 445 macOS** — 35 `#[cfg(unix)]` and 4 Linux-only gates. A naive grep for `#[cfg(unix)]` immediately above `#[test]` finds 26, because nine of the 35 have the gate *after* the `#[test]`. | **Fixed in this pass.** All three documents now state the current census — 481/479/442/476 after C040 — and the derivation method (a brace-tracking evaluation against `rustc --print cfg --target <triple>`, cross-checked against `cargo test --lib -- --list`) is recorded so the next reader can re-derive rather than copy. |
+| 58 | **Thirteen source doc comments still describe the pre-ADR 007 whole-scope block.** `src/cleanup.rs:300`, `:328`, `:1141`, `:2044`, `src/workspace.rs:394`, `:978`, and `src/main.rs:304`, `:366`, `:590`, `:831` say "whole-scope" where the behaviour is boundary-scoped; `src/cleanup.rs:315-316` says "coverage of the selected scope is unproven" for the same reason. `tests/cli_contract.rs:1935-1936` carries the same wording on a test whose *behaviour* is correct (its unresolved manifest is inside the anchor, so it does block). | **Open — not yet planned.** Deliberately **not** fixed in this pass: the diff is documentation-only by design, and editing `src/` shifts line numbers that 2,742 bare citations depend on — which `AGENTS.md` §5 forbids doing casually. The correction needs a corrective that re-derives the affected citations in the same change. Recorded as C036 D27. |
 | 59 | **Several inline tests assert on wall-clock and thread-scheduling observations, so the suite is load-sensitive.** `cleanup::tests::proof_refresh_parallelism_is_bounded_and_results_stay_deterministic` asserts the observed peak proof-refresh concurrency equals the reported counter, and `cleanup::tests::real_temp_project_preview_and_execute_with_redirected_target` asserts a recency-window reason code. Under CPU contention the observations move and the assertions fail. Measured: on the C038 tree, 8 consecutive `cargo test --all-targets --all-features` runs with an idle host all passed, and the same tree run concurrently with a build failed; on the **unmodified baseline** (`426cb72`) under the same contention, three tests failed — the same two plus `workspace::tests::real_conventional_workspace_is_private_bounded`. | **Open — not yet planned.** Pre-existing, and not a C038 regression: the baseline fails under the same load. The lesson is the repository's own — *a green test proves only that its own premises hold*, and here one of the premises is an unloaded host. A fix belongs with the real-Cargo fixtures, not with a corrective that changed no fixture. |
 | 60 | **The `-i` selection surface was a *list*, not a *finder*, and it was built that way on purpose.** The frame was exactly the terminal height (`list_rows()` returned `height - CHROME_LINES`), so the list filled the screen instead of being a window; there was no scroll-position indicator, no paging key (`Key` had no PageUp/PageDown/Home/End), and the absolute path of every row occupied most of the width while the part that distinguishes one workspace from another sat at its far end. Every row repeated the word `private`, whether or not that was news. The surface was **functionally correct** — every defect here is a presentation defect — but the module's own tests asserted the *shape* rather than the *usability*, and one of them (`the_frame_is_exactly_the_terminal_height_and_never_overflows_the_width`) **pinned the defect as the contract**. | **Fixed in C039.** The frame is now a bounded page of at most fifteen rows that never outgrows the terminal; a row is named by the shortest path suffix that identifies it uniquely among the candidates; the reclaimable size is right-aligned; the ownership column is omitted when it would say the same thing on every row; the gutter marks the window edges and the cursor; and the surface renders colour, opt-out via `NO_COLOR`. The NOR/INS model and the published key table are unchanged. The test that pinned the old shape was rewritten to pin the new property, and the evidence is a pty capture of the real binary, not a string comparison — the repository has no pty harness (finding **48**), so the rendered surface had never been observed by a test. |
 | 36 | **`cargo cleanme -i` leaves the terminal cursor hidden when the session ends in NOR mode.** `session_loop` hides the cursor at `src/interactive.rs:1145` and the per-frame call at `src/interactive.rs:1155` sets it to `mode == Insert`. The commit and quit arms (`src/interactive.rs:1159-1168`) rewind and clear **without restoring it**, and `set_cursor_visible(true)` is never called anywhere in the crate. `RawModeGuard` restores the terminal *mode* (`disable_raw_mode`) but cursor visibility is a separate escape sequence; `main.rs` has no cursor handling at all. The existing test `the_driver_shows_the_hardware_cursor_only_in_insert_mode` (`src/interactive.rs:1959-1974`) asserts the *last* recorded value is `Some(false)` — it **pins** the behaviour rather than catching it. | **Open — not yet planned. Verified live.** Driven over a raw pty: the tool emitted `ESC[?25l` (Hide) twice and `ESC[?25h` (Show) **zero** times, then exited 0 with `cargo-cleanme: interactive selection cancelled; no cleanup commands were run`. The operator's shell is left with no visible caret. The module's own argument — "a tool that can leave a terminal in raw mode is not shippable" — applies verbatim to the cursor. |
-| 37 | **`-i` and non-`-i` disagreed on the exit code for a scope that has roots but no cleanup units.** `run_interactive` refused an empty candidate list (`src/interactive.rs:1281-1283`), and the orchestrator mapped that to `AppError::Config` (`src/main.rs:597-610` at the time) → **exit 2**. The same scope without `-i` reported zero units and exited 0. | **Fixed in C038.** The empty surface is now a plain negative result: `SessionResult::NothingToClean` → one line, `Nothing to clean.`, on stdout, exit 0. The two spellings of one scope now agree. |
+| 37 | **`-i` and non-`-i` disagreed on the exit code for a scope that has roots but no cleanup units.** `run_interactive` refused an empty candidate list (`src/interactive.rs:1281-1283`), and the orchestrator mapped that to `AppError::Config` (`src/main.rs:603-616` at the time) → **exit 2**. The same scope without `-i` reported zero units and exited 0. | **Fixed in C038.** The empty surface is now a plain negative result: `SessionResult::NothingToClean` → one line, `Nothing to clean.`, on stdout, exit 0. The two spellings of one scope now agree. |
 | 38 | **`plans/output-schema-v1.md` is missing a reason code the code actually emits.** The schema lists 19 `reason_code` values; the code has **20** (`src/cleanup.rs:263-286`). The missing one is `skipped_outside_selection` — the value M014 actually emits for a workspace outside the selected scope (`src/cleanup.rs:1431`). | **Open — not yet planned.** Fits the C036 drift remit, but C036 is `proposed` and not accepted. |
 | 39 | **`plans/output-schema-v1.md` describes a non-UTF-8 path as using "the platform escaped debug form".** `output::path` (`src/output.rs:262-266`) now uses `to_string_lossy()`, so both the human and the machine output render `U+FFFD` and **agree** — the schema's description of a divergence that no longer exists is stale. The schema's own wording ("are UTF-8 strings when representable") is also wrong: a path is always a UTF-8 `String`, representable or not. | **Open — not yet planned.** Note the consequence: `output::path` is lossy and therefore **not injective**, so a JSON path string must not be used as a join key. |
 | 40 | **`plans/registry.md` contradicts itself about the self-update smoke.** The M011C row says the automatic smoke is "demonstrated three times" while the evidence table below it lists **seven** green automatic smokes. | **Open — not yet planned.** A registry is a control surface; a self-contradicting one is worse than a stale one, because a reader cannot tell which number to trust. |
 | 41 | **`progress::set_determinate_total` (`src/progress.rs:326`) is dead *and* internally inconsistent.** It sets the bar's total without zeroing `determinate_done`, unlike `apply_total` (`src/progress.rs:351`). It is the one path that can leave the displayed total and done-count mismatched. It has zero callers. | **Open — not yet planned.** It joins the §10.1 dead-API list if the owner decides to record it there. |
 | 42 | **The progress bar's message template hardcodes `"analyzing {done}/{total} …"` whenever a total exists** (`src/progress.rs:395`), so a `CleanupExecute` bar reads *"analyzing 3/12 …"*. The root cause is the duplicated counter set, not the label. | **Open — not yet planned.** |
-| 43 | **`--format json` on an attended terminal gets no progress at all.** The format gate at `src/main.rs:1056-1057` suppresses the renderer on anything other than `OutputFormat::Human`, regardless of whether stdout is a pipe. Progress is on **stderr**, so a `jq` consumer is unaffected by it — and the log mode's suppression is independently justified, but the JSON mode's is not. A minutes-long `--format json` scan gives the operator nothing. | **Open — not yet planned.** |
+| 43 | **`--format json` on an attended terminal gets no progress at all.** The format gate at `src/main.rs:1178-1179` suppresses the renderer on anything other than `OutputFormat::Human`, regardless of whether stdout is a pipe. Progress is on **stderr**, so a `jq` consumer is unaffected by it — and the log mode's suppression is independently justified, but the JSON mode's is not. A minutes-long `--format json` scan gives the operator nothing. | **Open — not yet planned.** |
 | 44 | **The contract tests do not cover the whole contract.** `cleanup_reason_codes_have_stable_contract_names` (`src/cleanup.rs:4177-4203`) covers **16 of 20** reason codes — it omits `skipped_ownership_unproven`, `skipped_outside_selection`, `selector_unsupported`, and `selector_invalid`. `policy_dispositions_have_stable_json_names` (`src/cleanup.rs:4157-4174`) covers **5 of 6** dispositions — it omits `selector_estimate_unavailable`. | **Open — not yet planned.** The stable-name tests are the only guard on the published string vocabulary, so the uncovered four and one are unguarded. |
 | 45 | **The positive `allowed_output_roots` path is untested end-to-end.** `config.toml` calls the field "operationally redundant" and the code advertises the remediation at `src/cleanup.rs:963-970`, but no test shows a `PrivateBounded` group outside every clean root becoming `Cleaned` through an allowed root. | **Open — not yet planned.** This is the one path where *authorization* — not proof — is what makes a group cleanable, so it is the path most worth an end-to-end case. |
-| 46 | **Two error paths in `main.rs` report an unmeasured zero.** `src/main.rs:677` and `src/main.rs:702` build a `CleanReport` after the engine returned `Err`, so the out-of-scope count it had computed was discarded and `out_of_scope_unresolved` is set to `0` — an unmeasured zero on a path that *did* traverse. The other two report sites (`src/main.rs:375`, `src/main.rs:400`) are correct. | **Open — not yet planned.** A machine consumer reading `out_of_scope_unresolved: 0` cannot tell "nothing was out of scope" from "we never got to count". |
-| 47 | **The one-JSON-document guard is asserted by a string check, not behaviourally.** `tests/cli_contract.rs:3124-3127` asserts that `src/main.rs` contains the text `"enum EmitReport"`. Renaming the enum breaks the test — good — but keeping the enum while every call site passes `EmitReport::Yes` leaves it green, and the two-JSON-documents bug returns. A source check on the *call site* (`src/main.rs:758`) would be a stronger, equally cheap assertion. | **Open — not yet planned.** AGENTS.md §4's own lesson in miniature. |
+| 46 | **Two error paths in `main.rs` report an unmeasured zero.** `src/main.rs:683` and `src/main.rs:708` build a `CleanReport` after the engine returned `Err`, so the out-of-scope count it had computed was discarded and `out_of_scope_unresolved` is set to `0` — an unmeasured zero on a path that *did* traverse. The other two report sites (`src/main.rs:381`, `src/main.rs:406`) are correct. | **Open — not yet planned.** A machine consumer reading `out_of_scope_unresolved: 0` cannot tell "nothing was out of scope" from "we never got to count". |
+| 47 | **The one-JSON-document guard is asserted by a string check, not behaviourally.** `tests/cli_contract.rs:3141-3144` asserts that `src/main.rs` contains the text `"enum EmitReport"`. Renaming the enum breaks the test — good — but keeping the enum while every call site passes `EmitReport::Yes` leaves it green, and the two-JSON-documents bug returns. A source check on the *call site* (`src/main.rs:765`) would be a stronger, equally cheap assertion. | **Open — not yet planned.** AGENTS.md §4's own lesson in miniature. |
 
 ### 10.1 Dead public API, recorded not removed
 
