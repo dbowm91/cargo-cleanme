@@ -15,6 +15,10 @@ Implementation: `c9f7784` (`src/policy.rs`, `src/workspace.rs`,
 `src/main.rs`, `src/cli.rs`, `xtask/src/main.rs`, the regenerated root man
 page, and the tests).
 
+Hosted-lane fixes: `cc27d5f` (the macOS path canonicalization, the Windows
+symlink gate, the regression test that reproduces the macOS condition
+anywhere, and the re-derived census).
+
 ## The executive finding
 
 The maintenance spelling had a **scope that could not contain the thing the
@@ -235,6 +239,52 @@ unchanged.
 The live runs are `Simulate` mode. No `cargo clean` process was invoked by
 any of them.
 
+## What the hosted lanes caught
+
+The first hosted run of the implementation (`c9f7784`, CI `39507383193`)
+failed on **macOS and Windows** and passed on Linux. Both failures were in
+C040's *tests*, not in its production code, and both were invisible on the
+platform they were developed on.
+
+**macOS — five `cli_contract` tests failed.** The reported path is
+canonical; the expectation was not:
+
+```
+left:  "/private/var/folders/…/sandbox/project"
+right: "/var/folders/…/sandbox/project"
+```
+
+Production canonicalizes every path it reports, and macOS puts the
+temporary directory under a symlinked prefix (`/var` → `/private/var`). The
+fixture built its paths on the raw spelling, so it asserted against a path
+production never produces. This is the repository's oldest known trap, and
+`AGENTS.md` records it: *"macOS's symlinked `TMPDIR` broke path comparison
+until the manifests were compared component-wise."* The fix is the one
+`tests/end_to_end.rs` already makes: canonicalize the directory the fixture
+builds in.
+
+**Windows — one test failed.** `an_operator_root_that_is_a_symlink_blocks_the_scope`
+created its symlink under `#[cfg(unix)]` but ran everywhere, so on Windows
+it asserted against a path that was simply absent: no symlink, so no
+"blocked", and the scope was *omitted* rather than blocked. The test is now
+unix-gated, as every other symlink test in the module already is — creating
+a symlink on Windows needs a privilege the CI runner does not have. The
+*classification* is the same on both platforms; only the creation is
+platform-specific.
+
+Neither failure is a product defect, and both are now covered by a test
+that can be run anywhere: `the_reported_path_is_canonical_even_behind_a_symlinked_prefix`
+(`tests/cli_contract.rs:4523`) builds the fixture under a symlinked prefix
+of its own, asserts that the fixture really canonicalized, and then asserts
+that the reported path is the canonical one. It was checked against a
+mutated build with the canonicalization removed, and it fails there.
+
+The lesson is the one this repository keeps re-learning, in a new costume:
+**a green local run is not a green run elsewhere**, and the hosted matrix
+is the only thing that proves it. A test that can only fail on the platform
+it was written for is a test whose failure arrives at the worst possible
+moment.
+
 ## The citation re-derivation
 
 C040 changed four source files, so 1,556 citations in `architecture/` moved.
@@ -305,14 +355,51 @@ target configurations, not by grep: 439 compile on all three lanes, 36 are
 unix-gated, 4 are Linux-only, 1 is Windows-only, and 1 is macOS+Windows.
 That is 481 declared, 479 Linux, 476 macOS, 441 Windows.
 
+## The hosted evidence
+
+Two hosted runs, and the first one failed. Both are recorded.
+
+| Run | Tree | Result |
+|---|---|---|
+| CI `39507383193` | `c9f7784` (the implementation) | **failure** — macOS and Windows; see "What the hosted lanes caught" |
+| Release drift guard `39507383163` | `c9f7784` | success |
+| CI `39509077691` | `cc27d5f` (the portability fix) | **success** — all nine jobs |
+| Release drift guard `39509077681` | `cc27d5f` | success |
+| Cargo selector qualification `39509083087` | `cc27d5f` | success |
+
+All nine jobs of `39509077691` are green: `checks (ubuntu-latest)`,
+`checks (macos-latest)`, `checks (windows-latest)`, `msrv`,
+`generated-docs`, `benchmark`, `installers (ubuntu-latest)`,
+`installers (macos-latest)`, `installers (windows-latest)`.
+
+### The hosted census, re-derived name for name
+
+The source-derived census is confirmed by the hosted lanes, target by target:
+
+| Target | Hosted `src/` tests | Census says |
+|---|---|---|
+| ubuntu-latest | 475 lib + 4 bin = **479** | 479 ✓ |
+| macos-latest | 472 lib + 4 bin = **476** | 476 ✓ |
+| windows-latest | 437 lib + 4 bin = **441** | 441 ✓ |
+| declared | — | **481** |
+
+The `tests/` targets are 71 `cli_contract` and 4 `end_to_end` on Linux and
+macOS, and 19 `cli_contract` on Windows — the `cli_contract` suite is
+unix-gated, which is why its Windows count is a fifth of the others.
+
+This is the first time the per-platform census has been *build-verified*
+rather than source-derived, and the derivation was correct on all three
+targets. That is worth saying plainly, because the previous three
+per-platform counts had each disagreed with the others (finding 57).
+
 ## The verification actually run
 
 Every command below was run on this tree, in this order.
 
 ```sh
-cargo fmt --all -- --check                              # ok
+cargo fmt --all -- --check                               # ok
 cargo clippy --all-targets --all-features -- -D warnings # ok, no warnings
-cargo test --all-targets --all-features                 # 475 lib + 4 bin + 70 cli_contract + 4 end_to_end, 0 failed
+cargo test --all-targets --all-features                 # 475 lib + 4 bin + 71 cli_contract + 4 end_to_end, 0 failed
 python3 scripts/check-fixture-portability.py --self-test && python3 scripts/check-fixture-portability.py
                                                         # 37 fixture file(s) clean
 python3 scripts/check-doc-citations.py --self-test && python3 scripts/check-doc-citations.py
@@ -335,16 +422,19 @@ than routine verification.
 
 ## Known limitations
 
-- **The Windows and macOS lane counts are source-derived, not
-  build-verified.** The derivation is a brace-tracking evaluation against
-  `rustc --print cfg --target <triple>`, cross-checked against
-  `cargo test --lib -- --list` on the host platform. The hosted CI matrix is
-  the only thing that proves the other two.
-- **The symlinked working directory is covered by a unit test, not an
+- **The per-platform lane counts are now build-verified.** The derivation
+  (a brace-tracking evaluation against `rustc --print cfg --target <triple>`,
+  cross-checked against `cargo test --lib -- --list` on the host platform)
+  was confirmed against the hosted lanes target by target: 479 on Linux, 476
+  on macOS, 441 on Windows, against a derived 479/476/441. The *per-file*
+  breakdown remains source-derived; the totals are not.
+- **A symlinked *working directory* is covered by a unit test, not an
   integration one.** `std::env::current_dir()` on Linux resolves symlinks, so
   a symlinked CWD is unreachable from a subprocess test. The behaviour is
   covered where it can be: `an_operator_root_that_is_a_symlink_blocks_the_scope`
-  exercises the classification arm directly.
+  exercises the classification arm directly. (The *reported path* is a
+  different question, and it now has an integration test that runs
+  everywhere: `the_reported_path_is_canonical_even_behind_a_symlinked_prefix`.)
 - **The live runs are Simulate mode.** No `cargo clean` process was invoked
   by any of them, so the evidence is about *selection and proof*, not about
   deletion.
@@ -385,11 +475,17 @@ doors. That is recorded as a stop condition in the plan.
 
 ## The disposition
 
-**Not closed.** The implementation landed and is verified locally. The
-publication is outstanding, and publication is what closes a corrective in
-this repository — *compilation is not closure, publication is not closure*.
-The release is also owner-gated: the release notes are maintainer-owned and
-the publication gate requires human inspection of the staged release.
+**Not closed.** The implementation landed, the hosted lanes are green, and
+the documentation is re-derived — but the publication is outstanding, and
+publication is what closes a corrective in this repository: *compilation is
+not closure, publication is not closure*. The release is also owner-gated:
+the release notes are maintainer-owned and the publication gate requires
+human inspection of the staged release.
+
+What is *not* outstanding: the ADR 009 implementation, the `long_about`
+rewrite, the man-page derivation, the 1,556 re-pointed citations, the
+re-derived counts, the seven mutations, the two hosted-lane defects and their
+fixes. All of that is landed and green on `cc27d5f`.
 
 ## Reproduction
 
