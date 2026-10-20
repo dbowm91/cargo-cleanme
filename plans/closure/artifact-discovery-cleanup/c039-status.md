@@ -1,7 +1,7 @@
 # C039 — Rip-Style Compact Selection Surface: closure record
 
-Status: **active — implementation landed and verified locally; the hosted lanes
-and the publication are outstanding. Not closed.**
+Status: **active — implementation landed, verified locally, and green on every
+hosted lane; the publication is outstanding. Not closed.**
 
 Plan: `plans/implementation/artifact-discovery-cleanup/c039-rip-style-compact-selection-surface-corrective.md`
 
@@ -211,6 +211,22 @@ CI `39378266722` and the Release drift guard `39378266902`, against
 `checks (macos-latest)`, `checks (windows-latest)`, `msrv` (toolchain 1.89,
 `--locked`), `installers` ×3, `generated-docs`, and `benchmark`.
 
+The **final tree** carries its own green run: CI `39379480713` and the Release
+drift guard `39379480734`, both against `075842f` — all nine jobs green again,
+including `generated-docs` and the MSRV lane.
+
+That run failed once before it succeeded, and the failure was **not** a
+regression. The `generated-docs` job never reached the repository's own drift
+check: its `dtolnay/rust-toolchain@stable` setup step could not download
+`channel-rust-stable.toml.sha256` from `static.rust-lang.org` (`Connection
+timed out (os error 110)`) and the step exited non-zero. The eight
+unaffected jobs were green on the same SHA, the commit was markdown-only, and
+the local `generate-docs -- --check` gate was green on the identical tree.
+Re-running the failed job (`gh run rerun --failed 39379480713`) produced the
+green result above. Recording this rather than only the green outcome: a lane
+that failed for infrastructure reasons is not a code signal, and a record that
+showed only the passing re-run would misreport what happened.
+
 The hosted lanes also **confirm the derived census**, name for name:
 
 | Lane | lib | bin | total | Census |
@@ -258,6 +274,18 @@ cargo run --quiet --features dev-tools --bin generate-docs -- --check
                                                         # 13 artifacts match the clap model
 ```
 
+One caveat on how that ladder was obtained, because a reader comparing
+timestamps would otherwise be confused: this host's filesystem filled up
+mid-ladder, and the `cargo test` step failed with `No space left on device`
+inside `config::tests::concurrent_first_use_creates_one_complete_template` —
+a **host condition, not a defect in this tree** (the failing code path is the
+config directory creation, in a module C039 does not touch, and the same
+command passed once space was available). The scratch Cargo target directories
+left in `/tmp` by earlier milestone runs were then reclaimed with `cargo clean
+--target-dir` — the same Cargo-mediated deletion this tool performs — and the
+whole ladder was **re-run from the top** on the same tree. The figures above
+are from that second, complete pass.
+
 `scripts/release-check.sh` was **not** run: it requires a clean tree, the
 `eggpack` binary, and toolchain 1.89, and it is the pre-release gate rather
 than routine verification.
@@ -294,8 +322,8 @@ than routine verification.
 
 ## The disposition
 
-**Not closed.** The implementation landed and is verified locally; the hosted
-lanes and the publication are outstanding. Publication is what closes a
+**Not closed.** The implementation landed, is verified locally, and is green on
+every hosted lane; the publication is outstanding. Publication is what closes a
 corrective in this repository — *compilation is not closure, publication is
 not closure* — and the release is owner-gated: the release notes are
 maintainer-owned and the publication gate requires human inspection of the

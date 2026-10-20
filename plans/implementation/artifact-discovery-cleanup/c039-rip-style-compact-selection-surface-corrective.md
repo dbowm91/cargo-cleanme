@@ -2,8 +2,9 @@
 
 Status: **active** — implementation landed and verified, locally and on the
 hosted lanes (CI `39378266722`, all nine jobs green, plus the Release drift
-guard `39378266902`); publication is outstanding, so this corrective is not
-yet closed. Evidence in
+guard `39378266902`; and, on the final tree, CI `39379480713` and the drift
+guard `39379480734`, all nine jobs green again); publication is outstanding,
+so this corrective is not yet closed. Evidence in
 `plans/closure/artifact-discovery-cleanup/c039-status.md`.
 
 Repository baseline: `main` at `413f25d` (v0.2.9, published).
