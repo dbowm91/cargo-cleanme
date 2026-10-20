@@ -6,9 +6,19 @@ All notable changes to cargo-cleanme are documented here. The format follows
 stance: the `0.x` line may make breaking changes in any release, and the
 command-line, JSON, and release-asset contracts are the stable surface.
 
-## [Unreleased]
+## [0.2.10] - 2026-10-20
 
-### Changed
+### Changed — BREAKING
+
+The bare invocation's **effect** changes in this release: it now covers the
+directory you are standing in. The spelling, the JSON contract, the log
+line, and every ownership-proof gate are unchanged.
+
+| 0.2.9 | Now |
+|---|---|
+| `cargo cleanme` in a directory the machine's known roots do not reach cleaned nothing | it cleans the workspace under it — see below |
+| `cargo cleanme` inside a directory the known roots already reach | unchanged |
+| `cargo cleanme -i` with nothing to select refused as a configuration error (exit `2`) | it says `Nothing to clean.` and exits `0` |
 
 - **A bare `cargo cleanme` now cleans the directory you are standing in.**
   The working directory was a *filter* over a universe that did not contain
@@ -1031,6 +1041,7 @@ published yet.
 - No runtime release-artifact qualification has run; the exact release bytes
   are qualified when the first release workflow is dispatched.
 
+[0.2.10]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.10
 [0.2.9]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.9
 [0.2.8]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.8
 [0.2.7]: https://github.com/dbowm91/cargo-cleanme/releases/tag/v0.2.7

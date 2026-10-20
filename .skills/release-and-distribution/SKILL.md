@@ -138,9 +138,9 @@ run it as a routine check.
 
 ### The published-release count
 
-**Sixteen** releases are published, `v0.1.0` through `v0.2.8`. **`v0.2.0` is
-yanked**; the other fifteen are installable. The current source version is
-`0.2.9`, **unpublished**.
+**Seventeen** releases are published, `v0.1.0` through `v0.2.9`. **`v0.2.0` is
+yanked**; the other sixteen are installable. The current source version is
+`0.2.10`, **unpublished**.
 
 Two ways to get this wrong, both of which have shipped as bugs in this
 repository's own docs: saying "fifteen releases are published" (that is the

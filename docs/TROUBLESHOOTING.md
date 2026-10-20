@@ -11,6 +11,8 @@ action.
 
 | If you are on | Check | Fixed in |
 |---|---|---|
+| **0.2.9 and earlier** | A bare `cargo cleanme` in a directory the machine's known roots do not reach did **nothing** — it reported a clean result over an empty scope, because the working directory was a filter over a universe that did not contain it | **0.2.10** (ADR 009; the working directory joins the maintenance scope) |
+| **0.2.9 and earlier** | `cargo cleanme -i` with nothing to select was refused as a **configuration error** (exit `2`), while the same scope without `-i` exited `0` — two spellings of one scope disagreed | **0.2.10** (both now say `Nothing to clean.` and exit `0`) |
 | **0.2.8 and earlier** | A manifest **outside** the selected scope that Cargo could not resolve **blocked the whole scope** — bare `cargo cleanme` refused to clean units it had already proved, and reported the out-of-scope manifest as the reason | **0.2.9** (M017 / ADR 007; the proof boundary is now the selected scope) |
 | **0.2.3 and earlier** | A deleted automatically learned scan location (for example a removed worktree) aborts bare `cargo cleanme` with `invalid scan root … No such file or directory` | **0.2.4** (C028; see below) |
 | **0.2.1 and earlier** | An `exclude` naming a directory with `[` or `]` in its canonical path **did not exclude it** on Windows | **0.2.2** |
