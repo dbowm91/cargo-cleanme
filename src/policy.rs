@@ -1416,15 +1416,22 @@ mod tests {
 
     /// ADR 009: an operator root's defect handling matches an automatic root's.
     ///
-    /// A symlinked operator root blocks the scope rather than being followed: the
-    /// scope may not quietly become smaller than the operator asked for.
+    /// A symlinked operator root blocks the scope rather than being followed:
+    /// the scope may not quietly become smaller than the operator asked for.
+    /// The exemption is from the maintainability rule only.
+    ///
+    /// Unix-gated for the reason every other symlink test in this module is:
+    /// creating a symlink on Windows needs a privilege the CI runner does not
+    /// have, so the test would be asserting against a path that is simply
+    /// absent. The behaviour is the same on both platforms — it is the
+    /// *creation* that is platform-specific, not the classification.
     #[test]
+    #[cfg(unix)]
     fn an_operator_root_that_is_a_symlink_blocks_the_scope() {
         let d = tempfile::tempdir().unwrap();
         let real = d.path().join("real");
         std::fs::create_dir_all(&real).unwrap();
         let link = d.path().join("link");
-        #[cfg(unix)]
         std::os::unix::fs::symlink(&real, &link).unwrap();
 
         let classified =

@@ -4085,7 +4085,6 @@ fn a_cleanup_with_nothing_to_report_says_nothing_to_clean_and_exits_zero() {
 /// not contain it, so the run proved nothing and reported a zero result.
 #[cfg(unix)]
 struct WorkingDirectoryScopeFixture {
-    temp: tempfile::TempDir,
     home: PathBuf,
     state_home: PathBuf,
     sandbox: PathBuf,
@@ -4095,28 +4094,53 @@ struct WorkingDirectoryScopeFixture {
     log: PathBuf,
     args_log: PathBuf,
     bin: PathBuf,
+    /// The temporary directory's owner. Never read — it is held so the
+    /// directory outlives the fixture and is removed with it.
+    _temp: tempfile::TempDir,
+    /// The canonical spelling of the temporary directory.
+    ///
+    /// Workspace resolution canonicalizes every path it reports, and the
+    /// temporary directory sits under a symlinked prefix on macOS (`/var` →
+    /// `/private/var`). A fixture built on the raw spelling therefore asserts
+    /// against a path production never produces. This is the same correction
+    /// `tests/end_to_end.rs` makes, for the same reason.
+    case: PathBuf,
 }
 
 #[cfg(unix)]
 impl WorkingDirectoryScopeFixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
-        let home = temp.path().join("home");
+        let place = temp.path().to_path_buf();
+        Self::build(temp, place)
+    }
+
+    /// Build the fixture with its directory at `place`, spelled *as given*.
+    ///
+    /// The fixture canonicalizes `place`, because production canonicalizes
+    /// every path it reports and a fixture built on a symlinked spelling
+    /// would assert against a path production never produces. This is the
+    /// macOS `/var` → `/private/var` trap, and it is the correction
+    /// `tests/end_to_end.rs` makes for the same reason.
+    fn build(temp: tempfile::TempDir, place: PathBuf) -> Self {
+        std::fs::create_dir_all(&place).unwrap();
+        let case = std::fs::canonicalize(&place).unwrap();
+        let home = case.join("home");
         std::fs::create_dir_all(&home).unwrap();
-        let state_home = temp.path().join("state-home");
+        let state_home = case.join("state-home");
         // The sandbox is neither a seed name nor a learned root.
-        let sandbox = temp.path().join("sandbox");
+        let sandbox = case.join("sandbox");
         std::fs::create_dir_all(&sandbox).unwrap();
         let project = common::inactive_project(&sandbox, "project");
         let target = project.join("target");
-        let bin = temp.path().join("bin");
-        common::write_fake_cargo(&bin, temp.path());
-        let config = temp.path().join("config.toml");
+        let bin = case.join("bin");
+        common::write_fake_cargo(&bin, &case);
+        let config = case.join("config.toml");
         fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
         Self {
-            log: temp.path().join("cargo.log"),
-            args_log: temp.path().join("cargo-args.log"),
-            temp,
+            log: case.join("cargo.log"),
+            args_log: case.join("cargo-args.log"),
+            _temp: temp,
             home,
             state_home,
             sandbox,
@@ -4124,6 +4148,7 @@ impl WorkingDirectoryScopeFixture {
             target,
             config,
             bin,
+            case,
         }
     }
 
@@ -4325,7 +4350,7 @@ fn the_working_directory_is_exempt_from_the_maintainability_rule() {
 
     // A directory that is not an ancestor of the forbidden origin, so the
     // working directory cannot reach it.
-    let elsewhere = fixture.temp.path().join("elsewhere");
+    let elsewhere = fixture.case.join("elsewhere");
     std::fs::create_dir_all(&elsewhere).unwrap();
 
     let run = |cwd: &std::path::Path| {
@@ -4383,7 +4408,7 @@ fn the_working_directory_is_exempt_from_the_maintainability_rule() {
 #[test]
 fn a_configured_ignore_still_covers_the_working_directory() {
     let fixture = WorkingDirectoryScopeFixture::new();
-    let config = fixture.temp.path().join("ignoring.toml");
+    let config = fixture.case.join("ignoring.toml");
     fs::write(
         &config,
         format!(
@@ -4478,6 +4503,48 @@ fn an_explicit_root_keeps_its_own_scope() {
         roots,
         vec![fixture.project.to_str().unwrap().to_string()],
         "an explicit root is the whole scope: {roots:?}"
+    );
+}
+
+/// ADR 009: the reported path is the canonical one, even when the fixture
+/// lives behind a symlinked prefix.
+///
+/// macOS puts the temporary directory under a symlinked prefix (`/var` →
+/// `/private/var`) and production canonicalizes every path it reports. A
+/// fixture built on the raw spelling asserts against a path production never
+/// produces, and the test fails on macOS only — which is exactly where it
+/// would be least welcome, and least likely to be investigated.
+///
+/// This reproduces the condition on every platform by building the fixture
+/// under a symlinked prefix of its own, so the defect cannot return
+/// unnoticed on the lane that cannot be checked locally.
+#[cfg(unix)]
+#[test]
+fn the_reported_path_is_canonical_even_behind_a_symlinked_prefix() {
+    let temp = tempfile::tempdir().unwrap();
+    let real = temp.path().join("real");
+    std::fs::create_dir_all(&real).unwrap();
+    let link = temp.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let symlinked_case = link.join("case");
+    let fixture = WorkingDirectoryScopeFixture::build(temp, symlinked_case.clone());
+
+    // The premise: the fixture really is canonicalising through a symlink.
+    // Without this, the assertion below would pass for the wrong reason.
+    assert_ne!(
+        fixture.case.to_str().unwrap(),
+        symlinked_case.to_str().unwrap(),
+        "the fixture must have canonicalized through the symlinked prefix: {:?} vs {:?}",
+        fixture.case,
+        symlinked_case
+    );
+
+    let output = fixture.run_from(&fixture.sandbox, &[]);
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        json["result"]["units"][0]["workspace_root"],
+        fixture.project.to_str().unwrap(),
+        "the reported path is the canonical one: {json}"
     );
 }
 

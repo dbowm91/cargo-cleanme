@@ -107,7 +107,7 @@ from `src/`, never copied between documents.
 | `src/output.rs` | 21 | 273 (`path_tests`), 509 (`mod tests`), 945 (`update_tests`) | 1065 | 793 |
 | `src/config.rs` | 20 | 614 | 1499 | 886 |
 | `src/discovery_state.rs` | 17 | 581 | 1129 | 549 |
-| `src/policy.rs` | 21 | 792 | 1444 | 653 |
+| `src/policy.rs` | 21 | 792 | 1451 | 660 |
 | `src/progress.rs` | 13 | 534 | 873 | 340 |
 | `src/report.rs` | 7 | 72 | 195 | 124 |
 | `src/traverse.rs` | 6 | 495 | 624 | 130 |
@@ -121,17 +121,17 @@ from `src/`, never copied between documents.
 **The count is declared, not executed.** 481 `#[test]` functions exist in `src/`; **479
 compile on Linux x86_64**, because two are gated to the other platforms
 (`config.rs:995`, `#[cfg(windows)]`, and `discovery.rs:1552`,
-`#[cfg(any(target_os = "macos", windows))]`). Beyond that, 35 more are `#[cfg(unix)]` and four
+`#[cfg(any(target_os = "macos", windows))]`). Beyond that, 36 more are `#[cfg(unix)]` and four
 are Linux-only (`config.rs:1443`, `discovery.rs:1572`, `output.rs:280`, `workspace.rs:5404`),
 so the other two lanes compile smaller sets. The three hosted lanes therefore compile different
-sets — 479 on Linux x86_64, 476 on macOS, 442 on Windows. Platform-gated tests mean a green local run does not mean a green run
+sets — 479 on Linux x86_64, 476 on macOS, 441 on Windows. Platform-gated tests mean a green local run does not mean a green run
 elsewhere — which is the whole reason the OS matrix exists, and the reason
 `check-fixture-portability.py` exists to catch a *new* ungated fixture before a lane disagrees
 about it.
 
 > **Count the gates with a parser, not a grep.** A naive "the `#[cfg(unix)]`
-> immediately above `#[test]`" search finds 26, not 35, because Rust allows
-> `#[test]` to precede the gate — nine of the 35 have it that way
+> immediately above `#[test]`" search finds 26, not 36, because Rust allows
+> `#[test]` to precede the gate — ten of the 36 have it that way
 > (`src/cleanup.rs:6124` does exactly that). The
 > figures above come from a brace-tracking evaluation against
 > `rustc --print cfg --target <triple>`, cross-checked against

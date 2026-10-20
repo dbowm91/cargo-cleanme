@@ -1176,7 +1176,7 @@ documents the binary hand-builds for the benign `update` outcomes
 (`src/main.rs:110-125`, `:151-166`). Those are the same shape as the envelope
 they imitate, written in the one file whose four inline tests do not reach them.
 
-### `tests/cli_contract.rs` — 4531 lines, 70 tests
+### `tests/cli_contract.rs` — 4598 lines, 71 tests
 
 Drives `env!("CARGO_BIN_EXE_cargo-cleanme")` as a subprocess and asserts on
 status, stdout and stderr. The pre-M012A tests survived; M012A, M012B, M014 and

@@ -589,7 +589,7 @@ now covered, in `domain.rs:417-434`.
 
 The integration surfaces that exercise this vocabulary:
 
-- **`tests/cli_contract.rs`** (4531 lines, 70 `#[test]`s) drives the real binary
+- **`tests/cli_contract.rs`** (4598 lines, 71 `#[test]`s) drives the real binary
   via `CARGO_BIN_EXE_cargo-cleanme` and asserts the JSON/stderr contract that
   `output.rs` and the counter lines produce.
   `json_scan_is_one_versioned_document_and_stats_stay_on_stderr`

@@ -127,18 +127,18 @@ set is valuable.
 **481** inline `#[test]` functions are **declared** in `src/`; **479** compile
 and run on Linux. Two are excluded there: one `#[cfg(windows)]`
 (`src/config.rs:995`) and one `#[cfg(any(target_os = "macos", windows))]`
-(`src/discovery.rs:1552`). A further **35** carry `#[cfg(unix)]` and **4** are
+(`src/discovery.rs:1552`). A further **36** carry `#[cfg(unix)]` and **4** are
 Linux-only (`src/config.rs:1443`, `src/discovery.rs:1572`, `src/output.rs:280`,
 `src/workspace.rs:5404`), so the three hosted lanes compile **479 of 481 on
-Linux**, **442 of 481 on Windows**, and **476 of 481 on macOS** —
+Linux**, **441 of 481 on Windows**, and **476 of 481 on macOS** —
 `#[cfg(unix)]` is true *on* macOS, which is the half people get wrong. A green
 local run is not a green run elsewhere — that is what the OS matrix in `ci.yml`
 is for, and why `check-fixture-portability.py` exists to catch a *new* ungated
 fixture before a lane disagrees about it.
 
 > **Count the gates, not the greps.** A naive "the `#[cfg(unix)]` immediately
-> above `#[test]`" grep finds 26, not 35, because Rust allows `#[test]` to come
-> *before* the gate (`src/cleanup.rs:6124` does exactly that). Nine of the 35
+> above `#[test]`" grep finds 26, not 36, because Rust allows `#[test]` to come
+> *before* the gate (`src/cleanup.rs:6124` does exactly that). Ten of the 36
 > have the gate after the `#[test]`. Derive these
 > numbers with a brace-tracking parser and check them against
 > `cargo test --lib -- --list` on the host platform; anything else silently

@@ -2,8 +2,8 @@
 
 > Component deep dive · part of the [architecture overview](overview.md)
 
-`src/policy.rs` — 1,444 lines, 791 of them production; the inline test
-module is the remaining 653.
+`src/policy.rs` — 1,451 lines, 791 of them production; the inline test
+module is the remaining 660.
 
 ## 1. Responsibility
 

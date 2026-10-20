@@ -228,12 +228,12 @@ source of truth for module line counts and the inline-test total; verify each
 against `src/`, fix the overview first, then align the deep dives.
 
 The same rule applies to **per-platform test counts**, which have disagreed
-across three documents: they are 481 declared, 479 on Linux, 442 on Windows,
+across three documents: they are 481 declared, 479 on Linux, 441 on Windows,
 476 on macOS. Derive them with a brace-tracking parser evaluated against
 `rustc --print cfg --target <triple>`, and cross-check against
 `cargo test --lib -- --list`. A grep for `#[cfg(unix)]` immediately above
-`#[test]` finds 26 of the 35, because Rust allows `#[test]` to come first —
-nine have the gate *after* the `#[test]`.
+`#[test]` finds 26 of the 36, because Rust allows `#[test]` to come first —
+ten have the gate *after* the `#[test]`.
 
 ## 7. Planning and decision records
 
@@ -325,7 +325,7 @@ closure records.
 | Path | Contents |
 |---|---|
 | `src/` | the crate — 18 files; `main.rs` is the binary, `lib.rs` declares the 16 library modules |
-| `tests/` | `cli_contract.rs` (70 tests), `end_to_end.rs` (4), `common/` |
+| `tests/` | `cli_contract.rs` (71 tests), `end_to_end.rs` (4), `common/` |
 | `architecture/` | `overview.md` + 16 deep dives |
 | `docs/` | `USAGE.md`, `AUTOMATION.md`, `INSTALLING.md`, `RELEASING.md`, `TROUBLESHOOTING.md`, `UPDATE.md` |
 | `plans/` | decision records — see §7 |
