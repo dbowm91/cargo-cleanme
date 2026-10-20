@@ -220,6 +220,14 @@ only mutation that does not remove a feature but *inverts* one, and it is the
 mutation that would have produced the shared-output hazard ADR 006 exists to
 prevent.
 
+The harness itself is a scratch artifact, not a shipped script: it lives at
+`/tmp/mutate_c040.sh` and backs every file up with `cp` before mutating
+(it never uses `git checkout --`, which once wiped uncommitted work in this
+repository). **The table above is the specification** — each row says what to
+revert and which test must fail, which is enough to re-create the harness
+from scratch. The mutations were re-run against the committed tree after the
+portability fix, and all seven were still caught.
+
 ## The live evidence
 
 On the machine that prompted this, before the change and after:
@@ -366,6 +374,8 @@ Two hosted runs, and the first one failed. Both are recorded.
 | CI `39509077691` | `cc27d5f` (the portability fix) | **success** — all nine jobs |
 | Release drift guard `39509077681` | `cc27d5f` | success |
 | Cargo selector qualification `39509083087` | `cc27d5f` | success |
+| CI `39509567027` | `3a33431` (this record) | **success** — all nine jobs |
+| Release drift guard `39509567152` | `3a33431` (this record) | success |
 
 All nine jobs of `39509077691` are green: `checks (ubuntu-latest)`,
 `checks (macos-latest)`, `checks (windows-latest)`, `msrv`,
