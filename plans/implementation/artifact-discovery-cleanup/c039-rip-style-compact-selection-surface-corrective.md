@@ -1,8 +1,9 @@
 # C039 — Rip-Style Compact Selection Surface Corrective
 
-Status: **active** — implementation landed and verified locally; the hosted
-lanes and the publication are outstanding, so this corrective is not yet
-closed. Evidence in
+Status: **active** — implementation landed and verified, locally and on the
+hosted lanes (CI `39378266722`, all nine jobs green, plus the Release drift
+guard `39378266902`); publication is outstanding, so this corrective is not
+yet closed. Evidence in
 `plans/closure/artifact-discovery-cleanup/c039-status.md`.
 
 Repository baseline: `main` at `413f25d` (v0.2.9, published).

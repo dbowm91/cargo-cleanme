@@ -154,6 +154,13 @@ Measured from the captured bytes, rather than read off the screen:
 The repaint size is the property that matters: it is now a function of the
 page, not of the terminal, and it is the same whatever the candidate count.
 
+**`NO_COLOR` was verified over the same pty.** With `NO_COLOR=1` in the
+environment, the captured bytes contain **no** styling sequence — no
+`ESC[0m`, `ESC[1m`, `ESC[2m`, `ESC[7m`, `ESC[32m`, `ESC[33m` or `ESC[36m` —
+while the terminal control sequences (`ESC[?25l`, the hide-cursor) are still
+there. The surface stays fully usable without colour; only its appearance
+changes.
+
 ## What the hosted lanes caught
 
 The first hosted run (CI `39375009699`) was **red on Windows only**, and the
@@ -196,6 +203,24 @@ machine-checkable property than "the numbers look right".
 The plan's own evidence citations deliberately refer to the baseline
 `413f25d` — that section describes the tree the corrective was written
 against — and the plan now says so.
+
+## The hosted evidence
+
+CI `39378266722` and the Release drift guard `39378266902`, against
+`b166d41`. **All nine jobs green**: `checks (ubuntu-latest)`,
+`checks (macos-latest)`, `checks (windows-latest)`, `msrv` (toolchain 1.89,
+`--locked`), `installers` ×3, `generated-docs`, and `benchmark`.
+
+The hosted lanes also **confirm the derived census**, name for name:
+
+| Lane | lib | bin | total | Census |
+|---|---:|---:|---:|---:|
+| Linux | 468 | 4 | 472 | 472 ✓ |
+| macOS | 465 | 4 | 469 | 469 ✓ |
+| Windows | 431 | 4 | 435 | 435 ✓ |
+
+Windows ran exactly the 19 `cli_contract` cases the `#[cfg(unix)]` gating
+predicts (63 declared, 44 Unix-only).
 
 ## The census re-derivation
 
