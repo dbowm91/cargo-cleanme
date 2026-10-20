@@ -101,7 +101,7 @@ from `src/`, never copied between documents.
 | `src/cleanup.rs` | 114 | 3747 | 9983 | 6237 |
 | `src/workspace.rs` | 76 | 2094 | 6068 | 3975 |
 | `src/update.rs` | 47 | 1290 | 2886 | 1597 |
-| `src/interactive.rs` | 58 | 1326 | 2427 | 1102 |
+| `src/interactive.rs` | 58 | 1312 | 2417 | 1106 |
 | `src/discovery.rs` | 39 | 1001 | 2363 | 1363 |
 | `src/cli.rs` | 32 | 485 | 1276 | 792 |
 | `src/output.rs` | 21 | 273 (`path_tests`), 509 (`mod tests`), 945 (`update_tests`) | 1065 | 793 |

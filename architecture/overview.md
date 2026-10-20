@@ -19,7 +19,7 @@ distinction matters.
 - **What it is:** a Cargo subcommand (`cargo cleanme`) that finds inactive Cargo
   build artifacts on a machine and either reports or safely reclaims them.
 - **Shape:** one binary (`src/main.rs`) over one library (`src/lib.rs`) of 16
-  modules, 18 source files, 33,870 lines in `src/` (15,230 of them outside
+  modules, 18 source files, 33,860 lines in `src/` (15,216 of them outside
   every `#[cfg(test)]` scope), no async runtime of its own, and exactly one
   binary dependency that matters for safety (`cargo metadata`).
 - **Version:** 0.2.9 (unpublished; latest published tag `v0.2.8`) ·
@@ -97,8 +97,8 @@ Execute mode). `scan --full` is a hidden alias of `scan --all`.
 |---|---|---|
 | Source files | 18 | `src/` |
 | Library modules | 16 | `src/lib.rs` |
-| Total lines in `src/` | 33,870 | `wc -l src/*.rs` |
-| Production lines | 15,230 | total minus every `#[cfg(test)]` scope |
+| Total lines in `src/` | 33,860 | `wc -l src/*.rs` |
+| Production lines | 15,216 | total minus every `#[cfg(test)]` scope |
 | Inline `#[test]` functions | 474 | `#[test]` attributes in `src/` |
 | Integration test files | 2 | `tests/cli_contract.rs`, `tests/end_to_end.rs` |
 | Contract-checker scripts | 17 | `scripts/` — the set is machine-gated, see §9 |
@@ -133,7 +133,7 @@ the file itself; the integration suites in `tests/` are counted separately in
 | `workspace.rs` | 6068 | 2093 | 76 | `progress.rs` | 873 | 533 | 13 |
 | `update.rs` | 2886 | 1289 | 47 | `report.rs` | 195 | 71 | 7 |
 | `discovery.rs` | 2363 | 1000 | 39 | `traverse.rs` | 624 | 494 | 6 |
-| `interactive.rs` | 2427 | 1325 | 58 | `domain.rs` | 435 | 406 | 1 |
+| `interactive.rs` | 2417 | 1311 | 58 | `domain.rs` | 435 | 406 | 1 |
 | `config.rs` | 1499 | 613 | 20 | `editor.rs` | 215 | 155 | 2 |
 | `main.rs` | 1562 | 1425 | 4 | `error.rs` | 16 | 16 | 0 |
 | `cli.rs` | 1276 | 484 | 32 | `lib.rs` | 16 | 16 | 0 |
