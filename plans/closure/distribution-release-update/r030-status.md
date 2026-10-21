@@ -40,7 +40,9 @@ missing; that debt is recorded in the registry and is **not** reopened here.
 | 15 | The external smoke was run from outside the repository | §8 — **and it failed on the first attempt; §8.1 says why, and §8.2 says what was re-run** |
 
 The crate was published from a **detached worktree of the tag**, as
-`docs/RELEASING.md` requires — not from `main`.
+`docs/RELEASING.md` requires — not from `main`. `git worktree remove --force
+/tmp/cargo-cleanme-publish` afterwards; `git worktree list` shows only the
+main worktree.
 
 ## 2. Where this release deviated, and why each is stated
 
