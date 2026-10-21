@@ -52,7 +52,7 @@ module at `src/output.rs:946` —
 `the_dry_run_document_pins_the_schema_and_the_identity_fields` and
 `the_mutating_document_is_the_same_shape_with_changed_true` both assert the
 document's shape field by field, and `update_json_stream`
-(`src/output.rs:902`) makes the document-plus-newline stream contract a value
+(`src/output.rs:941`) makes the document-plus-newline stream contract a value
 tests hold byte for byte.
 
 Migrating it to `EnvelopeV1` is still a **contract change**: it needs a plan
@@ -67,7 +67,7 @@ findings in `architecture/overview.md` §10, not deliberate omissions:
 - `capability` — present on the domain type (`src/domain.rs:198`), absent from
   the serialized participant (`src/output.rs:68-72`).
 - `out_of_scope_unresolved` — present on the cleanup report
-  (`src/cleanup.rs:414`), absent from the envelope.
+  (`src/cleanup.rs:578`), absent from the envelope.
 
 A consumer that needs them today has to derive them, which means guessing. If
 you close either gap, it is an additive field — the kind of change that is
@@ -88,7 +88,7 @@ and do not derive the label from flags.
 | Code | Meaning |
 |---|---|
 | `0` | success |
-| `1` | `full_incomplete` on scan, or a zero-deletion-with-typed-blocker on cleanup (the `scope` block path) |
+| `1` | `full_incomplete` on scan, or a zero-deletion-with-typed-blocker on cleanup (the `scope` block path), or a Full cleanup that could not prove every learned root |
 | `2` | **every** fatal error, including CLI usage errors |
 
 **There are only three exit codes.** `src/main.rs:34` is the only place the
@@ -105,10 +105,10 @@ not by their exit status.
 
 Two things to keep straight:
 
-- **`1` is overloaded** across two commands with two different causes, and the
-  `scope` block path is a *success-shaped* result with a typed blocker. The JSON
-  block is emitted with a non-zero exit status. A consumer must read the block
-  rather than inferring from the status.
+- **`1` is overloaded** across two commands with three different causes, and
+  the `scope` block path is a *success-shaped* result with a typed blocker. The
+  JSON block is emitted with a non-zero exit status. A consumer must read the
+  block rather than inferring from the status.
 - **State persistence does not affect the exit code.** It did once: a failed
   Full publish returned `Ok(1)`. The flag is gone. A scan is informational;
   state is an optimization. See
@@ -116,20 +116,23 @@ Two things to keep straight:
 
 ## Reason codes
 
-Cleanup emits typed `reason_code`s. The full, current set is the twenty
-variants of `ReasonCode` in `src/cleanup.rs:193-286`:
+Cleanup emits typed `reason_code`s. The full, current set is the twenty-one
+variants of `CleanupReasonCode` in `src/cleanup.rs:348-388`, spelled by
+`CleanupReasonCode::as_str` (`src/cleanup.rs:426-450`):
 
 ```text
 previewed  simulated  cleaned  below_minimum_size  too_recent_for_policy
 not_included  excluded  skipped_active  skipped_shared  skipped_uncertain
 skipped_unauthorized  skipped_marker_invalid  skipped_changed_before_cleanup
 skipped_ownership_unproven  skipped_safety  skipped_outside_selection
-cargo_failed  measurement_failed  selector_unsupported  selector_invalid
+skipped_incomplete_coverage  cargo_failed  measurement_failed
+selector_unsupported  selector_invalid
 ```
 
-`plans/output-schema-v1.md` § *reason_code* lists nineteen of them — it is
-missing `skipped_outside_selection`, which is a live documentation gap (C036
-D11).
+`plans/output-schema-v1.md` § *reason_code* now carries all twenty-one. It
+listed nineteen until the C036 D11 gap was closed, and it was extended again
+when `skipped_incomplete_coverage` arrived. Check it against `as_str`, not
+against this prose — both have been wrong before.
 
 The distinctions exist because they warrant **different operator responses**:
 
@@ -141,6 +144,9 @@ The distinctions exist because they warrant **different operator responses**:
   safety or environment problem.
 - `skipped_outside_selection` — the candidate is outside the scope that was
   actually selected, so it was never a candidate. Not a failure.
+- `skipped_incomplete_coverage` — the learned root above this workspace could
+  not be proven, so it was left untouched. A different fact from "you did not
+  ask for this"; the `detail` string names the root and the cause.
 - `previewed` and `simulated` are the expected outcomes in `CargoPreview` and
   `Simulate` mode respectively. There is **no** `skipped_dryrun` code.
 
@@ -179,12 +185,15 @@ did not commit is a failing build, not a detail.
 ## Before you claim the change is safe
 
 - The JSON document is still exactly one object on stdout, and
-  `cargo cleanme scan --format json` round-trips.
+  `cargo cleanme scan --all --format json` round-trips. (A bare
+  `cargo cleanme scan --format json` is a **usage error** — the `scan-scope`
+  ArgGroup requires exactly one selector.)
 - New fields are additive, or the version is bumped and the change has a plan.
 - `cargo cleanme update --format json` is unchanged, or the change is
   explicitly scoped and recorded as a contract change.
 - The reason codes you emit are **real** — cross-check them against the
-  `ReasonCode` enum, not against this prose, which has been wrong before.
+  `CleanupReasonCode` enum, not against this prose, which has been wrong
+  before.
 - The exit code you emit is `0`, `1`, or `2`. There is no fourth.
 - `scripts/gen-release-workflow-shape.py --check` and the completions drift
   gate pass.

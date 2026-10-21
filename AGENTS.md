@@ -149,7 +149,7 @@ run is worse than no record, because the next milestone trusts it.
 
 - **One spawn boundary.** Every external `cargo` invocation goes through the
   `CargoRunner` / `CleanupRunner` traits (`src/workspace.rs:82` for
-  `cargo metadata`, `src/cleanup.rs:891` for `cargo clean`) so tests can
+  `cargo metadata`, `src/cleanup.rs:1013` for `cargo clean`) so tests can
   substitute fakes. Do not add a bare `Command::new("cargo")` — that seam is the
   project's main testability mechanism and its main risk.
 - **`config.toml` is a compile-time input.** `src/config.rs:12` embeds it with
@@ -229,11 +229,11 @@ source of truth for module line counts and the inline-test total; verify each
 against `src/`, fix the overview first, then align the deep dives.
 
 The same rule applies to **per-platform test counts**, which have disagreed
-across three documents: they are 493 declared, 491 on Linux, 453 on Windows,
-488 on macOS. Derive them with a brace-tracking parser evaluated against
+across three documents: they are 522 declared, 520 on Linux, 478 on Windows,
+517 on macOS. Derive them with a brace-tracking parser evaluated against
 `rustc --print cfg --target <triple>`, and cross-check against
 `cargo test --lib -- --list`. A grep for `#[cfg(unix)]` immediately above
-`#[test]` finds 26 of the 36, because Rust allows `#[test]` to come first —
+`#[test]` finds 30 of the 40, because Rust allows `#[test]` to come first —
 ten have the gate *after* the `#[test]`.
 
 ## 7. Planning and decision records
@@ -319,14 +319,15 @@ closure records.
   `cargo cleanme clean ~/projects` remains accepted and hidden; `clean --known`
   does not move; and `cargo cleanme .` changes from a usage error to a bounded
   cleanup of `.`. The decision is recorded as dated amendment blocks in ADR 003
-  §4 and ADR 008. **Neither milestone is implemented.** The implementation plans
-  are `plans/implementation/artifact-discovery-cleanup/m018-*.md` (the gate) and
-  `m019-*.md` (the spelling); both are **`ready`** — their contracts are
-  settled and ADR 008 grants them implementation authority — but neither has
-  started. Do not add a root-level `--full`, and do not remove the published
-  spelling, outside M019 — and **M019 may not be published before M018 has
-  shipped**, because the canonical spelling must never point at an operation
-  that refuses.
+  §4 and ADR 008. **Both milestones are implemented** — the gate in M018
+  (`plans/implementation/artifact-discovery-cleanup/m018-*.md`) and the
+  spelling in M019 (`m019-*.md`) — and both are **`closing`**: implemented,
+  ladder-green, and **not yet published**, so they stay open (publication is
+  not closure). The root-level `--full` and the root-level policy overrides
+  now exist; `clean --full` and `clean ROOT` remain accepted and hidden, and
+  `clean --known` still resolves to the bare invocation. **M019 may not be
+  published before M018 has shipped**, because the canonical spelling must
+  never point at an operation that refuses.
 - **C036** (`plans/implementation/artifact-discovery-cleanup/c036-*.md`,
   *proposed*) is the open documentation-drift corrective. It is the right home
   for a newly-found doc or message defect — extend it rather than opening a

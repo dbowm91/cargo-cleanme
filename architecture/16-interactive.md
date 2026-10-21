@@ -34,12 +34,12 @@ That is why the selection is expressed as a filter over *already proven* units
 rather than as a way to point the engine at new ones (`src/interactive.rs:12-14`).
 
 The listing itself is read-only by contract: it spawns `cargo metadata` and
-never `cargo clean` (`src/cleanup.rs:4662-4688`).
+never `cargo clean` (`src/cleanup.rs:5065-5091`).
 
 Quitting is a decision, not a failure. A cancelled session prints one line on
-stderr and exits 0 (`src/main.rs:431-438`). An empty candidate set is not a
+stderr and exits 0 (`src/main.rs:464-467`). An empty candidate set is not a
 decision at all: it prints `Nothing to clean.` on stdout and exits 0
-(`src/main.rs:439-447`).
+(`src/main.rs:464-472`).
 
 ## 2. The shape: one pure machine, one thin terminal
 
@@ -48,7 +48,7 @@ and the geometry, and renders itself to a `Vec<String>`. It performs no IO,
 reads no clock, and holds no terminal. Every method is a total function of
 `self` and the key pressed.
 
-Two vocabularies sit on top of it. `Mode` (`src/interactive.rs:46-64`) is
+Two vocabularies sit on top of it. `Mode` (`src/interactive.rs:46-49`) is
 `Normal` or `Insert`, labelled `NOR` and `INS` in the status line. `Key`
 (`src/interactive.rs:68-89`) is the normalization point: the state machine
 consumes it rather than `crossterm::event::KeyEvent`, and `normalize`
@@ -56,11 +56,11 @@ consumes it rather than `crossterm::event::KeyEvent`, and `normalize`
 no binding becomes `Key::Ignored`, never an error. An unknown escape sequence
 is a normal terminal event, not a failure. `Ctrl-C` is recognised before any
 other examination, so it quits from either mode; every other control
-combination is `Ignored` (`src/interactive.rs:1248-1254`).
+combination is `Ignored` (`src/interactive.rs:86-92`).
 
-A key press produces an `Outcome` (`src/interactive.rs:91-102`) — continue,
+A key press produces an `Outcome` (`src/interactive.rs:91-101`) — continue,
 commit the checked roots, or quit — and the driver turns that into a
-`SessionResult` (`src/interactive.rs:105-114`): the selected roots, `Cancelled`,
+`SessionResult` (`src/interactive.rs:105-113`): the selected roots, `Cancelled`,
 or `NothingToClean` for a candidate set that proved no cleanup unit at all.
 
 Everything that touches a real terminal sits behind the `Terminal` trait
@@ -79,7 +79,7 @@ events crossterm delivers (resize, focus, mouse, paste) need no handling of
 their own — they normalize to `Key::Ignored`, and the next frame is already
 measured again (`src/interactive.rs:1265`).
 
-`render_to_string` (`src/interactive.rs:1301-1310`) flattens a frame for tests
+`render_to_string` (`src/interactive.rs:1301-1306`) flattens a frame for tests
 and diagnostics; the driver uses `Session::frame` line by line.
 
 ## 3. Why the listing is not a second proof
@@ -91,14 +91,14 @@ the engine refuses, or a unit the engine would consider could be absent from the
 list the operator chose from.
 
 So there is exactly one pipeline. `cleanup::discover_and_resolve_universe`
-(`src/cleanup.rs:1381-1472`) is called by both the destructive engine and
-`cleanup::list_cleanup_candidates` (`src/cleanup.rs:2262-2337`). The extraction
+(`src/cleanup.rs:1503-1594`) is called by both the destructive engine and
+`cleanup::list_cleanup_candidates` (`src/cleanup.rs:2393-2468`). The extraction
 exists for no other reason: it is what makes "the list is the engine's unit set"
 a structural property rather than a promise.
 
 The contract test `the_candidate_listing_is_the_engines_own_unit_set`
-(`src/cleanup.rs:4519-4659`) pins it, over a fixture with deliberately mixed
-ownership (`src/cleanup.rs:4468-4516`): `alpha` and `beta` own private targets
+(`src/cleanup.rs:4657-4797`) pins it, over a fixture with deliberately mixed
+ownership (`src/cleanup.rs:4606-4654`): `alpha` and `beta` own private targets
 while `gamma` redirects its output into `alpha`'s, so the comparison is between
 two units the engine would clean and one it would only inventory. Against a
 single-workspace fixture a listing that quietly filtered candidates would still
@@ -108,37 +108,46 @@ version of this test, and it survived its own mutation.
 The same test carries the *selection* half of the contract: the listing and the
 engine are handed the same `CleanupSelection::Roots`, both narrow to the same
 unit, and every deselected unit is reported as `SkippedOutsideSelection`
-rather than dropped (`src/cleanup.rs:4607-4658`). That is the property the TUI
+rather than dropped (`src/cleanup.rs:4745-4796`). That is the property the TUI
 depends on — what the operator sees is what the engine treats as candidates.
 
 ## 4. The safety boundary
 
 The listing resolves candidates with the invocation's resolved selection
-(`src/main.rs:574-588`): maintenance scopes offer only anchor-matching units,
-so `-i` is bounded by the working directory it runs in; `clean ROOT` and
-`clean --full` resolve to `CleanupSelection::All` and stay unfiltered because
-their roots already bound them. The proof universe stays wide in every case —
-`resolved.roots` still carry the full Routine set — so shared output stays
-`Shared` (`src/main.rs:520-523`). What the operator *gets* is always narrower
+(`src/main.rs:625-636`): maintenance scopes offer only anchor-matching units,
+so `-i` is bounded by the working directory it runs in; `cargo cleanme ROOT` and
+`cargo cleanme --full` resolve to `CleanupSelection::All` and stay unfiltered
+because their roots already bound them. The proof universe stays wide in every
+case — `resolved.roots` still carry the full Routine set — so shared output
+stays `Shared` (`src/main.rs:630`). What the operator *gets* is always narrower
 than what they *saw* — `Roots` can only remove, and for maintenance it can only
 remove within the anchor.
 
+**M018's coverage exclusion applies to the interactive path too.** The anchor
+is built with `.excluding(resolved.unproven_roots.clone())`
+(`src/main.rs:625-628`), so a workspace under a learned root whose coverage
+could not be proven is not offered — and the non-interactive path gets the same
+narrowing (`src/main.rs:578-587`). The exclusion is applied to the *declared
+selection*, after ownership classification, so it can only ever remove
+candidates: a shared output between a proven root and an unproven one stays
+`Shared` and stays inventory-only.
+
 Two refusals happen before any Cargo process is spawned, in this order:
 
-1. **Machine output formats** (`src/main.rs:549-555`). JSON and log are
+1. **Machine output formats** (`src/main.rs:594-600`). JSON and log are
    automation contracts. Carrying a terminal session in either would require
    inventing a document shape for "the operator stopped here", which is a new
    schema nobody asked for. This is checked first because it is a static property
    of the invocation — knowable without touching a stream, the same call clap
    makes by rejecting conflicting argv before anything runs.
-2. **Terminal presence** (`src/main.rs:556-570`). Checked before the listing
+2. **Terminal presence** (`src/main.rs:606-615`). Checked before the listing
    rather than after, because the listing is a full read-only resolution that
    spawns `cargo metadata` across every resolved root. Spending the operator's
    time and spawning processes for a run that was never going to happen would be
    a bad trade for a better error message.
 
 The same terminal precondition is enforced twice: once by the orchestrator
-(`src/main.rs:561-570`) and once inside the module's own entry point
+(`src/main.rs:606-615`) and once inside the module's own entry point
 (`src/interactive.rs:1280-1299`), so the module cannot be driven headless by a
 caller that forgets to check.
 
@@ -149,34 +158,34 @@ nothing a terminal could be needed for, and the result is a plain negative
 result rather than a refusal. That ordering is also what makes the case
 testable without a pty — a precondition that can only be satisfied by a real
 terminal cannot be exercised by a test process. The orchestrator's own check
-still comes first (`src/main.rs:561-570`), so a redirected `-i` still refuses
+still comes first (`src/main.rs:606-615`), so a redirected `-i` still refuses
 before the expensive listing; what the module's ordering buys is the verdict,
 not the ordering of the run.
 
 **A blocked boundary blocks the listing; out-of-boundary poison does not.**
 This is the ADR 007 rule, and it is the one place where the interactive path
 changed after M014 shipped. The listing applies the identical boundary gates as
-the engine (`src/cleanup.rs:2272-2319`): an in-boundary discovery diagnostic or
+the engine (`src/cleanup.rs:2403-2450`): an in-boundary discovery diagnostic or
 an in-boundary byte-capable unknown raises a block, and the orchestrator then
-refuses to present a session at all (`src/main.rs:589-598`). Offering rows from
+refuses to present a session at all (`src/main.rs:637-646`). Offering rows from
 an unproven universe would be ADR 006 in a new costume: the operator would be
 choosing from a list whose classification is exactly what failed. An unresolved
 manifest *outside* the selected scope is reported and never blocks
-(`src/cleanup.rs:2467-2505`), so a healthy anchored scope can still be chosen
+(`src/cleanup.rs:2605-2643`), so a healthy anchored scope can still be chosen
 from while poison exists elsewhere.
 
 The block names the unresolved participants (bounded, human surface only) with
 the same workspace-membership hint the engine's blocked report carries
-(`src/cleanup.rs:2164-2211`), so the operator knows which manifest to fix or
-which healthy workspace to clean explicitly with `clean ROOT` instead.
+(`src/cleanup.rs:2295-2342`), so the operator knows which manifest to fix or
+which healthy workspace to clean explicitly with `cargo cleanme ROOT` instead.
 
 The zero-unit edge still refuses: a scope that proves no units at all while a
 participant is unproven is an unproven universe, and an empty offer would read
-as success (`src/cleanup.rs:2298-2316`, `src/cleanup.rs:4695-4729`).
+as success (`src/cleanup.rs:2429-2447`, `src/cleanup.rs:5098-5132`).
 
 ## 5. Raw mode, and why rendering is inline
 
-`RawModeGuard` (`src/interactive.rs:1046-1080`) restores the terminal on every
+`RawModeGuard` (`src/interactive.rs:1046-1049`) restores the terminal on every
 exit path. It is created before the first key is read and holds a mutable borrow
 of the terminal, so restoration cannot be skipped by "using the terminal once
 more" — the guard's lifetime and the driver's ability to keep driving are the
@@ -191,7 +200,7 @@ that has already reported itself broken is not obviously safe
 
 A tool that can leave a terminal in raw mode is not shippable: the operator
 loses echo and `Ctrl-C` and gets a shell they must reset by hand. The test
-`the_guard_restores_when_dropped_during_unwind` (`src/interactive.rs:2035-2061`)
+`the_guard_restores_when_dropped_during_unwind` (`src/interactive.rs:2035-2044`)
 pins the panic path, and asserts the session was *genuinely* in raw mode when it
 panicked — otherwise it would pass against a restore that never had an enter to
 undo. The commit and quit paths are pinned separately
@@ -245,7 +254,7 @@ that failed first:
   arithmetic (`N selected of M`) and the row carries its own mark and count
   (`x` when every candidate is checked, `-` when some are), so the scope is
   never in doubt (`src/interactive.rs:602-626`, `src/interactive.rs:687-718`).
-- **`q` quits from NOR and types in INS** (`src/interactive.rs:376-406`).
+- **`q` quits from NOR and types in INS** (`src/interactive.rs:1498-1528`).
   INS is a text field; every printable key inserts. `Ctrl-C` is the only key that
   quits from inside it.
 - **Space is a filter character in INS** (`src/interactive.rs:408-438`).
@@ -353,7 +362,7 @@ is mixed, every row carries its class, and a non-private row still reads
 `inventory only`. On a terminal too narrow for the full wording, the column
 degrades to the bare class label (`src/interactive.rs:833-874`).
 
-`CleanupCandidate::provably_private` (`src/cleanup.rs:2150-2152`) is a
+`CleanupCandidate::provably_private` (`src/cleanup.rs:2281-2283`) is a
 **presentation hint about ownership only**. It is deliberately not an eligibility
 verdict — policy gates and selector capability live in the engine, and
 duplicating them here is how a listing starts disagreeing with the run.
@@ -404,7 +413,7 @@ minus the escapes (`src/interactive.rs:2356-2372`).
 - **An empty candidate list is a plain negative result.** `run_interactive` settles
   an empty list before the terminal precondition (`src/interactive.rs:1282-1284`)
   and returns `SessionResult::NothingToClean`; the orchestrator maps that to
-  `SelectionOutcome::NothingToClean` (`src/main.rs:609-622`) and prints one line,
+  `SelectionOutcome::NothingToClean` (`src/main.rs:644-657`) and prints one line,
   `Nothing to clean.`, on stdout, exiting 0. The same scope without `-i` reports
   zero units and exits 0, so the two spellings of one scope agree. It was a
   usage error before C038: the refusal became `AppError::Config`, which

@@ -270,12 +270,19 @@ one bounded line, load-aware timing, and never root for a developer home.**
   *outside* it is reported as a bounded `out_of_scope` diagnostic and never
   blocks: cleaning a healthy anchor while poison exists elsewhere is the
   intended behaviour, so a boundary clean is never read as a system clean.
-- It will not run `clean --full` against a Full reconciliation that is
-  incomplete or stale. That refuses with exit `2` and no cleanup command:
-  `full reconciliation reported an incomplete scan (exit N); no cleanup commands
-  were run against its unproven learned roots`, or `full reconciliation produced
-  no fresh generation; …`. The learned roots a Full cleanup acts on must come
-  from a reconciliation that just proved them.
+- A Full cleanup (`cargo cleanme --full`) will not clean a learned root it
+  could not prove. The proof boundary is the **learned root**: each one is
+  re-walked as its own walk root and judged on its own traversal, and a root
+  whose coverage could not be proven is dropped from the candidate set, named on
+  stderr, and reported per unit with the reason code
+  `skipped_incomplete_coverage`. The run exits `1` when **at least one** learned
+  root was unproven, even if every root that could be proven was cleaned — a
+  partial Full cleanup must not read as a complete one. When **no** learned root
+  could be proven, the scope is blocked with the typed unproven-ownership block
+  and the run exits `1`; it never exits `0` with zero rows. The one refusal the
+  Full cleanup still has is a reconciliation that produced **no fresh
+  generation** at all: that exits `2` with `full reconciliation produced no
+  fresh generation; no cleanup commands were run against stale learned roots`.
 - It will not grow. `cargo cleanme` never installs a service and never spawns a
   resident process. The tool itself never modifies your `PATH`; the separate
   bootstrap installer adds one guarded block to a zsh or bash startup file so a
@@ -288,7 +295,7 @@ one bounded line, load-aware timing, and never root for a developer home.**
 | Code | Meaning | What a scheduler should do |
 |---|---|---|
 | `0` | completed, including safe per-unit skips and "nothing to clean" | nothing |
-| `1` | scope incomplete, ownership unproven, or an operation failed | **read the log line.** `status=blocked` with a `reason=` code is usually an operator problem, not a crash |
+| `1` | scope incomplete, ownership unproven, a learned root could not be proven, or an operation failed | **read the log line.** `status=blocked` with a `reason=` code is usually an operator problem, not a crash |
 | `2` | could not run — usage or configuration error | fix the job definition; retrying will not help |
 
 `status=blocked` on exit `1` is a *success-shaped* result with a typed blocker,
@@ -299,10 +306,25 @@ not a crash. The reasons you will actually see:
 | `ownership_unproven` | coverage of the **proof boundary** could not be proven — a manifest inside it did not resolve with an unknown owner, or an authorization or re-proof step could not be verified — so **nothing in the boundary** was cleaned |
 | `incomplete_discovery` | discovery produced diagnostics **inside the proof boundary**, so the combined ownership universe for the boundary is incomplete — including an in-boundary automatic (seed/learned) root that is a symlink or cannot be read, which is never silently omitted |
 
-Both are boundary-scoped. Not every unresolved manifest inside the boundary
-blocks it: one that Cargo *named* the owner for, or named as a member of the
-scope, is reported and never blocks — there is no unknown owner left to merge.
-Only an in-boundary manifest with a genuinely unknown owner blocks.
+There is one exit-`1` case the log line does **not** mark as `status=blocked`:
+a Full cleanup (`cargo cleanme --full`) in which **at least one learned root
+could not be proven**. The line then reads `status=ok` — the roots that could be
+proven were cleaned — while the process exits `1`, because the requested
+boundary was not fully cleaned:
+
+```console
+$ cargo cleanme --full --dry-run --format log
+cargo-cleanme op=clean status=ok scope=full mode=simulate cleaned=0 skipped=0 failed=0 diagnostics=4
+```
+
+**The exit code is the authority, not `status=`.** A scheduler that alerts on
+the line alone will miss a partial Full cleanup; a scheduler that alerts on the
+exit code will not.
+
+Both reasons are boundary-scoped. Not every unresolved manifest inside the
+boundary blocks it: one that Cargo *named* the owner for, or named as a member
+of the scope, is reported and never blocks — there is no unknown owner left to
+merge. Only an in-boundary manifest with a genuinely unknown owner blocks.
 
 The early blocks — discovery diagnostics, unprovable ownership — are raised
 before the boundary is cleaned and run no cleanup command at all. A block
@@ -323,14 +345,15 @@ same command in the foreground without `--format` to get the full message:
 cargo cleanme --config ./config.toml          # human prose, exit 2
 ```
 
-Two commands can refuse with exit `2` before any report exists, and both read
-as "the tool declined" rather than as a crash:
+These commands can refuse with exit `2` before any report exists, and they all
+read as "the tool declined" rather than as a crash:
 
 | Command | Exit | Stderr line (human format) |
 |---|---|---|
 | `cargo cleanme config show --format json` | `2` | `cargo-cleanme: configuration error: config command does not support --format json; use human or log output` |
-| `cargo cleanme clean --full` | `2` | `cargo-cleanme: configuration error: full reconciliation reported an incomplete scan (exit N); no cleanup commands were run against its unproven learned roots` |
-| `cargo cleanme clean --full` (stale state) | `2` | `cargo-cleanme: configuration error: full reconciliation produced no fresh generation; no cleanup commands were run against stale learned roots` |
+| `cargo cleanme --full` (no fresh generation) | `2` | `cargo-cleanme: configuration error: full reconciliation produced no fresh generation; no cleanup commands were run against stale learned roots` |
+| `cargo cleanme --full scan --all` | `2` | `cargo-cleanme: configuration error: `scan` does not accept --full: these are cleanup flags, and `cargo cleanme scan` is read-only. Run the cleanup without the subcommand, or run `scan` on its own.` |
+| `cargo cleanme --older-than 3600 clean --older-than 60` | `2` | `cargo-cleanme: configuration error: --older-than was given at the root and on `clean`. The two values are ambiguous; give it at one level only.` |
 
 In `--format log` the same refusals are one bounded stderr line —
 `cargo-cleanme op=config status=error reason=config` — and the prose is not
@@ -341,10 +364,18 @@ the config file's text, and emitting them on a `--format json` stdout would
 break the one-document contract. `--format log` is accepted and exits `0`,
 reporting the action instead of the content.
 
-`clean --full` refuses rather than cleaning against learned roots that the
-current reconciliation could not prove. Neither refusal is transient: re-running
-the same command changes nothing, so fix the input or the reconciliation rather
-than the schedule.
+`cargo cleanme --full` refuses rather than cleaning against learned roots that
+the current reconciliation could not prove. That refusal is not transient:
+re-running the same command changes nothing, so fix the input or the
+reconciliation rather than the schedule.
+
+The last two rows are **usage** errors, and they are the tool's own doing:
+`--full` selects a cleanup operation, and a cleanup flag handed to a read-only
+or local-only subcommand is rejected rather than silently discarded — a flag you
+typed and the tool ignored looks exactly like a flag the tool honoured. The same
+override given at both the root and on `clean` is ambiguous, so it is rejected
+rather than silently resolved in favour of one of the two values. Neither is
+transient: fix the command line.
 
 ### Credentials and disclosure
 

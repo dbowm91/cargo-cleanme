@@ -128,17 +128,17 @@ directory, when there is one, and the working directory itself
 (`src/workspace.rs:655`). The rules that make it safe are the ones to carry:
 
 - **The universe may only ever grow.** The operator's roots are *added* to the
-  Routine roots, never substituted for them (`src/main.rs:974-983`). A wider
+  Routine roots, never substituted for them (`src/main.rs:1189-1198`). A wider
   universe can only reclassify `shared` bytes to `private`; the reverse — the
   only direction that could promote an unproven shared output into something
   the engine would delete — is unreachable by construction.
 - **The working directory joins only when the Routine scope does not already
-  reach it** (`src/main.rs:937-944`). It may not be *inside* a routine root,
+  reach it** (`src/main.rs:1152-1167`). It may not be *inside* a routine root,
   and it may not *contain* one. The second exclusion is a measurement, not a
   taste: without it, a bare run from the home directory became a 65-second
   sweep of 264,183 directories that ended **blocked** on 1,357 unresolvable
-  manifests in `~/.local/share/Trash`. `clean ROOT` is the spelling for that
-  wider sweep.
+  manifests in `~/.local/share/Trash`. `cargo cleanme ROOT` is the spelling for
+  that wider sweep.
 - **The decision is made against the *admitted* routine roots**, so a root the
   maintainability rule refuses — an agent worktree, say — does not count as
   the Routine scope reaching the operator's directory.
@@ -147,11 +147,54 @@ directory, when there is one, and the working directory itself
   standing there is an explicit act, and `clean ROOT` already permits the same
   subtree. Every other defect keeps the automatic root's handling: a symlink
   blocks the scope, an absent or non-directory root is omitted.
-- **`clean ROOT` and `clean --full` are unchanged**, and the JSON `scope`
-  label stays `"routine"`.
+- **`cargo cleanme ROOT` and `cargo cleanme --full` are unchanged**, and the
+  JSON `scope` label stays `"routine"`.
 - **The read-only `scan --known` inventory applies the same rule**
-  (`src/main.rs:1232-1241`). An inventory that described a smaller universe
+  (`src/main.rs:1450-1459`). An inventory that described a smaller universe
   than the cleanup would not be an inventory of it.
+
+### The Full cleanup's proof boundary is the learned root (M018)
+
+`cargo cleanme --full` proves ownership **per learned root**. When the platform
+walk could not complete, each learned root is re-walked as its own walk root
+and the per-root attribution decides whether that root's subtree was fully read
+(`src/discovery.rs:586-592`). The gate's verdict then splits the roots into
+proven and unproven (`src/policy.rs:551-620`).
+
+The rule that keeps this honest:
+
+> **The exclusion removes candidates, never participants.** An unproven learned
+> root's workspaces are still discovered, resolved, sized and classified; only
+> then are they dropped from the *candidate* set. So a shared output between a
+> proven root and an unproven one stays `Shared` and stays inventory-only.
+> Narrowing the *universe* would reclassify `shared` bytes to `private` — the
+> one direction that authorises deletion — so that is not available here.
+
+The exclusion is a filter on top of the declared selection
+(`src/cleanup.rs:103-129`, `src/cleanup.rs:198-219`), applied **after**
+ownership classification. It removes candidates only: it cannot add one or
+reclassify one.
+
+It is also the one filter shape that may move the **proof boundary**, and the
+reason is not a loophole: it states a *proof* fact — that root's traversal did
+not complete — and ADR 008 §5 makes the Full cleanup's boundary the *proven*
+learned root, so an unreadable region inside an unproven root blocks that root
+and not the whole scope. The engine therefore walks **per root**, so a
+traversal error (which carries no path) can be attributed to the root that
+produced it. Every other unreadable root still blocks the scope that contains
+it.
+
+The reconciliation mode decides what an incomplete traversal may do to the
+learned state (`src/discovery_state.rs:211-235`). An incomplete traversal
+proves **no absence**, so:
+
+- the read-only `scan --all` **discards** the generation — an incomplete
+  reconciliation must not rewrite the learned state;
+- the Full *cleanup* **retains** every prior learned root in memory: nothing
+  expires and no root narrows (`src/discovery_state.rs:320-335`). The retained
+  generation is consumed in memory and never published.
+
+Learned roots still expire only on a complete reconciliation.
 
 ### `scan.root` is honoured *except* by a Full scan
 
@@ -166,7 +209,7 @@ directory, when there is one, and the working directory itself
 "Always overrides the discovered root set" was the old, wrong version of this
 claim. The other half is easy to get wrong too: `scan.root` narrows the
 **scan scope**, but the **working-directory anchor still narrows the
-selection** for a cleanup (`src/cli.rs:387-390` →
+selection** for a cleanup (`src/cli.rs:608-612` →
 `CleanupSelection::WorkingDirectory`). A configured root therefore does *not*
 mean "cleanup targets exactly that root" — running from outside it yields
 zero units.
@@ -184,15 +227,15 @@ consequences:
   platform-root errors force Full scans to stay partial.
 - `PlatformRoot` + `Error` is what makes a Full scan `incomplete`. That
   predicate is computed **once**, as `full_traversal_complete`
-  (`src/main.rs:1151-1155`), and reused: as `complete` for reconciliation
-  (`:1103`) and as `full_incomplete` for the exit code (`:1198`). It is not
+  (`src/main.rs:1491-1495`), and reused: as `complete` for reconciliation
+  (`:1532`) and as `full_incomplete` for the exit code (`:1650`). It is not
   two copies of one expression, and you should not make it two.
 
 > **The uncertainty vector is empty in production.** The filter at
-> `src/main.rs:1162-1170` collects the three uncertainty categories
+> `src/main.rs:1500-1512` collects the three uncertainty categories
 > (`PermissionDenied`, `Metadata`, `Vanished`) and then `.filter_map(|d| d.path.clone())`
 > — but all three categories are emitted with `path: None`
-> (`src/discovery.rs:786-793` and `:981-988`), because `dua_core`'s error
+> (`src/discovery.rs:379-386` and `:1121-1143`), because `dua_core`'s error
 > carries no child path. The vector is therefore **always empty**.
 >
 > Two traps follow. First, the filter is a `matches!` over **three of the seven**
@@ -222,6 +265,12 @@ into the exit decision.
   derived from the **resolved** `policy.scope`, never from the CLI flags.
 - Repeated output roots do not panic and do not double-count bytes.
 - A Full scan still ignores `scan.root`, and a non-Full scan still honours it.
+- An incomplete traversal does not rewrite the learned state: the read-only
+  Full scan discards the generation, and the Full cleanup retains every prior
+  root in memory without publishing it.
+- An unproven learned root removes **candidates**, not participants: its
+  workspaces are still discovered and classified, and appear in the report as
+  `skipped_incomplete_coverage`.
 
 Then run the full gate and `scripts/check-doc-citations.py`.
 

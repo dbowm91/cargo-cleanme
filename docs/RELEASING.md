@@ -299,7 +299,7 @@ cargo cleanme --version
 cargo cleanme config show
 cargo cleanme config show --format json          # must refuse, exit 2
 cargo cleanme scan --format json --no-progress <some path>
-cargo cleanme clean --full --dry-run
+cargo cleanme --full --dry-run
 cargo cleanme update --dry-run
 ```
 
@@ -315,15 +315,18 @@ Check each of these:
   `configuration error: config command does not support --format json; use human
   or log output`. It must never put the config text on a `--format json`
   stdout.
-- `clean --full --dry-run` exercises the one cleanup path that can **refuse
-  before it cleans**. Either the Full reconciliation is fresh and the run
-  proceeds without spawning a single `cargo clean` — `--dry-run` spawns nothing
-  — or it refuses with exit `2` and one of these two messages:
-  `configuration error: full reconciliation reported an incomplete scan (exit
-  N); no cleanup commands were run against its unproven learned roots`, or
+- `cargo cleanme --full --dry-run` exercises the one cleanup path that can
+  **refuse before it cleans**. Either the Full reconciliation is fresh and the
+  run proceeds without spawning a single `cargo clean` — `--dry-run` spawns
+  nothing — or it refuses with exit `2` and
   `configuration error: full reconciliation produced no fresh generation; no
   cleanup commands were run against stale learned roots`. A refusal is a
   correct outcome; a *silent* cleanup against unproven learned roots is not.
+  Note the exit code: an incomplete traversal no longer refuses the whole
+  operation, but it does make the run exit `1` — a learned root whose coverage
+  could not be proven is skipped with the reason code
+  `skipped_incomplete_coverage`, named on stderr, and the exit code says the
+  boundary was not fully cleaned.
 - `update --dry-run` reports already-current rather than offering a downgrade.
 
 A binary installed by Cargo must be **refused**, not updated. `cargo cleanme

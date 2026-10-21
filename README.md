@@ -38,7 +38,7 @@ discovery, resolution, ownership proof, authorization, sizing, revalidation,
 reporting — and spawns nothing at all:
 
 ```console
-$ cargo cleanme clean ~/projects/my-app --dry-run --no-progress
+$ cargo cleanme ~/projects/my-app --dry-run --no-progress
 Simulated  my-app/target  4.02 MiB
 
 4.02 MiB would be reclaimed from 1 directory (simulation only — no `cargo clean` command was invoked)
@@ -66,7 +66,7 @@ are never cleaned.
 **3. Clean it.** Same selection, same proof, and Cargo does the deleting:
 
 ```console
-$ cargo cleanme clean ~/projects/my-app --no-progress
+$ cargo cleanme ~/projects/my-app --no-progress
 Cleaned  my-app/target  4.02 MiB
 
 4.02 MiB reclaimed from 1 directory
@@ -85,7 +85,7 @@ and `--format log` are byte-for-byte identical with and without it.
 **4. Or parse it.** One versioned JSON document on stdout, nothing else:
 
 ```console
-$ cargo cleanme clean ~/projects/my-app --dry-run --format json
+$ cargo cleanme ~/projects/my-app --dry-run --format json
 {"schema_version":1,"cargo_cleanme_version":"0.2.10","operation":"clean","scope":"explicit","mode":"simulate","result":{"discovered_manifests":1,"resolved_workspaces":1,"units_considered":1,"scope_blocked":false,"scope_reason":null,"unresolved_ownership":0,"unresolved_participants":[],"selected_roots":["~/projects/my-app"],"effective_policy":{"min_reclaimable_bytes":0,"min_inactive_seconds":null,"include":[],"exclude":[]},"selector_kind":null,"selector_value":null,"state_generation_last_full_at":null,"units":[{"workspace_root":"~/projects/my-app","output_roots":["~/projects/my-app/target"],"ownership":"private","policy_disposition":"selected","outcome":"simulated","reason_code":"simulated","before_bytes":4210688,"selector_estimate_bytes":4210688,"output_union_before_bytes":4210688,"after_bytes":null,"observed_decrease_bytes":null,"detail":"simulation: no `cargo clean` command was invoked"}],"summary":{"previewed":0,"simulated":1,"cleaned":0,"skipped":0,"failed":0,"diagnostics":0}}}
 ```
 
@@ -93,7 +93,7 @@ For a scheduler, `--format log` is one bounded ASCII line on stdout — no paths
 no progress, at most 384 bytes:
 
 ```console
-$ cargo cleanme clean ~/projects/my-app --dry-run --format log
+$ cargo cleanme ~/projects/my-app --dry-run --format log
 cargo-cleanme op=clean status=ok scope=explicit mode=simulate cleaned=0 skipped=0 failed=0 diagnostics=0
 ```
 
@@ -108,24 +108,34 @@ field list and scheduler integration.
 | `cargo cleanme` | Cleanup anchored at the working directory (Execute) | yes |
 | `cargo cleanme --dry-run` | Simulation: every gate runs, nothing is removed | **never**, not even preview |
 | `cargo cleanme -i` / `--interactive` | Choose cleanup units from a terminal list, then clean | yes |
+| `cargo cleanme ROOT` | Cleanup of one bounded root (Execute by default) | yes |
+| `cargo cleanme --full` | Full cleanup: reconcile the machine, then clean the learned roots it can prove | yes |
 | `cargo cleanme scan --all` | Full read-only reconciliation of the machine | never |
 | `cargo cleanme scan --known` | Routine read-only inventory | never |
 | `cargo cleanme scan ROOT` | One bounded read-only scope | never |
-| `cargo cleanme clean ROOT` | Cleanup of one explicit root (Execute by default) | yes |
-| `cargo cleanme clean --known` / `--full` | Advanced orchestration | yes |
-| `cargo cleanme clean … --cargo-preview` | Cargo's own `clean --dry-run --verbose`, after the same proof | yes, as a dry run |
+| `cargo cleanme --cargo-preview` | Cargo's own `clean --dry-run --verbose`, after the same proof | yes, as a dry run |
 | `cargo cleanme config path\|show\|edit` | Locate, print, or edit the config | never |
 | `cargo cleanme update [--dry-run]` | Self-update to the latest stable release | never |
+
+The root is the cleanup front door: `cargo cleanme ROOT` and `cargo cleanme
+--full` are the canonical spellings. `cargo cleanme clean ROOT` and
+`cargo cleanme clean --full` remain accepted and **hidden**, so every published
+spelling keeps working — but `clean` is absent from `cargo cleanme --help`.
+
+A directory whose name collides with a subcommand name (`scan`, `clean`,
+`config`, `update`) is read as that subcommand; spell it `./scan` to name such
+a directory. So `cargo cleanme .` is a bounded cleanup of `.`.
 
 `scan --full` remains accepted as a hidden alias of `scan --all`.
 
 The **maintenance scope** is a configured legacy `scan.root` when one is set
 (exclusive), otherwise bounded seed roots under your home plus active learned
 roots. Bare `cargo cleanme` and `clean --known` keep only the units anchored at
-the working directory; `clean ROOT` and `clean --full` keep every resolved unit,
-because their roots already bound the scope. Ownership is proven across the
-whole resolved universe *before* the anchor narrows anything, so a target
-shared with a project elsewhere stays shared and stays inventory-only.
+the working directory; `cargo cleanme ROOT` and `cargo cleanme --full` keep
+every resolved unit, because their roots already bound the scope. Ownership is
+proven across the whole resolved universe *before* the anchor narrows anything,
+so a target shared with a project elsewhere stays shared and stays
+inventory-only.
 
 → [docs/USAGE.md](docs/USAGE.md) for the full command and flag reference, the
 discovery model, and the cleanup safety model.
@@ -148,24 +158,30 @@ decision to Cargo itself.
 | Code | Meaning |
 |---|---|
 | `0` | the operation completed, including safe per-unit skips |
-| `1` | scope incomplete, ownership unproven, or an operation failed |
+| `1` | scope incomplete, ownership unproven, a learned root could not be proven, or an operation failed |
 | `2` | invocation or configuration error, before a report could be formed |
 
 `1` on `clean` with `scope_blocked: true` is a *success-shaped* result with a
 typed blocker, not a crash. Read the block — it is inside `result`:
 
 ```console
-$ cargo cleanme clean ~/projects/broken --format json; echo "exit $?"
+$ cargo cleanme ~/projects/broken --format json; echo "exit $?"
 {"schema_version":1,"cargo_cleanme_version":"0.2.10","operation":"clean","scope":"explicit","mode":"execute","result":{"discovered_manifests":1,"resolved_workspaces":0,"units_considered":0,"scope_blocked":true,"scope_reason":"cleanup ownership could not be proven: 1 discovered Cargo manifest did not resolve; no cleanup commands were run","unresolved_ownership":1,"unresolved_participants":[{"manifest":"~/projects/broken/Cargo.toml","stage":"locate","reason":"cargo locate-project failed: error: unclosed table, expected `]` | --> Cargo.toml:1:9 | |"}],"selected_roots":["~/projects/broken"],"effective_policy":{"min_reclaimable_bytes":0,"min_inactive_seconds":null,"include":[],"exclude":[]},"selector_kind":null,"selector_value":null,"state_generation_last_full_at":null,"units":[],"summary":{"previewed":0,"simulated":0,"cleaned":0,"skipped":0,"failed":0,"diagnostics":1}}}
 exit 1
 ```
 
-Two refusals exit `2` before any report is formed:
+Refusals exit `2` before any report is formed:
 
 | Command | Refusal |
 |---|---|
 | `cargo cleanme config show --format json` | `configuration error: config command does not support --format json; use human or log output` — `config` has no JSON envelope, so it refuses loudly rather than emitting non-JSON. `--format log` is accepted and exits `0`. |
-| `cargo cleanme clean --full` | `full reconciliation reported an incomplete scan (exit N); no cleanup commands were run against its unproven learned roots` — a Full cleanup runs against the learned roots the reconciliation just proved, so an incomplete or stale reconciliation refuses the cleanup instead of using unproven roots. |
+| `cargo cleanme --full` | `full reconciliation produced no fresh generation; no cleanup commands were run against stale learned roots` — a Full cleanup needs a *fresh* generation of learned roots to clean from. An **incomplete** reconciliation is no longer a refusal: the cleanup is then partial, and it exits `1`. |
+| `cargo cleanme --full scan --all` | `` `scan` does not accept --full: these are cleanup flags, and `cargo cleanme scan` is read-only `` — a cleanup flag handed to a read-only or local-only subcommand is rejected, never silently discarded. |
+
+The Full cleanup's proof boundary is the **learned root**: it cleans the roots
+it can prove, names the ones it cannot on stderr, and exits `1` if any of them
+was unproven — even when every root that could be proven was cleaned
+successfully.
 
 → [docs/USAGE.md](docs/USAGE.md#exit-codes) for the full exit-code table and
 [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for symptom-first triage.
@@ -240,9 +256,13 @@ and `--dry-run` changed from Cargo preview to simulation.
 |---|---|---|
 | `cargo cleanme` | `cargo cleanme scan --known` | same old read-only Routine inventory |
 | `cargo cleanme scan --full` | `cargo cleanme scan --all` | Full reconciliation |
-| `cargo cleanme clean R --dry-run` | `cargo cleanme clean R --cargo-preview` | same Cargo preview |
-| `cargo cleanme clean R --dryrun` | `cargo cleanme clean R --dry-run` | same simulation |
-| `cargo cleanme clean R --yes` | `cargo cleanme clean R` | Execute is now the default |
+| `cargo cleanme clean R --dry-run` | `cargo cleanme R --cargo-preview` | same Cargo preview |
+| `cargo cleanme clean R --dryrun` | `cargo cleanme R --dry-run` | same simulation |
+| `cargo cleanme clean R --yes` | `cargo cleanme R` | Execute is now the default |
+
+The "Now" column spells the canonical root-level form. `cargo cleanme clean R`
+is still accepted, and still means exactly the same thing — it is the hidden
+alias of `cargo cleanme R`.
 
 `--dryrun` and `--yes` still work on `clean` as hidden aliases for the
 pre-1.0 migration period. They print nothing.

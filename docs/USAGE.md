@@ -25,16 +25,29 @@ quickstart; this document has the detail.
 | *(none)* | **Cleanup** of the maintenance scope: the machine's known roots plus the working directory (Execute) |
 | `--dry-run` | Same selection simulated end to end, zero `cargo clean` processes |
 | `-i` / `--interactive` | Terminal selection list over the resolved units, then clean |
+| `cargo cleanme ROOT` | **Cleanup of one bounded root** (Execute) |
+| `cargo cleanme --full` | **Full cleanup**: reconcile the machine, then clean the learned roots it can prove |
 | `cargo cleanme scan --all` | Full read-only reconciliation |
 | `cargo cleanme scan ROOT` | One explicit read-only scope |
 | `cargo cleanme scan --known` | Routine read-only inventory of the maintenance scope |
-| `cargo cleanme clean [ROOT] [--known\|--full]` | advanced cleanup: execute (default), simulate, or Cargo preview, proven within the selected scope (unprovable manifests outside the scope are reported, never blocking) |
+| `cargo cleanme clean …` | **hidden** compatibility alias — `clean ROOT`, `clean --known`, and `clean --full` still work, and mean what the root-level spellings mean |
 | `cargo cleanme config path\|show\|edit` | locate, print, or edit the config |
 | `cargo cleanme update [--dry-run]` | self-update to the latest stable release |
 
 `cargo cleanme …` and `cargo-cleanme …` are the same binary and behave
-identically. `scan --all` and `clean --full` take **no** `ROOT`; the
+identically. `scan --all` and `--full` take **no** `ROOT`; the
 scan form walks the platform roots, and the cleanup form reconciles them first.
+
+**The root is the cleanup front door.** `cargo cleanme ROOT` and
+`cargo cleanme --full` are the canonical spellings. `cargo cleanme clean ROOT`
+and `cargo cleanme clean --full` remain accepted and **hidden** — every
+published spelling keeps working — so `clean` does not appear in
+`cargo cleanme --help`.
+
+A directory whose name collides with a subcommand name (`scan`, `clean`,
+`config`, `update`) is read as that **subcommand**: the subcommand wins.
+Spell such a directory `./scan` to name it. So `cargo cleanme .` is a bounded
+cleanup of `.` — not a subcommand, and not a usage error.
 
 ## Flags
 
@@ -46,27 +59,45 @@ scan form walks the platform roots, and the cleanup form reconciles them first.
 | `--stats` | counters and phase timings **on stderr**; stdout stays byte-identical |
 | `--verbose` | the detailed **human** surface: every workspace considered, the scope census, the counters, the diagnostic detail. `--format json` and `--format log` are byte-identical with and without it |
 | `--config PATH` | use a specific `config.toml` |
-| `--min-reclaimable-bytes N` | only clean units above this measured size (`clean`) |
-| `--older-than SECONDS` | extra quiet-age requirement; never replaces the recency guard (`clean`) |
-| `--include GLOB` | include canonical workspace roots matching this glob (`clean`) |
-| `--exclude GLOB` | exclude canonical workspace roots matching this glob (`clean`) |
-| `--profile NAME` | ask Cargo to clean one named profile (`clean`) |
-| `--package SPEC` | clean one validated workspace package (`clean`) |
-| `--cargo-preview` | after the same proof, run Cargo's own `clean --dry-run --verbose` (`clean`) |
-| `--yes` | hidden alias for the default Execute mode (`clean`) |
+| `--min-reclaimable-bytes N` | only clean units above this measured size |
+| `--older-than SECONDS` | extra quiet-age requirement; never replaces the recency guard |
+| `--include GLOB` | include canonical workspace roots matching this glob |
+| `--exclude GLOB` | exclude canonical workspace roots matching this glob |
+| `--profile NAME` | ask Cargo to clean one named profile |
+| `--package SPEC` | clean one validated workspace package |
+| `--cargo-preview` | after the same proof, run Cargo's own `clean --dry-run --verbose` |
+| `--yes` | hidden alias for the default Execute mode (`clean` only) |
 | `--known` | Routine roots (`clean`, `scan`) |
-| `--full` | Full reconciliation before cleanup (`clean`) |
+| `--full` | Full cleanup: reconcile the machine, then clean the learned roots it can prove |
 | `-a` / `--all` | Full machine reconciliation (`scan`; `--full` is a hidden alias) |
 | `-i` / `--interactive` | choose cleanup units from a terminal list (needs a TTY) |
 
-`--dry-run`, `--cargo-preview`, and `--yes` conflict pairwise **on `clean`**, on
-purpose: they select three different modes. A root-level `--dry-run` — the
-`cargo cleanme --dry-run clean ROOT` spelling Cargo itself passes to an
-external subcommand — is a **different flag** from the clean-level one and does
-**not** conflict with `--cargo-preview`: the root flag wins and selects
-Simulation, because simulation is the mode that spawns nothing.
+The policy overrides — `--min-reclaimable-bytes`, `--older-than`, `--include`,
+`--exclude`, `--profile`, `--package`, `--cargo-preview` — are **root-level**
+flags. `clean` keeps them as hidden aliases, so `cargo cleanme clean --profile
+release` still works. Giving the **same** override at both levels is a usage
+error (exit `2`), not a merge: the two values are ambiguous, and cargo-cleanme
+will not guess which one you meant. Give it at one level only.
 
-`--dryrun` and `--yes` are hidden aliases that print nothing.
+`--dry-run`, `--cargo-preview`, and `--yes` conflict pairwise **on `clean`**, on
+purpose: they select three different modes. At the root, `--dry-run` and
+`--cargo-preview` conflict too — there is no `--yes` there. A root-level
+`--dry-run` — the `cargo cleanme --dry-run ROOT` spelling Cargo itself passes
+to an external subcommand — is a **different flag** from the clean-level one and
+does **not** conflict with a clean-level `--cargo-preview`: **a simulation at
+either level wins over a Cargo preview at either level**, because simulation is
+the mode that spawns nothing.
+
+`--dryrun` (at the root and on `clean`) and `--yes` (on `clean`) are hidden
+aliases that print nothing.
+
+A cleanup flag handed to a read-only or local-only subcommand is a **usage
+error** (exit `2`), never a silently discarded flag:
+`cargo cleanme --full scan --all`, `cargo cleanme --full config path`,
+`cargo cleanme --full update`, and `cargo cleanme --profile release scan --all`
+are all rejected. Run the cleanup without the subcommand, or run the subcommand
+on its own. `--dry-run` is deliberately **not** in that set: a read-only
+subcommand ignores it, and ignoring it changes nothing.
 
 ### The maintenance scope
 
@@ -91,18 +122,19 @@ it. Standing inside a known root, or standing in a directory that contains
 one, leaves the bounded machine-wide sweep bounded: sweeping *everything*
 under your home would also sweep your Trash and your package caches, whose
 abandoned manifests cannot be resolved and would block the run. To sweep a
-whole directory on purpose, name it: `cargo cleanme clean ~`.
+whole directory on purpose, name it: `cargo cleanme ~`.
 
 Bare invocation and `clean --known` then anchor the **selection** to the working
 directory: a resolved unit is a candidate when its canonical workspace root is
 the directory you are standing in, contains it, or is contained by it.
-`clean ROOT` and `clean --full` skip this filter, because their roots already
-bound the scope. The anchor narrows candidates only — ownership is proven across
-the whole resolved universe first, so a target shared with a workspace outside
-the anchor stays `shared` and stays inventory-only. Units the anchor excludes
-are reported as typed `skipped_outside_selection` rows rather than dropped, so
-"nothing was selected" never looks like "nothing was eligible". `scan --known`
-is not anchored: it is the read-only inventory over the whole maintenance scope.
+`cargo cleanme ROOT` and `cargo cleanme --full` skip this filter, because their
+roots already bound the scope. The anchor narrows candidates only — ownership
+is proven across the whole resolved universe first, so a target shared with a
+workspace outside the anchor stays `shared` and stays inventory-only. Units the
+anchor excludes are reported as typed `skipped_outside_selection` rows rather
+than dropped, so "nothing was selected" never looks like "nothing was
+eligible". `scan --known` is not anchored: it is the read-only inventory over
+the whole maintenance scope.
 
 `scan --all` is **always** Full and deliberately ignores `scan.root`, so a
 configured root can never silently narrow the canonical reconciliation command.
@@ -128,7 +160,8 @@ their existing strict safety checks.
 
 Standing in one of those locations is a different matter: the working
 directory joins the maintenance scope whatever it is, because you chose it by
-standing there. `clean ROOT` permits the same subtree and has always done so.
+standing there. `cargo cleanme ROOT` permits the same subtree and has always
+done so.
 
 ### scan
 
@@ -154,41 +187,112 @@ A group appears only if it is *inactive*. Anything with source activity inside
 the recency window (`recency_seconds`, default 300) is protected and reported
 as skipped. `--stats` shows this as `active_skipped=N`.
 
-### clean
+### Cleanup
 
 ```sh
 cargo cleanme                                     # cleanup anchored at $PWD (Execute)
 cargo cleanme --dry-run                           # same selection, zero cargo clean
 cargo cleanme -i                                  # choose units interactively, then clean
 cargo cleanme -i --dry-run                        # choose units, simulate, clean nothing
-cargo cleanme clean ~/projects                    # explicit root (Execute)
-cargo cleanme clean ~/projects --dry-run          # simulation, no cargo clean
-cargo cleanme clean ~/projects --cargo-preview    # Cargo's own dry-run, after the same proof
-cargo cleanme clean --known --dry-run             # $PWD-anchored selection, simulated
-cargo cleanme clean --full --dry-run              # reconcile Full, then simulate
-cargo cleanme clean ~/projects --min-reclaimable-bytes 104857600
-cargo cleanme clean --known --older-than 2592000 --exclude '**/archived'
+cargo cleanme ~/projects                          # explicit root (Execute)
+cargo cleanme ~/projects --dry-run                # simulation, no cargo clean
+cargo cleanme ~/projects --cargo-preview          # Cargo's own dry-run, after the same proof
+cargo cleanme --dry-run                           # the maintenance scope, simulated
+cargo cleanme --full --dry-run                    # reconcile Full, then simulate
+cargo cleanme ~/projects --min-reclaimable-bytes 104857600
+cargo cleanme --older-than 2592000 --exclude '**/archived'
 ```
 
-`clean --full` refuses with exit `2` when the Full reconciliation it depends
-on is incomplete or stale — `full reconciliation reported an incomplete scan
-(exit N); no cleanup commands were run against its unproven learned roots`, or
-`full reconciliation produced no fresh generation; no cleanup commands were run
-against stale learned roots`. A Full cleanup runs against the learned roots the
-reconciliation just proved, so an unproven reconciliation refuses the cleanup
-rather than using those roots.
+`--known` is a `clean`-level flag, not a root-level one: `cargo cleanme
+--known` is a usage error. The bare invocation already *is* the maintenance
+scope, so `cargo cleanme --dry-run` is the canonical spelling of what
+`cargo cleanme clean --known --dry-run` used to be.
+
+`cargo cleanme clean ~/projects` and `cargo cleanme clean --full` remain
+accepted and **hidden**; they mean exactly what the canonical root-level
+spellings above mean. `clean --known` still means the bare invocation, and
+`clean --dry-run` still simulates it.
 
 `--dry-run`, `--cargo-preview`, and `--yes` conflict pairwise **on `clean`**:
 they select three different modes. A root-level `--dry-run` — the
-`cargo cleanme --dry-run clean ROOT` spelling Cargo itself passes to an
-external subcommand — is a different flag from the clean-level one and does
-**not** conflict with `--cargo-preview`: the root flag wins and selects
-Simulation, because simulation is the mode that spawns nothing.
+`cargo cleanme --dry-run ROOT` spelling Cargo itself passes to an external
+subcommand — is a different flag from the clean-level one and does **not**
+conflict with a clean-level `--cargo-preview`: **a simulation at either level
+wins over a Cargo preview at either level**, because simulation is the mode
+that spawns nothing.
 
-`clean` with no scope selector resolves the maintenance scope, exactly as bare
+A cleanup with no scope selector resolves the maintenance scope, exactly as bare
 invocation does — there is one cleanup code path, not two. Both anchor the
-selection to the working directory; only `clean ROOT` and `clean --full` clean
-every resolved unit.
+selection to the working directory; only `cargo cleanme ROOT` and
+`cargo cleanme --full` clean every resolved unit.
+
+#### The Full cleanup cleans the learned roots it can prove
+
+`cargo cleanme --full` does not clean "the platform roots". Its proof boundary
+is the **learned root**: it cleans the learned roots it can prove, and it
+discloses the ones it cannot.
+
+1. The Full reconciliation runs and produces a generation of learned roots.
+2. When the platform walk **completed**, every learned root is proven by
+   definition — the walk read each root's subtree. When the platform walk was
+   **incomplete**, each learned root is re-walked **as its own walk root**,
+   using the same prune and filter sets as the platform walk, and the
+   per-walk-root attribution decides — root by root — whether that root's
+   subtree was fully read.
+3. The roots that were proven are cleanup candidates. The roots that were not
+   are **unproven**: a unit under an unproven root that the selection would
+   otherwise have admitted is removed from the *candidate* set and reported
+   with the reason code `skipped_incomplete_coverage`, whose detail names the
+   root, the cause, and the alternative. Because the narrowing happens
+   **after** ownership classification, a shared output between a proven root
+   and an unproven one stays `Shared` and stays inventory-only. The filter can
+   only remove candidates — never add one or reclassify one.
+
+   An unproven root is also **outside the proof boundary**: an unreadable
+   region inside it blocks *that root*, not the whole scope. That is the one
+   place a filter may unblock a scope, and it is not the narrowing ADR 006
+   forbids — the unproven root's manifests are still discovered, resolved and
+   classified, so the universe does not narrow. Every other unreadable root
+   still blocks the scope that contains it: an unreadable automatic root is
+   indeterminate coverage, not absence.
+
+An incomplete traversal proves **no absence**. So an incomplete Full cleanup
+**retains** every prior learned root: nothing is expired, no root is narrowed,
+and the generation it consumed is held **in memory** and never published — the
+learned state on disk is left exactly as it was. The read-only `scan --all`
+keeps the opposite rule: an incomplete reconciliation still publishes nothing,
+and learned roots still expire only on a complete reconciliation.
+
+The run discloses the residual:
+
+- each unproven root is reported **on stderr**, with the reason it could not be
+  proven: `cargo-cleanme: learned root PATH was skipped: REASON`;
+- the run **exits `1`** when at least one learned root was unproven, even if
+  every root that could be proven was cleaned — an unattended script must not
+  read a partial Full cleanup as a complete one;
+- if **no** learned root could be proven, the scope is blocked with the
+  standard unproven-ownership block (`no learned root could be proven: N
+  root(s) had incomplete coverage (...)`) and the run exits `1`. It never
+  exits `0` with zero rows.
+
+**The residual this accepts.** An unreadable region hides what is inside it,
+and the location of the region is not known — only the root it was found under
+is. So a Cargo workspace hidden in such a region cannot be disproven: it may
+name an output root that a cleaned root also owns, and the shared output would
+not be recognised as shared. Under the withdrawn whole-system rule such a
+region blocked the entire operation; under the per-root rule it blocks the
+root that contains it, and the uncertainty inside it is **disclosed, not
+fixed**: the skipped root, the cause, and the fact that the boundary was not
+fully cleaned. Run `cargo cleanme scan --all` for the read-only inventory, or
+`cargo cleanme ROOT` for a bounded scope whose coverage you can see.
+
+The old refusal is gone. `clean --full` no longer exits `2` with `full
+reconciliation reported an incomplete scan`; an incomplete reconciliation is now
+a **partial** run, not a refusal. The one thing the Full cleanup still refuses
+is a reconciliation that produced **no fresh generation** at all
+(`full reconciliation produced no fresh generation; no cleanup commands were
+run against stale learned roots`) — then there is no learned-root set to prove,
+and the refusal stays fail-closed.
 
 ### Interactive selection
 
@@ -237,13 +341,17 @@ five rows that matter:
 |---|---|---|
 | `cargo cleanme` (read-only Routine scan) | `cargo cleanme scan --known` | yes |
 | `cargo cleanme scan --full` | `cargo cleanme scan --all` | yes |
-| `cargo cleanme clean R --dry-run` (Cargo preview) | `cargo cleanme clean R --cargo-preview` | yes |
-| `cargo cleanme clean R --dryrun` (simulation) | `cargo cleanme clean R --dry-run` | yes |
-| `cargo cleanme clean R --yes` (execute) | `cargo cleanme clean R` | yes |
+| `cargo cleanme clean R --dry-run` (Cargo preview) | `cargo cleanme R --cargo-preview` | yes |
+| `cargo cleanme clean R --dryrun` (simulation) | `cargo cleanme R --dry-run` | yes |
+| `cargo cleanme clean R --yes` (execute) | `cargo cleanme R` | yes |
 
 The one row whose *meaning* changed rather than its spelling: bare
 `cargo cleanme` was a read-only Routine scan in 0.1.x and is Routine **cleanup**
 now, and `--dry-run` was Cargo preview and is **simulation** now.
+
+The "Now" column spells the canonical root-level form. `cargo cleanme clean R`
+is still accepted, and still means exactly the same thing — it is the hidden
+alias of `cargo cleanme R`.
 
 `--dryrun` and `--yes` remain accepted on `clean` as **hidden** aliases for the
 pre-1.0 migration period. They select the same canonical modes as `--dry-run`
@@ -266,7 +374,7 @@ the editor exits and rejects an invalid file.
 
 | Scope | How to ask | What it walks |
 |---|---|---|
-| explicit | `clean ROOT` / `scan ROOT` | that directory, recursively |
+| explicit | `cargo cleanme ROOT` / `scan ROOT` | that directory, recursively |
 | Routine | `scan --known` | seed roots under Projects/projects, Developer, dev, Code/code, src, repos/Repos, GitHub/github, workspace/workspaces, **plus** active learned roots, **plus** the working directory when the Routine scope does not already reach it |
 | Full | `scan --all` | the full platform roots, exhaustively |
 
@@ -379,7 +487,7 @@ is deliberate.
 
 | Mode | Flag | Machine `mode` | What runs |
 |---|---|---|---|
-| Execute | *(default)*; `--yes` is a hidden alias | `execute` | everything, then `cargo clean` |
+| Execute | *(default)*; `--yes` on `clean` is a hidden alias | `execute` | everything, then `cargo clean` |
 | Simulate | `--dry-run`; `--dryrun` is a hidden alias | `simulate` | everything, then **nothing** — no `cargo clean` at all |
 | Cargo preview | `--cargo-preview` | `preview` | everything, then `cargo clean --dry-run --verbose` |
 
@@ -468,7 +576,10 @@ groups. The read-only scan report stays physical-group oriented.
 
 `2` covers every `AppError` — an invalid or unreadable config, an invalid scan
 root, an I/O error, a scan failure, a self-update refusal, and any Clap usage
-error.
+error. Two M019 refusals live here: a **cleanup flag handed to a read-only or
+local-only subcommand** (`cargo cleanme --full scan --all`), and the **same
+override given at both levels** (`cargo cleanme --older-than 3600 clean
+--older-than 60`). Neither is a silently discarded flag.
 
 `config edit` is the one exception: it **propagates the editor's own exit
 status**, so its code is whatever the editor chose. A nonzero editor exit is
@@ -478,6 +589,12 @@ reported on stderr and the config is *not* reverted.
 well-formed JSON document. When `scope_blocked` is `true`, that is a
 success-shaped result carrying a typed blocker — read the block rather than
 inferring from the status.
+
+A Full cleanup (`cargo cleanme --full`) exits `1` when **at least one learned
+root could not be proven**, even if every root that could be proven was cleaned
+— a partial Full cleanup must not read as a complete one. When **no** learned
+root could be proven, the scope is blocked with the standard unproven-ownership
+block and the run exits `1`; it never exits `0` with zero rows.
 
 A failure to persist learned state does **not** affect the exit code. State is
 an optimization only.
@@ -590,13 +707,18 @@ document on stdout. Not NDJSON, not pretty-printed, not followed by a summary
 line. Field-level detail is normative in
 [`plans/output-schema-v1.md`](../plans/output-schema-v1.md).
 
-> **That schema document is currently behind the code in two specific ways.**
-> It omits the reason code `skipped_outside_selection` (the code carries 20
-> reason codes), and it does not disclose that the JSON envelope drops two
-> fields the safety model depends on: `capability` (present on the
-> unresolved-participant domain type, absent from the serialized participant)
-> and `out_of_scope_unresolved` (the count of manifests that did not resolve
-> outside the selected scope). Read the code alongside the schema document.
+> **That schema document is still behind the code in one specific way.**
+> It does not disclose that the JSON envelope drops two fields the safety model
+> depends on: `capability` (present on the unresolved-participant domain type,
+> absent from the serialized participant) and `out_of_scope_unresolved` (the
+> count of manifests that did not resolve outside the selected scope). Read the
+> code alongside the schema document.
+>
+> Its `reason_code` list is now complete: it names every value
+> `CleanupReasonCode::as_str` can return, including `skipped_outside_selection`
+> and `skipped_incomplete_coverage`. The envelope's **shape** did not change —
+> one reason code was added, and a consumer reading `reason_code` sees one more
+> possible value than before.
 
 - Diagnostics go to **stderr**, never into the document.
 - `--stats` goes to **stderr**. stdout is byte-identical with and without it.
@@ -670,7 +792,7 @@ clean, in a simulation or a Cargo preview), with the size, and the path spelled
 **relative to the scope root**:
 
 ```console
-$ cargo cleanme clean ~/projects/my-app
+$ cargo cleanme ~/projects/my-app
 Cleaned  my-app/target  4.02 MiB
 
 4.02 MiB reclaimed from 1 directory
@@ -697,7 +819,7 @@ is. "Boundary clean" must never read as "system clean".
 diagnostic detail on stderr.
 
 ```console
-$ cargo cleanme clean ~/projects/my-app --verbose
+$ cargo cleanme ~/projects/my-app --verbose
 combined roots ~/projects/my-app
 combined scope: 1 root(s) [~/projects/my-app], 1 manifest(s), 1 resolved workspace(s), 1 CleanupUnit(s), 0 unresolved ownership participant(s)
 Cleaned  ~/projects/my-app  [private]  output ~/projects/my-app/target  before   4.02 MiB  after   0.00 B  observed decrease   4.02 MiB  — Removed 4 files, 4.0MiB total
@@ -712,14 +834,16 @@ either.
 
 ## Cleanup selectors
 
-`clean --profile NAME` delegates profile selection to Cargo on exact qualified
+`--profile NAME` delegates profile selection to Cargo on exact qualified
 runtime releases: 1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0,
 1.98.1, and 1.99.0.
 
-`clean --package SPEC` is enabled only on Cargo **1.98.1 and 1.99.0** — the exact
+`--package SPEC` is enabled only on Cargo **1.98.1 and 1.99.0** — the exact
 releases where package cleanup passed the configured-target matrix. Any other or
 unknown Cargo version gets a typed `selector_unsupported` result *before* any
 Cargo clean.
+
+Both selectors are **root-level** flags; `clean` keeps them as hidden aliases.
 
 ### How a version gets added to those lists
 
@@ -780,6 +904,11 @@ Discovery state is machine-local JSON and is normally self-managed.
   unusable.
 - A successful `scan --all` (Full) replaces corrupt or obsolete state **after**
   reconciliation completes. An incomplete Full scan leaves it untouched.
+- A Full **cleanup** (`cargo cleanme --full`) is different: an incomplete
+  traversal proves no absence, so every prior learned root is **retained** —
+  nothing is expired and no root is narrowed — and the generation it consumed is
+  held **in memory** and never published. The learned state on disk is left
+  exactly as it was.
 - State written by a **newer** schema is preserved, and that version must be
   upgraded before it can be reconciled.
 - A persistence failure is reported on stderr and never changes the exit code.
@@ -793,7 +922,8 @@ Discovery state is machine-local JSON and is normally self-managed.
   broken links) or that cannot be read is **not** omitted: the run blocks
   with a typed report and exit `1`, because omitting it could
   conceal an expected scan tree. Explicit roots (`scan.root`, `scan ROOT`,
-  `clean ROOT`) are never omitted; any defect in one is a fatal usage error.
+  `cargo cleanme ROOT`) are never omitted; any defect in one is a fatal usage
+  error.
 - A complete, certain Full reconciliation prunes learned directories that are
   positively confirmed nonexistent, independent of retention. An existing
   directory with no projects keeps the age rule below, and uncertainty,

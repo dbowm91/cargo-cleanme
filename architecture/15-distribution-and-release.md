@@ -389,16 +389,16 @@ by staleness. The outputs are **13 generated artefacts** in total:
   (`xtask/src/main.rs:21-22`). Each is generated with
   `clap_complete::generate` (`xtask/src/main.rs:46`).
 - **8 manpages** in `man/`, one per command node, via `clap_mangen`
-  (`xtask/src/main.rs:126-179`).
+  (`xtask/src/main.rs:134-187`).
 
 The `--check` flag is what makes CI enforcement possible: it regenerates in
 memory and compares against the checked-in tree instead of writing
-(`xtask/src/main.rs:8`, `32`).
+(`xtask/src/main.rs:20`, `32`).
 
 ### 4.2 Naming convention in `completions/`
 
 The output path per shell is chosen explicitly in `completion_path`
-(`xtask/src/main.rs:107-118`), and the naming is **not** uniform — deliberately:
+(`xtask/src/main.rs:115-126`), and the naming is **not** uniform — deliberately:
 
 | File | Shell | Convention note |
 | --- | --- | --- |
@@ -429,7 +429,7 @@ per command node, the conventional multi-page layout," because
 `clap_mangen::Man::new` only renders the node it is given and would otherwise
 produce a single page (`xtask/src/main.rs:120-122`). The file name is
 `man/cargo-cleanme.1` for the root and `man/cargo-cleanme-{name}.1` for each
-subcommand (`xtask/src/main.rs:169-171`).
+subcommand (`xtask/src/main.rs:177-179`).
 
 Adding a subcommand without regenerating leaves the docs set one page short;
 removing one leaves a page describing a command that no longer exists. The

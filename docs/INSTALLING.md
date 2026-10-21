@@ -214,8 +214,8 @@ are follow-up capabilities, not current support.
   because the test suite and tooling need one, and it may change in any release.
   Treat the command-line interface, the versioned JSON schema, and the
   release-asset names as the stable surfaces.
-- **Cargo selector support is exact-version.** `clean --profile` and
-  `clean --package` work only on the exact releases listed in
+- **Cargo selector support is exact-version.** `--profile` and `--package` work
+  only on the exact releases listed in
   [USAGE.md](USAGE.md#cleanup-selectors). An unqualified Cargo release fails
   closed with a typed result rather than guessing.
 - **Pre-1.0 versioning:** breaking changes to the CLI, JSON schema, or asset
@@ -286,6 +286,12 @@ There are **eight** man pages: the root page `man/cargo-cleanme.1`, one page per
 top-level subcommand (`clean`, `config`, `scan`, `update`), and one page per
 `config` sub-subcommand (`edit`, `path`, `show`). They document the
 `cargo cleanme` spelling, which is what resolves after a registry install.
+
+The count is unchanged by the move of the ROOT positional and the `--full` flag
+to the root: `clean` is now a **hidden** compatibility alias rather than a
+listed subcommand, but its page still ships, because the alias still resolves.
+The root page renders from the same `long_about` the CLI prints, so the two
+cannot drift apart.
 
 To regenerate after a CLI change:
 

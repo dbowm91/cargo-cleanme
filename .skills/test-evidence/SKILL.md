@@ -92,9 +92,9 @@ range"; the test needed was "the process really was the one under test".
 Generalised: before trusting a test, ask **"what input makes this fail?"** If
 you cannot produce one, the test is decoration. `cleanup.rs` contains several
 tests of exactly that shape — `metadata_failure_blocks_boundary_with_zero_spawns`
-(`src/cleanup.rs:5317`) and
+(`src/cleanup.rs:5720`) and
 `violated_admission_premise_blocks_with_zero_cargo_spawns`
-(`src/cleanup.rs:6359`) — whose comments are worth reading before writing
+(`src/cleanup.rs:6762`) — whose comments are worth reading before writing
 anything in that module.
 
 ## What only a subprocess can prove
@@ -124,13 +124,13 @@ set is valuable.
 
 ## Coverage shape, honestly
 
-**493** inline `#[test]` functions are **declared** in `src/`; **491** compile
+**522** inline `#[test]` functions are **declared** in `src/`; **520** compile
 and run on Linux. Two are excluded there: one `#[cfg(windows)]`
 (`src/config.rs:995`) and one `#[cfg(any(target_os = "macos", windows))]`
-(`src/discovery.rs:1552`). A further **36** carry `#[cfg(unix)]` and **4** are
-Linux-only (`src/config.rs:1443`, `src/discovery.rs:1572`, `src/output.rs:280`,
-`src/workspace.rs:5404`), so the three hosted lanes compile **491 of 493 on
-Linux**, **453 of 493 on Windows**, and **488 of 493 on macOS** —
+(`src/discovery.rs:1698`). A further **40** carry `#[cfg(unix)]` and **4** are
+Linux-only (`src/config.rs:1443`, `src/discovery.rs:1718`, `src/output.rs:280`,
+`src/workspace.rs:5404`), so the three hosted lanes compile **520 of 522 on
+Linux**, **478 of 522 on Windows**, and **517 of 522 on macOS** —
 `#[cfg(unix)]` is true *on* macOS, which is the half people get wrong. A green
 local run is not a green run elsewhere — that is what the OS matrix in `ci.yml`
 is for, and why `check-fixture-portability.py` exists to catch a *new* ungated
@@ -138,17 +138,17 @@ fixture before a lane disagrees about it.
 
 > **Count the gates, not the greps.** A naive "the `#[cfg(unix)]` immediately
 > above `#[test]`" grep finds 26, not 36, because Rust allows `#[test]` to come
-> *before* the gate (`src/cleanup.rs:6330` does exactly that). Ten of the 36
+> *before* the gate (`src/cleanup.rs:5945` does exactly that). Ten of the 36
 > have the gate after the `#[test]`. Derive these
 > numbers with a brace-tracking parser and check them against
 > `cargo test --lib -- --list` on the host platform; anything else silently
 > disagrees by a few.
 
-State which number you mean. "493 tests" (declared) and "491 passing" (on
+State which number you mean. "522 tests" (declared) and "520 passing" (on
 Linux) are both true, and a record that gives one while meaning the other is
 ambiguous in the direction that matters.
 
-Of the 493, **40.3% live in two modules** (`cleanup.rs` 120, `workspace.rs` 79).
+Of the 522, **39.3% live in two modules** (`cleanup.rs` 126, `workspace.rs` 79).
 That concentration is a direct consequence of the architecture: cleanup and
 workspace resolution are where the invariants are. It is not a balanced suite,
 and a flat count would hide that. A change to a small module can be genuinely

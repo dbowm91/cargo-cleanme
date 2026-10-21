@@ -13,17 +13,17 @@ one-line `indicatif` composition.
 
 Does **not** own:
 
-- **The final report** — that is stdout, via `report::render` (`main.rs:1490`) or
-  `output::scan` (`main.rs:1477`) or `output::log::scan` (`main.rs:1486`).
-  `Reporting` (`progress.rs:21`) is announced (`main.rs:1461`) then immediately
-  followed by `finish_and_clear()` (`main.rs:1462`); the phase is written into the
+- **The final report** — that is stdout, via `report::render` (`main.rs:1675`) or
+  `output::scan` (`main.rs:1662`) or `output::log::scan` (`main.rs:1671`).
+  `Reporting` (`progress.rs:21`) is announced (`main.rs:1646`) then immediately
+  followed by `finish_and_clear()` (`main.rs:1647`); the phase is written into the
   message and a draw is requested, but the clear lands before any `Reporting`
   frame can survive on screen, so no `Reporting` frame is ever seen.
 - **Any domain truth.** Every number the renderer shows is a side effect of an
   observer call; the report's numbers come from `ScanCounters`, carried in from
-  discovery at `main.rs:1278` and written into the report at `main.rs:1458`.
+  discovery at `main.rs:1440` and written into the report at `main.rs:1643`.
   Independent counter sets — see §8.
-- **Phase sequencing.** `cleanup.rs:1413-1417` maps `CleanMode` → `ScanPhase`; the
+- **Phase sequencing.** `cleanup.rs:1535-1539` maps `CleanMode` → `ScanPhase`; the
   renderer reacts to whatever phase a caller names.
 
 **The stdout/stderr separation is a contract, verified on three axes:**
@@ -31,8 +31,8 @@ Does **not** own:
 | Axis | Evidence |
 |---|---|
 | Draw target is fd 2 | `ProgressDrawTarget::stderr_with_hz(10)` (`progress.rs:269`) |
-| Report is fd 1 | `println!` for human (`main.rs:1490`), JSON (`main.rs:1475`), log (`main.rs:1484`), and both cleanup renderers (`main.rs:1034`, `main.rs:1063`) |
-| Clear precedes report | `finish_and_clear()` at `main.rs:1462` (scan), `main.rs:470` (cleanup) |
+| Report is fd 1 | `println!` for human (`main.rs:1675`), JSON (`main.rs:1660`), log (`main.rs:1660`), and both cleanup renderers (`main.rs:1195`, `main.rs:1224`) |
+| Clear precedes report | `finish_and_clear()` at `main.rs:1647` (scan), `main.rs:495` (cleanup) |
 
 The user-facing consequence: `cargo cleanme scan | jq` shows progress on the
 terminal and keeps stdout pipeable. §5 shows the TTY check is on **stderr only**,
@@ -60,13 +60,13 @@ retired. Everything the production half needs is `std` (`progress.rs:7-14`) or
 
 | Variant | Work it represents | Entered from | Total known in advance? |
 |---|---|---|---|
-| `Discovery` | Filesystem walk for `Cargo.toml` | `main.rs:1252` | No — indeterminate |
-| `Resolution` | `cargo metadata` per manifest | `main.rs:1299` | No — no `units_total` ever |
-| `Analysis` | Parallel sizing + activity classification | `main.rs:1413-1414`, total at `workspace.rs:1619` | Yes — determinate |
-| `Reporting` | About to write the stdout report | `main.rs:1461` | No — never drawn |
-| `CleanupPreview` | Cargo's own `clean --dry-run` preview | `cleanup.rs:1414` | Yes — `cleanup.rs:1600` |
-| `CleanupSimulate` | Application simulation, no Cargo spawned | `cleanup.rs:1415` | Yes — `cleanup.rs:1600` |
-| `CleanupExecute` | Real cleanup through Cargo | `cleanup.rs:1416` | Yes — `cleanup.rs:1600` |
+| `Discovery` | Filesystem walk for `Cargo.toml` | `main.rs:1414` | No — indeterminate |
+| `Resolution` | `cargo metadata` per manifest | `main.rs:1461` | No — no `units_total` ever |
+| `Analysis` | Parallel sizing + activity classification | `main.rs:1598-1599`, total at `workspace.rs:1619` | Yes — determinate |
+| `Reporting` | About to write the stdout report | `main.rs:1646` | No — never drawn |
+| `CleanupPreview` | Cargo's own `clean --dry-run` preview | `cleanup.rs:1536` | Yes — `cleanup.rs:1722` |
+| `CleanupSimulate` | Application simulation, no Cargo spawned | `cleanup.rs:1537` | Yes — `cleanup.rs:1722` |
+| `CleanupExecute` | Real cleanup through Cargo | `cleanup.rs:1538` | Yes — `cleanup.rs:1722` |
 
 `ProgressObserver` — `progress.rs:39-53`. `Send + Sync`. All thirteen methods take
 `&self` and **all thirteen have default empty bodies**, so an implementor overrides
@@ -76,18 +76,18 @@ is a complete, allocation-free implementation.
 | Method | Argument | Meaning | Phases that use it |
 |---|---|---|---|
 | `phase(ScanPhase)` | new phase | Announce a transition; re-scopes the determinate scope | All four scan + all three cleanup phases |
-| `dirs_visited(u64)` | batch delta | Entries walked, batched at 512 (`discovery.rs:671-673`) | `Discovery` |
-| `dirs_pruned(u64)` | batch delta | Entries cut by prune rules, batched at 64 (`discovery.rs:736-738`) | `Discovery` |
-| `manifests_found(u64)` | batch delta | Validated `Cargo.toml` files (`discovery.rs:733`) | `Discovery` |
-| `discovery_issues(u64)` | final count | Discovery-stage diagnostics, kept separate from Cargo resolution failures (`main.rs:1271`) | `Discovery` → `Resolution` |
+| `dirs_visited(u64)` | batch delta | Entries walked, batched at 512 (`discovery.rs:799-801`) | `Discovery` |
+| `dirs_pruned(u64)` | batch delta | Entries cut by prune rules, batched at 64 (`discovery.rs:864-866`) | `Discovery` |
+| `manifests_found(u64)` | batch delta | Validated `Cargo.toml` files (`discovery.rs:861`) | `Discovery` |
+| `discovery_issues(u64)` | final count | Discovery-stage diagnostics, kept separate from Cargo resolution failures (`main.rs:1433`) | `Discovery` → `Resolution` |
 | `workspaces_resolved(u64)` | batch delta | Successful `cargo metadata` runs (`workspace.rs:971`) | `Resolution` |
 | `cargo_failure()` | — | One Cargo workspace-resolution command failed, at either locate or metadata (`workspace.rs:850`, `:865`, `:880`, `:892`, `:949`, `:1106`, `:1128`, `:1152`) | `Resolution` |
 | `empty_skipped()` | — | Group skipped: no eligible bytes (`workspace.rs:1645`, `1851`) | `Analysis` |
 | `active_skipped()` | — | Group or workspace skipped: protected by source activity (`workspace.rs:1703`, `1864`) | `Analysis` |
 | `group_measured(u64)` | bytes | A group finished sizing (`workspace.rs:1876`) | `Analysis` |
-| `reportable_group(&Path, u64)` | path, bytes | A group qualifies for the report (`workspace.rs:1905`, `cleanup.rs:2436`) | `Analysis`, cleanup |
-| `units_total(ScanPhase, u64)` | phase, total | Announce the unit count for a phase | `Analysis` (`workspace.rs:1619`), cleanup (`cleanup.rs:1600`) |
-| `unit_completed(ScanPhase)` | phase | One unit finished | `Analysis` (`workspace.rs:1805-1877`), cleanup (19 sites, `cleanup.rs:1665-2114`) |
+| `reportable_group(&Path, u64)` | path, bytes | A group qualifies for the report (`workspace.rs:1905`, `cleanup.rs:2567`) | `Analysis`, cleanup |
+| `units_total(ScanPhase, u64)` | phase, total | Announce the unit count for a phase | `Analysis` (`workspace.rs:1619`), cleanup (`cleanup.rs:1722`) |
+| `unit_completed(ScanPhase)` | phase | One unit finished | `Analysis` (`workspace.rs:1805-1877`), cleanup (19 sites, `cleanup.rs:1796-2245`) |
 
 `active_skipped` is deliberately counted per **workspace** at
 `workspace.rs:1703` and per **group** at `workspace.rs:1864`; the source comment
@@ -144,11 +144,11 @@ after `group_measured(100)`, `determinate_done_value()` is still `0`; only
 
 **`Send + Sync` (`progress.rs:39`) is a contract, and today no call site
 exercises it across a thread.** The observer is threaded as a
-`&dyn ProgressObserver` (`main.rs:1251`, `discovery.rs:325`, `workspace.rs:464`),
+`&dyn ProgressObserver` (`main.rs:1413`, `discovery.rs:331`, `workspace.rs:464`),
 but every observer call in the crate happens on the calling thread. The
-`dua_core::walk_roots` pool (`discovery.rs:578`) is handed the *descend filter*
-closure (`discovery.rs:587`), not the observer; the observer is called from the
-consumer loop at `discovery.rs:634`. The bounded-parallel Cargo resolution
+`dua_core::walk_roots` pool (`discovery.rs:706`) is handed the *descend filter*
+closure (`discovery.rs:715`), not the observer; the observer is called from the
+consumer loop at `discovery.rs:762`. The bounded-parallel Cargo resolution
 (`workspace.rs:488-503`) likewise keeps the observer out of its workers. So
 `Send + Sync` is forward-looking permission, not a bound the current code needs —
 and it is exactly why the trait is also the reason every method takes `&self`:
@@ -160,19 +160,19 @@ counters, `Mutex` for the candidate list, the phase, and the draw timestamp
 **Testability:** `discovery`, `workspace` and `cleanup` are tested with
 `NoopObserver` (152 references across `src/` and `tests/`; `cleanup.rs` alone
 names it 81 times) and with
-`TestObserver` for event assertions (`cleanup.rs:8004`, `:8002`, `:8566`;
+`TestObserver` for event assertions (`cleanup.rs:8407`, `:8002`, `:8566`;
 `workspace.rs:4797`, `:5209`); without a trait every one of those tests would need
 a real terminal or a global renderer hook. **Multiple independent producers, one
 renderer:** the scan and cleanup paths each build a single `IndicatifRenderer`
-(`main.rs:451`, `main.rs:1248`) and never learn about one another — none of
+(`main.rs:476`, `main.rs:1410`) and never learn about one another — none of
 `discovery`, `workspace`, `cleanup` imports `indicatif` (the only `indicatif` use
 in `src/` is in this file), and none knows whether the renderer is a spinner, a TTY
 bar, a test double, or absent. A third producer exists since M014: the
 interactive candidate listing runs on its own **hidden** renderer
-(`main.rs:573`), because a live bar would fight the repainting selection list.
+(`main.rs:605`), because a live bar would fight the repainting selection list.
 
 **"The observer must never be able to fail a scan" — honoured.** Enforced at four
-levels, and `main.rs:1249-1250` is accurate. **No fallible signature exists:**
+levels, and `main.rs:1411-1412` is accurate. **No fallible signature exists:**
 every method returns `()` (`progress.rs:40-52`), so there is nothing to propagate
 and no `?` is ever written against an observer. **Construction is infallible:**
 `new` returns `Self`, not `Result` (`progress.rs:261`) — a terminal that cannot be
@@ -194,11 +194,11 @@ failures unknown until run. `Reporting` is never left on screen.
 
 **Determinate: `Analysis` and the three cleanup phases.** `Analysis` gets its
 total from `workspace::analyze_groups` at `workspace.rs:1619` (and redundantly from
-`main.rs:1414`). Cleanup gets its total at `cleanup.rs:1600`, gated on complete
-ownership coverage — the comment at `cleanup.rs:1597-1598` is explicit that a
+`main.rs:1599`). Cleanup gets its total at `cleanup.rs:1722`, gated on complete
+ownership coverage — the comment at `cleanup.rs:1719-1720` is explicit that a
 partial total would be a lie.
 
-**Re-scoping semantics.** `main.rs:1411` says *"Phase first (re-scopes totals),
+**Re-scoping semantics.** `main.rs:1596` says *"Phase first (re-scopes totals),
 then total (starts fresh scope)"*. Verified against the renderer; the two steps
 are distinct operations:
 
@@ -226,10 +226,10 @@ done `0`).
 **Two gates, and they are different kinds of thing.** A call site must satisfy
 both before a renderer exists at all.
 
-1. **Format gate** — `main.rs:1246-1247` (scan) and `main.rs:449-450` (cleanup),
+1. **Format gate** — `main.rs:1408-1409` (scan) and `main.rs:474-475` (cleanup),
    both `options.format == OutputFormat::Human && progress::should_show_progress(no_progress)`.
 2. **Construction gate** — `IndicatifRenderer::new(!show, options.verbose)` at
-   `main.rs:1248` and `main.rs:451`. The renderer's `hidden` flag is the
+   `main.rs:1410` and `main.rs:476`. The renderer's `hidden` flag is the
    *negation* of the gate, so `show` being false produces a renderer whose every
    draw path short-circuits.
 
@@ -263,8 +263,8 @@ The row-3 asymmetry is real but is conventional Unix behaviour (a tool writes to
 the terminal it is attached to); the crate is *more* permissive here than an
 `is_stdout_terminal` check would be.
 
-**Both non-Human formats suppress progress on a TTY** (`main.rs:1246-1247`,
-`main.rs:449-450`). JSON is a deliberate choice: a machine-readable consumer should get
+**Both non-Human formats suppress progress on a TTY** (`main.rs:1408-1409`,
+`main.rs:474-475`). JSON is a deliberate choice: a machine-readable consumer should get
 no ANSI noise in any captured stream. But the *scope* is too wide, because
 progress goes to stderr and JSON to stdout. A user running `--format json` on a
 TTY loses all feedback about a scan that can take minutes, for no correctness
@@ -276,7 +276,7 @@ it.
 `--format log` exists to be *read by a program* line by line. A spinner
 interleaving control sequences with `LogLine` records would corrupt that stream,
 so the format gate is load-bearing there in a way it is not for JSON. Log mode
-also drops the scan's per-diagnostic stderr fan-out (`main.rs:1495`, gated on
+also drops the scan's per-diagnostic stderr fan-out (`main.rs:1680`, gated on
 `options.format != OutputFormat::Log`) so its stderr carries
 only `--stats`; the diagnostics instead ride along as the log line's
 `diagnostics=N` count (`output.rs:344`). Progress suppression and diagnostic
@@ -374,7 +374,7 @@ consumer could assert on them.
 
 **`finish_and_clear` (`progress.rs:419-429`)** calls `multi.clear()` then
 `finish_and_clear()` on the main bar. Clearing matters because the
-report is written with `println!` (`main.rs:1490`, `main.rs:1063`), which emits `\n` and
+report is written with `println!` (`main.rs:1675`, `main.rs:1224`), which emits `\n` and
 nothing else — any residual frame would remain interleaved above the report in
 terminal history. Idempotent (`progress.rs:828-829` calls it twice) and safe when
 hidden (`progress.rs:420-422`).
@@ -494,41 +494,41 @@ exit code? No — definitively.** Traced end to end:
 
 1. No trait method returns a `Result` (`progress.rs:40-52`); nothing to propagate.
 2. No caller in `src/` writes `?` against an observer call. All are bare
-   statements: `discovery.rs:672`, `workspace.rs:1619`, `cleanup.rs:1600`,
-   `main.rs:1414`.
+   statements: `discovery.rs:800`, `workspace.rs:1619`, `cleanup.rs:1722`,
+   `main.rs:1599`.
 3. `new` is infallible (`progress.rs:261`); the only fallible indicatif call,
    `multi.clear()`, has its `io::Result` dropped at `progress.rs:424`.
 4. The exit code comes from scan truth only: `Ok(1)` iff `full_incomplete`
-   (`main.rs:1610-1616`), else `Ok(0)` (`main.rs:1617-1621`). No progress value
+   (`main.rs:1795-1801`), else `Ok(0)` (`main.rs:1802-1806`). No progress value
    participates, and a failed state publish does not participate either.
 
-`main.rs:1249-1250` is accurate, and the mechanism is exactly infallible
+`main.rs:1411-1412` is accurate, and the mechanism is exactly infallible
 construction plus refresh throttling.
 
 **Is progress output guaranteed to go to stderr and never stdout? Yes.** The only
 production draw target is `stderr_with_hz` (`progress.rs:269`); the in-memory
 constructor never touches fd 2. Every stdout write in the pipeline is a report
-`println!` — scan at `main.rs:1475` (JSON), `:1484` (log), `:1490` (human);
-cleanup at `main.rs:1034` (JSON), `:1036` (log), `:1041` (the empty-scope note),
+`println!` — scan at `main.rs:1660` (JSON), `:1484` (log), `:1490` (human);
+cleanup at `main.rs:1195` (JSON), `:1036` (log), `:1041` (the empty-scope note),
 `:1047` ("Nothing to clean."), and `:1053` / `:1063` (human). The `--stats` case
-holds too: stats go to stderr (`main.rs:485`, `:1585`), as `main.rs:481-494` and
-`main.rs:1585-1602` require.
-Cleanup's state-generation line (`main.rs:478`) is likewise stdout, so it is
+holds too: stats go to stderr (`main.rs:510`, `:1585`), as `main.rs:506-519` and
+`main.rs:1770-1787` require.
+Cleanup's state-generation line (`main.rs:503`) is likewise stdout, so it is
 behind the same Human-only gate as the human report — and, since M020, behind a
-`--verbose` gate as well (`main.rs:472-474`), because which state generation a
+`--verbose` gate as well (`main.rs:497-499`), because which state generation a
 run used is debugging information rather than a result.
 
 **Are the observer calls cheap enough for a hot loop? Mostly yes, one exception.**
 The trait doc requires *"Implementations MUST NOT allocate per visited entry;
 directory counters are aggregated in batches"* (`progress.rs:30-31`), and producers
-honour it: `discovery.rs:671-673` batches `dirs_visited` at 512 entries,
-`discovery.rs:736-738` batches `dirs_pruned` at 64. Per-call cost is one relaxed
+honour it: `discovery.rs:799-801` batches `dirs_visited` at 512 entries,
+`discovery.rs:864-866` batches `dirs_pruned` at 64. Per-call cost is one relaxed
 `fetch_add` (`progress.rs:460`, `:464`).
 
 The exception: **`unit_completed` takes a `Mutex` on every call** —
 `reset_totals_for_phase` locks `current_phase` (`progress.rs:327`) before checking
 whether the phase changed. That lock is taken by every `unit_completed` (19 sites
-in `cleanup.rs:1665-2114`, 5 in `workspace.rs:1805-1877`) and every `units_total`.
+in `cleanup.rs:1796-2245`, 5 in `workspace.rs:1805-1877`) and every `units_total`.
 Bounded by group and unit count, not entry count, so not a hot-loop problem — but
 an uncontended lock per progress unit that a `load`/`store` on an `AtomicU8` phase
 tag would avoid.
@@ -546,14 +546,14 @@ sorts and truncates — *then* calls `maybe_draw`, which returns immediately. Te
 check each.
 
 **Can the bar's counts disagree with the report? Yes, by construction.** The
-renderer's counters (`progress.rs:221-227`) and `ScanCounters` (`main.rs:1458`)
+renderer's counters (`progress.rs:221-227`) and `ScanCounters` (`main.rs:1643`)
 are independent values fed by independent increments. The bar's `visited` counts
 **every entry** — `dirs_visited` receives `batch_visited += 1` per entry including
-files (`discovery.rs:665`) — while `ScanCounters.directories_visited` counts
+files (`discovery.rs:793`) — while `ScanCounters.directories_visited` counts
 **directories only**: *"`directories_visited` counts directories only; `visited`
 keeps counting every entry (files included) as the traversal total (L6)"*
-(`discovery.rs:667-668`). So one run shows "visited N" on the bar and a different,
-smaller visited-entries number in the report (`main.rs:1457`), and neither labels
+(`discovery.rs:795-796`). So one run shows "visited N" on the bar and a different,
+smaller visited-entries number in the report (`main.rs:1642`), and neither labels
 the other. The hardcoded `analyzing` label that used to compound this is gone:
 `phase_label` (`progress.rs:348-358`) names the real phase, so a `CleanupExecute`
 run reads `cleaning 3/12 …` rather than `analyzing 3/12 …`. The duplication is the
@@ -576,10 +576,10 @@ cannot emit escape sequences to a real display even if a test leaked the rendere
 — and the property is only half pinned.** The C023 work changed the shape of this
 question. `finish_and_clear()` is now called on the failure paths, not only on
 success: the scan path clears the renderer before returning the discovery error
-(`main.rs:1267`) and before returning the recency-window error (`main.rs:1421`),
+(`main.rs:1429`) and before returning the recency-window error (`main.rs:1429`),
 and the cleanup path clears **before** the fallible cleanup call
-(`main.rs:470` before `main.rs:471`) rather than after it. The reason is
-recorded twice, at `main.rs:453-456` (cleanup) and `main.rs:1254-1258` (scan): a
+(`main.rs:495` before `main.rs:496`) rather than after it. The reason is
+recorded twice, at `main.rs:478-481` (cleanup) and `main.rs:1416-1420` (scan): a
 `?` escaping with the bar still live lets indicatif's `impl Drop for BarState`
 (indicatif `state.rs:219-232`) *finish* the bar rather than clear it, so the
 retained line stayed on screen above the `cargo-cleanme: …` message.
@@ -702,15 +702,15 @@ directly). Not covered by `tests/cli_contract.rs` either, which always passes
 
 1. **Stdout/stderr separation intact.** The only production draw target is
    `stderr_with_hz` (`progress.rs:269`); every report write is a `println!`
-   (`main.rs:1475`, `:1484`, `:1490`, `:1034`, `:1063`). A new code path passing
+   (`main.rs:1660`, `:1484`, `:1490`, `:1034`, `:1063`). A new code path passing
    `MultiProgress::new()` or any other target breaks pipeability silently.
 2. **The TTY check is stderr-only and must stay that way.**
    `stderr_is_terminal` (`progress.rs:189-192`) inspects fd 2 and never fd 1.
    Adding a stdout check would suppress progress for `cleanme scan | jq` — the
    case the separation exists to support.
-3. **The format gate at `main.rs:1246-1247` and `main.rs:449-450` is duplicated,
+3. **The format gate at `main.rs:1408-1409` and `main.rs:474-475` is duplicated,
    not shared.** Both must be edited together or `scan` and `clean` will disagree;
-   the `!show` inversion at `main.rs:1248` / `main.rs:451` is easy to drop, and
+   the `!show` inversion at `main.rs:1410` / `main.rs:476` is easy to drop, and
    so is the second argument — `options.verbose` must be threaded to both, or the
    two paths render different surfaces. Adding a fourth `OutputFormat` variant
    means touching both, and a variant added without them would silently inherit
@@ -728,14 +728,14 @@ directly). Not covered by `tests/cli_contract.rs` either, which always passes
    scale. Note that the *message* is not clamped either (`progress.rs:370-374`),
    so it will still read `130/100` — the guard covers the bar, not the text.
 7. **The bar's counters and the report's already disagree.** Bar `visited` counts
-   all entries (`discovery.rs:665`); `ScanCounters.directories_visited` counts
-   directories only (`discovery.rs:667-668`). The `analyzing` literal is gone —
+   all entries (`discovery.rs:793`); `ScanCounters.directories_visited` counts
+   directories only (`discovery.rs:795-796`). The `analyzing` literal is gone —
    the label comes from `phase_label` (`progress.rs:348-358`) — but the duplicated
    counter set is not. Fixing that means sharing one counter set, not patching
    the label.
 8. **The error paths now clear the bar — and the ordering is still unpinned.**
-   `main.rs:1267` and `main.rs:1421` clear before the scan error returns, and
-   `main.rs:470` clears before the fallible cleanup call at `main.rs:471`. Reverting
+   `main.rs:1429` and `main.rs:1429` clear before the scan error returns, and
+   `main.rs:495` clears before the fallible cleanup call at `main.rs:496`. Reverting
    that ordering leaves every test green (C023 §11.4). A `Drop` impl on
    `IndicatifRenderer` would make the failure path deterministic without a pty
    harness.

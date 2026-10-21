@@ -33,7 +33,7 @@ This skill is about *how to change it without weakening it*.
 ## The invariants, and the one that is easiest to break
 
 1. **Ownership proof, not timestamps.** `OutputOwnershipClass` in
-   `domain.rs:210` is the vocabulary. `Shared`, `Uncertain`, and
+   `src/domain.rs:255` is the vocabulary. `Shared`, `Uncertain`, and
    `ExternalUnproven` are **inventory-only, forever**.
 2. **Authorization never manufactures proof.** `allowed_output_roots` lets a
    user authorize a location; it cannot upgrade an ownership class.
@@ -50,11 +50,19 @@ This skill is about *how to change it without weakening it*.
    same invocation; such a unit is skipped **whole**.
 6. **The discovery universe may only ever grow.** ADR 009 widened the
    maintenance scope by adding the working directory — *added*, never
-   substituted for the Routine roots (`src/main.rs:974-983`). A wider
+   substituted for the Routine roots (`src/main.rs:1189-1198`). A wider
    universe can only reclassify `shared` bytes to `private`; it can never
    promote an unproven shared output. Any change that **narrows** the
    universe re-opens exactly the hazard invariant 1 exists to prevent, so
    treat a narrowing change as a safety change, not a cleanup.
+7. **An unproven learned root leaves the *candidate* set, never the
+   *discovery* set.** The Full cleanup's gate is per-root
+   (`src/policy.rs:551-620`): a learned root whose subtree could not be fully
+   read is disclosed and its workspaces are dropped from the candidate set —
+   but they are still discovered, resolved, sized and classified, so a shared
+   output between a proven root and an unproven one stays `Shared` and stays
+   inventory-only. Dropping *candidates* cannot reclassify anything; dropping
+   *participants* can, which is invariant 6's hazard in a new costume.
 
 ## Invariant 2 is the trap
 
@@ -92,10 +100,10 @@ mode or a different safety path. Do not "help" by reintroducing a
 
 Two details the shorthand hides:
 
-- The three flags conflict pairwise **on `clean`**. The **root-level**
-  `--dry-run` does *not* conflict with the clean-level `--cargo-preview`; the
-  root flag wins and selects `Simulate` (`src/cli.rs:393-397`), because
-  simulation spawns nothing. See
+- The three flags conflict pairwise **on `clean`**. Across the root and the
+  `clean` alias they do not: a simulation at *either* level wins over a Cargo
+  preview at *either* level, because simulation spawns nothing
+  (`src/cli.rs:621-626`). See
   [`cli-surface-and-argv`](../cli-surface-and-argv/SKILL.md).
 - There is **no `Preview` mode**. `CargoPreview` maps to the *wire* label
   `"preview"` (`src/cleanup.rs:52`), and `CleanOutcome::Previewed` is an
@@ -117,7 +125,7 @@ Every `Cargo.toml` under the selected cleanup root must be accounted for by
 direct successful resolution or by successful workspace metadata listing it as a
 member/root. What happens to the ones that remain is a **three-way split**
 (ADR 007 §1–§4, implemented by `split_unresolved_for_boundary`,
-`src/cleanup.rs:2481-2504`):
+`src/cleanup.rs:2742-2766`):
 
 | Where the unresolved manifest is | What happens |
 |---|---|
@@ -131,7 +139,7 @@ anchor, the explicit roots, or the Full set.
 Cleaning a healthy boundary while poison exists elsewhere is the *intended*
 behaviour, precisely so that a boundary clean can never be read as a system
 clean. The regression test is `out_of_anchor_poison_does_not_block_anchor`
-(`src/cleanup.rs:5277`) — it **fails by construction** against the old
+(`src/cleanup.rs:6020`) — it **fails by construction** against the old
 whole-scope rule, which is what makes it worth keeping.
 
 Read-only scans stay partial-result tolerant; cleanup does not. That asymmetry
@@ -145,9 +153,61 @@ is intentional.
 Note the consequence for tests: asserting "zero clean spawns" under a blocked
 boundary is the strongest available assertion, and `cleanup.rs` has several —
 `metadata_failure_blocks_boundary_with_zero_spawns`
-(`src/cleanup.rs:5508`) and
+(`src/cleanup.rs:6251`) and
 `violated_admission_premise_blocks_with_zero_cargo_spawns`
-(`src/cleanup.rs:6559`). Prefer that over asserting an error message.
+(`src/cleanup.rs:7302`). Prefer that over asserting an error message.
+
+## The Full cleanup gate is per-root, not whole-scope
+
+`cargo cleanme --full` proves ownership **per learned root**. When the platform
+walk could not complete, each learned root is re-walked as its own walk root
+and the existing per-walk-root attribution decides whether that root's subtree
+was fully read (`src/discovery.rs:586-592`). The pass uses the same prune and
+filter sets as the platform walk, because a verdict computed under different
+rules is not comparable to the verdict it stands in for.
+
+The gate returns a verdict, not a refusal (`src/policy.rs:551-620`):
+
+- A **proven** root is a cleanup candidate.
+- An **unproven** root is disclosed on stderr (`src/main.rs:389-401`) and its
+  workspaces leave the *candidate* set — each is still discovered and
+  classified, and each appears in the report with the typed reason
+  `skipped_incomplete_coverage` (`src/cleanup.rs:250-269`).
+- If **no** root could be proven, the operation **blocks** with the standard
+  unproven-ownership scope block (`src/main.rs:776-806`). It never exits 0
+  with zero rows.
+- If **some** root was unproven, the exit code is **1**
+  (`src/main.rs:808-821`), so an unattended script cannot read a partial Full
+  cleanup as a complete one.
+
+The typed reason is not optional. "We could not read this root" and "you did
+not ask for this" are different facts; that difference is the whole of
+`skipped_incomplete_coverage` versus `skipped_outside_selection`, and a
+consumer that cannot tell them apart cannot report coverage honestly.
+
+Do not turn this back into a whole-scope refusal: the old gate refused the
+entire Full cleanup because the reconciliation's exit code was non-zero, so
+one unreadable directory anywhere on the machine blocked every learned root.
+The C028 property survives — a missing fresh in-memory generation is still
+fatal, and means no cleanup at all.
+
+**The per-root rule needs an attribution to work.** A traversal error carries
+**no path** — the upstream walk's error event has no child path — so it cannot
+be placed in a subtree, and a rule that counts every pathless diagnostic as
+in-boundary is the whole-system refusal wearing a new hat. The cleanup engine
+therefore walks **per root**, so the error is attributed to the root whose
+walk produced it (`src/cleanup.rs`), and only a root the gate already judged
+and disclosed stays out of the boundary. Two rules keep this honest:
+
+- a pathless diagnostic from a root the gate **did not** judge still blocks
+  the scope that contains it — an unreadable automatic root is indeterminate
+  coverage, not absence
+  (`unreadable_automatic_root_blocks_instead_of_omitting`);
+- the excluded root leaves the **proof boundary** as well as the candidate
+  set, so an unprovable participant inside it is reported, not blocking. That
+  is the one place a filter may unblock a scope, and it is safe only because
+  discovery does not narrow: the root's manifests are still discovered,
+  resolved and classified.
 
 ## The `skipped_outside_selection` reason code exists
 
@@ -163,7 +223,7 @@ consumer report coverage honestly.
   reason codes as default `Execute`, with zero spawns.
 - Any new `Shared`/`Uncertain`/`ExternalUnproven` case is inventory-only in
   **both** the scan report and the cleanup decision.
-- `cargo cleanme clean … --format json` round-trips: the `reason_code` for each
+- `cargo cleanme … --format json` round-trips: the `reason_code` for each
   unit explains its skip, and `skipped_ownership_unproven` is distinguishable
   from `skipped_changed_before_cleanup` (they warrant different operator
   responses).
@@ -174,6 +234,9 @@ consumer report coverage honestly.
   in-boundary unknown owner still does. If your change touched
   `split_unresolved_for_boundary` or `boundary_admits`, say which of the three
   ADR 007 cases you changed and why.
+- A Full cleanup that could not prove a learned root reports that root with
+  `skipped_incomplete_coverage` and exits 1 — never 0. A Full cleanup that
+  proved *no* root blocks; it never exits 0 with zero rows.
 
 Then run the full gate (see [`test-evidence`](../test-evidence/SKILL.md)):
 `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D
