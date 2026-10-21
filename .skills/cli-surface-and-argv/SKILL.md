@@ -39,7 +39,7 @@ changed twice. `cargo cleanme scan` with no selector is a **usage error (exit
 It is enforced by one `ArgGroup`:
 
 ```rust
-// src/cli.rs:86
+// src/cli.rs:89
 #[command(group = clap::ArgGroup::new("scan-scope").required(true).args(["root", "known", "all", "full"]))]
 ```
 
@@ -57,7 +57,7 @@ it says so.
 ## `Invocation::UsageError` is not dead code
 
 ```rust
-// src/cli.rs:268-276
+// src/cli.rs:284
 UsageError(String),
 ```
 
@@ -76,9 +76,9 @@ There are **three** `--dry-run` declarations, and they are not the same flag:
 
 | Declaration | Where | Meaning |
 |---|---|---|
-| `dry_run` | root (`src/cli.rs:53`) | honoured wherever it appears, but only `clean` and `update` act on it; `scan` and `config` ignore it |
-| `dry_run` | `clean` (`src/cli.rs:140`) | Simulate mode for cleanup |
-| `dry_run` | `update` (`src/cli.rs:164`) | resolve the update plan, acquire nothing |
+| `dry_run` | root (`src/cli.rs:56-57`) | honoured wherever it appears, but only `clean` and `update` act on it; `scan` and `config` ignore it |
+| `dry_run` | `clean` (`src/cli.rs:143-144`) | Simulate mode for cleanup |
+| `dry_run` | `update` (`src/cli.rs:167-168`) | resolve the update plan, acquire nothing |
 
 The canonical mapping is one function:
 
@@ -93,7 +93,7 @@ mapping runs. If you add a fourth mode, that assertion is what you must update
 *and* what must keep failing when two modes are combined.
 
 **The root-level `--dry-run` wins over the `clean`-level `--cargo-preview`.**
-`src/cli.rs:384-388` checks the root flag *first*, because `--dry-run` spawns
+`src/cli.rs:392-396` checks the root flag *first*, because `--dry-run` spawns
 nothing while `--cargo-preview` spawns a Cargo process. The safe mode wins the
 tie. Clap cannot express this, because the two flags live at different levels
 of the command tree and therefore never conflict with each other.
@@ -117,7 +117,7 @@ nothing.
 
 ## One cleanup code path, on purpose
 
-`CleanupScope::Maintenance` (`src/cli.rs:182-193`) covers **both** bare
+`CleanupScope::Maintenance` (`src/cli.rs:186-195`) covers **both** bare
 invocation and `clean` with no scope selector. The doc comment says why: bare
 maintenance and every advanced cleanup spelling produce the same
 `CleanupRequest`, so there is exactly one cleanup engine and one set of gates
@@ -128,20 +128,36 @@ invocation is a bug, and a change that splits the two is a regression. Keep
 `CleanupScope::Maintenance` as the shared arm.
 
 Policy overrides (`--min-reclaimable-bytes`, `--older-than`, `--include`,
-`--exclude`, `--profile`, `--package`) live **only on `clean`**, by design
-(M012A work package D, `src/cli.rs:210-223`). Do not clone them onto the root
-command to "make it more symmetric" — that is the change M012A deliberately
-declined.
+`--exclude`, `--profile`, `--package`) live **only on `clean`** today (M012A
+work package D, `src/cli.rs:124-140`), because M012A deliberately declined to
+clone them onto the root command.
 
-## The `long_about` lie
+**That decision has been superseded.** ADR 008 §4 was resolved to **4b** on
+2026-10-21: the overrides become root-level, the root becomes the single
+cleanup front door, and `clean` survives as a hidden compatibility alias. The
+move is **not implemented** — it is M019's work, and M019 is *proposed*.
 
-`src/cli.rs:27-28` still says that `cargo cleanme scan` with no ROOT is the full
-read-only machine reconciliation. It is a usage error. Only
-`cargo cleanme --help` shows this text — the man page overwrites the root
-`long_about` with its own block in `xtask`, so the man page is unaffected.
+So: do not clone them onto the root as a symmetry exercise, and do not treat
+their staying on `clean` as a settled design either. The decided destination
+is the root; the implementation is M019's, and M019 may not be published
+before M018 has shipped.
 
-This is recorded as **C036 D1** (proposed, not accepted). It is documentation,
-not behaviour: do not change the *behaviour* to match the text.
+## The `long_about` lie — resolved, and the drift mechanism that hid it
+
+`src/cli.rs:27-28` used to say that `cargo cleanme scan` with no ROOT is the
+full read-only machine reconciliation. It is a usage error. Only
+`cargo cleanme --help` showed that text — the man page overwrote the root
+`long_about` with its own block in `xtask`, so the man page never saw the
+lie and the drift gate could not catch it.
+
+That was **C036 D1**, and it is **discharged**: C040 (ADR 009) rewrote the
+root `long_about` so it states that `scan` needs a scope, and made the root
+man page render from **that same `long_about`** (`src/main.rs:148-156`)
+instead of from a generator-side block. The two surfaces can no longer drift.
+
+The lesson survives the fix: a surface that is rendered from a *different*
+source than the one being edited is invisible to the gate. When you change a
+user-visible string, check which artifacts render it.
 
 ## The generated artifacts drift with every edit
 
@@ -157,23 +173,32 @@ cargo run --quiet --features dev-tools --bin generate-docs -- --check # drift ga
 The generated artifacts document the **`cargo cleanme`** spelling, not
 `cleanme`, because that is the spelling that resolves after a registry install.
 
-## The `--full` spelling question is OPEN
+## The `--full` spelling is decided; it is not implemented yet
 
-ADR 008 (`plans/adr/008-…`) **proposes** making `cargo cleanme --full` the
-canonical Full-cleanup spelling, with `cargo cleanme clean --full` retained as a
-**hidden** compatibility alias (it has been published since 0.2.4).
+ADR 008 (`plans/adr/008-…`) was **accepted 2026-10-21**. It decides that
+`cargo cleanme --full` becomes the canonical Full-cleanup spelling, with
+`cargo cleanme clean --full` retained as a **hidden** compatibility alias (it
+has been published since 0.2.4), and that the policy overrides become
+root-level too.
 
-The ADR is **`proposed`**, not accepted. It has **no implementation authority**.
-Until the owner accepts it:
+**Acceptance is not implementation.** The tree still has no root-level
+`--full`, `clean` is still visible, and `clean --full` is still the
+documented spelling. The implementation plans are M018 (the Full gate) and
+M019 (the spelling), and both are *proposed* — they carry no implementation
+authority yet.
+
+Until M019 lands:
 
 - do **not** add a root-level `--full` flag;
 - do **not** remove or hide `clean --full`;
 - if you touch the CLI, assume both spellings must keep working.
 
-The ADR also carries two open decisions the owner has not yet answered (the
-Full-gate options, and whether the policy flags move to the root). See
-[`planning-and-closure`](../planning-and-closure/SKILL.md) before acting on any
-of it.
+And note the sequencing rule ADR 008 makes binding: **M019 may not be
+published before M018 has shipped**, because the canonical spelling must
+never point at an operation that refuses.
+
+See [`planning-and-closure`](../planning-and-closure/SKILL.md) before acting
+on any of it.
 
 ## A flag can be accepted and ignored — and that is a defect shape
 

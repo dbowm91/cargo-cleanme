@@ -61,21 +61,29 @@ C001–C009 and C010–C017 are all corrective passes. That is the pattern: a
 material defect found after a milestone gets a **new** plan, and the original
 closure record keeps the original verdict.
 
-The corpus is now **35** correctives, `C001`–`C034` plus `C036`. **`C035` is
+The corpus is now **40** correctives, `C001`–`C034` plus `C036`–`C041`. **`C035` is
 absent on purpose**: it is superseded, it lives on a separate branch, and it
 must **not** be merged. It stays as the record of the rejected mechanism. Do not
 "fix" the numbering gap — a gap that is invisible to a numbering check is
 exactly what a deliberate gap looks like.
 
 **A proposed ADR has no implementation authority.** ADR 005
-(`plans/adr/005-*.md`) and ADR 008 (`plans/adr/008-*.md`) are both `proposed;
-not accepted`. That means: no code change may be justified by them, and they do
-**not** belong in the registry (which holds `ready`/`active`/`blocked` plans —
-see below). A proposed ADR is a direction, not a task.
+(`plans/adr/005-*.md`) is `proposed; not accepted`. That means: no code change
+may be justified by it, and it does **not** belong in the registry (which holds
+`ready`/`active`/`blocked` plans — see below). A proposed ADR is a direction,
+not a task.
 
-Two open ADRs, two open correctives, and an owner decision between them is the
-current state of the decision record. Read `plans/registry.md` before assuming
-anything is unclaimed.
+**An accepted ADR is a decision, not an implementation.** ADR 008 was accepted
+on 2026-10-21, and it authorises **no release** and no code change on its own:
+its implementation plans (M018 for the gate, M019 for the spelling) are
+`proposed`, and they carry the implementation authority, not the ADR. An
+accepted ADR that decides a *sequence* binds the plans under it — ADR 008 makes
+it binding that M019 may not be published before M018 has shipped.
+
+One open ADR, an accepted-but-unimplemented ADR with two planned milestones
+under it, and a handful of open correctives is the current state of the
+decision record. Read `plans/registry.md` before assuming anything is
+unclaimed.
 
 ## The corrective-pass rule
 
@@ -115,7 +123,7 @@ a suite is red for an unrelated reason, say so, in the record.
 One worked example in this repository: `plans/closure/artifact-discovery-cleanup/m017-status.md`
 recorded a pre-existing failing test
 (`cleanup::tests::real_temp_project_preview_and_execute_with_redirected_target`,
-`src/cleanup.rs:6722`) and said it "needs its own corrective". For four days
+`src/cleanup.rs:6605`) and said it "needs its own corrective". For four days
 **no such corrective existed** — the note was a permanent resident, and the
 red it described was silently suppressing the whole integration-test surface on
 CI, because `cargo test` stops scheduling the remaining targets behind a

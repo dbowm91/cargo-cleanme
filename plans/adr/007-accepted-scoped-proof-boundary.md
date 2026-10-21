@@ -74,6 +74,19 @@ operator already asked for — the working directory — is the scope.**
    reported on; the island *certificate* computation is retained only where
    the scoped engine reuses it.
 
+**Amendment 2026-10-21 — ADR 008.** Item 1's reservation for `clean --full` is
+**withdrawn**, effective when M018 ships. Under ADR 008 §5 (route 5b-i) the
+Full cleanup's proof boundary becomes the **learned root**: a learned root
+whose traversal completed is proven and cleaned; a learned root whose traversal
+did not complete is skipped with a typed reason; and the operation proceeds
+with the roots it can prove instead of refusing wholesale. Items 2, 3 and 4
+apply to the Full scope **unchanged** — in particular *discovery and grouping
+stay whole-system*, so a root skipped for incomplete coverage is still
+resolved and classified, a shared output between a cleaned root and a skipped
+root stays `Shared` and is never deleted, and only an unknown that is
+in-boundary for the root being cleaned can block that root. The read-only
+`scan --all` is untouched: this amendment concerns the cleanup gate only.
+
 ## Residuals (disclosed, not fixed)
 
 - An out-of-boundary unresolvable manifest's unknown output cannot be
@@ -83,6 +96,16 @@ operator already asked for — the working directory — is the scope.**
 - `clean --full` still blocks whole-scope on any unprovable participant:
   that operation asserts system-wide proof and keeps the old rule
   deliberately.
+
+**Amendment 2026-10-21 — ADR 008.** The third bullet above is **superseded**,
+effective when M018 ships: `clean --full` no longer blocks whole-scope on any
+unprovable participant. It blocks each learned root whose own traversal did
+not complete, and reports those roots with a typed reason. The residual
+recorded in the first bullet above — an out-of-boundary unknown output that
+cannot be disproven — now also covers an unreadable region **outside every
+learned root**, which under the withdrawn whole-system rule would have blocked
+the entire operation. It is disclosed, not fixed, and it is the residual
+ADR 008's acceptance record names.
 
 ## Consequences
 

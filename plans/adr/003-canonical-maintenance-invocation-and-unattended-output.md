@@ -96,6 +96,33 @@ Absent a mode flag, these execute eligible cleanup units. `--dry-run` selects ap
 
 For migration compatibility, the implementation may accept the historical `--yes` as a hidden execute alias and `--dryrun` as a hidden simulation alias through the pre-1.0 line. They must not remain the documented canonical spellings.
 
+**Amendment 2026-10-21 — ADR 008.** The spellings listed above remain
+**accepted** — `clean ROOT`, `clean --known` and `clean --full` are published
+and keep working — but they stop being the *canonical* front door. Under
+ADR 008 §§1–4 the root command becomes the canonical cleanup front door:
+
+~~~text
+cargo cleanme --full
+cargo cleanme --full --older-than 3600
+cargo cleanme --older-than 3600
+~~~
+
+with `--full` and the policy overrides (`--min-reclaimable-bytes`,
+`--older-than`, `--include`, `--exclude`, `--profile`, `--package`) accepted at
+the root, and `clean` retained as a **hidden compatibility alias** for
+published scripts. A `--full`, or any policy override, supplied to a read-only
+or local-only subcommand is a **usage error (exit 2)** — rejected, never
+silently discarded.
+
+§4's actual decision is **unchanged**: advanced cleanup executes by default,
+`--dry-run` selects application simulation, `--cargo-preview` selects Cargo
+preview, and the historical `--yes` / `--dryrun` aliases stay hidden. This
+amendment changes which command carries the decision, not what the decision
+is. The explicit-root spelling `clean ROOT` and the inert `clean --known`
+(equivalent to bare invocation, `src/cli.rs:374-380`) are **not** moved to the
+root by this amendment; ADR 008 did not decide them, and moving a positional
+onto the root is a separate decision.
+
 ### 5. `scan` becomes the canonical Full read-only reconciliation command
 
 ~~~text

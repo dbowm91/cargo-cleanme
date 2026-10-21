@@ -7,13 +7,13 @@ Source roadmap: `plans/subsystems/artifact-discovery-cleanup-roadmap.md`.
 Corrects: M012A (canonical maintenance CLI), M014 (CWD-anchored default),
 M017 (scoped proof default), C028/C029 (learned-root admission and partial
 Full coverage).
-Related: `plans/adr/008-proposed-canonical-full-cleanup-spelling-and-proof-scoped-full-gate.md`.
+Related: `plans/adr/008-accepted-canonical-full-cleanup-spelling-and-proof-scoped-full-gate.md`.
 
 ## Objective
 
 Make every user-visible statement about the CLI **true**, and make the
 repository's operational documentation match the behaviour the code actually
-has. **Twenty-nine** defects are in scope (D1–D29); all are documentation-,
+has. **Thirty-two** defects are in scope (D1–D32); all are documentation-,
 message-, or evidence-level. **No production behaviour change is authorised by
 this plan**, with one exception: D8 adds a bounded *diagnostic* to the
 bare-invocation path, which changes no exit code and no cleanup behaviour
@@ -24,6 +24,21 @@ re-derivation pass of 2026-10-19, which re-derived the eight skills, `AGENTS.md`
 `README.md`, and all six `docs/` files against the current source. They are
 retained in the table for the record. **Fourteen defects remain open**
 (D3, D4, D6, D7, D8, D9, D10, D11, D12, D13, D24, D25, D27, D29).
+
+**D30–D32 were added on 2026-10-21**, in the pass that accepted ADR 008 and
+registered M018/M019. The three skills that describe ADR 008's status had
+drifted — one of them *because* of the acceptance, two of them before it —
+and were corrected in the same pass. They are recorded here because the
+mechanism is the one this plan exists to expose: a hand-maintained statement
+about a decision's status, with no gate over it, that reads as true long
+after it stops being true. D29 is the same mechanism in a number.
+
+**D7 is partially discharged.** A live `clean --full` run now exists — 2026-10-21,
+a non-root Linux host, exit `2`, empty stdout, 128 permission-denied traversal
+errors under `/` — and it is recorded in ADR 008's acceptance record. What
+remains open is the other half: a *case* whose refusal is driven by a real
+non-zero code from a real traversal, not a literal. That is ADR 008 evidence
+item 2, carried by M018.
 
 **D29 was added on 2026-10-21**, after the v0.2.10 publication: the
 published-release count had to be corrected in three documents *again*, the
@@ -64,7 +79,7 @@ a non-root Linux workstation, unless stated otherwise.
 | D4 | The README's recovery advice for "scan reports 0 groups" is incomplete: it says to backdate *the sources*, but the activity guard also keys on **directory mtimes**. | `README.md:140`; `src/traverse.rs:461-468` |
 | D5 | The cleanup-safety skill states that any unresolved manifest blocks the whole scope. Since ADR 007 §3–§4 and M017, out-of-boundary unprovables are **reported, never blocking**; only in-boundary byte-capable unknowns block. | `.skills/cleanup-safety/SKILL.md:93-97`; ADR 007 §3-§5 |
 | D6 | `docs/USAGE.md` advertises `cargo cleanme clean --full --dry-run` with no note that the operation refuses on a non-root machine, and separately documents that a Full scan is "incomplete" on a typical workstation without connecting the two. | `docs/USAGE.md:115`, `docs/USAGE.md:643-645` |
-| D7 | No **live** `clean --full` run exists in the evidence base, and the repository knows it: the deep dive marks the fail-closed rule "partial", and the contract test that would cover it is a placeholder no case can satisfy. | `architecture/13-orchestration.md:1219-1220`; `tests/cli_contract.rs:3080-3121` |
+| D7 | No **live** `clean --full` run exists in the evidence base, and the repository knows it: the deep dive marks the fail-closed rule "partial", and the contract test that would cover it is a placeholder no case can satisfy. **Partially discharged 2026-10-21**: a live run now exists (exit `2`, empty stdout, 128 permission-denied traversal errors under `/`, recorded in ADR 008's acceptance record) and the deep dive's claim is corrected; the *case* with a real traversal-derived code remains open, carried by M018. | `architecture/13-orchestration.md:1288`; `tests/cli_contract.rs:3097-3105`; ADR 008 acceptance record |
 | D8 | A bare invocation whose working directory lies **outside** the resolved Routine scope reports `0 CleanupUnit(s)`, `0 would-clean`, and exits 0 — silence where ADR 006 §4 requires a typed report. | live run in `/tmp/<scratch>`; ADR 006 §4 |
 | D9 | `--include` / `--exclude` are matched against the **workspace root**, not the physical output root, and neither the flag help nor the config key says so. A pattern written as `**/target` matches nothing and produces no warning. | `src/cleanup.rs:1467`, `src/cleanup.rs:1477`; `config.toml` `cleanup.include` / `cleanup.exclude` |
 | D10 | A configured `scan.root` is **silently ignored by a rootless `scan`**: `policy::resolve` returns from its `full` arm before the configured root is read. The behaviour is deliberate — configuration must not narrow the canonical reconciliation command — but the config key's own documentation does not mention it. | `src/policy.rs:19`; `src/main.rs:1036-1039`; `config.toml` `scan.root` |
@@ -87,8 +102,11 @@ a non-root Linux workstation, unless stated otherwise.
 | D27 | **Thirteen source doc comments still describe the pre-ADR 007 whole-scope block.** `src/cleanup.rs:300`, `:328`, `:1141`, `:2044`, `src/workspace.rs:394`, `:978`, and `src/main.rs:304`, `:366`, `:590`, `:831` say "whole-scope" where the behaviour is boundary-scoped; `src/cleanup.rs:315-316` says "coverage of the selected scope is unproven". `tests/cli_contract.rs:1929-1930` carries the same wording on a test whose *behaviour* is correct — its unresolved manifest is inside the anchor, so it does block. | ADR 007 §3–§4; `src/cleanup.rs:2276-2314`; `src/cleanup.rs:5080` |
 | D28 | **The README's transcripts and its blocked-shape JSON were not real output.** The old README labelled its transcripts "illustrative" and used placeholder byte counts (`8.78 MiB`) and a placeholder file count (`Removed 22 files`) that the tool had never produced. Its "blocked shape" example was worse: it showed `scope_blocked`, `scope_reason`, `unresolved_participants`, and `units_considered` at the **top level** of the document, where the real envelope nests all of them inside `result` — a consumer written from the README would look for a field the tool never emits at that level. | Verified against the release binary: the real blocked document nests the block inside `result`, adds `unresolved_ownership`, and reports `summary.diagnostics: 1` with exit `1`. The five README transcripts (dry-run, scan, real clean, JSON, log) are now captured from a build of this source tree and match byte for byte, paths abbreviated to `~/…`. |
 | D29 | **The published-release count is hand-maintained in three places and has drifted at least three times.** `docs/INSTALLING.md:3`, `AGENTS.md:14`, and `.skills/release-and-distribution/SKILL.md:141` each state "N releases are published; M are installable" in prose. The count read "Fifteen" when there were sixteen, "Sixteen" when there were seventeen, and "Seventeen" when there were eighteen; the three copies can also disagree with *each other*. The number is not derivable from the tree — the git tags and crates.io are the only authorities — and **no gate resolves the prose against them**. D26 corrected one instance of this; it did not touch the mechanism, so the drift recurred at the very next publication. | `git tag` → 18 tags; crates.io `/api/v1/crates/cargo-cleanme` → 18 versions, `0.2.0` yanked; `architecture/overview.md` §10 finding **50** |
+| D30 | **The `cli-surface-and-argv` skill described ADR 008 as an open question with two unanswered owner forks, and taught a rule that the same ADR reverses.** It carried a section headed "The `--full` spelling question is OPEN", said the ADR was "**`proposed`**, not accepted" and had "**no implementation authority**", and told the reader that ADR 008 "carries two open decisions the owner has not yet answered (the Full-gate options, and whether the policy flags move to the root)". Below it, a second section said the policy overrides live "**only on `clean`**, by design (M012A work package D) … Do not clone them onto the root command to 'make it more symmetric' — that is the change M012A deliberately declined". ADR 008 was **accepted 2026-10-21** with §4 resolved to 4b (the overrides move to the root) and §5 resolved to 5b/5b-i, so both statements became false. An agent that trusted the skill would have refused to implement the accepted decision — and would have had no way to know it had been made. | ADR 008 acceptance record; `.skills/cli-surface-and-argv/SKILL.md` (corrected 2026-10-21) |
+| D31 | **The same skill's "The `long_about` lie" section described a lie that no longer existed.** It said "`src/cli.rs:27-28` still says that `cargo cleanme scan` with no ROOT is the full read-only machine reconciliation" and that "the man page overwrites the root `long_about` with its own block in `xtask`, so the man page is unaffected". Both halves were false as of v0.2.10: **C040** (ADR 009) rewrote the root `long_about` so the sentence is gone, and the root man page now renders from that same `long_about` (`src/main.rs:148-156`) instead of from a generator-side block — so the drift mechanism the section describes no longer exists either. The section had survived the fix it described. | `src/cli.rs:21-33`; `src/main.rs:148-156`; C036 D1 (discharged by C040) |
+| D32 | **The `planning-and-closure` skill's inventory of the decision record was stale in two places.** It said "The corpus is now **35** correctives, `C001`–`C034` plus `C036`" — the corpus is **40** (`C001`–`C034` plus `C036`–`C041`) — and "**A proposed ADR has no implementation authority.** ADR 005 … and ADR 008 … are both `proposed; not accepted`", followed by "Two open ADRs, two open correctives, and an owner decision between them is the current state of the decision record". ADR 008 is accepted; the corpus grew by six correctives; and an accepted ADR with unimplemented plans is a state the skill had no account of. | `plans/implementation/artifact-discovery-cleanup/` → 40 corrective plans; ADR 008 accepted 2026-10-21 |
 
-D2 is **already resolved** by the architecture documentation pass of 2026-10-19:
+**D2 is already resolved** by the architecture documentation pass of 2026-10-19:
 `architecture/02-cli.md` was rewritten against the current source and its status
 block now states the explicit-selector rule. D2 is retained in the table so the
 record shows that the defect was found, and was fixed by re-deriving the
@@ -98,6 +116,27 @@ remaining D-series entries are open.
 ## Why previous verification missed it
 
 This is the field that matters most; see `plans/003-planning-process.md` §6.
+
+**D30 / D31 / D32 — a skill's statement about a decision's *status* has no
+expiry.** The skills are hand-maintained prose, and nothing asks whether the
+ADR they describe is still proposed. ADR 008 sat in `proposed` for two days
+after the C039/C040 work, and the `cli-surface-and-argv` skill carried a
+section headed "The `--full` spelling question is OPEN" — a heading that reads
+like a live question and is indistinguishable from one. D31 is the mirror
+image: the same skill described a defect that C040 had already fixed in the
+published v0.2.10, so the section survived the fix it described. D32 is the
+same mechanism applied to a count: the corpus grew by six correctives and the
+skill's "35" was never revisited.
+
+The shared cause is that **a statement about the decision record is not
+itself part of the decision record**. D29 is the same shape in a number, and
+its note ("the gate is not built, so the drift is expected to recur until it
+is") applies here too: no gate resolves a skill's prose against the ADR
+directory. The correction in this pass was to *re-derive* the three sections
+against the accepted ADR rather than to edit the stale sentences in place,
+and to say explicitly in the skill what the difference is between an ADR that
+is *accepted* and an ADR that is *implemented* — because that difference is
+the trap an agent falls into.
 
 **D1 / D2 — the drift gate does not cover `long_about`.** The repository's
 generated-artifact gate (`generate-docs -- --check`) renders the man page from

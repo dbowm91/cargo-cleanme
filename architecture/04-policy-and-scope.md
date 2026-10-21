@@ -501,7 +501,7 @@ is an error (`policy.rs:1150`), while `full_cleanup_roots(0, None)` is an error
 automatic roots plus the generation (`policy.rs:1152`).
 
 A **proposed** ADR 008
-(`plans/adr/008-proposed-canonical-full-cleanup-spelling-and-proof-scoped-full-gate.md`,
+(`plans/adr/008-accepted-canonical-full-cleanup-spelling-and-proof-scoped-full-gate.md`,
 status *proposed; not accepted; no implementation authority*) argues that this
 gate makes `clean --full` unreachable for ordinary users on unix, because a
 platform-root walk by a non-root user is never complete. It is a proposal

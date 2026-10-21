@@ -84,7 +84,7 @@ Execute mode). `scan --full` is a hidden alias of `scan --all`.
 
 > **There is no `cargo cleanme --full`.** `--full` exists only on `scan` (as a
 > hidden alias of `--all`) and on `clean`. A proposed ADR
-> ([ADR 008](../plans/adr/008-proposed-canonical-full-cleanup-spelling-and-proof-scoped-full-gate.md),
+> ([ADR 008](../plans/adr/008-accepted-canonical-full-cleanup-spelling-and-proof-scoped-full-gate.md),
 > status **proposed — not accepted, no implementation authority**) proposes
 > making `cargo cleanme --full` the canonical spelling. Nothing in this file
 > describes that as shipped.
@@ -689,15 +689,16 @@ allowlist, so none of this documentation ships in the published crate.
 The deep dives surfaced the items below. Each was then **verified against the
 source before any change was made** — three did not survive that check, and one
 was materially misdescribed. Status is current as of the commit that fixed
-items 1, 7, 8, 10, 11 and 22, and as of the v0.2.10 release close-out, which
-corrected item 50 and added item 61.
+items 1, 7, 8, 10, 11 and 22, as of the v0.2.10 release close-out, which
+corrected item 50 and added item 61, and as of the ADR 008 acceptance of
+2026-10-21, which added item 62.
 
 Items 3-6 are re-verified as of the Phase-11 and Phase-12 closures (all of
 C018/C019/C021-C025 are now closed). Their findings were real when recorded and
 each is now closed by shipped code; the deep dives that carry them were updated in
 the same pass, so these rows point at completed work rather than at a plan.
 
-**Sixty-one** findings are recorded here. The count is re-derivable: it is the
+**Sixty-two** findings are recorded here. The count is re-derivable: it is the
 number of numbered rows in the table below.
 
 | # | Finding | Status |
@@ -763,6 +764,7 @@ number of numbered rows in the table below.
 | 45 | **The positive `allowed_output_roots` path is untested end-to-end.** `config.toml` calls the field "operationally redundant" and the code advertises the remediation at `src/cleanup.rs:963-970`, but no test shows a `PrivateBounded` group outside every clean root becoming `Cleaned` through an allowed root. | **Open — not yet planned.** This is the one path where *authorization* — not proof — is what makes a group cleanable, so it is the path most worth an end-to-end case. |
 | 46 | **Two error paths in `main.rs` report an unmeasured zero.** `src/main.rs:683` and `src/main.rs:708` build a `CleanReport` after the engine returned `Err`, so the out-of-scope count it had computed was discarded and `out_of_scope_unresolved` is set to `0` — an unmeasured zero on a path that *did* traverse. The other two report sites (`src/main.rs:381`, `src/main.rs:406`) are correct. | **Open — not yet planned.** A machine consumer reading `out_of_scope_unresolved: 0` cannot tell "nothing was out of scope" from "we never got to count". |
 | 47 | **The one-JSON-document guard is asserted by a string check, not behaviourally.** `tests/cli_contract.rs:3141-3144` asserts that `src/main.rs` contains the text `"enum EmitReport"`. Renaming the enum breaks the test — good — but keeping the enum while every call site passes `EmitReport::Yes` leaves it green, and the two-JSON-documents bug returns. A source check on the *call site* (`src/main.rs:765`) would be a stronger, equally cheap assertion. | **Open — not yet planned.** AGENTS.md §4's own lesson in miniature. |
+| 62 | **The Full cleanup operation is unreachable for an ordinary user.** `cargo cleanme clean --full` runs a Full reconciliation first (`src/main.rs:765`), and a platform-root walk by a non-root user is **never** complete, so `policy::full_cleanup_roots` (`src/policy.rs:519-543`) refuses the non-zero reconciliation code (`src/policy.rs:523-528`) and the operation exits **2** before it cleans anything. The refusal is unconditional in practice, not merely common: it happens because regions that are irrelevant to the cleanup — `/var`, `/snap`, `/run` — are unreadable, not because anything about the learned roots is unproven. **Verified live** on 2026-10-21 (uid 1000): exit `2`, stdout empty, 128 permission-denied traversal errors under `/`. The gate is unit-tested, but only with a literal `1` (`src/policy.rs:1150`), so the test proved its own premise and never that a real machine produces that code. | **Decided — ADR 008 §5, route 5b-i (accepted 2026-10-21).** The Full cleanup's proof boundary becomes the **learned root**: a root whose traversal completed is proven and cleaned, one whose traversal did not complete is skipped with a typed reason, and the operation proceeds with the roots it can prove. Implementation is planned in **M018** (the gate) and **M019** (the canonical spelling), both *proposed*. The disclosed residual — an unknown participant in an unreadable region outside every learned root cannot be disproven — is the same shape as ADR 007's out-of-boundary residual, and it is disclosed rather than fixed. ADR 007 §1 and *Residuals* are amended accordingly. |
 
 ### 10.1 Dead public API, recorded not removed
 

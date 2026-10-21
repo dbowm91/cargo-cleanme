@@ -68,7 +68,7 @@ a file that is being rewritten rots immediately.
 | 7 | The cleanup pipeline | What happens on `clean`, end to end |
 | 8 | Cross-cutting invariants | The eight rules that span modules — read before changing any of them |
 | 9 | Tooling and verification surfaces | The gates, and what each one actually proves |
-| 10 | Findings from the deep dives | 61 known defects and their dispositions — **check here before adding a new one** |
+| 10 | Findings from the deep dives | 62 known defects and their dispositions — **check here before adding a new one** |
 | 11 | How the code got this way | The plan corpus |
 | 12 | Index of deep dives | The sixteen deep dives |
 | 13 | Reading order | If you read one thing, read this |
@@ -306,13 +306,19 @@ closure records.
 
 ### Open decisions — do not resolve them yourself
 
-- **ADR 008** (`plans/adr/008-*.md`, *proposed*) proposes making
-  `cargo cleanme --full` the canonical Full-cleanup spelling, with
+- **ADR 008** (`plans/adr/008-*.md`, *accepted 2026-10-21*) decides that
+  `cargo cleanme --full` becomes the canonical Full-cleanup spelling, with
   `cargo cleanme clean --full` retained as a hidden alias (published since
-  0.2.4). It has **no implementation authority**, and its §4 (policy-flag
-  placement) and §5 (the Full gate) carry two owner decisions that are still
-  open. Do not add a root-level `--full`, and do not remove the published
-  spelling, until the ADR is accepted.
+  0.2.4), and that the Full cleanup's proof boundary becomes the **learned
+  root** instead of the platform root. §4 resolved to 4b (the policy flags
+  become root-level); §5 resolved to 5b, route 5b-i (a verification pass over
+  the learned roots). **Neither is implemented.** The implementation plans are
+  `plans/implementation/artifact-discovery-cleanup/m018-*.md` (the gate) and
+  `m019-*.md` (the spelling); both are *proposed*, with no implementation
+  authority. Do not add a root-level `--full`, and do not remove the published
+  spelling, outside M019 — and **M019 may not be published before M018 has
+  shipped**, because the canonical spelling must never point at an operation
+  that refuses.
 - **C036** (`plans/implementation/artifact-discovery-cleanup/c036-*.md`,
   *proposed*) is the open documentation-drift corrective. It is the right home
   for a newly-found doc or message defect — extend it rather than opening a

@@ -1107,3 +1107,65 @@ whole-system fail-closed blocking); out-of-boundary unprovables are reported,
 never blocking; in-boundary passengers/notes never block; exits are
 boundary-scoped with a zero-unit fail-closed edge. No publication authorized
 here; the ADR 004 item (e) distinct release gate transfers to M017's release.
+
+## M018 — proof-scoped Full cleanup gate (proposed; ADR 008 §5, route 5b-i)
+
+Status: **proposed; not active; no implementation authority**. Plan:
+`plans/implementation/artifact-discovery-cleanup/m018-proof-scoped-full-cleanup-gate.md`.
+Authority: **ADR 008**, accepted 2026-10-21, whose §5 resolves to route 5b-i.
+
+The Full cleanup's proof boundary becomes the **learned root** instead of the
+platform root. After the Full reconciliation produces the fresh in-memory
+generation, each learned root is re-walked as its own walk root; a root whose
+traversal completed is proven and cleaned, and a root whose traversal did not
+complete is skipped with the new typed reason `skipped_incomplete_coverage`.
+The operation proceeds with the roots it can prove; if **no** root is proven
+it fails closed.
+
+This replaces the whole-system fail-closed reservation ADR 007 §1 and
+*Residuals* made for `clean --full`, which is amended by ADR 008 on
+2026-10-21 and takes effect when this milestone ships. ADR 007 §2–§4 are
+unchanged and still bind: discovery and grouping stay whole-system, so a root
+skipped for incomplete coverage is still resolved and classified and a shared
+output between a cleaned root and a skipped root stays `Shared`.
+
+The disclosed residual: an unknown participant in an unreadable region
+**outside every learned root** cannot be disproven. Under the withdrawn
+whole-system rule such a region blocked the whole operation; under this
+milestone it blocks nothing. It must appear in the closure record and in the
+user documentation.
+
+**Ships before M019.** ADR 008 makes the sequencing binding: the spelling
+change (§§1–4) and the gate change (§5) are sequenced together, never
+separately released, because the canonical spelling must never point at an
+operation that refuses.
+
+## M019 — canonical Full cleanup spelling and the root front door (proposed; ADR 008 §§1–4, option 4b)
+
+Status: **proposed; not active; no implementation authority**. Plan:
+`plans/implementation/artifact-discovery-cleanup/m019-canonical-full-cleanup-spelling-and-root-front-door.md`.
+Authority: **ADR 008**, accepted 2026-10-21, whose §4 resolves to 4b
+(coherent).
+
+`cargo cleanme --full` becomes the canonical spelling of the Full cleanup
+operation; `cargo cleanme clean --full` is retained as a **hidden**
+compatibility alias (published since 0.2.4, so hidden, never deleted). The
+policy overrides (`--min-reclaimable-bytes`, `--older-than`, `--include`,
+`--exclude`, `--profile`, `--package`) become root-level, and `clean`
+survives as a compatibility alias. `--full`, and any policy override, handed
+to a read-only or local-only subcommand is a **usage error (exit 2)** — never
+a silently discarded flag, which is the failure mode
+`architecture/02-cli.md:97-104` records as the worst this tool has.
+
+The resolved intent does not change: the scope, the selection, the policy
+evaluation and the engine are untouched, and the existing `invocation()`
+tests must pass unmodified.
+
+**Publication is gated on M018 having shipped.** One owner decision is
+carried forward: whether the ROOT positional moves to the root (recommended)
+or `clean` stays visible. ADR 008 does not decide it, and hiding `clean`
+without a resolution orphans the documented bounded-root spelling.
+
+ADR 003 §4 is amended by ADR 008 on 2026-10-21: the spellings
+`clean ROOT`, `clean --known` and `clean --full` remain accepted, and the
+root becomes the canonical front door.
