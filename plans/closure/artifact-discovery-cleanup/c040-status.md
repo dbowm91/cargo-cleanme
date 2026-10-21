@@ -1,7 +1,10 @@
 # C040 — Working-Directory Scope: closure record
 
-Status: **active — implementation landed and verified locally; the hosted
-lanes and the publication are outstanding. Not closed.**
+Status: **closed — shipped in v0.2.10** (tag `v0.2.10` at `270cceb2be31`,
+GitHub release published 2026-10-21T00:35:53Z and immutable with a valid
+attestation, crates.io sha256 `0f2e471b…`, automatic smoke `39522277814`
+green on five targets). Receipt:
+`plans/closure/distribution-release-update/r030-status.md`.
 
 Plan: `plans/implementation/artifact-discovery-cleanup/c040-working-directory-scope-corrective.md`
 
@@ -18,6 +21,11 @@ page, and the tests).
 Hosted-lane fixes: `cc27d5f` (the macOS path canonicalization, the Windows
 symlink gate, the regression test that reproduces the macOS condition
 anywhere, and the re-derived census).
+
+Published: **v0.2.10**, tag `v0.2.10` at `270cceb2be31`, GitHub release
+published 2026-10-21T00:35:53Z (immutable, valid attestation), crates.io
+sha256 `0f2e471bcdf53b4c108b0ed0c1532fa30277b38bdb88854493f5b6da9248cd0b`,
+automatic smoke `39522277814` green on five target lanes.
 
 ## The executive finding
 
@@ -485,17 +493,41 @@ doors. That is recorded as a stop condition in the plan.
 
 ## The disposition
 
-**Not closed.** The implementation landed, the hosted lanes are green, and
-the documentation is re-derived — but the publication is outstanding, and
-publication is what closes a corrective in this repository: *compilation is
-not closure, publication is not closure*. The release is also owner-gated:
-the release notes are maintainer-owned and the publication gate requires
-human inspection of the staged release.
+**Closed.** The implementation landed, the hosted lanes are green, the
+documentation is re-derived, and the publication that was the only remaining
+condition has happened: **v0.2.10** carries ADR 009 to the public.
 
-What is *not* outstanding: the ADR 009 implementation, the `long_about`
-rewrite, the man-page derivation, the 1,556 re-pointed citations, the
-re-derived counts, the seven mutations, the two hosted-lane defects and their
-fixes. All of that is landed and green on `cc27d5f`.
+| | |
+|---|---|
+| Tag | `v0.2.10` at `270cceb2be318ab6e2f7da87a90d5ce73f7f292a` |
+| GitHub release | published 2026-10-21T00:35:53Z, immutable, 15 assets, valid attestation |
+| crates.io | published 2026-10-21T00:36:36Z, sha256 `0f2e471b…`, not yanked |
+| Automatic smoke | `39522277814` — green on all five target lanes |
+| External smoke | passed against the published crate and the published release asset |
+| Release record | `plans/closure/distribution-release-update/r030-status.md` |
+
+The publication gate was satisfied in full: the Eggpack candidate build
+(`39518072322`) was green, the staged-release validation (`39520043716`) was
+green for the same tag and the same source SHA, the draft's 15 assets were
+independently inspected and every digest agreed four ways, and the crate
+version and the release tag agreed before the upload.
+
+**Publication is what closes a corrective in this repository** — *compilation
+is not closure, publication is not closure* — and the publication happened.
+
+Two things are **not** closed by this, and both stay open on their own
+merits:
+
+- **The interactive terminal lifecycle** — the cursor is not restored on exit
+  — and the **absence of a pty harness**. Both are carried from C039.
+- **ADR 008 §4 and §5**, the two open owner decisions. C040 deliberately did
+  not resolve them: it added no root-level `--full` and removed no published
+  spelling.
+
+One further finding was discovered by this release's own gate and is recorded
+as **C041** (open, proposed): the update path's candidate spawn can fail
+spuriously with `ETXTBSY` under load. It is not a safety defect, it is not
+C040's code, and it was not fixed inside the release.
 
 ## Reproduction
 

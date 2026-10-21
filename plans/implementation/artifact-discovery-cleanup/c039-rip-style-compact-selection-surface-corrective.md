@@ -1,11 +1,15 @@
 # C039 — Rip-Style Compact Selection Surface Corrective
 
-Status: **active** — implementation landed and verified, locally and on the
+Status: **closed** — implementation landed and verified, locally and on the
 hosted lanes (CI `39378266722`, all nine jobs green, plus the Release drift
 guard `39378266902`; and, on the final tree, CI `39379480713` and the drift
-guard `39379480734`, all nine jobs green again); publication is outstanding,
-so this corrective is not yet closed. Evidence in
-`plans/closure/artifact-discovery-cleanup/c039-status.md`.
+guard `39379480734`, all nine jobs green again), and the publication that was
+the last remaining condition has happened: **v0.2.10** carries this corrective
+(tag `v0.2.10` at `270cceb2be31`; GitHub release published 2026-10-21T00:35:53Z,
+immutable with a valid attestation; crates.io sha256 `0f2e471b…`; automatic
+smoke `39522277814` green on five targets). Evidence in
+`plans/closure/artifact-discovery-cleanup/c039-status.md`; release record in
+`plans/closure/distribution-release-update/r030-status.md`.
 
 Repository baseline: `main` at `413f25d` (v0.2.9, published).
 

@@ -10,11 +10,12 @@ Cargo**, never by deleting directories. One binary over one library of 16
 modules, 18 source files, 34,438 lines in `src/`. No async runtime of its own.
 `cargo metadata` is the only binary dependency that matters for safety.
 
-The working tree is **0.2.10, which is not published**; `CHANGELOG.md` has no
-`[Unreleased]` section. Seventeen releases are published (v0.1.0 through
-v0.1.6, then 0.2.0, 0.2.1, 0.2.2, 0.2.3, 0.2.4, 0.2.5, 0.2.6, 0.2.7, 0.2.8,
-0.2.9). **v0.2.0 is yanked; the other sixteen are not.** Bumping `Cargo.toml`
-is not a publication — see `docs/RELEASING.md` and `scripts/release-check.sh`.
+The working tree is **0.2.10**, the published version, with post-publication
+record changes on top; `CHANGELOG.md` has no `[Unreleased]` section. Eighteen
+releases are published (v0.1.0 through v0.1.6, then 0.2.0, 0.2.1, 0.2.2, 0.2.3,
+0.2.4, 0.2.5, 0.2.6, 0.2.7, 0.2.8, 0.2.9, 0.2.10). **v0.2.0 is yanked; the
+other seventeen are not.** Bumping `Cargo.toml` is not a publication — see
+`docs/RELEASING.md` and `scripts/release-check.sh`.
 
 ## Read this before your first change
 
@@ -67,7 +68,7 @@ a file that is being rewritten rots immediately.
 | 7 | The cleanup pipeline | What happens on `clean`, end to end |
 | 8 | Cross-cutting invariants | The eight rules that span modules — read before changing any of them |
 | 9 | Tooling and verification surfaces | The gates, and what each one actually proves |
-| 10 | Findings from the deep dives | 58 known defects and their dispositions — **check here before adding a new one** |
+| 10 | Findings from the deep dives | 61 known defects and their dispositions — **check here before adding a new one** |
 | 11 | How the code got this way | The plan corpus |
 | 12 | Index of deep dives | The sixteen deep dives |
 | 13 | Reading order | If you read one thing, read this |
@@ -318,7 +319,11 @@ closure records.
   second one. **Its D1 is discharged by C040**, which rewrote the root
   `long_about` so it no longer claims a bare `cargo cleanme scan` is the full
   machine reconciliation, and made the root manpage render from that same
-  `long_about` so the two surfaces cannot drift again.
+  `long_about` so the two surfaces cannot drift again. **Its D29 was added on
+  2026-10-21**: the published-release count is hand-maintained prose in three
+  documents with no gate over it, and it has now drifted three times. The
+  three copies were corrected in the same pass; the *gate* is not built, so
+  the drift is expected to recur until it is.
 
 ## 9. Repository map
 

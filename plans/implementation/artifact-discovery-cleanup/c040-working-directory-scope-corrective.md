@@ -1,6 +1,15 @@
 # C040 — Working-Directory Scope Corrective
 
-Status: **active** — owner-directed 2026-10-20; implementation in progress.
+Status: **closed** — owner-directed 2026-10-20; implementation landed at
+`c9f7784`, hosted-lane green after the portability fix at `cc27d5f`, and the
+publication that was the last remaining condition has happened: **v0.2.10**
+carries this corrective (tag `v0.2.10` at `270cceb2be31`; GitHub release
+published 2026-10-21T00:35:53Z, immutable with a valid attestation;
+crates.io sha256 `0f2e471b…`; automatic smoke `39522277814` green on five
+targets). Evidence in
+`plans/closure/artifact-discovery-cleanup/c040-status.md`; release record in
+`plans/closure/distribution-release-update/r030-status.md`.
+
 Date: 2026-10-20.
 Repository baseline: `main` at `075842f` (0.2.9, unpublished; latest published
 tag `v0.2.8`).

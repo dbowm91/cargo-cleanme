@@ -138,14 +138,16 @@ run it as a routine check.
 
 ### The published-release count
 
-**Seventeen** releases are published, `v0.1.0` through `v0.2.9`. **`v0.2.0` is
-yanked**; the other sixteen are installable. The current source version is
-`0.2.10`, **unpublished**.
+**Eighteen** releases are published, `v0.1.0` through `v0.2.10`. **`v0.2.0` is
+yanked**; the other seventeen are installable. The current source version is
+`0.2.10`, **published**.
 
 Two ways to get this wrong, both of which have shipped as bugs in this
-repository's own docs: saying "fifteen releases are published" (that is the
-*installable* count — 0.2.0 is published, just yanked) and saying "sixteen are
-installable" (it is fifteen). State both numbers, or neither.
+repository's own docs: saying "seventeen releases are published" (that is the
+*installable* count — 0.2.0 is published, just yanked) and saying "eighteen
+are installable" (it is seventeen). The published count is always **one
+higher** than the installable count, and the two errors above are what you get
+when you swap them. State both numbers, or neither.
 
 ## Non-obvious traps
 

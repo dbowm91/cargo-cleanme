@@ -13,7 +13,7 @@ Related: `plans/adr/008-proposed-canonical-full-cleanup-spelling-and-proof-scope
 
 Make every user-visible statement about the CLI **true**, and make the
 repository's operational documentation match the behaviour the code actually
-has. **Twenty-eight** defects are in scope (D1–D28); all are documentation-,
+has. **Twenty-nine** defects are in scope (D1–D29); all are documentation-,
 message-, or evidence-level. **No production behaviour change is authorised by
 this plan**, with one exception: D8 adds a bounded *diagnostic* to the
 bare-invocation path, which changes no exit code and no cleanup behaviour
@@ -22,8 +22,16 @@ bare-invocation path, which changes no exit code and no cleanup behaviour
 D2, D5, D14–D23, D26, and D28 were resolved by the documentation-and-skills
 re-derivation pass of 2026-10-19, which re-derived the eight skills, `AGENTS.md`,
 `README.md`, and all six `docs/` files against the current source. They are
-retained in the table for the record. **Thirteen defects remain open**
-(D3, D4, D6, D7, D8, D9, D10, D11, D12, D13, D24, D25, D27).
+retained in the table for the record. **Fourteen defects remain open**
+(D3, D4, D6, D7, D8, D9, D10, D11, D12, D13, D24, D25, D27, D29).
+
+**D29 was added on 2026-10-21**, after the v0.2.10 publication: the
+published-release count had to be corrected in three documents *again*, the
+third such correction, which is what made the underlying mechanism — a
+hand-maintained prose number with no gate over it — the finding rather than
+the individual wrong number. The three copies were corrected in the same pass
+(re-derived from `git tag` and crates.io, not copied forward); the gate is
+not built, so the drift is expected to recur until it is.
 
 **D1 was discharged by C040** (ADR 009), which rewrote the root `long_about`
 so it states that `scan` *needs a scope* and that `--all` is the full
@@ -78,6 +86,7 @@ a non-root Linux workstation, unless stated otherwise.
 | D26 | **`docs/INSTALLING.md` said "Fifteen releases are published"** — self-contradictory, because `0.2.0` *is* published, just yanked. Sixteen are published; fifteen are installable. It also said man pages are "one per subcommand" (there are **eight**: root, four subcommands, and the three `config` sub-subcommands), and documented `install.ps1 -Dir` when the parameter is `-Directory`. | `git tag` → 16 tags; `man/` → 8 files; `packaging/install.ps1:27`, `:43` |
 | D27 | **Thirteen source doc comments still describe the pre-ADR 007 whole-scope block.** `src/cleanup.rs:300`, `:328`, `:1141`, `:2044`, `src/workspace.rs:394`, `:978`, and `src/main.rs:304`, `:366`, `:590`, `:831` say "whole-scope" where the behaviour is boundary-scoped; `src/cleanup.rs:315-316` says "coverage of the selected scope is unproven". `tests/cli_contract.rs:1929-1930` carries the same wording on a test whose *behaviour* is correct — its unresolved manifest is inside the anchor, so it does block. | ADR 007 §3–§4; `src/cleanup.rs:2276-2314`; `src/cleanup.rs:5080` |
 | D28 | **The README's transcripts and its blocked-shape JSON were not real output.** The old README labelled its transcripts "illustrative" and used placeholder byte counts (`8.78 MiB`) and a placeholder file count (`Removed 22 files`) that the tool had never produced. Its "blocked shape" example was worse: it showed `scope_blocked`, `scope_reason`, `unresolved_participants`, and `units_considered` at the **top level** of the document, where the real envelope nests all of them inside `result` — a consumer written from the README would look for a field the tool never emits at that level. | Verified against the release binary: the real blocked document nests the block inside `result`, adds `unresolved_ownership`, and reports `summary.diagnostics: 1` with exit `1`. The five README transcripts (dry-run, scan, real clean, JSON, log) are now captured from a build of this source tree and match byte for byte, paths abbreviated to `~/…`. |
+| D29 | **The published-release count is hand-maintained in three places and has drifted at least three times.** `docs/INSTALLING.md:3`, `AGENTS.md:14`, and `.skills/release-and-distribution/SKILL.md:141` each state "N releases are published; M are installable" in prose. The count read "Fifteen" when there were sixteen, "Sixteen" when there were seventeen, and "Seventeen" when there were eighteen; the three copies can also disagree with *each other*. The number is not derivable from the tree — the git tags and crates.io are the only authorities — and **no gate resolves the prose against them**. D26 corrected one instance of this; it did not touch the mechanism, so the drift recurred at the very next publication. | `git tag` → 18 tags; crates.io `/api/v1/crates/cargo-cleanme` → 18 versions, `0.2.0` yanked; `architecture/overview.md` §10 finding **50** |
 
 D2 is **already resolved** by the architecture documentation pass of 2026-10-19:
 `architecture/02-cli.md` was rewritten against the current source and its status

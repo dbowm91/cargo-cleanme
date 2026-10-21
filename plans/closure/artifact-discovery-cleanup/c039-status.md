@@ -1,7 +1,10 @@
 # C039 — Rip-Style Compact Selection Surface: closure record
 
-Status: **active — implementation landed, verified locally, and green on every
-hosted lane; the publication is outstanding. Not closed.**
+Status: **closed — shipped in v0.2.10** (tag `v0.2.10` at `270cceb2be31`,
+GitHub release published 2026-10-21T00:35:53Z and immutable with a valid
+attestation, crates.io sha256 `0f2e471b…`, automatic smoke `39522277814`
+green on five targets). Receipt:
+`plans/closure/distribution-release-update/r030-status.md`.
 
 Plan: `plans/implementation/artifact-discovery-cleanup/c039-rip-style-compact-selection-surface-corrective.md`
 
@@ -322,12 +325,33 @@ than routine verification.
 
 ## The disposition
 
-**Not closed.** The implementation landed, is verified locally, and is green on
-every hosted lane; the publication is outstanding. Publication is what closes a
-corrective in this repository — *compilation is not closure, publication is
-not closure* — and the release is owner-gated: the release notes are
-maintainer-owned and the publication gate requires human inspection of the
-staged release.
+**Closed.** The implementation landed, is verified locally, and is green on
+every hosted lane; and the publication that was the only remaining condition
+has happened. **v0.2.10** carries the compact selection surface to the
+public.
+
+| | |
+|---|---|
+| Tag | `v0.2.10` at `270cceb2be318ab6e2f7da87a90d5ce73f7f292a` |
+| GitHub release | published 2026-10-21T00:35:53Z, immutable, 15 assets, valid attestation |
+| crates.io | published 2026-10-21T00:36:36Z, sha256 `0f2e471b…`, not yanked |
+| Automatic smoke | `39522277814` — green on all five target lanes |
+| External smoke | passed against the published crate and the published release asset |
+| Release record | `plans/closure/distribution-release-update/r030-status.md` |
+
+Publication is what closes a corrective in this repository — *compilation is
+not closure, publication is not closure* — and the release notes are
+maintainer-owned, so the publication was owner-gated as well as
+gate-gated.
+
+**Not closed by this**, and still open on its own merits:
+
+- **Finding 36** — the interactive session leaves the terminal cursor hidden.
+  It was a non-goal of this corrective and needs its own.
+- **Finding 48** — the repository has no pty harness. The live capture is
+  hand evidence, not CI evidence.
+- **Finding 59** — the load-sensitive real-Cargo assertions. Pre-existing and
+  proven on the unmodified baseline; not a C039 regression.
 
 ## Reproduction
 

@@ -10,7 +10,8 @@ Corrects / closes findings from:
 Repository baseline: `main` at `426cb72` (v0.2.9, published).
 Implementation commit: `462a996` — *"fix(negative-result): make a nothing-to-clean run a plain result, not a refusal"*.
 Documentation re-derivation commit: `5db6ce3` — *"docs(c038): re-derive the deep dives, counts and citations for the negative-result contract"*.
-Release tag carrying the work: **none yet**. v0.2.9 predates this corrective.
+Release tag carrying the work: **v0.2.10** at `270cceb2be31`. v0.2.9 predates
+this corrective.
 Hosted evidence: CI `39338559008` (all nine jobs **success**) and Release drift
 guard `39338559022` (**success**) against the pushed tree `859d08e`. See §6.4.
 
@@ -404,25 +405,35 @@ the real-Cargo fixtures.
 
 ## 8. Disposition
 
-**Not closed. Conditionally closed on publication.**
+**Closed.** The implementation is landed and verified on every surface the
+repository has: the local ladder is green, the hosted matrix and the MSRV
+1.89 lane are green (§6.4), the pty evidence is captured, the citations and
+the census are re-derived and now independently confirmed by the hosted
+lanes, and the four mutations prove the repair is discriminating. And the
+publication that was the only remaining condition has happened.
 
-The implementation is landed and verified on every surface the repository has:
-the local ladder is green, the hosted matrix and the MSRV 1.89 lane are green
-(§6.4), the pty evidence is captured, the citations and the census are
-re-derived and now independently confirmed by the hosted lanes, and the four
-mutations prove the repair is discriminating.
+| | |
+|---|---|
+| Tag | `v0.2.10` at `270cceb2be318ab6e2f7da87a90d5ce73f7f292a` |
+| GitHub release | published 2026-10-21T00:35:53Z, immutable, 15 assets, valid attestation |
+| crates.io | published 2026-10-21T00:36:36Z, sha256 `0f2e471b…`, not yanked |
+| Automatic smoke | `39522277814` — green on all five target lanes |
+| External smoke | passed against the published crate and the published release asset |
+| Release record | `plans/closure/distribution-release-update/r030-status.md` |
 
-What is outstanding:
-
-- no release carries the work, and **publication is not closure**
-  (`AGENTS.md` §7). Until a published release carries C038, this corrective
-  stays open.
+Publication is not closure (`AGENTS.md` §7), and until a published release
+carried C038 this corrective stayed open. **v0.2.10** carries it.
 
 Per the plan's stop conditions, none of the three fired: the empty-report
-verdict suppresses no row, unproven participant, out-of-scope participant, scope
-block, failure or discovery diagnostic; silencing the transient bucket changed
-the *reporting* of the scope, not the scope; and the JSON envelope and the log
-line are unchanged.
+verdict suppresses no row, unproven participant, out-of-scope participant,
+scope block, failure or discovery diagnostic; silencing the transient bucket
+changed the *reporting* of the scope, not the scope; and the JSON envelope
+and the log line are unchanged.
+
+The findings this corrective closed stay closed. The ones it carried forward
+stay open: finding **36** (the hidden cursor), finding **48** (no pty
+harness), and finding **59** (the load-sensitive assertions) all remain, and
+each needs its own corrective.
 
 ## 9. Unresolved findings by severity
 
