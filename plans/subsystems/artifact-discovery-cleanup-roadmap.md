@@ -1170,7 +1170,7 @@ ADR 003 §4 is amended by ADR 008 on 2026-10-21: the spellings
 `clean ROOT`, `clean --known` and `clean --full` remain accepted, and the
 root becomes the canonical front door.
 
-## M020 — a quiet human output surface (active; owner-directed 2026-10-21)
+## M020 — a quiet human output surface (closing; owner-directed 2026-10-21)
 
 Status: **closing** — implemented (`12385e5`) and verified by the full ladder;
 not yet published, and therefore not closed. Plan:
