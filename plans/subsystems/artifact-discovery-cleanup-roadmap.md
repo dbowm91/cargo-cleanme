@@ -1108,10 +1108,11 @@ never blocking; in-boundary passengers/notes never block; exits are
 boundary-scoped with a zero-unit fail-closed edge. No publication authorized
 here; the ADR 004 item (e) distinct release gate transfers to M017's release.
 
-## M018 — proof-scoped Full cleanup gate (ready; ADR 008 §5, route 5b-i)
+## M018 — proof-scoped Full cleanup gate (closing; ADR 008 §5, route 5b-i)
 
-Status: **ready** — the contract is fully specified and ADR 008 grants its
-implementation authority; **not started, not implemented, not released.** Plan:
+Status: **closing** — implemented and verified in the working tree; **not yet
+published**, so the milestone stays open (publication is not closure). Evidence:
+`plans/closure/artifact-discovery-cleanup/m018-status.md`. Plan:
 `plans/implementation/artifact-discovery-cleanup/m018-proof-scoped-full-cleanup-gate.md`.
 Authority: **ADR 008**, accepted 2026-10-21, whose §5 resolves to route 5b-i.
 
@@ -1141,10 +1142,11 @@ change (§§1–4) and the gate change (§5) are sequenced together, never
 separately released, because the canonical spelling must never point at an
 operation that refuses.
 
-## M019 — canonical Full cleanup spelling and the root front door (ready; ADR 008 §§1–4, option 4b)
+## M019 — canonical Full cleanup spelling and the root front door (closing; ADR 008 §§1–4, option 4b)
 
-Status: **ready** — the contract is fully specified and ADR 008 grants its
-implementation authority; **not started, not implemented, not released.** Plan:
+Status: **closing** — implemented and verified in the working tree; **not yet
+published**, so the milestone stays open. Evidence:
+`plans/closure/artifact-discovery-cleanup/m019-status.md`. Plan:
 `plans/implementation/artifact-discovery-cleanup/m019-canonical-full-cleanup-spelling-and-root-front-door.md`.
 Authority: **ADR 008**, accepted 2026-10-21, whose §4 resolves to 4b
 (coherent), **amended the same day by the owner's ROOT-positional decision**.

@@ -41,7 +41,7 @@ verified against the built binary on a live machine:
    aggregated into one diagnostic whose `path` is `null` and whose message ends
    *"skipped region location unknown"*.
 3. Any traversal error sets `coverage_complete = false`
-   (`src/discovery.rs:638`), and `main.rs` derives `full_traversal_complete`
+   (`src/discovery.rs:766`), and `main.rs` derives `full_traversal_complete`
    from it, so the Full scan is **incomplete**.
 4. An incomplete Full scan exits **1** (`full_incomplete`).
 5. `policy::full_cleanup_roots` refuses any non-zero reconciliation code
@@ -143,13 +143,13 @@ no alias, no deprecation path"* — applies to flags that **never shipped**
 `--full` is a **root-level, non-global** flag, exactly like `--dry-run`.
 
 It must not be `global = true`: the `scan` subcommand already owns a `full`
-field (the hidden alias of `--all`, `src/cli.rs:114-115`) and `clean` owns one
+field (the hidden alias of `--all`, `src/cli.rs:155-156`) and `clean` owns one
 too (`src/cli.rs:130-131`). A blanket global would collide with those
 argument ids, the same collision `architecture/02-cli.md:92-96` records for
 `--dry-run` versus `update --dry-run`.
 
 Non-global root args and identically-named subcommand args coexist — that is
-precisely how `dry_run` already exists at `src/cli.rs:65-66` and on `Clean`
+precisely how `dry_run` already exists at `src/cli.rs:70-71` and on `Clean`
 and `Update` today.
 
 `Cli::invocation()` then resolves `root.full || clean.full` to
@@ -165,14 +165,14 @@ tool has — a root-level flag that clap accepts and the code silently
 discards, so a *dry run deleted the bytes and reported success*. `--full` is a
 **scope selector**, not a mode; silently discarding it would leave the
 operator believing a machine-wide cleanup ran when it did not. The existing
-`Invocation::UsageError` arm (`src/cli.rs:285-293`) is the correct home for
+`Invocation::UsageError` arm (`src/cli.rs:333-341`) is the correct home for
 it, and it is the arm whose doc comment already explains that "defaulting to
 Full would silently run the machine-wide reconciliation the flag exists to
 gate".
 
 The `--dry-run` precedent differs and is not a counterexample: `scan` and
 `config` *ignore* a global `--dry-run` because for those operations a
-simulation **is** the same read-only behaviour (`src/cli.rs:59-66`). Full
+simulation **is** the same read-only behaviour (`src/cli.rs:64-71`). Full
 cleanup is not the same behaviour as a Full scan.
 
 ### 4. The advanced policy flags — resolved: 4b (coherent)
@@ -243,11 +243,11 @@ It requires **new discovery machinery** that does not exist today, and the
 precise obstacle is now identified:
 
 - Per-walk-root attribution **already exists**.
-  `src/discovery.rs:632` keeps `walk_errors: HashMap<usize, (u64, u64, u64)>`
+  `src/discovery.rs:760` keeps `walk_errors: HashMap<usize, (u64, u64, u64)>`
   keyed by walk-root index, and `src/discovery.rs:772-783` drains it into
   **one diagnostic per walk root**, naming the root in the message. It is
   covered by `more_than_one_thousand_walk_errors_stay_one_bounded_root_record`
-  (`src/discovery.rs:1008`).
+  (`src/discovery.rs:1154`).
 - But a Full scan has exactly **one walk root** — the platform root `/` — so
   that machinery cannot separate `/var` from `/home` within it. That is why
   the observed diagnostic reads *"127 traversal error(s) under / … skipped
@@ -256,7 +256,7 @@ precise obstacle is now identified:
   `RootEvent::Entry(io::Result<Entry>)` (`dua-core-4.1.0/src/lib.rs:276-281`)
   carries a **bare `io::Error` with no path**. The repository already records
   this: *"M-11: dua-core's error event carries no child path, only the root
-  index"* (`src/discovery.rs:775-778`). A traversal error therefore cannot be
+  index"* (`src/discovery.rs:903-906`). A traversal error therefore cannot be
   attributed to the subtree that produced it, at any layer above dua-core.
 
 Two implementation routes follow, and the choice between them is a
@@ -451,7 +451,7 @@ and **§5 → 5b, route 5b-i** (a verification pass over the learned roots).
    deleted.
 2. `--full` is a **root-level, non-global** flag. It is not `global = true`:
    `scan` and `clean` already own a `full` argument id
-   (`src/cli.rs:115`, `src/cli.rs:131`), and a blanket global would collide
+   (`src/cli.rs:156`, `src/cli.rs:156`), and a blanket global would collide
    with them.
 3. `--full` with a read-only or local-only subcommand (`scan`, `config`,
    `update`) is a **usage error, exit 2** — never a silently discarded flag.

@@ -1,9 +1,9 @@
 # M019 — Canonical Full Cleanup Spelling and the Root Cleanup Front Door (ADR 008 §§1–4)
 
-Status: **ready** — the contract is fully specified (ADR 008 §§1–4, option 4b,
-with the ROOT positional resolved by the owner on 2026-10-21) and ADR 008 grants
-this milestone implementation authority. **Not started, not implemented, not
-released.**
+Status: **closing** — implemented and verified in the working tree; **not
+yet published.** The milestone stays **open**: publication is not closure, and
+no release has carried this change yet. M019 may not be published before M018
+has shipped (ADR 008's acceptance record).
 Date: 2026-10-21.
 Repository baseline: `main` at `8b96f86` (0.2.10 published).
 Source roadmap: `plans/subsystems/artifact-discovery-cleanup-roadmap.md`.
@@ -83,17 +83,17 @@ before the ergonomics.
 | `--known` | — | accepted | inert for cleanup scope, and it stays on `clean`: it resolves to the bare invocation (`src/cli.rs:383-389` against `src/cli.rs:332-338`), so hiding `clean` orphans nothing by it |
 
 **`--full` is root-level and non-global.** It must not be `global = true`:
-`scan` already owns a `full` argument id (`src/cli.rs:114-115`) and `clean`
+`scan` already owns a `full` argument id (`src/cli.rs:155-156`) and `clean`
 owns one (`src/cli.rs:130-131`), and a blanket global collides with both —
 the same collision `architecture/02-cli.md:92-96` records for `--dry-run`
 versus `update --dry-run`. Non-global root args and identically-named
 subcommand args coexist, exactly as `dry_run` already does
-(`src/cli.rs:65-66`).
+(`src/cli.rs:70-71`).
 
 **`--cargo-preview` moves too.** It is a mode rather than a policy override,
 but ADR 008 §4b's rationale is that the root is the *single cleanup front
 door*: a front door that cannot express every mode is not a front door. The
-root already carries `--dry-run` as a global (`src/cli.rs:59-66`); Cargo
+root already carries `--dry-run` as a global (`src/cli.rs:64-71`); Cargo
 preview is the one mode the root cannot express today.
 
 **Scope resolution is unchanged.** `Cli::invocation()` resolves
@@ -111,14 +111,14 @@ discarded-flag failure mode ADR 008 §3 exists to prevent.
 So is any policy override handed to a read-only or local-only subcommand.
 
 The home is the existing `Invocation::UsageError` arm
-(`src/cli.rs:285-293`), whose own doc comment already explains that
+(`src/cli.rs:333-341`), whose own doc comment already explains that
 "defaulting to Full would silently run the machine-wide reconciliation the
-flag exists to gate". It maps to `AppError::Config` (`src/main.rs:92`), so
+flag exists to gate". It maps to `AppError::Config` (`src/main.rs:97`), so
 the exit code is 2 — the same as any other usage error.
 
 This is deliberately **not** the `--dry-run` precedent: `scan` and `config`
 ignore a global `--dry-run` because for those operations a simulation *is*
-the same read-only behaviour (`src/cli.rs:59-66`). Full cleanup is not the
+the same read-only behaviour (`src/cli.rs:64-71`). Full cleanup is not the
 same behaviour as a Full scan, and `--profile` / `--package` select Cargo
 targets — they are meaningless for a read-only scan.
 
@@ -134,7 +134,7 @@ targets — they are meaningless for a read-only scan.
   **non-global**, mirroring the existing `--dry-run` structure.
 - `Command::Clean` (`src/cli.rs:122-165`) keeps every flag it has today and
   becomes hidden; its flags become hidden aliases. The `CleanupOverrides`
-  struct (`src/cli.rs:233-240`) is reused rather than duplicated — the root
+  struct (`src/cli.rs:281-288`) is reused rather than duplicated — the root
   and `clean` must produce the same value type, or the two spellings can
   drift.
 - `Cli::invocation()` (`src/cli.rs:339-417`) resolves the merged flags and
@@ -149,7 +149,7 @@ targets — they are meaningless for a read-only scan.
 
 The root `long_about` (`src/cli.rs:21-33`) must describe the canonical Full
 cleanup spelling. The root man page renders from that same `long_about`
-(`src/main.rs:151-159`), so `--help` and `man cargo-cleanme` cannot drift —
+(`src/main.rs:156-164`), so `--help` and `man cargo-cleanme` cannot drift —
 the property C040 established when it rewrote the same text.
 
 The sentence "`cargo cleanme scan` needs a scope: `--all` is the full
@@ -161,7 +161,7 @@ read-only machine reconciliation…" stays true and stays.
 need checking rather than assuming:
 
 - The generator renders every subcommand returned by `get_subcommands()`
-  (`xtask/src/main.rs:175`), and clap includes **hidden** subcommands in that
+  (`xtask/src/main.rs:183`), and clap includes **hidden** subcommands in that
   list — so hiding `clean` does not automatically remove
   `man/cargo-cleanme-clean.1`. Whether that page keeps shipping (a
   compatibility alias with its own page) is a decision this milestone must

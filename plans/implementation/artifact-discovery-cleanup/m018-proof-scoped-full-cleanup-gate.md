@@ -1,8 +1,8 @@
 # M018 — Proof-Scoped Full Cleanup Gate (ADR 008 §5, route 5b-i)
 
-Status: **ready** — the contract is fully specified (ADR 008 §5, route 5b-i)
-and ADR 008 grants this milestone implementation authority. **Not started, not
-implemented, not released.**
+Status: **closing** — implemented and verified in the working tree; **not
+yet published.** The milestone stays **open**: publication is not closure, and
+no release has carried this change yet.
 Date: 2026-10-21.
 Repository baseline: `main` at `8b96f86` (0.2.10 published).
 Source roadmap: `plans/subsystems/artifact-discovery-cleanup-roadmap.md`.
@@ -117,18 +117,18 @@ After the Full reconciliation produces the fresh in-memory generation, and
 that generation as **its own walk root**.
 
 - **Reuse, do not reimplement.** `discovery::discover_global_roots`
-  (`src/discovery.rs:528`) already accepts a list of roots and already keeps
+  (`src/discovery.rs:625`) already accepts a list of roots and already keeps
   per-walk-root attribution: `walk_errors: HashMap<usize, (u64, u64, u64)>`
-  (`src/discovery.rs:632`) is drained into **one diagnostic per walk root**
+  (`src/discovery.rs:760`) is drained into **one diagnostic per walk root**
   (`src/discovery.rs:772-783`), naming the root in the message. A learned
   root with no entry in `walk_errors`, and no unusable-root condition, is
   proven. The existing test
   `more_than_one_thousand_walk_errors_stay_one_bounded_root_record`
-  (`src/discovery.rs:1008`) covers the bounded-diagnostic property this
+  (`src/discovery.rs:1154`) covers the bounded-diagnostic property this
   depends on.
 - **No dependency change.** The upstream obstacle is unchanged and still
   documented: `dua-core`'s error event carries a bare `io::Error` with no
-  child path, only the root index (`src/discovery.rs:775-778`). That is why
+  child path, only the root index (`src/discovery.rs:903-906`). That is why
   the granularity of a verdict is the **whole learned root** and not the
   unreadable sub-path — the same limitation the ADR records, and the reason
   route 5b-i was chosen over 5b-ii.
@@ -147,11 +147,11 @@ that generation as **its own walk root**.
 
 `policy::full_cleanup_roots` (`src/policy.rs:519-543`) currently refuses any
 non-zero reconciliation code (`src/policy.rs:523-528`) and any missing fresh
-generation (`src/policy.rs:529-535`). Under this milestone:
+generation (`src/policy.rs:554-560`). Under this milestone:
 
 - the **missing-generation refusal is unchanged** — no fresh generation means
   no cleanup, and `full_cleanup_consumes_only_a_fresh_in_memory_generation`
-  (`src/policy.rs:1137`) keeps pinning it;
+  (`src/policy.rs:1313`) keeps pinning it;
 - the **reconciliation-code refusal is replaced** by the per-root verdict:
   the function takes the verification result and returns the learned roots
   together with the set of unproven ones;
@@ -221,6 +221,79 @@ each has a test.
 Property 3 is the price of the decision, and it was accepted with the ADR,
 not discovered by this plan.
 
+### Amendment 2026-10-21 — the proof boundary is the *proven* learned root
+
+**Added after the first live run, which exposed a gap in the plan above.**
+
+The plan's property 3 named the residual as living in an unreadable region
+**outside every learned root**, and its Engine §3 quoted the selection
+invariant as *"A selection is applied after ownership classification and can
+only remove candidates. It cannot add one, reclassify one, or unblock a
+scope."* Read together, those two sentences leave no room for the case the
+live run actually produced, and the implementation that followed them refused
+the operation anyway.
+
+**What the live run showed.** With the unproven root admitted as a cleanup
+root — which is required, because withholding it narrows the discovery
+universe and would promote a shared output to `PrivateBounded` (the ADR 006
+forbidden shortcut) — the cleanup engine walks that root, hits the same
+unreadable region the gate had already measured, and raises a traversal
+diagnostic. A traversal diagnostic carries **no path**: the upstream walk's
+error event has no child path, so it cannot be attributed to a subtree. The
+plan's Engine §3 treats the exclusion as a *candidate* filter, so nothing in
+it moved the **proof boundary**, and the engine's boundary rule — which
+counts a pathless diagnostic as in-boundary, fail-closed — blocked the whole
+scope. The result was the whole-system refusal ADR 008 withdrew, wearing a
+different hat: the operation was still unreachable on any machine with one
+unreadable directory under a learned root.
+
+**The resolution, and its authority.** ADR 008's acceptance record decides
+this point and this plan did not: *"Under 5b, an unreadable region inside a
+learned root blocks **that root**, and an unreadable region outside every
+learned root blocks nothing."* The Full cleanup's proof boundary is therefore
+the **proven** learned root, and an unproven root is outside it. ADR 007's
+amendment (same date) says the same thing from the other side: *"`clean
+--full` no longer blocks whole-scope on any unprovable participant. It blocks
+each learned root whose own traversal did not complete, and reports those
+roots with a typed reason."*
+
+So the amended contract is:
+
+- the exclusion removes the unproven root's units from the **candidate** set
+  (unchanged), **and** places the unproven root outside the **proof
+  boundary** (new). An unprovable participant inside an unproven root is
+  reported as `out_of_scope`, not blocking — the treatment ADR 007 already
+  gives every out-of-boundary unprovable;
+- the engine's discovery walks **per root**, so a traversal error can be
+  attributed to the root that produced it. A pathless diagnostic from a root
+  the gate judged and disclosed does not block; a pathless diagnostic from
+  **any other** root still blocks, fail-closed. An unreadable automatic root
+  is indeterminate coverage, not absence, and the scope that contains it
+  blocks — `unreadable_automatic_root_blocks_instead_of_omitting` keeps
+  saying so;
+- the quoted invariant is therefore amended, not deleted: it holds for every
+  operator selection, and `ExcludeRoots` is the one shape that may also move
+  the proof boundary, because it states a **proof** fact rather than narrowing
+  a choice. The ADR 006 protection is untouched, because discovery does not
+  narrow.
+
+**What this costs, stated plainly.** Property 3 above is now **wider** than
+it was written: the residual covers an unknown participant hidden in an
+unreadable region **inside an unproven learned root** as well as one outside
+every learned root. Such a participant may name an output root that a cleaned
+root also owns, and the shared output would not be recognised as shared. That
+is the price of the per-root rule the owner accepted, and it is disclosed in
+the user documentation (`docs/USAGE.md`, "The residual this accepts") and in
+the closure record — not only here.
+
+**The closure-evidence wording is corrected with it.** The requirement below
+says the live run must exit **0** "with rows cleaned and rows skipped". Under
+this milestone's own exit contract those cannot be the same run: a skipped
+row means an unproven root, and an unproven root means exit **1**. The
+evidence is therefore two live runs — one with an unproven root (exit `1`,
+the skipped row naming the unreadable root) and one with every learned root
+proven (exit `0`) — and both are recorded in the closure record.
+
 ## Tests
 
 Every test names the input that makes it fail. A test that cannot fail is
@@ -258,8 +331,22 @@ decoration.
    still exists, still works, and no root-level `--full` is introduced —
    M019 owns that. *Fails if:* M018 grows a flag.
 7. **Regression.** `full_cleanup_consumes_only_a_fresh_in_memory_generation`
-   (`src/policy.rs:1137`) keeps passing: a missing fresh generation still
+   (`src/policy.rs:1313`) keeps passing: a missing fresh generation still
    refuses, and stale learned roots are never cleaned.
+8. **The unproven root is admitted as a root (added by the 2026-10-21
+   amendment).** Assert that the gate's admitted root set contains the
+   unproven root, that the unproven root is disclosed, and that its units are
+   not candidates. *Fails if:* the Full branch passes the proven roots only —
+   the ADR 006 shortcut, which narrows the discovery universe and promotes a
+   shared output to `PrivateBounded`.
+9. **The per-root boundary (added by the 2026-10-21 amendment).** A root with
+   a real unreadable region, walked by the engine. Assert: the scope is **not**
+   blocked when that root is excluded, and the excluded root's unit is
+   reported with `skipped_incomplete_coverage`; and the scope **is** blocked
+   with `IncompleteDiscovery` when the same root is inside the proof
+   boundary. *Fails if:* a pathless traversal diagnostic is treated as
+   unattributable and always blocking (the whole-system refusal ADR 008
+   withdrew), or as always harmless (a fail-open).
 
 ## Documentation updates
 
@@ -306,7 +393,7 @@ traversal, mtimes or path comparison is **not verified** until they run.
   and item **3** (the verification pass showing a provable root beside a
   skippable one, with the error attributed to the correct root) are met by
   tests 1 and 3.
-- The seven tests above exist, pass, and each names its failing input.
+- The tests above exist, pass, and each names its failing input.
 - The safety argument's three properties are each covered by a test, and
   test 2 fails if the forbidden shortcut is taken.
 - The exit-code contract is implemented exactly as specified, including the

@@ -25,7 +25,7 @@ structural. The anchor is a **post-classification filter**, and the
 classification universe is the resolved roots:
 
 ```rust
-// src/cleanup.rs:1216
+// src/cleanup.rs:1529
 let resolved = crate::domain::EffectiveScanPolicy {
     scope: ScanScope::ExplicitRoots(roots.clone()),
     discovery_filters: crate::domain::DiscoveryFilters::Bypassed,
@@ -120,12 +120,12 @@ to the only class that authorizes deletion.
    (`src/workspace.rs:29`, the same invocation shape as
    `src/workspace.rs:548`). It is needed because a member directory's
    manifest sits *above* the member, so a root at the member cannot discover
-   it; `CleanupSelection::Ancestry` (`src/cleanup.rs:101`) already admits that
+   it; `CleanupSelection::Ancestry` (`src/cleanup.rs:122`) already admits that
    workspace in both directions, which is ADR 006 §3's bidirectional rule.
 
 4. **The anchor is unchanged.** Selection for the maintenance spelling
    remains `Ancestry(working directory)`, applied after classification
-   (`src/cleanup.rs:1449` decides the ADR 007 boundary with the same
+   (`src/cleanup.rs:1571` decides the ADR 007 boundary with the same
    selection). ADR 006 §1's "the working directory anchors selection, not
    discovery" is amended only in that discovery now *includes* the working
    directory; the anchor still cannot add, reclassify, or unblock anything.
