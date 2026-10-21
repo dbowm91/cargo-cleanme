@@ -312,10 +312,18 @@ closure records.
   0.2.4), and that the Full cleanup's proof boundary becomes the **learned
   root** instead of the platform root. §4 resolved to 4b (the policy flags
   become root-level); §5 resolved to 5b, route 5b-i (a verification pass over
-  the learned roots). **Neither is implemented.** The implementation plans are
-  `plans/implementation/artifact-discovery-cleanup/m018-*.md` (the gate) and
-  `m019-*.md` (the spelling); both are *proposed*, with no implementation
-  authority. Do not add a root-level `--full`, and do not remove the published
+  the learned roots). The one point ADR 008 left open — where the **ROOT
+  positional** lives — was resolved by the owner on 2026-10-21 in favour of
+  **option A**: the ROOT positional **moves to the root**, so
+  `cargo cleanme ~/projects` is the canonical bounded-root spelling and
+  `cargo cleanme clean ~/projects` remains accepted and hidden; `clean --known`
+  does not move; and `cargo cleanme .` changes from a usage error to a bounded
+  cleanup of `.`. The decision is recorded as dated amendment blocks in ADR 003
+  §4 and ADR 008. **Neither milestone is implemented.** The implementation plans
+  are `plans/implementation/artifact-discovery-cleanup/m018-*.md` (the gate) and
+  `m019-*.md` (the spelling); both are **`ready`** — their contracts are
+  settled and ADR 008 grants them implementation authority — but neither has
+  started. Do not add a root-level `--full`, and do not remove the published
   spelling, outside M019 — and **M019 may not be published before M018 has
   shipped**, because the canonical spelling must never point at an operation
   that refuses.

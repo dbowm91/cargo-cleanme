@@ -832,7 +832,7 @@ it. Persistent targeted retirement remains decision-gated by proposed ADR 005.
 `cleanup.rs` has **no** import of this module (verified by grep over `src/`).
 Learned roots reach it only as admitted root paths plus an `AdmissionPremise`
 of safely omitted roots through
-`clean_with_roots_policy_selector_guarded` (`cleanup.rs:1288`, called from
+`clean_with_roots_policy_selector_guarded` (`cleanup.rs:1479`, called from
 `run_engine_guarded` at `main.rs:641`). That is the structural expression of
 ADR §8: the module that authorizes deletion has no access to the state that
 decides where to look, and the omitted set travels alongside only so the
@@ -1076,29 +1076,29 @@ correctly.
 **There is now integration coverage for the read path**, added with C028 — the
 previous revision of this document claimed there was none, and that claim is
 obsolete. `tests/cli_contract.rs` has a dedicated C028 block
-(`tests/cli_contract.rs:3321-3330`)
-whose fixture (`StaleLearnedFixture`, `tests/cli_contract.rs:3340-3436`)
+(`tests/cli_contract.rs:3325-3334`)
+whose fixture (`StaleLearnedFixture`, `tests/cli_contract.rs:3344-3440`)
 overrides `$HOME` and `$XDG_STATE_HOME` and writes a real
 `discovery-state.json` at the path `state_path()` would resolve to
-(`tests/cli_contract.rs:3382-3395`). Ten cases follow:
+(`tests/cli_contract.rs:3386-3399`). Ten cases follow:
 
 | Test | Line | What it pins |
 |---|---|---|
-| `stale_learned_root_is_omitted_and_bare_routine_execute_cleans_the_sibling` | `tests/cli_contract.rs:3577` | A deleted learned root is omitted, the surviving sibling is cleaned. |
-| `stale_learned_root_simulate_agrees_with_execute_and_spawns_no_cargo_clean` | `tests/cli_contract.rs:3633` | Simulation parity; zero `cargo clean` spawns. |
-| `repeated_routine_runs_bound_stale_root_noise_without_mutating_state` | `tests/cli_contract.rs:3664` | 100 stale roots produce one bounded summary line, and the state file is **byte-identical** afterwards (`tests/cli_contract.rs:3697`). |
-| `missing_explicit_roots_stay_fatal_with_zero_cargo_clean_spawns` | `tests/cli_contract.rs:3706` | Explicit roots stay authoritative even alongside available learned paths. |
-| `all_automatic_roots_missing_is_a_successful_empty_no_op` | `tests/cli_contract.rs:3746` | Every automatic root missing is a successful no-op. |
-| `automatic_file_root_is_omitted_and_symlink_root_blocks_without_traversal` | `tests/cli_contract.rs:3773` | A file root is omitted; a symlink root blocks. |
-| `out_of_anchor_poison_does_not_block_bare_routine_cleanup` | `tests/cli_contract.rs:3837` | ADR 007 scoped proof: an out-of-boundary unprovable is reported, not blocking. |
-| `unreadable_automatic_root_blocks_instead_of_omitting` | `tests/cli_contract.rs:3876` | An unreadable automatic root blocks rather than being silently omitted. |
-| `incomplete_discovery_reports_actual_resolution_counts_and_spawns_no_clean` | `tests/cli_contract.rs:3909` | An incomplete discovery reports real counts and spawns no clean. |
-| `stale_and_blocked_automatic_roots_keep_the_bounded_log_contract` | `tests/cli_contract.rs:3945` | Stale and blocked roots keep the bounded log contract. |
+| `stale_learned_root_is_omitted_and_bare_routine_execute_cleans_the_sibling` | `tests/cli_contract.rs:3581` | A deleted learned root is omitted, the surviving sibling is cleaned. |
+| `stale_learned_root_simulate_agrees_with_execute_and_spawns_no_cargo_clean` | `tests/cli_contract.rs:3637` | Simulation parity; zero `cargo clean` spawns. |
+| `repeated_routine_runs_bound_stale_root_noise_without_mutating_state` | `tests/cli_contract.rs:3668` | 100 stale roots produce one bounded summary line, and the state file is **byte-identical** afterwards (`tests/cli_contract.rs:3701`). |
+| `missing_explicit_roots_stay_fatal_with_zero_cargo_clean_spawns` | `tests/cli_contract.rs:3710` | Explicit roots stay authoritative even alongside available learned paths. |
+| `all_automatic_roots_missing_is_a_successful_empty_no_op` | `tests/cli_contract.rs:3750` | Every automatic root missing is a successful no-op. |
+| `automatic_file_root_is_omitted_and_symlink_root_blocks_without_traversal` | `tests/cli_contract.rs:3777` | A file root is omitted; a symlink root blocks. |
+| `out_of_anchor_poison_does_not_block_bare_routine_cleanup` | `tests/cli_contract.rs:3841` | ADR 007 scoped proof: an out-of-boundary unprovable is reported, not blocking. |
+| `unreadable_automatic_root_blocks_instead_of_omitting` | `tests/cli_contract.rs:3880` | An unreadable automatic root blocks rather than being silently omitted. |
+| `incomplete_discovery_reports_actual_resolution_counts_and_spawns_no_clean` | `tests/cli_contract.rs:3913` | An incomplete discovery reports real counts and spawns no clean. |
+| `stale_and_blocked_automatic_roots_keep_the_bounded_log_contract` | `tests/cli_contract.rs:3949` | Stale and blocked roots keep the bounded log contract. |
 
 What that block does **not** cover is the write path: it seeds a state file and
 reads it, but never exercises `reconcile_full` or `publish` end to end, and
 `repeated_routine_runs_bound_stale_root_noise_without_mutating_state`
-(`tests/cli_contract.rs:3664`) asserts the opposite for the Routine branch — the
+(`tests/cli_contract.rs:3668`) asserts the opposite for the Routine branch — the
 state file must be untouched. There is no integration test that observes
 `state generation last_full_at=` (`main.rs:472`), the `state_generation_last_full_at`
 JSON field (`output.rs:61`), the "replaced unusable discovery state" message, or

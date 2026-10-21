@@ -1108,9 +1108,10 @@ never blocking; in-boundary passengers/notes never block; exits are
 boundary-scoped with a zero-unit fail-closed edge. No publication authorized
 here; the ADR 004 item (e) distinct release gate transfers to M017's release.
 
-## M018 — proof-scoped Full cleanup gate (proposed; ADR 008 §5, route 5b-i)
+## M018 — proof-scoped Full cleanup gate (ready; ADR 008 §5, route 5b-i)
 
-Status: **proposed; not active; no implementation authority**. Plan:
+Status: **ready** — the contract is fully specified and ADR 008 grants its
+implementation authority; **not started, not implemented, not released.** Plan:
 `plans/implementation/artifact-discovery-cleanup/m018-proof-scoped-full-cleanup-gate.md`.
 Authority: **ADR 008**, accepted 2026-10-21, whose §5 resolves to route 5b-i.
 
@@ -1140,12 +1141,13 @@ change (§§1–4) and the gate change (§5) are sequenced together, never
 separately released, because the canonical spelling must never point at an
 operation that refuses.
 
-## M019 — canonical Full cleanup spelling and the root front door (proposed; ADR 008 §§1–4, option 4b)
+## M019 — canonical Full cleanup spelling and the root front door (ready; ADR 008 §§1–4, option 4b)
 
-Status: **proposed; not active; no implementation authority**. Plan:
+Status: **ready** — the contract is fully specified and ADR 008 grants its
+implementation authority; **not started, not implemented, not released.** Plan:
 `plans/implementation/artifact-discovery-cleanup/m019-canonical-full-cleanup-spelling-and-root-front-door.md`.
 Authority: **ADR 008**, accepted 2026-10-21, whose §4 resolves to 4b
-(coherent).
+(coherent), **amended the same day by the owner's ROOT-positional decision**.
 
 `cargo cleanme --full` becomes the canonical spelling of the Full cleanup
 operation; `cargo cleanme clean --full` is retained as a **hidden**
@@ -1157,14 +1159,26 @@ to a read-only or local-only subcommand is a **usage error (exit 2)** — never
 a silently discarded flag, which is the failure mode
 `architecture/02-cli.md:97-104` records as the worst this tool has.
 
+**The ROOT positional moves to the root — owner decision, 2026-10-21, option
+A.** ADR 008 §4b made `clean` hidden but said nothing about where the ROOT
+positional lives, and hiding `clean` without moving ROOT would have orphaned
+the bounded-root scope — a published, non-deprecated operation whose only
+spelling would become an undocumented alias. So `cargo cleanme ~/projects` is
+now the canonical bounded-root spelling and `cargo cleanme clean ~/projects`
+remains accepted and hidden. `clean --known` does **not** move: it resolves to
+the bare invocation, so hiding `clean` orphans nothing by it. One deliberate
+behaviour change follows — `cargo cleanme .` goes from a usage error (exit 2,
+*"unrecognized subcommand '.'"*) to a bounded cleanup of `.` — and the
+subcommand-versus-positional precedence on the root must be made explicit
+rather than left to a default. The decision is recorded as a dated amendment
+block in ADR 003 §4 and in ADR 008.
+
 The resolved intent does not change: the scope, the selection, the policy
 evaluation and the engine are untouched, and the existing `invocation()`
 tests must pass unmodified.
 
-**Publication is gated on M018 having shipped.** One owner decision is
-carried forward: whether the ROOT positional moves to the root (recommended)
-or `clean` stays visible. ADR 008 does not decide it, and hiding `clean`
-without a resolution orphans the documented bounded-root spelling.
+**Publication is gated on M018 having shipped** — the canonical spelling must
+never point at an operation that refuses.
 
 ADR 003 §4 is amended by ADR 008 on 2026-10-21: the spellings
 `clean ROOT`, `clean --known` and `clean --full` remain accepted, and the

@@ -50,7 +50,7 @@ This skill is about *how to change it without weakening it*.
    same invocation; such a unit is skipped **whole**.
 6. **The discovery universe may only ever grow.** ADR 009 widened the
    maintenance scope by adding the working directory — *added*, never
-   substituted for the Routine roots (`src/main.rs:968-977`). A wider
+   substituted for the Routine roots (`src/main.rs:974-983`). A wider
    universe can only reclassify `shared` bytes to `private`; it can never
    promote an unproven shared output. Any change that **narrows** the
    universe re-opens exactly the hazard invariant 1 exists to prevent, so
@@ -94,7 +94,7 @@ Two details the shorthand hides:
 
 - The three flags conflict pairwise **on `clean`**. The **root-level**
   `--dry-run` does *not* conflict with the clean-level `--cargo-preview`; the
-  root flag wins and selects `Simulate` (`src/cli.rs:384-388`), because
+  root flag wins and selects `Simulate` (`src/cli.rs:393-397`), because
   simulation spawns nothing. See
   [`cli-surface-and-argv`](../cli-surface-and-argv/SKILL.md).
 - There is **no `Preview` mode**. `CargoPreview` maps to the *wire* label
@@ -117,7 +117,7 @@ Every `Cargo.toml` under the selected cleanup root must be accounted for by
 direct successful resolution or by successful workspace metadata listing it as a
 member/root. What happens to the ones that remain is a **three-way split**
 (ADR 007 §1–§4, implemented by `split_unresolved_for_boundary`,
-`src/cleanup.rs:2290-2313`):
+`src/cleanup.rs:2481-2504`):
 
 | Where the unresolved manifest is | What happens |
 |---|---|
@@ -131,7 +131,7 @@ anchor, the explicit roots, or the Full set.
 Cleaning a healthy boundary while poison exists elsewhere is the *intended*
 behaviour, precisely so that a boundary clean can never be read as a system
 clean. The regression test is `out_of_anchor_poison_does_not_block_anchor`
-(`src/cleanup.rs:5080`) — it **fails by construction** against the old
+(`src/cleanup.rs:5277`) — it **fails by construction** against the old
 whole-scope rule, which is what makes it worth keeping.
 
 Read-only scans stay partial-result tolerant; cleanup does not. That asymmetry
@@ -145,9 +145,9 @@ is intentional.
 Note the consequence for tests: asserting "zero clean spawns" under a blocked
 boundary is the strongest available assertion, and `cleanup.rs` has several —
 `metadata_failure_blocks_boundary_with_zero_spawns`
-(`src/cleanup.rs:5311`) and
+(`src/cleanup.rs:5508`) and
 `violated_admission_premise_blocks_with_zero_cargo_spawns`
-(`src/cleanup.rs:6353`). Prefer that over asserting an error message.
+(`src/cleanup.rs:6559`). Prefer that over asserting an error message.
 
 ## The `skipped_outside_selection` reason code exists
 

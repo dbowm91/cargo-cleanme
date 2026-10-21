@@ -10,7 +10,7 @@ dependency, and the only one that writes to its own executable path.
 > **Citation health, read this before trusting a line number in this file.**
 >
 > Every source citation here is fully qualified — `src/update.rs:403`,
-> `src/main.rs:81`, `src/output.rs:903` — so `scripts/check-doc-citations.py`
+> `src/main.rs:84`, `src/output.rs:903` — so `scripts/check-doc-citations.py`
 > gates **all** of them: the file exists, the line is in range, and the range is
 > ordered. The previous revision of this file carried 257 bare `` `:N` ``
 > references that the guard could not see, and C021 measured them to be 191–503
@@ -82,7 +82,7 @@ Complete inventory. Anything not listed is private.
 | Item | Signature | Contract |
 |---|---|---|
 | `host_target` | `pub fn() -> Option<&'static str>` (`src/update.rs:120`) | The contracted triple for the host this binary was *compiled* for, via `#[cfg]` on `target_os`/`target_arch`. `None` outside the five published targets. |
-| `asset_for_target` | `pub fn(&str) -> Option<&'static str>` (`src/update.rs:145`) | Triple → asset name, from `PUBLISHED_TARGETS`. **Public** — `src/main.rs` uses it to name the asset in the JSON "already current" and "newer than published" documents (`src/main.rs:105`, `src/main.rs:146`). |
+| `asset_for_target` | `pub fn(&str) -> Option<&'static str>` (`src/update.rs:145`) | Triple → asset name, from `PUBLISHED_TARGETS`. **Public** — `src/main.rs` uses it to name the asset in the JSON "already current" and "newer than published" documents (`src/main.rs:108`, `src/main.rs:149`). |
 | `PUBLISHED_TARGETS` | `const` (`src/update.rs:76`, private) | Compile-time copy of `release/eggpack/distribution.toml`; `scripts/check-release-contract.py` fails the build on divergence (`src/update.rs:72-75`). |
 
 ### Outcomes
@@ -117,10 +117,10 @@ established as 'not Cargo's'?" — and returns `true` for `Uninterpretable` alon
 **The JSON surface is not in this module.** The document `update --format json`
 prints is built by `output::update_json` (`src/output.rs:903-931`) and written
 by `output::update_json_stream` (`src/output.rs:941-943`), which
-`src/main.rs:186-193` prints with a single `print!`. Two *other* documents are
+`src/main.rs:189-196` prints with a single `print!`. Two *other* documents are
 composed inline in `src/main.rs` for the two no-op outcomes —
-`AlreadyCurrent` at `src/main.rs:110-125` and `NewerThanPublished` at
-`src/main.rs:151-166` — each written with `serde_json::json!` rather than
+`AlreadyCurrent` at `src/main.rs:113-128` and `NewerThanPublished` at
+`src/main.rs:154-169` — each written with `serde_json::json!` rather than
 through the library seam, each at `schema_version: 1`, and each carrying the
 same `result` object shape. So the library seam covers the *success* path only;
 the two no-op documents are a second, parallel producer of the same contract.
@@ -166,7 +166,7 @@ assembles `"{PRODUCT} is {code}; run this instead:\n  {command}"`.
   and the only reason the module is testable.
 - `update(bool) -> Result<UpdatePlan, UpdateError>` (`src/update.rs:1285`) — CLI
   wrapper; constructs `HttpEnvironment` and delegates. Called from
-  `src/main.rs:94`, dispatched from `src/main.rs:81`.
+  `src/main.rs:97`, dispatched from `src/main.rs:84`.
 - `classify_provenance(&Path) -> Provenance` (`src/update.rs:386`) and
   `classify_provenance_in(&Path, Option<PathBuf>) -> Provenance`
   (`src/update.rs:403`). §3.
@@ -194,7 +194,7 @@ seam for the refusal path specifically (repeated on the trait method,
 **Who calls each:** `classify_provenance_in` is called by `run`
 (`src/update.rs:986`), supplied from the same seam via
 `environment.cargo_home()`. `classify_provenance` is called from **production**
-in the two JSON no-op branches (`src/main.rs:108`, `src/main.rs:149`) to fill
+in the two JSON no-op branches (`src/main.rs:111`, `src/main.rs:152`) to fill
 the `provenance` field, and from tests (`src/update.rs:2399`,
 `src/update.rs:2414`).
 
@@ -526,7 +526,7 @@ changes the answer." A mutating run on forbidden provenance therefore makes
 `a_mutating_run_on_forbidden_provenance_makes_zero_registry_requests`
 (`src/update.rs:2212`) and by the integration test
 `json_update_refusal_emits_no_document_and_exits_non_zero`
-(`tests/cli_contract.rs:3237`).
+(`tests/cli_contract.rs:3241`).
 
 **The one path that still contacts the registry on forbidden provenance is
 `--dry-run`,** and that is deliberate: "reporting a candidate is the entire
@@ -1047,17 +1047,17 @@ target is recomputed independently at `src/update.rs:988`.
 cases in `tests/cli_contract.rs` now drive it —
 
 - `update_dry_run_reaches_the_same_non_mutating_path_from_either_spelling`
-  (`tests/cli_contract.rs:2435`) — both spellings resolve to the same
+  (`tests/cli_contract.rs:2438`) — both spellings resolve to the same
   non-mutating updater request.
 - `json_update_refusal_emits_no_document_and_exits_non_zero`
-  (`tests/cli_contract.rs:3237`) — drives the **real binary** staged under a
-  Cargo root with a verbatim `v1` record (`tests/cli_contract.rs:3210-3225`) and
+  (`tests/cli_contract.rs:3241`) — drives the **real binary** staged under a
+  Cargo root with a verbatim `v1` record (`tests/cli_contract.rs:3214-3229`) and
   asserts exit 2 and no document on stdout. Its doc comment
-  (`tests/cli_contract.rs:3227-3235`) is the reason this is meaningful: the
+  (`tests/cli_contract.rs:3231-3239`) is the reason this is meaningful: the
   mutating refusal happens *before* the registry is asked anything, so the case
   is hermetic and cannot pass for an unrelated network failure.
 - `the_json_update_branch_prints_only_the_tested_seam`
-  (`tests/cli_contract.rs:3288`) — pins that the JSON branch of `run_update`
+  (`tests/cli_contract.rs:3292`) — pins that the JSON branch of `run_update`
   prints exactly `output::update_json_stream` and nothing else, so the
   library's one-document/one-newline guarantee becomes a statement about the
   process's stdout.
@@ -1264,11 +1264,11 @@ Concrete checks, each anchored to a line observed. Priority reflects blast radiu
     refusal with the exact remediation string
     (`scripts/post-release-smoke.sh:257-275`).
 11. **Integration coverage.** The updater now has three integration cases
-    (`tests/cli_contract.rs:2435`, `tests/cli_contract.rs:3237`,
-    `tests/cli_contract.rs:3288`), but none of them reaches the network or the
+    (`tests/cli_contract.rs:2438`, `tests/cli_contract.rs:3241`,
+    `tests/cli_contract.rs:3292`), but none of them reaches the network or the
     commit path. A hermetic *successful* update is not representable: every
     success path resolves the version authority from crates.io and then
-    replaces bytes (`tests/cli_contract.rs:3279-3286`). The cheapest real
+    replaces bytes (`tests/cli_contract.rs:3283-3290`). The cheapest real
     improvement is therefore an **environment override for the version
     authority** — the updater has none (`crates_io_metadata_url`,
     `src/update.rs:154-156`, is a hard-coded const format), unlike

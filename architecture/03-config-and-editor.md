@@ -18,12 +18,12 @@ projection (`show`, `src/config.rs:610-612`); editor resolution
 
 **Does not own** — any policy *decision* (`config.rs` validates shape and range;
 scope and recency belong to `policy::resolve`, `src/policy.rs:19-58`, and the
-CLI-over-config merge of the *cleanup policy* to `src/main.rs:334-349`; see
+CLI-over-config merge of the *cleanup policy* to `src/main.rs:337-352`; see
 [Policy & scope](04-policy-and-scope.md)); any authorization decision
 (`cleanup.allowed_output_roots` is carried and absoluteness-checked here,
-interpreted by `cleanup::is_authorized`, `src/cleanup.rs:762-772`; see
+interpreted by `cleanup::is_authorized`, `src/cleanup.rs:953-963`; see
 [Cleanup](09-cleanup.md)); process launching (`editor.rs` resolves,
-`src/main.rs:260-266` spawns); persisted discovery state, a separate file with its
+`src/main.rs:263-269` spawns); persisted discovery state, a separate file with its
 own atomic publish (see [Discovery state](06-discovery-state.md)).
 
 **The template is not the runtime config.** The most load-bearing fact about
@@ -53,17 +53,17 @@ setting.
 | `[scan]` | `unignore` | `Vec<PathBuf>` | `[]` (`:48-49`, `:59`) | Exact absolute directories re-included beneath ignored trees. Not globs — a component-wise prefix test (`p.starts_with(u)`) resolved by `Filters::disposition` (`src/discovery.rs:68-87`). Must be absolute (`:122-124`). |
 | `[scan]` | `learned_root_retention_days` | `u32` | `30` (`src/config.rs:67-69`, `:50`) | How long a learned developer root survives after the last project observation. `0` disables expiration (`config.toml:14-15`). Accepted range `0..=3650`, enforced in `load` (`:107-111`). |
 | `[cleanup]` | `allowed_output_roots` | `Vec<PathBuf>` | `[]` (`:24-25`) | Authorization for already-private output outside the `clean ROOT` sandbox. Must be absolute (`:125-127`). See below. |
-| `[cleanup.policy]` | `min_reclaimable_bytes` | `u64` | `0` (`:32-33`) | Minimum reclaimable size for a group. `--min-reclaimable-bytes` replaces it when supplied (`src/main.rs:335-337`). |
-| `[cleanup.policy]` | `min_inactive_seconds` | `Option<u64>` | `None` (`:34`) | Optional *extra* quiet age on top of the safety recency guard. `--older-than` wins (`src/main.rs:338`). Values above `u64::MAX / 1_000_000_000` are rejected (`:128-134`). |
-| `[cleanup.policy]` | `include` | `Vec<String>` | `[]` (`:35-36`) | Globs a cleanup unit's **workspace root** must match to be selected at all (`src/cleanup.rs:1467`). |
-| `[cleanup.policy]` | `exclude` | `Vec<String>` | `[]` (`:37-38`) | Globs that prune a cleanup unit's workspace root (`src/cleanup.rs:1477`). |
+| `[cleanup.policy]` | `min_reclaimable_bytes` | `u64` | `0` (`:32-33`) | Minimum reclaimable size for a group. `--min-reclaimable-bytes` replaces it when supplied (`src/main.rs:338-340`). |
+| `[cleanup.policy]` | `min_inactive_seconds` | `Option<u64>` | `None` (`:34`) | Optional *extra* quiet age on top of the safety recency guard. `--older-than` wins (`src/main.rs:341`). Values above `u64::MAX / 1_000_000_000` are rejected (`:128-134`). |
+| `[cleanup.policy]` | `include` | `Vec<String>` | `[]` (`:35-36`) | Globs a cleanup unit's **workspace root** must match to be selected at all (`src/cleanup.rs:1658`). |
+| `[cleanup.policy]` | `exclude` | `Vec<String>` | `[]` (`:37-38`) | Globs that prune a cleanup unit's workspace root (`src/cleanup.rs:1668`). |
 
 **`include`/`exclude` select on the *workspace root*, not the output root.** Both
 globsets are matched against `unit.root` — the workspace root of the cleanup
-unit — at `src/cleanup.rs:1467` and `:1477`, and the skip reasons say so
+unit — at `src/cleanup.rs:1658` and `:1477`, and the skip reasons say so
 ("cleanup policy: workspace root is not included"). The physical output root is
 not what these two lists select on, and the `globset` is compiled per run from
-the merged list (`src/cleanup.rs:1300-1301`, `compile_policy_globs`,
+the merged list (`src/cleanup.rs:1491-1492`, `compile_policy_globs`,
 `:2153-2163`).
 
 ### `scan.root` — an exclusive override, and Full outranks it
@@ -71,10 +71,10 @@ the merged list (`src/cleanup.rs:1300-1301`, `compile_policy_globs`,
 A rootless `cargo cleanme scan` is a Full reconciliation and **never** consults
 the configured root: `policy::resolve` returns from its `full` arm before
 `config.root` is read (`src/policy.rs:20-29`), so configuration cannot narrow
-the canonical reconciliation command (`src/main.rs:1143-1146`). `scan --known` and
+the canonical reconciliation command (`src/main.rs:1211-1214`). `scan --known` and
 the Routine cleanup scope both resolve with `full: false` and no CLI root, so
 *there* the configured root *is* the scope — an exclusive Explicit override
-rather than an extra root to add (`src/policy.rs:30`, `src/main.rs:775-786`). A
+rather than an extra root to add (`src/policy.rs:30`, `src/main.rs:781-792`). A
 CLI root outranks the configured one wherever both are present
 (`src/policy.rs:30`).
 
@@ -137,12 +137,12 @@ values are exactly the defaults.
 field is *currently inert*. It authorizes a **location** for deletion of output
 already private but outside the `clean ROOT` sandbox; entries must be absolute
 directory roots, not globs, and symlink roots are invalid
-(`src/cleanup.rs:815-846`). Shared, uncertain and external-unproven output
+(`src/cleanup.rs:1006-1037`). Shared, uncertain and external-unproven output
 "remains inventory-only even inside an allowed root": authorization "never
 manufactures ownership proof and cannot promote ExternalUnproven to private"
 (`config.toml:33-36`; ADR 001, C002), restated as a hard contract at
-`src/cleanup.rs:756-761`. An empty list "preserves M004-style containment"
-(`config.toml:36`, `src/cleanup.rs:759`) and is the shipped default. The
+`src/cleanup.rs:947-952`. An empty list "preserves M004-style containment"
+(`config.toml:36`, `src/cleanup.rs:950`) and is the shipped default. The
 subtlety: the field "is currently operationally redundant because PrivateBounded
 output is normally workspace-contained, but is preserved for schema
 compatibility" (`config.toml:37-38`) — a retained extension point, not dead
@@ -153,7 +153,7 @@ is [overview invariant 2](overview.md#8-cross-cutting-invariants).
 
 Every pattern in `include`, `exclude` and `scan.ignore` is compiled with
 `globset::Glob::new` (`src/config.rs:144`, `:149`; recompiled per use at
-`src/discovery.rs:22`, `src/cleanup.rs:2156`), always with default `globset`
+`src/discovery.rs:22`, `src/cleanup.rs:2347`), always with default `globset`
 construction: no `literal_separator`, no `backslash_escape` override,
 case-sensitive. So `*` crosses path separators, `/` is not special on Windows,
 and matching is `globset`'s own: both sides are `/`-spelled, because
@@ -249,7 +249,7 @@ prefixes (`:155-187`); then re-validate the rewritten patterns (`:194-208`).
 
 The absence rule and the range checks together are why deletion is dangerous: an
 absent file yields `recency_seconds = 300`, which validates clean. **Absence is
-indistinguishable from "all defaults"** — the whole reason `src/main.rs:276-283`
+indistinguishable from "all defaults"** — the whole reason `src/main.rs:279-286`
 refuses to accept a deletion as an edit, and the reason `ensure_exists` exists.
 Errors surface as `AppError::Config(String)`, printed as `cargo-cleanme:
 configuration error: …` with exit code 2 in the human format
@@ -270,8 +270,8 @@ migration shim.
 file is missing, then `load`s it. It never overwrites: a malformed file stays
 malformed and stays on disk (`:406-407` — creation is attempted only when the
 file is absent; `malformed_config_is_not_replaced_automatically`,
-`:1238-1249`). Used by `scan` (`src/main.rs:1142`), `clean` (`src/main.rs:323`)
-and `config show` (`src/main.rs:249`).
+`:1238-1249`). Used by `scan` (`src/main.rs:1210`), `clean` (`src/main.rs:326`)
+and `config show` (`src/main.rs:252`).
 
 `ensure_exists` (`:422-427`), documented at `:421` as "Ensure a config editor
 target exists without requiring its current contents to parse," creates the
@@ -372,7 +372,7 @@ struct declaration order.
 ## 4. Path resolution
 
 `ConfigPathResolver` (`src/config.rs:70-89`) holds `override_path:
-Option<PathBuf>`. `src/main.rs:71` constructs it once from `cli.config` (the
+Option<PathBuf>`. `src/main.rs:73` constructs it once from `cli.config` (the
 `--config` global flag, `src/cli.rs:36-37`) and resolves the path once per
 process, before any command dispatch — including for `update`, which does not use
 the config at all.
@@ -402,11 +402,11 @@ directory on any platform (`directories-6.0.0` `src/win.rs:98-99`,
 `src/lin.rs:92-94`, `src/mac.rs:91-97`). `ProjectDirs` returns `None` only when
 the home directory (Unix) or both known-folder lookups (Windows) are unavailable
 — an environment failure, not a permissions one. `config path` prints the path and
-nothing else (`src/main.rs:241-247`): it creates and reads nothing.
+nothing else (`src/main.rs:244-250`): it creates and reads nothing.
 
 ## 5. `config show` and `config edit`
 
-All three subcommands are one match arm at `src/main.rs:240-293`, inside
+All three subcommands are one match arm at `src/main.rs:243-296`, inside
 `run_config` (`:221-295`), after the shared path resolution at `:71`.
 
 **`config` refuses `--format json`.** `run_config` returns `AppError::Config`
@@ -471,7 +471,7 @@ scan. The loaded value is discarded by the `?` at `:286`; `:290` prints
 The ordering matters: a failed editor is reported as a failed editor and the file
 is not second-guessed; only a cleanly-exited editor can be caught having deleted
 the file or corrupted it. All of it is pinned end-to-end by
-`tests/cli_contract.rs:1102-1189`, which drives the real binary against a fake
+`tests/cli_contract.rs:1105-1192`, which drives the real binary against a fake
 editor reached through `VISUAL` with an argument (`"<path>" --wait`), sets
 `EDITOR` to a value that must not win, and asserts: exit code **1** for the
 failing mode, with the editor's own status 17 visible in the prose and never
@@ -497,7 +497,7 @@ candidate."
 **Why the tuple.** `(PathBuf, Vec<String>)` separates the program from its
 arguments because the program is resolved and validated on its own while the
 remaining tokens must reach the child verbatim. `VISUAL="code --wait"` resolves
-`code` on `PATH` and keeps `["--wait"]` as an argument; `src/main.rs:260-263` then
+`code` on `PATH` and keeps `["--wait"]` as an argument; `src/main.rs:263-266` then
 spawns `code --wait <config path>`. Folding the string into one `PathBuf` would
 force either a shell or a guess about which token is the program. The fallbacks
 return an empty `Vec` because they take no flags (`:30`).
@@ -520,7 +520,7 @@ execute bit set (`:82-96`); on non-Unix `is_file()` alone suffices (`:92-95`).
 **Fallback list** (`:28-32`): `hx`, `vim`, `vi`, `nano`, first hit wins, each with
 an empty argument vector — ordered by preference, not alphabetically. **Error**
 (`:33-36`): `"no editor found; set VISUAL or EDITOR to an executable, or install
-hx, vim, vi, or nano"`, which `src/main.rs:258-259` wraps as `AppError::Config` so it
+hx, vim, vi, or nano"`, which `src/main.rs:261-262` wraps as `AppError::Config` so it
 prints with the other configuration errors and exits 2 — a missing editor is
 reported as a configuration problem, which is what it is.
 
@@ -547,7 +547,7 @@ What must remain true for this surface to stay safe:
    `ConfigPathResolver::path` has no CWD input, `:80-88`).
 3. **Editing must never silently reset policy to defaults.** `load` maps absence
    to `Config::default()` (`:91-98`); the defences are the non-zero-exit warning
-   (`src/main.rs:267-275`), the deletion refusal (`:276-283`) and the post-edit
+   (`src/main.rs:270-278`), the deletion refusal (`:276-283`) and the post-edit
    `load` (`:284-286`). Removing any of them reopens a path to a silently
    degraded policy file.
 4. **Creation never overwrites.** `load_or_create` acts only when the file is
@@ -555,7 +555,7 @@ What must remain true for this surface to stay safe:
    `hard_link` (`:526`); a malformed config is never replaced (`:1238-1249`).
 5. **`allowed_output_roots` is authorization, not ownership proof.** It must
    never be read as a way to make an unproven class actionable (`config.toml:33-36`;
-   `src/cleanup.rs:756-761`; [overview invariant
+   `src/cleanup.rs:947-952`; [overview invariant
    2](overview.md#8-cross-cutting-invariants)). "Operationally redundant"
    (`config.toml:37-38`) does not mean unvalidated — it is still absoluteness-
    checked at `:125-127`.
@@ -652,7 +652,7 @@ backslashes, and an unfinished quote erroring; and
 unusable `VISUAL` falls through to a usable `EDITOR` with an empty argument list.
 The comment at `:179-184` is a premise guard: the fixture is never executed, and
 the test asserts resolution only, never a spawn. Integration coverage lives
-outside these files, in `tests/cli_contract.rs:1102-1189` (fake editor process,
+outside these files, in `tests/cli_contract.rs:1105-1192` (fake editor process,
 three failure modes) and `tests/cli_contract.rs:148-169` (the
 `config edit --help` surface under both argv spellings).
 
@@ -678,7 +678,7 @@ three failure modes) and `tests/cli_contract.rs:148-169` (the
    Publication is `create_new` + `fs::hard_link` (`:494-497`, `:526`) and
    `load_or_create` acts only when the file is absent (`:406-407`).
 8. Are the three post-edit checks still present and still ordered non-zero-exit
-   → deletion → validity (`src/main.rs:267-286`)? Reordering them changes which
+   → deletion → validity (`src/main.rs:270-289`)? Reordering them changes which
    failure is reported for a broken editor.
 9. Is `resolve_editor`'s candidate loop still fall-through rather than fail-fast
    (`src/editor.rs:8-27`), and is the program still separated from its arguments

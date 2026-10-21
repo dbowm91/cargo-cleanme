@@ -125,7 +125,7 @@ to the only class that authorizes deletion.
 
 4. **The anchor is unchanged.** Selection for the maintenance spelling
    remains `Ancestry(working directory)`, applied after classification
-   (`src/cleanup.rs:1258` decides the ADR 007 boundary with the same
+   (`src/cleanup.rs:1449` decides the ADR 007 boundary with the same
    selection). ADR 006 §1's "the working directory anchors selection, not
    discovery" is amended only in that discovery now *includes* the working
    directory; the anchor still cannot add, reclassify, or unblock anything.

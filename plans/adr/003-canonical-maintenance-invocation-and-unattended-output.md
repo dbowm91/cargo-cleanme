@@ -119,9 +119,35 @@ silently discarded.
 preview, and the historical `--yes` / `--dryrun` aliases stay hidden. This
 amendment changes which command carries the decision, not what the decision
 is. The explicit-root spelling `clean ROOT` and the inert `clean --known`
-(equivalent to bare invocation, `src/cli.rs:374-380`) are **not** moved to the
-root by this amendment; ADR 008 did not decide them, and moving a positional
-onto the root is a separate decision.
+(equivalent to bare invocation, `src/cli.rs:383-389` and `src/cli.rs:332-338`)
+are **not** moved to the root by this amendment; ADR 008 did not decide them,
+and moving a positional onto the root is a separate decision.
+
+**Amendment 2026-10-21 — owner decision on the ROOT positional.** The
+paragraph above reserved one point for a separate decision: *"moving a
+positional onto the root."* That decision has been made, and it is **A** — the
+ROOT positional **moves to the root**.
+
+`cargo cleanme ~/projects` becomes the canonical bounded-root spelling, and
+`cargo cleanme clean ~/projects` remains accepted as a hidden compatibility
+alias. The inert `clean --known` spelling is **not** moved: it resolves to the
+same `CleanupScope::Maintenance` scope and the same
+`CleanupSelection::WorkingDirectory` selection as the bare invocation
+(`src/cli.rs:383-389` against `src/cli.rs:332-338`), and the bare invocation is
+the canonical maintenance operation this ADR already establishes, so hiding
+`clean` orphans nothing. Hiding `clean` *without* moving ROOT would have
+orphaned the bounded-root scope, which has no root-level equivalent.
+
+One **behaviour change** follows from the decision and is deliberate:
+`cargo cleanme .` is currently a usage error (exit 2, *"unrecognized subcommand
+'.'"*), and under this decision it becomes a bounded cleanup of `.`. The
+root-level ROOT positional therefore shares the root command with
+subcommands, and the subcommand-versus-positional precedence must be made
+explicit rather than left to a default. Every other decision in this ADR
+stands, and this amendment changes which command carries the decision, not
+what the decision is. The implementation is **M019**, whose publication is
+gated on **M018** shipping first; the canonical spelling must never point at
+an operation that refuses.
 
 ### 5. `scan` becomes the canonical Full read-only reconciliation command
 

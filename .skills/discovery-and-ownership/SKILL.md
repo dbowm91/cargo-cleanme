@@ -128,12 +128,12 @@ directory, when there is one, and the working directory itself
 (`src/workspace.rs:655`). The rules that make it safe are the ones to carry:
 
 - **The universe may only ever grow.** The operator's roots are *added* to the
-  Routine roots, never substituted for them (`src/main.rs:968-977`). A wider
+  Routine roots, never substituted for them (`src/main.rs:974-983`). A wider
   universe can only reclassify `shared` bytes to `private`; the reverse — the
   only direction that could promote an unproven shared output into something
   the engine would delete — is unreachable by construction.
 - **The working directory joins only when the Routine scope does not already
-  reach it** (`src/main.rs:931-938`). It may not be *inside* a routine root,
+  reach it** (`src/main.rs:937-944`). It may not be *inside* a routine root,
   and it may not *contain* one. The second exclusion is a measurement, not a
   taste: without it, a bare run from the home directory became a 65-second
   sweep of 264,183 directories that ended **blocked** on 1,357 unresolvable
@@ -150,7 +150,7 @@ directory, when there is one, and the working directory itself
 - **`clean ROOT` and `clean --full` are unchanged**, and the JSON `scope`
   label stays `"routine"`.
 - **The read-only `scan --known` inventory applies the same rule**
-  (`src/main.rs:1164-1173`). An inventory that described a smaller universe
+  (`src/main.rs:1232-1241`). An inventory that described a smaller universe
   than the cleanup would not be an inventory of it.
 
 ### `scan.root` is honoured *except* by a Full scan
@@ -166,7 +166,7 @@ directory, when there is one, and the working directory itself
 "Always overrides the discovered root set" was the old, wrong version of this
 claim. The other half is easy to get wrong too: `scan.root` narrows the
 **scan scope**, but the **working-directory anchor still narrows the
-selection** for a cleanup (`src/cli.rs:378-381` →
+selection** for a cleanup (`src/cli.rs:387-390` →
 `CleanupSelection::WorkingDirectory`). A configured root therefore does *not*
 mean "cleanup targets exactly that root" — running from outside it yields
 zero units.
@@ -184,12 +184,12 @@ consequences:
   platform-root errors force Full scans to stay partial.
 - `PlatformRoot` + `Error` is what makes a Full scan `incomplete`. That
   predicate is computed **once**, as `full_traversal_complete`
-  (`src/main.rs:1083-1087`), and reused: as `complete` for reconciliation
+  (`src/main.rs:1151-1155`), and reused: as `complete` for reconciliation
   (`:1103`) and as `full_incomplete` for the exit code (`:1198`). It is not
   two copies of one expression, and you should not make it two.
 
 > **The uncertainty vector is empty in production.** The filter at
-> `src/main.rs:1094-1102` collects the three uncertainty categories
+> `src/main.rs:1162-1170` collects the three uncertainty categories
 > (`PermissionDenied`, `Metadata`, `Vanished`) and then `.filter_map(|d| d.path.clone())`
 > — but all three categories are emitted with `path: None`
 > (`src/discovery.rs:786-793` and `:981-988`), because `dua_core`'s error

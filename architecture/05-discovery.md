@@ -68,7 +68,7 @@ module for exactly one function.
 `discover_manifests_with_attribution`, and `discover_manifests` exists so that
 callers who do not want the per-entry attribution map do not have to pass a
 `false`. Callers: `main.rs:1192-1195` (with `options.stats`),
-`cleanup.rs:1230`, `cleanup.rs:1717` and `cleanup.rs:2867` (the destructive
+`cleanup.rs:1421`, `cleanup.rs:1908` and `cleanup.rs:3058` (the destructive
 paths, without), `tests/end_to_end.rs:135`,
 `examples/traversal-qualification.rs:35`.
 
@@ -439,7 +439,7 @@ negative evidence.
 
 > **Two traps live here.** First, the `matches!` filter above covers **three of
 > the seven** `DiagnosticCategory` variants and has **no `_` arm**
-> (`src/main.rs:1216-1224`), so a newly-added category is *silently* excluded.
+> (`src/main.rs:1284-1292`), so a newly-added category is *silently* excluded.
 > Second, the filter itself is correct and should not be "fixed" by adding a
 > catch-all that admits pathless diagnostics — that would make the vector
 > non-empty with values that carry no location, which is worse than empty.
@@ -458,16 +458,16 @@ negative evidence.
 
 **Cleanup, under ADR 007.** The old "any discovery diagnostic blocks the whole
 scope" rule is gone. Cleanup blocks only on *in-boundary* discovery diagnostics
-(`cleanup.rs:1264-1265`, `cleanup.rs:2332-2345`): a diagnostic whose path lies
+(`cleanup.rs:1455-1456`, `cleanup.rs:2523-2536`): a diagnostic whose path lies
 outside the selected boundary is reported and never blocks. Pathless diagnostics
 cannot be attributed, so they count as in-boundary (fail-closed,
-`cleanup.rs:2340-2341`) — which is exactly why discovery's path-aggregated walk
+`cleanup.rs:2531-2532`) — which is exactly why discovery's path-aggregated walk
 errors still block the scope they occurred in. The block is raised only after
 metadata resolution, so workspace and unit counts describe attempted work
-(`cleanup.rs:1248-1257`, `cleanup.rs:1353-1364`). The final proof re-walk is
+(`cleanup.rs:1439-1448`, `cleanup.rs:1544-1555`). The final proof re-walk is
 unchanged: it re-discovers over the *selected* roots and refuses any diagnostic
-(`cleanup.rs:1717-1739`), and the ownership refresh does the same
-(`cleanup.rs:2867-2879`).
+(`cleanup.rs:1908-1930`), and the ownership refresh does the same
+(`cleanup.rs:3058-3070`).
 
 ---
 
@@ -489,7 +489,7 @@ with* the measurement traversal, capped at 8.
 **One pool for all roots, in the global path** (`:578`): N roots share ≤8
 workers. **One pool per root, in the sequential path** (`:881`): `walk` starts
 a fresh pool, and dropping the iterator stops and joins its workers
-(`dua-core lib.rs:11`). `ScanScope::ExplicitRoots` from `cleanup.rs:1218`
+(`dua-core lib.rs:11`). `ScanScope::ExplicitRoots` from `cleanup.rs:1409`
 therefore pays one pool startup per selected root.
 
 **Result ordering, honestly.** Results are *not* merged from several threads —
@@ -687,7 +687,7 @@ Windows run 33.
    to the `PlatformRoot && Error` check (`main.rs:1206-1209`) and to the
    `coverage_complete` flag (`:638`, `:912`). Missing the first silently
    converts a hole in the scan into certainty about learned roots. Before adding
-   anything at all, check `cleanup.rs:2332-2345`: under ADR 007 a discovery
+   anything at all, check `cleanup.rs:2523-2536`: under ADR 007 a discovery
    diagnostic blocks only when it is in-boundary, and a pathless one always
    counts as in-boundary.
 2. **Does a new prune reason have a `ScanCounters` field and a position in the

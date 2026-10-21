@@ -114,16 +114,16 @@ The specific case of an explicit CLI root *and* `--full` *and* a configured
 `scan.root` resolves to **`ScanScope::Global`**, because the `full` early-return
 at `policy.rs:20` precedes the `or_else` at `policy.rs:30`. That combination
 is unreachable from the command line: `scan` requires exactly one of ROOT /
-`--known` / `--all` through an `ArgGroup` (`cli.rs:89`), so `scan --all` and
+`--known` / `--all` through an `ArgGroup` (`cli.rs:98`), so `scan --all` and
 `scan ROOT` are mutually exclusive, and `clean --full` carries
-`conflicts_with_all = ["root", "known"]` (`cli.rs:121`). No in-repo caller
+`conflicts_with_all = ["root", "known"]` (`cli.rs:130`). No in-repo caller
 constructs the conflicting pair either — `tests/end_to_end.rs:124` and
 `examples/traversal-qualification.rs:26` both pass `cli_root: None`. The
 precedence therefore matters only for a future programmatic caller.
 
 Note the asymmetry with cleanup, which is decided in `cli.rs` rather than here:
 for `clean`, a `ROOT` argument wins over `--full`, because the scope match
-tests `root` first (`cli.rs:374-379`).
+tests `root` first (`cli.rs:383-388`).
 
 ### Fields populated on `EffectiveScanPolicy`
 
@@ -174,15 +174,15 @@ only three of them:
 | Variant | Produced by `resolve`? | Meaning |
 |---|---|---|
 | `Explicit(PathBuf)` | yes, `policy.rs:42` | one user-named root |
-| `ExplicitRoots(Vec<PathBuf>)` | **no** | multiple explicit roots forming one cleanup boundary; constructed only in `cleanup.rs:1218`, `cleanup.rs:1714` and `cleanup.rs:2864` |
+| `ExplicitRoots(Vec<PathBuf>)` | **no** | multiple explicit roots forming one cleanup boundary; constructed only in `cleanup.rs:1409`, `cleanup.rs:1905` and `cleanup.rs:3055` |
 | `Global(Vec<PathBuf>)` | yes, `policy.rs:23` | exhaustive platform roots |
 | `Routine(Vec<PathBuf>)` | yes, `policy.rs:46` | bounded adaptive roots |
 
 Which spelling reaches which scope is decided in `cli.rs` and `main.rs`, not
 here: `scan ROOT` → Explicit, `scan --known` → Routine, `scan --all` → Global
-(`cli.rs:330-346`, `main.rs:1148-1152`); `clean ROOT` → Explicit, `clean --full`
+(`cli.rs:339-355`, `main.rs:1148-1152`); `clean ROOT` → Explicit, `clean --full`
 → Global, and `clean --known` plus the bare front door → the maintenance scope
-(`cli.rs:374-379`), which resolves to Routine **or** to Explicit when a
+(`cli.rs:383-388`), which resolves to Routine **or** to Explicit when a
 `scan.root` is configured (§7.8).
 
 ### `Explicit(root)` — the user named a place
@@ -675,7 +675,7 @@ subtree to be scanned twice.
    (`main.rs:1088-1095`). The contract test is
    `json_scope_label_follows_the_resolved_scope_not_the_cli_flags`
    (`tests/cli_contract.rs:214`), and `known_scan_resolves_routine_without_a_configured_root_and_explicit_with_one`
-   (`tests/cli_contract.rs:2461`) pins the same label for `scan --known` with
+   (`tests/cli_contract.rs:2464`) pins the same label for `scan --known` with
    and without a configured root.
 10. **The safety-envelope coupling.** `clean --known` routes its cleanup roots
     through `policy::resolve` (`main.rs:780`), so any change to scope resolution
@@ -780,9 +780,9 @@ exercise the resolved scope rather than the flags.
   `main.rs` has four inline tests, none of which reach root derivation; the
   nearest coverage is
   `known_scan_resolves_routine_without_a_configured_root_and_explicit_with_one`
-  (`tests/cli_contract.rs:2461`) on the *scan* side and
+  (`tests/cli_contract.rs:2464`) on the *scan* side and
   `bare_cleanup_with_no_known_roots_is_a_successful_no_op`
-  (`tests/cli_contract.rs:1899`) on the empty-scope side.
+  (`tests/cli_contract.rs:1902`) on the empty-scope side.
 
 ## 9. Review checklist
 

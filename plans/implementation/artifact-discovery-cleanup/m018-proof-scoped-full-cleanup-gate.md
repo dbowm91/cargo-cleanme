@@ -1,6 +1,8 @@
 # M018 — Proof-Scoped Full Cleanup Gate (ADR 008 §5, route 5b-i)
 
-Status: **proposed; not active; no implementation authority**.
+Status: **ready** — the contract is fully specified (ADR 008 §5, route 5b-i)
+and ADR 008 grants this milestone implementation authority. **Not started, not
+implemented, not released.**
 Date: 2026-10-21.
 Repository baseline: `main` at `8b96f86` (0.2.10 published).
 Source roadmap: `plans/subsystems/artifact-discovery-cleanup-roadmap.md`.
@@ -153,9 +155,9 @@ generation (`src/policy.rs:529-535`). Under this milestone:
 - the **reconciliation-code refusal is replaced** by the per-root verdict:
   the function takes the verification result and returns the learned roots
   together with the set of unproven ones;
-- the caller is the Full branch in `src/main.rs:753-773`, which runs the
-  reconciliation (`src/main.rs:765`) and then calls the gate
-  (`src/main.rs:771-772`).
+- the caller is the Full branch in `src/main.rs:759-779`, which runs the
+  reconciliation (`src/main.rs:771`) and then calls the gate
+  (`src/main.rs:777-778`).
 
 ### 3. The exclusion is a post-classification filter
 
@@ -177,7 +179,7 @@ where the effect can only be to remove candidates.
 its own documentation states the invariant the implementation must preserve:
 *"A selection is applied after ownership classification and can only remove
 candidates. It cannot add one, reclassify one, or unblock a scope."* The
-seam is `resolve_candidate_selection` (`src/main.rs:527-535`), which resolves
+seam is `resolve_candidate_selection` (`src/main.rs:533-541`), which resolves
 the selection for both the engine and the interactive listing.
 
 The exclusion therefore needs a selection shape that means *"every unit,
@@ -190,7 +192,7 @@ under (or equal to) an unproven learned root", because the verdict's
 granularity is the whole learned root.
 
 The reporting follows the existing pattern for units removed from the
-selection (`src/cleanup.rs:1420-1437`): **one row per excluded unit**, not a
+selection (`src/cleanup.rs:1611-1628`): **one row per excluded unit**, not a
 synthetic summary row, because the report's row identity is a workspace path
 and the operator's next question is always "which one?". Those rows carry
 `skipped_incomplete_coverage`.

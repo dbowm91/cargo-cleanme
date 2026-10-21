@@ -123,7 +123,7 @@ a suite is red for an unrelated reason, say so, in the record.
 One worked example in this repository: `plans/closure/artifact-discovery-cleanup/m017-status.md`
 recorded a pre-existing failing test
 (`cleanup::tests::real_temp_project_preview_and_execute_with_redirected_target`,
-`src/cleanup.rs:6605`) and said it "needs its own corrective". For four days
+`src/cleanup.rs:6815`) and said it "needs its own corrective". For four days
 **no such corrective existed** — the note was a permanent resident, and the
 red it described was silently suppressing the whole integration-test surface on
 CI, because `cargo test` stops scheduling the remaining targets behind a

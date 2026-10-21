@@ -1,6 +1,9 @@
 # M019 — Canonical Full Cleanup Spelling and the Root Cleanup Front Door (ADR 008 §§1–4)
 
-Status: **proposed; not active; no implementation authority**.
+Status: **ready** — the contract is fully specified (ADR 008 §§1–4, option 4b,
+with the ROOT positional resolved by the owner on 2026-10-21) and ADR 008 grants
+this milestone implementation authority. **Not started, not implemented, not
+released.**
 Date: 2026-10-21.
 Repository baseline: `main` at `8b96f86` (0.2.10 published).
 Source roadmap: `plans/subsystems/artifact-discovery-cleanup-roadmap.md`.
@@ -8,8 +11,10 @@ Implements: **ADR 008 §§1–4, option 4b** — the canonical Full cleanup spel
 becomes `cargo cleanme --full`, the policy overrides become root-level, `clean`
 survives as a hidden compatibility alias, and a scope selector or policy
 override handed to a read-only subcommand is a usage error.
-Related: ADR 008 (accepted 2026-10-21; §4 resolved to 4b), ADR 003 §4
-(amended by ADR 008 on 2026-10-21), ADR 007 §3 (a discarded flag is the
+Related: ADR 008 (accepted 2026-10-21; §4 resolved to 4b; **amended 2026-10-21
+with the owner's ROOT-positional decision**), ADR 003 §4 (amended by ADR 008 on
+2026-10-21, and **amended again on 2026-10-21** by the owner's ROOT-positional
+decision), ADR 007 §3 (a discarded flag is the
 worst failure mode this tool has), **M018** (the gate — this milestone may not
 be **published** before M018 has shipped), ADR 009 / C040 (the root man page
 renders from the root `long_about`), M012A, M014, M017.
@@ -24,6 +29,9 @@ single cleanup front door:
   operation;
 - `cargo cleanme clean --full` remains accepted as a **hidden compatibility
   alias** — published since 0.2.4, so hidden, never deleted;
+- the **ROOT positional moves to the root**: `cargo cleanme ~/projects` is the
+  canonical bounded-root spelling, and `cargo cleanme clean ~/projects`
+  remains accepted and hidden;
 - the policy overrides (`--min-reclaimable-bytes`, `--older-than`,
   `--include`, `--exclude`, `--profile`, `--package`) become root-level;
 - `--full`, and any policy override, handed to a read-only or local-only
@@ -71,26 +79,26 @@ before the ergonomics.
 | `--cargo-preview` | **canonical** | hidden alias | mode, not an override — see below |
 | `--dry-run` / `--dryrun` | already global | already present | unchanged |
 | `--yes` | — | hidden alias | carries no intent (Execute is the default) |
-| ROOT positional | *open question* — see below | accepted | bounded root |
-| `--known` | — | accepted | inert for cleanup scope |
+| ROOT positional | **canonical** | hidden alias | bounded root — moved to the root by the owner decision, 2026-10-21 |
+| `--known` | — | accepted | inert for cleanup scope, and it stays on `clean`: it resolves to the bare invocation (`src/cli.rs:383-389` against `src/cli.rs:332-338`), so hiding `clean` orphans nothing by it |
 
 **`--full` is root-level and non-global.** It must not be `global = true`:
-`scan` already owns a `full` argument id (`src/cli.rs:105-106`) and `clean`
-owns one (`src/cli.rs:121-122`), and a blanket global collides with both —
+`scan` already owns a `full` argument id (`src/cli.rs:114-115`) and `clean`
+owns one (`src/cli.rs:130-131`), and a blanket global collides with both —
 the same collision `architecture/02-cli.md:92-96` records for `--dry-run`
 versus `update --dry-run`. Non-global root args and identically-named
 subcommand args coexist, exactly as `dry_run` already does
-(`src/cli.rs:56-57`).
+(`src/cli.rs:65-66`).
 
 **`--cargo-preview` moves too.** It is a mode rather than a policy override,
 but ADR 008 §4b's rationale is that the root is the *single cleanup front
 door*: a front door that cannot express every mode is not a front door. The
-root already carries `--dry-run` as a global (`src/cli.rs:50-57`); Cargo
+root already carries `--dry-run` as a global (`src/cli.rs:59-66`); Cargo
 preview is the one mode the root cannot express today.
 
 **Scope resolution is unchanged.** `Cli::invocation()` resolves
 `root.full || clean.full` to `CleanupScope::Full` at the existing arm
-(`src/cli.rs:374-380`), and the policy overrides merge the same way: a value
+(`src/cli.rs:383-389`), and the policy overrides merge the same way: a value
 given at the root wins, a value given on `clean` is used when the root did
 not supply one. **The same override given at both levels is a usage error**
 (exit 2) — it is ambiguous, and silently preferring one of two values is the
@@ -103,14 +111,14 @@ discarded-flag failure mode ADR 008 §3 exists to prevent.
 So is any policy override handed to a read-only or local-only subcommand.
 
 The home is the existing `Invocation::UsageError` arm
-(`src/cli.rs:276-284`), whose own doc comment already explains that
+(`src/cli.rs:285-293`), whose own doc comment already explains that
 "defaulting to Full would silently run the machine-wide reconciliation the
-flag exists to gate". It maps to `AppError::Config` (`src/main.rs:89`), so
+flag exists to gate". It maps to `AppError::Config` (`src/main.rs:92`), so
 the exit code is 2 — the same as any other usage error.
 
 This is deliberately **not** the `--dry-run` precedent: `scan` and `config`
 ignore a global `--dry-run` because for those operations a simulation *is*
-the same read-only behaviour (`src/cli.rs:50-57`). Full cleanup is not the
+the same read-only behaviour (`src/cli.rs:59-66`). Full cleanup is not the
 same behaviour as a Full scan, and `--profile` / `--package` select Cargo
 targets — they are meaningless for a read-only scan.
 
@@ -122,14 +130,14 @@ targets — they are meaningless for a read-only scan.
 
 ## Engine
 
-- `Cli` (`src/cli.rs:35-77`) gains `--full` and the six policy overrides, all
+- `Cli` (`src/cli.rs:35-86`) gains `--full` and the six policy overrides, all
   **non-global**, mirroring the existing `--dry-run` structure.
-- `Command::Clean` (`src/cli.rs:113-156`) keeps every flag it has today and
+- `Command::Clean` (`src/cli.rs:122-165`) keeps every flag it has today and
   becomes hidden; its flags become hidden aliases. The `CleanupOverrides`
-  struct (`src/cli.rs:224-231`) is reused rather than duplicated — the root
+  struct (`src/cli.rs:233-240`) is reused rather than duplicated — the root
   and `clean` must produce the same value type, or the two spellings can
   drift.
-- `Cli::invocation()` (`src/cli.rs:330-408`) resolves the merged flags and
+- `Cli::invocation()` (`src/cli.rs:339-417`) resolves the merged flags and
   raises the usage errors. It stays pure: no IO, no filesystem access, and
   every resolution unit-testable.
 - The `CleanupRequest`, `CleanupScope`, `CleanupSelection` and
@@ -141,7 +149,7 @@ targets — they are meaningless for a read-only scan.
 
 The root `long_about` (`src/cli.rs:21-33`) must describe the canonical Full
 cleanup spelling. The root man page renders from that same `long_about`
-(`src/main.rs:148-156`), so `--help` and `man cargo-cleanme` cannot drift —
+(`src/main.rs:151-159`), so `--help` and `man cargo-cleanme` cannot drift —
 the property C040 established when it rewrote the same text.
 
 The sentence "`cargo cleanme scan` needs a scope: `--all` is the full
@@ -166,9 +174,9 @@ need checking rather than assuming:
 Whatever the outcome: **no stale artifact may ship**, and
 `docs/INSTALLING.md`'s man-page count must be re-derived from the tree.
 
-## Open owner decision — the ROOT positional
+## The ROOT positional — owner decision, 2026-10-21: **option A**
 
-ADR 008 §4b decides that `clean` becomes hidden. It does not decide what
+ADR 008 §4b decides that `clean` becomes hidden. It did not decide what
 happens to the **ROOT positional**, which is how a bounded root is selected.
 
 Hiding `clean` without moving ROOT to the root would remove the documented
@@ -179,7 +187,7 @@ ADR 008 does not ask for, and it is the one place where ADR 008's *rationale*
 ("the root is the single cleanup front door") implies more than its literal
 text.
 
-Two coherent resolutions:
+Two coherent resolutions were put to the owner:
 
 - **A (recommended) — move ROOT to the root.** `cargo cleanme ~/projects`
   becomes the canonical bounded-root spelling; `cargo cleanme clean ~/projects`
@@ -194,10 +202,39 @@ Two coherent resolutions:
   spellings, and ADR 008 §4b's "hidden" is narrowed to the *flags* rather
   than the subcommand.
 
-**M019 does not implement either until the owner chooses.** This is the one
-point in the milestone where the accepted ADR is silent, the outcome is
-user-visible, and the two options are not equivalent in cost. The rest of
-M019 does not depend on the answer.
+**The owner chose A on 2026-10-21.** The decision is recorded in ADR 003 §4
+and ADR 008 as dated amendment blocks; this plan implements it.
+
+### What the decision settles
+
+- **The canonical bounded-root spelling is `cargo cleanme ROOT`.** The
+  compatibility spelling `cargo cleanme clean ROOT` is accepted and hidden —
+  published since 0.2.8, so hidden, never deleted.
+- **`cargo cleanme .` changes from a usage error (exit 2) to a bounded cleanup
+  of `.`.** This is a deliberate behaviour change to an argv shape that was
+  previously rejected, and it is the one user-visible change the decision
+  makes that is not merely a relocation of a spelling.
+- **`clean --known` does not move.** It resolves to the bare invocation
+  (`src/cli.rs:383-389` against `src/cli.rs:332-338`), and the bare invocation
+  is ADR 003's canonical maintenance operation, so hiding `clean` orphans
+  nothing by it. Adding a root-level `--known` would be a second spelling for
+  an operation the root already performs.
+- **The root now carries a positional alongside subcommands.** The
+  subcommand-versus-positional precedence must be **explicit**, not a default:
+  `cargo cleanme scan` must still parse as the subcommand, and
+  `cargo cleanme ~/projects` as the ROOT positional. The one edge this creates
+  is a directory whose name collides with a subcommand name (`scan`, `clean`,
+  `config`, `update`); the resolution must be stated in `--help` and the
+  behaviour documented, not left to whichever way the parser happens to fall.
+
+### What the decision does not change
+
+The resolved intent is untouched. The scope, the selection, the policy
+evaluation, and the engine are unchanged; `CleanupRequest`, `CleanupScope`,
+`CleanupSelection` and `CleanupOverrides` are unchanged. Only the command
+that *carries* the intent moves. The `--full` spelling, the policy overrides,
+the usage-error rule for read-only subcommands, and the M018 sequencing all
+stand exactly as ADR 008 §4b and ADR 008 §5 set them.
 
 ## Tests
 
@@ -231,11 +268,36 @@ Every test names the input that makes it fail.
    change altered the intent.
 8. **The one-document invariant survives.** A root-level `--full` run emits
    exactly one JSON document on stdout, and the intervening Full scan report
-   is still suppressed (`EmitReport::No`, `src/main.rs:765`).
+   is still suppressed (`EmitReport::No`, `src/main.rs:771`).
 9. **The generated artifacts are current.** `generate-docs -- --check` is
    green, and no artifact in `man/` or `completions/` is stale.
 10. **The root help describes the Full cleanup.** `cargo cleanme --help`
     names the canonical Full cleanup spelling.
+11. **The root positional resolves to the bounded-root scope.**
+    `cargo cleanme ~/projects` resolves to `CleanupScope::Root("~/projects")`
+    — the *same* value `cargo cleanme clean ~/projects` resolves to. Assert
+    the resolved `Invocation`, not the exit code. *Fails if:* the root
+    positional is parsed but not bound, or is bound to the maintenance scope.
+12. **A subcommand still wins over a positional of the same shape.**
+    `cargo cleanme scan --all` resolves to the scan invocation, not to a ROOT
+    positional named `scan`. *Fails if:* the positional/subcommand precedence
+    is left to a default that resolves the other way — the case that would
+    make `cargo cleanme scan` silently become a bounded cleanup of a directory
+    called `scan`.
+13. **The deliberate behaviour change is pinned.** `cargo cleanme .` no longer
+    exits **2** with *"unrecognized subcommand"*: it resolves to
+    `CleanupScope::Root(".")`. *Fails if:* the root positional is added but the
+    old argv shape is still rejected, or if the new shape is accepted but
+    resolves to the wrong scope.
+14. **The compatibility alias for the bounded root still resolves.**
+    `cargo cleanme clean ~/projects` resolves to the same value as test 11,
+    and `clean` is absent from `cargo cleanme --help`. *Fails if:* the alias is
+    dropped or the hidden subcommand reappears in the help text.
+15. **`clean --known` is not orphaned by the hiding.** `cargo cleanme clean
+    --known` still resolves to `CleanupScope::Maintenance` with
+    `CleanupSelection::WorkingDirectory` — the same value as the bare
+    invocation. *Fails if:* hiding `clean` silently changes what the alias
+    resolves to, or if the behaviour becomes unreachable.
 
 ## Documentation updates
 
@@ -254,6 +316,35 @@ Every test names the input that makes it fail.
   section become descriptions of the shipped surface.
 - `AGENTS.md` §8 — the ADR 008 bullet changes from an open decision to an
   implemented one.
+
+## Planning review (`plans/003-planning-process.md` §12)
+
+Confirmed on 2026-10-21, when the plan moved from `proposed` to `ready`:
+
+1. **Durable behavior is unambiguous.** ADR 008 §§1–4, option 4b, plus the
+   owner's ROOT-positional decision of 2026-10-21 (option A) fix the whole
+   surface: every spelling, its canonical form, its alias, and the
+   usage-error rule.
+2. **Destructive behavior is not introduced ahead of its dependency.** The
+   change moves *spellings*. The scope, the selection, the proof and the
+   engine are untouched, and the release is gated on M018 shipping first.
+3. **Scope/filter precedence is explicit.** `ROOT` wins over `--full`, as
+   today (`src/cli.rs:383-389`); the same override given at both levels is a
+   usage error, not a silent preference.
+4. **Filesystem failure semantics are explicit.** Unchanged — the plan
+   changes no discovery, no traversal and no cleanup.
+5. **Concurrency/parallelism does not weaken correctness.** Unchanged.
+6. **Cross-platform behavior is testable.** The change is argv parsing only;
+   the hosted matrix still gates it.
+7. **Configuration compatibility is defined.** No configuration key changes.
+8. **Verification is specific.** Fifteen tests, each naming the input that
+   makes it fail, plus the ordinary ladder.
+9. **Closure evidence is measurable.** The closure-evidence requirements below
+   name the live runs, the artifact inventory, the scope-resolution
+   equivalence and the ladder's quoted results.
+10. **Stop conditions prevent silent scope expansion.** The stop conditions
+    below cover the ambiguous-argv-shape case, the resolved-intent case, the
+    policy-override case and the artifact case.
 
 ## Verification commands
 
@@ -281,7 +372,7 @@ not covered by the ladder.
   green) and item **5** (`--help` describes the canonical Full cleanup
   spelling, and the stale `scan`-with-no-ROOT sentence is gone — it was
   already retired by C040) are met.
-- The ten tests above exist, pass, and each names its failing input.
+- The fifteen tests above exist, pass, and each names its failing input.
 - The scope resolution is provably unchanged: the existing `invocation()`
   tests pass without modification, and `CleanupRequest`, `CleanupScope`,
   `CleanupSelection` and `CleanupOverrides` are untouched.
@@ -289,6 +380,9 @@ not covered by the ladder.
   subcommand rejects `--full` and every policy override with exit 2.
 - No published spelling is removed; `clean` still accepts everything it
   accepts today.
+- **The ROOT positional is implemented at the root**, with the
+  subcommand-versus-positional precedence made explicit and the
+  subcommand-name collision documented in `--help`.
 - The documentation set above is reconciled, and the man-page count is
   re-derived from the tree.
 - The ladder is green.
@@ -297,8 +391,9 @@ not covered by the ladder.
 
 Stop and write a corrective rather than continuing if:
 
-- the ROOT positional decision is not made — hiding `clean` without a
-  resolution orphans the bounded-root spelling;
+- the ROOT positional cannot be made to coexist with the subcommands without
+  an ambiguous argv shape — the decision is made, but if the precedence cannot
+  be made explicit then the spelling must not ship until it can;
 - the change cannot be made without touching the resolved intent (the scope,
   the selection, the policy evaluation, or the engine);
 - a policy override turns out to be needed by a read-only subcommand, which
