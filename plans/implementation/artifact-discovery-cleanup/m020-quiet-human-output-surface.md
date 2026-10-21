@@ -1,8 +1,10 @@
 # M020 — A Quiet Human Output Surface (one line while it works, one line per directory cleaned, one tally)
 
-Status: **active** — owner-directed 2026-10-21 and implemented in the working
-tree. **Not closed**: it has not been carried by a published release, and
-"publication is not closure" is not a formality here.
+Status: **closing** — owner-directed 2026-10-21, implemented in `12385e5`, and
+verified by the full ladder. **Not closed**: it has not been carried by a
+published release, and "publication is not closure" is not a formality here.
+Closure record:
+`plans/closure/artifact-discovery-cleanup/m020-status.md`.
 Date: 2026-10-21.
 Repository baseline: `main` at `1a55f9e` (0.2.10 published).
 Source roadmap: `plans/subsystems/artifact-discovery-cleanup-roadmap.md`.

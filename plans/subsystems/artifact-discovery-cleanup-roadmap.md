@@ -1172,8 +1172,8 @@ root becomes the canonical front door.
 
 ## M020 — a quiet human output surface (active; owner-directed 2026-10-21)
 
-Status: **active** — implemented in the working tree, not yet published, and
-therefore not closed. Plan:
+Status: **closing** — implemented (`12385e5`) and verified by the full ladder;
+not yet published, and therefore not closed. Plan:
 `plans/implementation/artifact-discovery-cleanup/m020-quiet-human-output-surface.md`.
 Authority: the owner's directive of 2026-10-21 — *"we do NOT want to see
 potentially thousands of lines of lines that were not picked, as this is
