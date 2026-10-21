@@ -83,9 +83,14 @@ fn run(cli: Cli) -> Result<i32, AppError> {
     match cli.invocation() {
         Invocation::Update { dry_run } => run_update(dry_run, options.format),
         Invocation::Config(command) => run_config(command, &path, options.format),
-        Invocation::Scan(intent) => {
-            run_scan(intent, &path, options, EmitReport::Yes).map(|outcome| outcome.code)
-        }
+        Invocation::Scan(intent) => run_scan(
+            intent,
+            &path,
+            options,
+            EmitReport::Yes,
+            cargo_cleanme::discovery_state::ReconciliationMode::IncompleteDiscard,
+        )
+        .map(|outcome| outcome.code),
         Invocation::Cleanup(request) => run_cleanup(request, &path, options),
         // Unreachable through `clap` (see `Invocation::UsageError`). Reported as
         // a usage error (exit 2) rather than guessing an operation.
@@ -313,6 +318,19 @@ struct ResolvedCleanup {
     omitted_diagnostics: Vec<String>,
     omitted: Vec<cargo_cleanme::policy::AutomaticOmission>,
     blocked: Option<cargo_cleanme::cleanup::ScopeBlock>,
+    /// M018: the learned roots whose coverage could not be proven.
+    ///
+    /// Their workspaces stay in the discovery universe — discovered, resolved,
+    /// sized and classified — but they are removed from the *candidate* set,
+    /// so a shared output between a proven root and an unproven one stays
+    /// `Shared`. Empty for every scope but the Full cleanup.
+    unproven_roots: Vec<cargo_cleanme::domain::UnprovenRoot>,
+    /// M018: how long the verification pass took, when it ran.
+    ///
+    /// The gate's cost is a real cost, and the plan's stop conditions make it
+    /// measurable rather than assumed: `None` means the pass did not run,
+    /// which is the case for every scope but an incomplete Full cleanup.
+    verification_elapsed: Option<std::time::Duration>,
     /// True for Routine/Full scopes whose roots are automatic hints; false
     /// for explicit scopes where every defect stays a fatal usage error.
     automatic: bool,
@@ -366,6 +384,19 @@ fn run_cleanup(
     if !resolved.omitted_diagnostics.is_empty() && options.format != OutputFormat::Log {
         for diagnostic in &resolved.omitted_diagnostics {
             eprintln!("cargo-cleanme: {diagnostic}");
+        }
+    }
+    // M018: the roots whose coverage could not be proven are disclosed, not
+    // hidden. A run that skipped them says so on stderr whether or not the
+    // report carries a row for them — a root with no workspace under it has
+    // no row, and its exclusion is still a fact the operator needs.
+    if !resolved.unproven_roots.is_empty() && options.format != OutputFormat::Log {
+        for unproven in &resolved.unproven_roots {
+            eprintln!(
+                "cargo-cleanme: learned root {} was skipped: {}",
+                unproven.root.display(),
+                unproven.detail
+            );
         }
     }
     if let Some(block) = resolved.blocked.clone() {
@@ -483,20 +514,27 @@ fn run_cleanup(
         // C003 §7.6: cleanup --stats must account for the final
         // ownership-universe proof work, not only the initial scan.
         eprintln!(
-            "cleanup stats: mode={:?} {} {} {} {} elapsed={:.2}s",
+            "cleanup stats: mode={:?} {} {} {} {} verification={} elapsed={:.2}s",
             mode,
             report.counters.stats_line(),
             report.counters.timings_line(),
             report.counters.proof_stats_line(),
             report.counters.proof_timings_line(),
+            // M018: the gate's cost, measured. `skipped` means the platform
+            // walk completed and every learned root was proven by definition,
+            // so the verification pass did not run at all.
+            match resolved.verification_elapsed {
+                Some(duration) => format!("{:.2}s", duration.as_secs_f64()),
+                None => "skipped".to_string(),
+            },
             elapsed.as_secs_f64(),
         );
     }
-    Ok(if report.failed > 0 || report.scope_blocked.is_some() {
-        1
-    } else {
-        0
-    })
+    // M018: an unproven learned root means the requested boundary was not
+    // fully cleaned, even when every root that *could* be proven was cleaned
+    // successfully. The exit code says so, so an unattended script does not
+    // read a partial Full cleanup as a complete one.
+    Ok(cleanup_exit_code(&report, &resolved.unproven_roots))
 }
 
 /// What the selection step decided.
@@ -538,7 +576,14 @@ fn resolve_candidate_selection(
     options: RunOptions,
 ) -> Result<SelectionOutcome, AppError> {
     if !request.interactive {
-        return Ok(SelectionOutcome::Chosen(request.selection.resolved()?));
+        // M018: the coverage exclusion is applied to the declared selection,
+        // so it can only ever remove candidates. The discovery universe stays
+        // whole: a shared output between a proven root and an unproven one
+        // stays `Shared`.
+        let declared = request.selection.resolved()?;
+        return Ok(SelectionOutcome::Chosen(
+            declared.excluding(resolved.unproven_roots.clone()),
+        ));
     }
     // The machine formats are refused first because that conflict is a static
     // property of the invocation: it is knowable without touching a single
@@ -577,7 +622,10 @@ fn resolve_candidate_selection(
     // `resolved.roots` still carry the full Routine set — so shared output
     // stays `Shared`. `clean ROOT`/`--full` resolve to `All` and stay
     // unfiltered because their roots already bound them.
-    let anchor = request.selection.resolved()?;
+    let anchor = request
+        .selection
+        .resolved()?
+        .excluding(resolved.unproven_roots.clone());
     let listing = cargo_cleanme::cleanup::list_cleanup_candidates(
         &resolved.roots,
         config.scan.recency_seconds,
@@ -725,6 +773,145 @@ fn run_engine_guarded(
     }
 }
 
+/// M018: the fail-closed rule for a Full cleanup that proved nothing.
+///
+/// If no learned root could be proven, the operation proves nothing: it
+/// blocks with the standard unproven-ownership reason instead of exiting 0
+/// with zero rows. The M012A silent no-op is exactly that shape — an
+/// operator script reading "success" for a cleanup that never ran.
+///
+/// `None` when there was nothing to prove *and* nothing that failed: an
+/// empty scope is an honest no-op, not a failure.
+fn zero_proven_block(
+    unproven: &[cargo_cleanme::domain::UnprovenRoot],
+) -> Option<cargo_cleanme::cleanup::ScopeBlock> {
+    if unproven.is_empty() {
+        return None;
+    }
+    let mut paths: Vec<String> = unproven
+        .iter()
+        .map(|u| u.root.display().to_string())
+        .collect();
+    paths.sort();
+    Some(cargo_cleanme::cleanup::ScopeBlock::new(
+        cargo_cleanme::cleanup::ScopeBlockReason::OwnershipUnproven,
+        format!(
+            "no learned root could be proven: {} root(s) had incomplete coverage ({}); \
+             no cleanup commands were run — run `cargo cleanme scan --all` for the read-only \
+             inventory, or `cargo cleanme ROOT` for a bounded scope",
+            paths.len(),
+            paths.join(", ")
+        ),
+    ))
+}
+
+/// M018: an unproven learned root means the requested boundary was not fully
+/// cleaned, even when every root that *could* be proven was cleaned
+/// successfully. The exit code says so, so an unattended script does not read
+/// a partial Full cleanup as a complete one.
+fn cleanup_exit_code(
+    report: &cargo_cleanme::cleanup::CleanReport,
+    unproven: &[cargo_cleanme::domain::UnprovenRoot],
+) -> i32 {
+    if report.failed > 0 || report.scope_blocked.is_some() || !unproven.is_empty() {
+        1
+    } else {
+        0
+    }
+}
+
+/// M018: turn the Full gate's verdict into a resolved cleanup scope.
+///
+/// Every learned root — proven or not — is admitted as a cleanup **root**.
+/// Withholding an unproven root would narrow the *discovery* universe: the
+/// other claimant of a shared output would never be seen, and those bytes
+/// would be promoted from `Shared` to `PrivateBounded` — the ADR 006 defect,
+/// and the forbidden shortcut. The unproven root's workspaces are removed
+/// from the *candidate* set by the selection, never from the discovery set.
+///
+/// The fail-closed condition is about the **proof**, not about the admitted
+/// roots: an unproven root is admitted as a root precisely so that its
+/// workspaces are still *seen*; it is never a candidate. If the gate proved no
+/// root at all while there were roots to judge, the operation proves nothing,
+/// and exiting 0 with zero rows would be the M012A silent no-op — an operator
+/// script reading "success" for a cleanup that never ran.
+fn resolve_full_verdict(
+    verdict: cargo_cleanme::policy::FullCleanupVerdict,
+    verification_elapsed: Option<std::time::Duration>,
+) -> Result<ResolvedCleanup, AppError> {
+    let unproven = verdict.unproven.clone();
+    let proven_count = verdict.proven.len();
+    let mut resolved = admit_automatic(
+        verdict.admitted_roots(),
+        Vec::new(),
+        "full",
+        verdict.generation,
+    )?;
+    resolved.unproven_roots = unproven.clone();
+    resolved.verification_elapsed = verification_elapsed;
+    if proven_count == 0 && !unproven.is_empty() {
+        resolved.blocked = zero_proven_block(&resolved.unproven_roots);
+    }
+    Ok(resolved)
+}
+
+/// M018: verify each learned root's coverage as its own walk root.
+///
+/// The pass runs only when the platform walk was incomplete. A completed
+/// platform walk read every learned root's subtree, so every root is proven
+/// by definition and a second traversal would buy nothing.
+///
+/// It uses the same policy — and therefore the same prune and filter sets —
+/// as the platform walk, because its verdict stands in for that walk's.
+fn verify_learned_root_coverage(
+    outcome: &ScanOutcome,
+    config: &config::Config,
+    options: RunOptions,
+) -> Result<
+    Option<(
+        Vec<cargo_cleanme::domain::RootCoverage>,
+        std::time::Duration,
+    )>,
+    AppError,
+> {
+    if outcome.code == 0 {
+        return Ok(None);
+    }
+    let Some(state) = outcome.full_state.as_ref() else {
+        return Ok(None);
+    };
+    let roots: Vec<std::path::PathBuf> = state
+        .learned_roots
+        .iter()
+        .map(|root| root.path.clone())
+        .collect();
+    if roots.is_empty() {
+        return Ok(None);
+    }
+    let policy = cargo_cleanme::policy::resolve(
+        cargo_cleanme::domain::ScanRequest {
+            cli_root: None,
+            full: true,
+        },
+        &config.scan,
+    )?;
+    let show = options.format == OutputFormat::Human
+        && cargo_cleanme::progress::should_show_progress(options.no_progress);
+    let renderer = cargo_cleanme::progress::IndicatifRenderer::new(!show, options.verbose);
+    let observer: &dyn cargo_cleanme::progress::ProgressObserver = &renderer;
+    observer.phase(cargo_cleanme::progress::ScanPhase::Discovery);
+    let started = std::time::Instant::now();
+    let coverage = cargo_cleanme::discovery::verify_root_coverage(&roots, &policy, observer);
+    // The bars must come down before the cleanup's own renderer starts, or
+    // two draw targets own the terminal at once.
+    renderer.finish_and_clear();
+    let (coverage, _diagnostics) = coverage?;
+    // The gate's cost is measured, not assumed: the plan's stop conditions
+    // make an unbounded verification pass a reason to stop, and a number is
+    // the only way to know.
+    Ok(Some((coverage, started.elapsed())))
+}
+
 /// Resolve a cleanup scope into concrete bounded roots and its machine label.
 ///
 /// The label always describes the scope that was actually resolved, never the
@@ -753,6 +940,8 @@ fn resolve_cleanup_roots(
                 omitted_diagnostics: Vec::new(),
                 omitted: Vec::new(),
                 blocked: None,
+                unproven_roots: Vec::new(),
+                verification_elapsed: None,
                 automatic: false,
             })
         }
@@ -768,15 +957,37 @@ fn resolve_cleanup_roots(
             // never from a disk reload that could be an older generation when
             // publication failed, was unsupported, or was unavailable. No
             // fresh generation means no cleanup.
-            let outcome = run_scan(ScanIntent::Full, config_path, options, EmitReport::No)?;
+            let outcome = run_scan(
+                ScanIntent::Full,
+                config_path,
+                options,
+                EmitReport::No,
+                cargo_cleanme::discovery_state::ReconciliationMode::IncompleteRetain,
+            )?;
             if !outcome.publish_ok {
                 eprintln!(
                     "cargo-cleanme: discovery state was not saved; cleaning the reconciled in-memory generation only"
                 );
             }
-            let (entries, generation) =
-                cargo_cleanme::policy::full_cleanup_roots(outcome.code, outcome.full_state)?;
-            admit_automatic(entries, Vec::new(), "full", generation)
+            // M018: the proof boundary is the learned root, not the platform
+            // root. When the platform walk could not complete, each learned
+            // root is re-walked as its own walk root, so the per-root
+            // attribution decides — per root — whether that root's subtree was
+            // fully read. The pass costs a second traversal of the learned
+            // roots' subtrees, and only runs when the platform walk was
+            // incomplete: a completed platform walk proves every learned root
+            // by definition.
+            let coverage = verify_learned_root_coverage(&outcome, config, options)?;
+            let (coverage, verification_elapsed) = match coverage {
+                Some((coverage, elapsed)) => (Some(coverage), Some(elapsed)),
+                None => (None, None),
+            };
+            let verdict = cargo_cleanme::policy::full_cleanup_roots(
+                outcome.code,
+                outcome.full_state,
+                coverage.as_deref(),
+            )?;
+            resolve_full_verdict(verdict, verification_elapsed)
         }
         // Bare maintenance and `clean` with no scope selector land here and use
         // exactly the same maintenance policy: a configured legacy
@@ -811,6 +1022,8 @@ fn resolve_cleanup_roots(
                         omitted_diagnostics: Vec::new(),
                         omitted: Vec::new(),
                         blocked: None,
+                        unproven_roots: Vec::new(),
+                        verification_elapsed: None,
                         automatic: false,
                     })
                 }
@@ -827,6 +1040,8 @@ fn resolve_cleanup_roots(
                         omitted_diagnostics: Vec::new(),
                         omitted: Vec::new(),
                         blocked: None,
+                        unproven_roots: Vec::new(),
+                        verification_elapsed: None,
                         automatic: false,
                     })
                 }
@@ -1007,6 +1222,8 @@ fn admit_automatic(
         omitted_diagnostics,
         omitted,
         blocked,
+        unproven_roots: Vec::new(),
+        verification_elapsed: None,
         automatic: true,
     })
 }
@@ -1201,6 +1418,7 @@ fn run_scan(
     config_path: &std::path::Path,
     options: RunOptions,
     emit_report: EmitReport,
+    reconciliation_mode: cargo_cleanme::discovery_state::ReconciliationMode,
 ) -> Result<ScanOutcome, AppError> {
     use cargo_cleanme::{domain, progress};
     use std::time::SystemTime;
@@ -1342,11 +1560,21 @@ fn run_scan(
                 })
                 .collect();
             let complete = full_traversal_complete;
+            // M018: the mode decides what an incomplete traversal may do to
+            // the learned state. The read-only Full scan discards; the Full
+            // cleanup retains every prior root in memory, because its proof
+            // boundary is the learned root and it needs a generation to judge
+            // coverage against.
+            let mode = if complete {
+                cargo_cleanme::discovery_state::ReconciliationMode::Complete
+            } else {
+                reconciliation_mode
+            };
             match cargo_cleanme::discovery_state::reconcile_full(
                 &prior,
                 &observations,
                 &uncertainty,
-                complete,
+                mode,
                 now,
                 c.scan.learned_root_retention_days as u16,
                 directories::BaseDirs::new()
@@ -1359,19 +1587,32 @@ fn run_scan(
                     // Full cleanup can consume exactly what the traversal
                     // proved even when the save fails.
                     full_state = Some(next.clone());
-                    match cargo_cleanme::discovery_state::publish(&next) {
-                        Ok(()) => {
-                            if replacing_invalid {
-                                pending_notices.push(
-                                    "replaced unusable discovery state after successful Full reconciliation"
-                                        .into(),
-                                );
+                    if mode == cargo_cleanme::discovery_state::ReconciliationMode::Complete {
+                        match cargo_cleanme::discovery_state::publish(&next) {
+                            Ok(()) => {
+                                if replacing_invalid {
+                                    pending_notices.push(
+                                        "replaced unusable discovery state after successful Full reconciliation"
+                                            .into(),
+                                    );
+                                }
+                            }
+                            Err(error) => {
+                                publish_ok = false;
+                                pending_notices
+                                    .push(format!("discovery state was not saved: {error}"));
                             }
                         }
-                        Err(error) => {
-                            publish_ok = false;
-                            pending_notices.push(format!("discovery state was not saved: {error}"));
-                        }
+                    } else {
+                        // M018: the retained generation is consumed in memory
+                        // only. The persisted state keeps describing the last
+                        // *complete* reconciliation, so an incomplete pass can
+                        // never advance the generation a later run trusts.
+                        pending_notices.push(
+                            "discovery state was not updated: the Full traversal was incomplete; \
+                             the learned roots were retained and verified in memory"
+                                .into(),
+                        );
                     }
                 }
                 cargo_cleanme::discovery_state::Reconciliation::NoPublication(reason) => {
@@ -1648,6 +1889,249 @@ mod tests {
             effective_policy: None,
             selector: None,
         }
+    }
+
+    /// M018: the cost control. A completed platform walk read every learned
+    /// root's subtree, so every root is proven by definition and the
+    /// verification pass is not entered at all.
+    ///
+    /// *Fails if:* the cost control regresses into an unconditional re-walk.
+    /// The Full cleanup would then traverse every learned root twice on every
+    /// run, including the runs that never needed it.
+    #[test]
+    fn a_complete_platform_walk_needs_no_verification_pass() {
+        let options = RunOptions {
+            no_progress: true,
+            stats: false,
+            format: OutputFormat::Human,
+            verbose: false,
+        };
+        let state = cargo_cleanme::discovery_state::DiscoveryState {
+            schema_version: cargo_cleanme::discovery_state::CURRENT_SCHEMA,
+            last_full_at: Some(1),
+            learned_roots: vec![cargo_cleanme::discovery_state::LearnedRoot {
+                path: std::path::PathBuf::from("/work/a"),
+                last_project_seen_at: 1,
+            }],
+            ..Default::default()
+        };
+        let complete = ScanOutcome {
+            code: 0,
+            full_state: Some(state.clone()),
+            publish_ok: true,
+        };
+        let coverage = verify_learned_root_coverage(&complete, &config::Config::default(), options)
+            .expect("the pass does not fail");
+        assert!(
+            coverage.is_none(),
+            "a completed platform walk needs no second walk"
+        );
+        // An incomplete one does enter the pass — otherwise the gate would
+        // have nothing to judge and would fail closed forever.
+        let incomplete = ScanOutcome {
+            code: 1,
+            full_state: Some(state),
+            publish_ok: true,
+        };
+        let coverage =
+            verify_learned_root_coverage(&incomplete, &config::Config::default(), options)
+                .expect("the pass does not fail");
+        assert!(
+            coverage.is_some(),
+            "an incomplete platform walk must be measured per root"
+        );
+    }
+
+    /// M018: a Full cleanup that proved nothing blocks with the standard
+    /// unproven-ownership reason instead of exiting 0 with zero rows.
+    ///
+    /// The M012A silent no-op is exactly that shape: an operator script
+    /// reading "success" for a cleanup that never ran. A test that only
+    /// asserted "it did not clean anything" would pass against it.
+    #[test]
+    fn a_full_cleanup_that_proved_nothing_blocks_instead_of_exiting_zero() {
+        let unproven = vec![cargo_cleanme::domain::UnprovenRoot {
+            root: std::path::PathBuf::from("/work/unproven"),
+            detail: "2 permission-denied region(s) under it".into(),
+        }];
+        let block = zero_proven_block(&unproven).expect("an unproven root blocks");
+        assert_eq!(block.reason, ScopeBlockReason::OwnershipUnproven);
+        assert!(
+            block.message.contains("/work/unproven"),
+            "the block names the root: {}",
+            block.message
+        );
+        assert!(
+            block.message.contains("no cleanup commands were run"),
+            "the block says nothing ran: {}",
+            block.message
+        );
+        // A scope with nothing to prove and nothing that failed is an honest
+        // no-op, not a failure.
+        assert!(
+            zero_proven_block(&[]).is_none(),
+            "an empty scope is not a block"
+        );
+    }
+
+    /// M018: the gate admits an unproven root as a **root**, so the ownership
+    /// universe is not narrowed.
+    ///
+    /// The defect this pins is the ADR 006 forbidden shortcut. If the
+    /// unproven root is withheld from the cleanup roots, the discovery
+    /// universe shrinks to the proven roots; the other claimant of a shared
+    /// output is never seen, and those bytes are promoted from `Shared` to
+    /// `PrivateBounded` — the one class that authorizes deletion. The
+    /// unproven root's workspaces must still be *discovered*; they are removed
+    /// from the candidate set by the selection, never from the universe.
+    ///
+    /// *Fails if:* the Full branch passes `verdict.proven` where it must pass
+    /// `verdict.admitted_roots()`.
+    #[test]
+    fn an_unproven_root_is_admitted_as_a_root_and_excluded_only_as_a_candidate() {
+        let dir = maintainable_fixture("cleanme-gate-");
+        let proven_root = dir.path().join("proven");
+        let unproven_root = dir.path().join("unproven");
+        std::fs::create_dir_all(&proven_root).expect("the proven root");
+        std::fs::create_dir_all(&unproven_root).expect("the unproven root");
+        let verdict = cargo_cleanme::policy::FullCleanupVerdict {
+            proven: vec![(
+                proven_root.clone(),
+                cargo_cleanme::policy::RootProvenance::Automatic,
+            )],
+            unproven: vec![cargo_cleanme::domain::UnprovenRoot {
+                root: unproven_root.clone(),
+                detail: "1 permission-denied region(s) under it".into(),
+            }],
+            generation: Some(7),
+        };
+        let resolved =
+            resolve_full_verdict(verdict, None).expect("the verdict resolves into a scope");
+        let canonical =
+            |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        assert!(
+            resolved.roots.contains(&canonical(&unproven_root)),
+            "the unproven root is a root: the discovery universe must not be narrowed; \
+             roots: {:?}, omitted: {:?}, blocked: {:?}",
+            resolved.roots,
+            resolved.omitted,
+            resolved.blocked
+        );
+        assert!(
+            resolved.roots.contains(&canonical(&proven_root)),
+            "the proven root is a root too: {:?}",
+            resolved.roots
+        );
+        assert_eq!(
+            resolved.unproven_roots.len(),
+            1,
+            "the unproven root is disclosed: {:?}",
+            resolved.unproven_roots
+        );
+        assert!(
+            resolved.blocked.is_none(),
+            "one proven root is enough to run the scope: {:?}",
+            resolved.blocked
+        );
+        // The root being admitted does not make its workspaces candidates.
+        let selection = cargo_cleanme::cleanup::CleanupSelection::All
+            .excluding(resolved.unproven_roots.clone());
+        assert!(
+            !selection.admits(&canonical(&unproven_root)),
+            "the unproven root's units are not candidates"
+        );
+        assert!(
+            selection.admits(&canonical(&proven_root)),
+            "the proven root's units stay candidates"
+        );
+    }
+
+    /// M018: a gate that proved nothing blocks the scope, even though the
+    /// unproven roots are admitted as roots.
+    ///
+    /// The admitted roots exist so the universe is whole; they are not a
+    /// licence to clean. With no proven root there is nothing to authorize a
+    /// deletion, so the run must block rather than exit 0 with zero rows.
+    ///
+    /// *Fails if:* the fail-closed condition is tested against the admitted
+    /// roots instead of the proof.
+    #[test]
+    fn a_gate_that_proved_nothing_blocks_even_though_the_roots_are_admitted() {
+        let dir = maintainable_fixture("cleanme-gate-empty-");
+        let unproven_root = dir.path().join("unproven");
+        std::fs::create_dir_all(&unproven_root).expect("the unproven root");
+        let verdict = cargo_cleanme::policy::FullCleanupVerdict {
+            proven: Vec::new(),
+            unproven: vec![cargo_cleanme::domain::UnprovenRoot {
+                root: unproven_root,
+                detail: "1 permission-denied region(s) under it".into(),
+            }],
+            generation: Some(7),
+        };
+        let resolved =
+            resolve_full_verdict(verdict, None).expect("the verdict resolves into a scope");
+        let block = resolved
+            .blocked
+            .expect("a gate that proved nothing blocks the scope");
+        assert_eq!(block.reason, ScopeBlockReason::OwnershipUnproven);
+        assert!(
+            block.message.contains("no cleanup commands were run"),
+            "the block says nothing ran: {}",
+            block.message
+        );
+    }
+
+    /// A fixture directory the maintainability rule admits.
+    ///
+    /// The rule withholds the platform temp root whenever the home is a real
+    /// one — a temp fixture would be *omitted* rather than admitted, and the
+    /// test would measure the omission rule instead of the gate. The crate's
+    /// own build directory is a real directory that is disposable by
+    /// construction, so it is the right home for a fixture that has to survive
+    /// the maintainability check.
+    fn maintainable_fixture(prefix: &str) -> tempfile::TempDir {
+        let base = std::env::var_os("CARGO_TARGET_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::current_dir()
+                    .expect("the crate root")
+                    .join("target")
+            });
+        std::fs::create_dir_all(&base).expect("the build directory");
+        tempfile::Builder::new()
+            .prefix(prefix)
+            .tempdir_in(&base)
+            .expect("the fixture directory")
+    }
+
+    /// M018: an unproven learned root makes the exit code non-zero even when
+    /// every root that could be proven was cleaned successfully. An unattended
+    /// script must not read a partial Full cleanup as a complete one.
+    #[test]
+    fn an_unproven_learned_root_makes_the_exit_code_non_zero() {
+        let unproven = vec![cargo_cleanme::domain::UnprovenRoot {
+            root: std::path::PathBuf::from("/work/unproven"),
+            detail: "1 permission-denied region(s) under it".into(),
+        }];
+        assert_eq!(
+            cleanup_exit_code(&empty_report(), &unproven),
+            1,
+            "a skipped root means the boundary was not fully cleaned"
+        );
+        assert_eq!(
+            cleanup_exit_code(&empty_report(), &[]),
+            0,
+            "a clean run stays zero"
+        );
+        let mut failed = empty_report();
+        failed.failed = 1;
+        assert_eq!(cleanup_exit_code(&failed, &[]), 1, "a failure is one");
+        let mut blocked = empty_report();
+        blocked.scope_blocked = Some(ScopeBlock::new(
+            ScopeBlockReason::OwnershipUnproven,
+            "blocked".into(),
+        ));
+        assert_eq!(cleanup_exit_code(&blocked, &[]), 1, "a block is one");
     }
 
     /// The interactive surface has three endings, and the orchestrator keeps

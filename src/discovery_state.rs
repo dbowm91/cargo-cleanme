@@ -208,18 +208,54 @@ pub fn automatic_root_is_maintainable(path: &Path, home: Option<&Path>) -> bool 
 
 /// Reconcile only after a complete Full traversal. Localized uncertainty retains
 /// intersecting old roots while positive observations are always merged.
+/// What a Full reconciliation may do when its traversal was incomplete.
+///
+/// An incomplete traversal proves **no absence**: a root that was not seen
+/// may simply have been behind an unreadable region. What may be done about
+/// the learned state therefore depends on who consumes the result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReconciliationMode {
+    /// The traversal completed: publish the reconciled generation, expiring
+    /// the roots whose absence was positively established.
+    Complete,
+    /// The traversal was incomplete: publish nothing. The read-only Full scan
+    /// keeps this — an incomplete reconciliation must not rewrite the learned
+    /// state.
+    IncompleteDiscard,
+    /// The traversal was incomplete: produce a generation that **retains**
+    /// every prior learned root and adds the roots this pass observed.
+    ///
+    /// M018: the Full cleanup's proof boundary is the learned root, so it
+    /// needs a generation to judge coverage against even when the platform
+    /// walk did not finish. Nothing is expired — absence was not proven — and
+    /// the generation is consumed **in memory**: the caller does not publish
+    /// it, so the persisted state keeps describing the last complete
+    /// reconciliation.
+    IncompleteRetain,
+}
+
 pub fn reconcile_full(
     prior: &DiscoveryState,
     observations: &[ProjectObservation],
     uncertainty: &[PathBuf],
-    complete: bool,
+    mode: ReconciliationMode,
     now: u64,
     retention_days: u16,
     home: Option<&Path>,
 ) -> Reconciliation {
-    if !complete {
-        return Reconciliation::NoPublication("Full traversal was incomplete");
+    match mode {
+        ReconciliationMode::Complete => {}
+        ReconciliationMode::IncompleteDiscard => {
+            return Reconciliation::NoPublication("Full traversal was incomplete");
+        }
+        // M018: fall through. An incomplete traversal proves no absence, so
+        // nothing is expired below and nothing is narrowed; the generation is
+        // the prior generation plus the roots this pass observed.
+        ReconciliationMode::IncompleteRetain => {}
     }
+    // M018: an incomplete pass retains every prior root, so the expiry rules
+    // below — which are all rules about *absence* — do not run at all.
+    let retain_all = mode == ReconciliationMode::IncompleteRetain;
     let mut next = prior.clone();
     let observed_at = now.max(prior.last_full_at.unwrap_or(0));
     next.schema_version = CURRENT_SCHEMA;
@@ -282,6 +318,24 @@ pub fn reconcile_full(
         }
     }
     for old in &prior.learned_roots {
+        if retain_all {
+            // M018: an incomplete traversal proves no absence, so no root is
+            // expired here — not by uncertainty, not by absence, not by age —
+            // and no root is narrowed either. A prior root is retained
+            // exactly as it was, even when a newly observed root sits under
+            // it: narrowing the retained set would hide the out-of-scope
+            // claimants of a shared output and promote `shared` bytes to
+            // `private`, which is the ADR 006 defect.
+            if let Some(observed) = learned.iter_mut().find(|r| r.path == old.path) {
+                // The same root was observed again this pass: keep the
+                // fresher observation.
+                observed.last_project_seen_at =
+                    observed.last_project_seen_at.max(old.last_project_seen_at);
+                continue;
+            }
+            learned.push(old.clone());
+            continue;
+        }
         if covered.contains(&old.path) {
             continue;
         }
@@ -613,7 +667,7 @@ mod tests {
             &DiscoveryState::default(),
             &observations,
             &[],
-            true,
+            ReconciliationMode::Complete,
             100,
             30,
             Some(home.path()),
@@ -692,7 +746,7 @@ mod tests {
             &DiscoveryState::default(),
             &observations,
             &[],
-            true,
+            ReconciliationMode::Complete,
             100,
             30,
             Some(home.path()),
@@ -791,13 +845,21 @@ mod tests {
             let (prior, replacing_invalid) = full_reconciliation_prior(&load).unwrap();
             assert!(replacing_invalid);
             assert_eq!(
-                reconcile_full(&prior, &[], &[], false, 10, 30, None),
+                reconcile_full(
+                    &prior,
+                    &[],
+                    &[],
+                    ReconciliationMode::IncompleteDiscard,
+                    10,
+                    30,
+                    None
+                ),
                 Reconciliation::NoPublication("Full traversal was incomplete")
             );
             assert_eq!(fs::read(&p).unwrap(), invalid);
 
             let Reconciliation::Publish(next) =
-                reconcile_full(&prior, &[], &[], true, 10, 30, None)
+                reconcile_full(&prior, &[], &[], ReconciliationMode::Complete, 10, 30, None)
             else {
                 panic!("complete Full reconciliation should produce a generation")
             };
@@ -843,7 +905,7 @@ mod tests {
                 full_reconciliation_prior(&load_at(&p)).expect("safe Full prior");
             assert!(!replacing_invalid);
             let Reconciliation::Publish(next) =
-                reconcile_full(&prior, &[], &[], true, 10, 30, None)
+                reconcile_full(&prior, &[], &[], ReconciliationMode::Complete, 10, 30, None)
             else {
                 panic!("complete Full reconciliation should publish")
             };
@@ -899,7 +961,7 @@ mod tests {
                 workspace: None,
             }],
             &["/work/uncertain/nested".into()],
-            true,
+            ReconciliationMode::Complete,
             100_000_000,
             30,
             None,
@@ -950,7 +1012,15 @@ mod tests {
             ],
             ..Default::default()
         };
-        let result = reconcile_full(&prior, &[], &[], true, 100_000_000, 0, None);
+        let result = reconcile_full(
+            &prior,
+            &[],
+            &[],
+            ReconciliationMode::Complete,
+            100_000_000,
+            0,
+            None,
+        );
         let Reconciliation::Publish(state) = result else {
             panic!("completed Full should publish")
         };
@@ -984,7 +1054,15 @@ mod tests {
         };
         // Fresh retention would retain both; absence still prunes the deleted
         // path while the existing-but-unobserved root keeps age behavior.
-        let result = reconcile_full(&prior, &[], &[], true, 100_000_000, 30, None);
+        let result = reconcile_full(
+            &prior,
+            &[],
+            &[],
+            ReconciliationMode::Complete,
+            100_000_000,
+            30,
+            None,
+        );
         let Reconciliation::Publish(state) = result else {
             panic!("completed Full should publish")
         };
@@ -1004,7 +1082,7 @@ mod tests {
             &prior,
             &[],
             std::slice::from_ref(&absent),
-            true,
+            ReconciliationMode::Complete,
             100_000_000,
             30,
             None,
@@ -1020,7 +1098,15 @@ mod tests {
         // An incomplete Full never prunes: without a complete traversal there
         // is no evidence of absence at all.
         assert_eq!(
-            reconcile_full(&prior, &[], &[], false, 100_000_000, 30, None),
+            reconcile_full(
+                &prior,
+                &[],
+                &[],
+                ReconciliationMode::IncompleteDiscard,
+                100_000_000,
+                30,
+                None
+            ),
             Reconciliation::NoPublication("Full traversal was incomplete")
         );
     }
@@ -1076,7 +1162,7 @@ mod tests {
                 &DiscoveryState::default(),
                 &observations,
                 &[],
-                true,
+                ReconciliationMode::Complete,
                 100_000_000,
                 30,
                 None,
@@ -1110,7 +1196,7 @@ mod tests {
             &DiscoveryState::default(),
             &observations,
             &[],
-            true,
+            ReconciliationMode::Complete,
             100,
             30,
             None,

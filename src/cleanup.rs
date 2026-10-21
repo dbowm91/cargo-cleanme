@@ -69,6 +69,18 @@ impl CleanMode {
 /// rejected (ADR 006): narrowing discovery hides out-of-scope claimants and
 /// silently upgrades `shared` bytes to `private`, the only class that authorizes
 /// deletion.
+///
+/// **M018 — the one exception, and why it is not one.** `ExcludeRoots` states
+/// a *proof* fact rather than narrowing an operator's choice: that root's own
+/// traversal did not complete, so nothing inside it is proof-bearing. It
+/// therefore also places that root outside the **proof boundary** — the Full
+/// cleanup's boundary is the *proven* learned root (ADR 008 §5), and an
+/// unprovable participant inside an unproven root is reported rather than
+/// blocking the whole scope. That is not the ADR 006 shortcut, because the
+/// excluded root's manifests are still discovered, resolved and classified:
+/// the universe does not narrow, so a shared output between a proven root and
+/// an unproven one stays `Shared` and stays inventory-only. The residual it
+/// accepts is disclosed, not hidden.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CleanupSelection {
     /// Every resolved unit is a candidate. `clean ROOT` and `clean --full`,
@@ -88,6 +100,33 @@ pub enum CleanupSelection {
     /// Units whose canonical workspace root is exactly one of these. The
     /// interactive selection produces this.
     Roots(Vec<PathBuf>),
+    /// Every unit the inner selection admits, **except** those under (or
+    /// equal to) these roots.
+    ///
+    /// M018: the Full cleanup's proof boundary is the learned root. A learned
+    /// root whose own traversal did not complete cannot authorize cleanup for
+    /// the workspaces under it, so those workspaces are removed from the
+    /// *candidate* set — never from the discovery set. They are still
+    /// discovered, resolved, sized and classified like every other unit, so a
+    /// shared output between a proven root and an unproven one stays `Shared`
+    /// and stays inventory-only.
+    ///
+    /// This is an exclude-list, not the allow-list [`Self::Roots`] that `-i`
+    /// produces, because the verdict's granularity is the whole learned root.
+    /// It removes candidates only: it cannot add one, reclassify one, or
+    /// unblock a scope.
+    ///
+    /// It also places the excluded roots outside the **proof boundary** — the
+    /// one place a selection may do that, and the reason is stated in the
+    /// type's documentation: the excluded root states a proof fact, and
+    /// ADR 008 §5 makes the Full cleanup's boundary the *proven* learned
+    /// root.
+    ExcludeRoots {
+        /// The selection this exclusion narrows.
+        inner: Box<CleanupSelection>,
+        /// The roots whose coverage could not be proven.
+        roots: Vec<crate::domain::UnprovenRoot>,
+    },
 }
 
 impl CleanupSelection {
@@ -110,6 +149,17 @@ impl CleanupSelection {
                     || anchor.starts_with(workspace_root)
             }
             Self::Roots(roots) => roots.iter().any(|root| root == workspace_root),
+            // M018: the inner selection still decides, and the unproven
+            // root's own subtree is removed from the candidate set. The
+            // comparison is canonical on both sides so a symlinked prefix
+            // (macOS `/var` vs `/private/var`) cannot fail open and leave an
+            // unproven workspace a candidate.
+            Self::ExcludeRoots { inner, roots } => {
+                inner.admits(workspace_root)
+                    && !roots
+                        .iter()
+                        .any(|u| path_is_within(workspace_root, &u.root))
+            }
         }
     }
 
@@ -130,7 +180,41 @@ impl CleanupSelection {
                 })?;
                 Ok(Self::Ancestry(cwd))
             }
+            // M018: the inner selection is the one that can be unresolved.
+            Self::ExcludeRoots { inner, roots } => Ok(Self::ExcludeRoots {
+                inner: Box::new(inner.resolved()?),
+                roots: roots.clone(),
+            }),
             other => Ok(other.clone()),
+        }
+    }
+
+    /// Narrow this selection by removing the units under these roots.
+    ///
+    /// M018: the coverage exclusion is a filter *on top of* the declared
+    /// selection, so it can only ever remove candidates. It composes with
+    /// every shape, including an already-narrowed one, and it never changes
+    /// the proof boundary.
+    pub fn excluding(&self, roots: Vec<crate::domain::UnprovenRoot>) -> CleanupSelection {
+        if roots.is_empty() {
+            return self.clone();
+        }
+        match self {
+            Self::ExcludeRoots {
+                inner,
+                roots: existing,
+            } => {
+                let mut merged = existing.clone();
+                merged.extend(roots);
+                Self::ExcludeRoots {
+                    inner: inner.clone(),
+                    roots: merged,
+                }
+            }
+            other => Self::ExcludeRoots {
+                inner: Box::new(other.clone()),
+                roots,
+            },
         }
     }
 
@@ -144,8 +228,79 @@ impl CleanupSelection {
                 Some("an unresolved working-directory anchor (internal error)".into())
             }
             Self::Roots(_) => Some("the interactive selection".into()),
+            Self::ExcludeRoots { inner, roots } => Some(format!(
+                "{} root(s) whose coverage could not be proven (within {})",
+                roots.len(),
+                inner
+                    .describe()
+                    .unwrap_or_else(|| "the whole scope".to_string())
+            )),
         }
     }
+
+    /// The typed reason this selection removed a unit, when the removal has a
+    /// reason of its own.
+    ///
+    /// `ExcludeRoots` (M018) removes a unit because its learned root's
+    /// coverage could not be proven. That is a different fact from "outside
+    /// the selection", and the report must not conflate them: one says "you
+    /// did not ask for this", the other says "this could not be proven".
+    /// Every other variant removes units for the ordinary reason and returns
+    /// `None`.
+    pub fn exclusion_reason(&self, workspace_root: &Path) -> Option<(CleanupReasonCode, String)> {
+        match self {
+            Self::ExcludeRoots { roots, .. } => roots
+                .iter()
+                .find(|u| path_is_within(workspace_root, &u.root))
+                .map(|u| {
+                    (
+                        CleanupReasonCode::SkippedIncompleteCoverage,
+                        format!(
+                            "the learned root {} could not be proven: {}; the workspace was left \
+                             untouched — run `cargo cleanme scan --all` for the read-only \
+                             inventory, or `cargo cleanme ROOT` for a bounded scope",
+                            u.root.display(),
+                            u.detail
+                        ),
+                    )
+                }),
+            _ => None,
+        }
+    }
+
+    /// Whether this selection states that a root's coverage could not be
+    /// proven — the M018 gate's per-root verdict.
+    ///
+    /// A **traversal error** carries no path: the upstream walk's error event
+    /// has no child path. It is therefore attributed to the root whose walk
+    /// produced it, and this predicate says whether that root's incompleteness
+    /// was already **judged and disclosed**.
+    ///
+    /// It was, for a root the Full cleanup's gate skipped with a typed
+    /// reason: the uncertainty inside it is the residual ADR 008 §5 accepts
+    /// in exchange for the per-root rule. It was not, for any other root: a
+    /// root that cannot be walked is indeterminate coverage for the scope
+    /// that contains it, and the scope blocks — an unreadable automatic root
+    /// is not absence, and guessing would be the ADR 007 defect in the other
+    /// direction.
+    pub fn excludes_coverage_root(&self, root: &Path) -> bool {
+        match self {
+            Self::ExcludeRoots { roots, .. } => roots
+                .iter()
+                .any(|unproven| path_is_within(root, &unproven.root)),
+            _ => false,
+        }
+    }
+}
+
+/// Whether `path` is inside `root`, or is `root` itself.
+///
+/// Both sides are compared canonically, so a symlinked prefix cannot fail
+/// open: the path that matters is the one on disk, not the spelling.
+fn path_is_within(path: &Path, root: &Path) -> bool {
+    let canon_path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let canon_root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    canon_path.starts_with(&canon_root)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -218,6 +373,14 @@ pub enum CleanupReasonCode {
     /// selection can never produce a silent no-op the way a configured
     /// `scan.root` once made `clean --known` (M012A defect).
     SkippedOutsideSelection,
+    /// The unit's learned root could not be proven: that root's own traversal
+    /// did not complete, so the ownership inside it could not be established
+    /// (M018).
+    ///
+    /// The unit was still discovered, resolved, sized and classified — it is
+    /// excluded from the *candidate* set, never from the discovery set — so a
+    /// shared output between a proven root and this one stays `Shared`.
+    SkippedIncompleteCoverage,
     CargoFailed,
     MeasurementFailed,
     SelectorUnsupported,
@@ -278,6 +441,7 @@ impl CleanupReasonCode {
             Self::SkippedOwnershipUnproven => "skipped_ownership_unproven",
             Self::SkippedSafety => "skipped_safety",
             Self::SkippedOutsideSelection => "skipped_outside_selection",
+            Self::SkippedIncompleteCoverage => "skipped_incomplete_coverage",
             Self::CargoFailed => "cargo_failed",
             Self::MeasurementFailed => "measurement_failed",
             Self::SelectorUnsupported => "selector_unsupported",
@@ -492,7 +656,7 @@ fn append_unresolved_listing(out: &mut String, unresolved: &[UnresolvedOwnership
     }
     if workspace_hint {
         out.push_str(
-            "  hint: a nested crate that believes it is in a workspace needs an empty `[workspace]` table or a parent `workspace.exclude` entry; otherwise clean a healthy workspace explicitly, e.g. `cargo cleanme clean ROOT`\n",
+            "  hint: a nested crate that believes it is in a workspace needs an empty `[workspace]` table or a parent `workspace.exclude` entry; otherwise clean a healthy workspace explicitly, e.g. `cargo cleanme ROOT`\n",
         );
     }
 }
@@ -1154,7 +1318,7 @@ fn unit_block_reason_roots(
             Ok(false) => {
                 return Err(format!(
                     "{} output {} is private but outside the authorized cleanup boundary; \
-                     add a `cleanup.allowed_output_roots` entry or use a clean ROOT that contains it",
+                     add a `cleanup.allowed_output_roots` entry or use a bounded root that contains it",
                     group.kind_label(),
                     group.display.display()
                 ));
@@ -1404,11 +1568,6 @@ fn discover_and_resolve_universe(
     for root in &roots {
         validate_cleanup_root(root)?;
     }
-    let resolved = crate::domain::EffectiveScanPolicy {
-        recency: Duration::from_secs(recency_seconds),
-        scope: ScanScope::ExplicitRoots(roots.clone()),
-        discovery_filters: crate::domain::DiscoveryFilters::Bypassed,
-    };
     let scan_start = SystemTime::now();
     let cleanup_phase = match mode {
         CleanMode::CargoPreview => ScanPhase::CleanupPreview,
@@ -1418,15 +1577,61 @@ fn discover_and_resolve_universe(
     // Discovery (manifest-first, no Cargo yet).
     observer.phase(cleanup_phase);
     let discovery_start = std::time::Instant::now();
-    let discovered = discovery::discover_manifests(&resolved, observer)?;
+    // M018: the walk is **per root**, so a traversal error can be attributed
+    // to the root that produced it. A traversal error carries no path — the
+    // upstream walk's error event has no child path — so the root is the only
+    // attribution available, and the Full cleanup's proof boundary is the
+    // learned root. One walk per root is also the question the per-root
+    // verdict asks; a single walk over the whole root set could only answer
+    // "did *something* fail", which is the whole-system question ADR 008
+    // withdrew.
+    let mut manifests: Vec<PathBuf> = Vec::new();
+    let mut diagnostics: Vec<ScanDiagnostic> = Vec::new();
+    let mut counters = crate::domain::ScanCounters::default();
+    // Each root's own diagnostics, as a range into `diagnostics`.
+    let mut root_diagnostics: Vec<(PathBuf, usize, usize)> = Vec::new();
+    for root in &roots {
+        let resolved = crate::domain::EffectiveScanPolicy {
+            recency: Duration::from_secs(recency_seconds),
+            scope: ScanScope::ExplicitRoots(vec![root.clone()]),
+            discovery_filters: crate::domain::DiscoveryFilters::Bypassed,
+        };
+        let start = diagnostics.len();
+        let discovered = discovery::discover_manifests(&resolved, observer)?;
+        // The bounded walk fills only the three discovery counters; every
+        // other counter belongs to the phases that follow. The assertion
+        // keeps that true: if the walk ever filled another one, the merge
+        // below would silently drop it.
+        debug_assert_eq!(
+            discovered.counters,
+            crate::domain::ScanCounters {
+                directories_visited: discovered.counters.directories_visited,
+                directories_pruned: discovered.counters.directories_pruned,
+                manifests_found: discovered.counters.manifests_found,
+                ..Default::default()
+            },
+            "the bounded walk fills only the discovery counters"
+        );
+        counters.directories_visited = counters
+            .directories_visited
+            .saturating_add(discovered.counters.directories_visited);
+        counters.directories_pruned = counters
+            .directories_pruned
+            .saturating_add(discovered.counters.directories_pruned);
+        counters.manifests_found = counters
+            .manifests_found
+            .saturating_add(discovered.counters.manifests_found);
+        manifests.extend(discovered.manifests);
+        diagnostics.extend(discovered.diagnostics);
+        root_diagnostics.push((root.clone(), start, diagnostics.len()));
+    }
+    manifests.sort();
+    manifests.dedup();
     let discovery_elapsed = discovery_start.elapsed();
-    let mut counters = discovered.counters.clone();
     counters.discovery_nanos = counters
         .discovery_nanos
         .saturating_add(crate::domain::elapsed_nanos(discovery_elapsed));
-    let discovery_diagnostic_count = discovered.diagnostics.len();
-    let mut diagnostics: Vec<ScanDiagnostic> = discovered.diagnostics;
-    let manifests = discovered.manifests;
+    let discovery_diagnostic_count = diagnostics.len();
     // H-2 snapshot: the manifest set the hoisted universe was built from.
     // The last-moment gate before each spawn rediscovers and blocks on any
     // growth, so a manifest created after hoisting cannot silently escape
@@ -1452,8 +1657,12 @@ fn discover_and_resolve_universe(
         .iter()
         .filter(|diagnostic| diagnostic.category == crate::domain::DiagnosticCategory::OutOfScope)
         .count();
-    let boundary_discovery_diagnostics =
-        boundary_discovery_diagnostic_count(&diagnostics, discovery_diagnostic_count, selection);
+    let boundary_discovery_diagnostics = boundary_discovery_diagnostic_count(
+        &diagnostics,
+        discovery_diagnostic_count,
+        selection,
+        &root_diagnostics,
+    );
     Ok(ResolvedUniverse {
         roots,
         cleanup_phase,
@@ -1609,9 +1818,18 @@ pub fn clean_with_roots_policy_selector_guarded(
     // "why wasn't this cleaned?" is always "which one?", which a summary row
     // cannot answer without inventing a path that is on disk.
     for unit in &unselected {
-        let anchor = selection
-            .describe()
-            .unwrap_or_else(|| "the current selection".to_string());
+        let (reason_code, detail) = match selection.exclusion_reason(&unit.root) {
+            Some((code, detail)) => (code, detail),
+            None => {
+                let anchor = selection
+                    .describe()
+                    .unwrap_or_else(|| "the current selection".to_string());
+                (
+                    CleanupReasonCode::SkippedOutsideSelection,
+                    format!("workspace is outside {anchor}; it was proven and left untouched"),
+                )
+            }
+        };
         report.results.push(CleanResult {
             display_path: unit.root.clone(),
             workspace_roots: vec![unit.root.clone()],
@@ -1619,11 +1837,11 @@ pub fn clean_with_roots_policy_selector_guarded(
             ownership: unit_blocking_class(unit),
             outcome: CleanOutcome::Skipped,
             policy_disposition: None,
-            reason_code: CleanupReasonCode::SkippedOutsideSelection,
+            reason_code,
             before_bytes: Some(unit.bytes),
             after_bytes: None,
             observed_decrease: None,
-            detail: format!("workspace is outside {anchor}; it was proven and left untouched"),
+            detail,
         });
     }
 
@@ -1900,33 +2118,57 @@ pub fn clean_with_roots_policy_selector_guarded(
         // proceeding against a stale claimant set. Simulate runs it too so
         // simulation predicts the spawn path instead of diverging from it.
         {
-            let rediscovery_policy = crate::domain::EffectiveScanPolicy {
-                recency: Duration::ZERO,
-                scope: ScanScope::ExplicitRoots(roots.clone()),
-                discovery_filters: crate::domain::DiscoveryFilters::Bypassed,
-            };
-            match discovery::discover_manifests(&rediscovery_policy, &crate::progress::NoopObserver)
-            {
-                Ok(fresh) if fresh.diagnostics.is_empty() => {
-                    let mut now = fresh.manifests;
-                    now.sort();
-                    if !universe_manifests_stable(&initial_manifests, &now) {
-                        report.scope_blocked = Some(ScopeBlock::new(
-                            ScopeBlockReason::IncompleteDiscovery,
-                            "cleanup ownership universe changed: manifest set differs after proof; no further cleanup commands were run".into(),
-                        ));
-                        report.counters = counters.clone();
-                        return Ok(report);
+            // M018: the re-discovery walks per root, for the same reason the
+            // initial discovery does — a traversal error carries no path, so
+            // the root that produced it is the only attribution available.
+            // A diagnostic inside the proof boundary blocks the remaining
+            // scope; one outside it does not: that root was already skipped
+            // and disclosed, and the uncertainty inside it is the residual
+            // ADR 008 §5 accepts in exchange for the per-root rule.
+            let mut now: Vec<PathBuf> = Vec::new();
+            let mut incomplete = false;
+            for root in &roots {
+                let rediscovery_policy = crate::domain::EffectiveScanPolicy {
+                    recency: Duration::ZERO,
+                    scope: ScanScope::ExplicitRoots(vec![root.clone()]),
+                    discovery_filters: crate::domain::DiscoveryFilters::Bypassed,
+                };
+                match discovery::discover_manifests(
+                    &rediscovery_policy,
+                    &crate::progress::NoopObserver,
+                ) {
+                    Ok(fresh) => {
+                        let root_already_judged = selection.excludes_coverage_root(root);
+                        for diagnostic in &fresh.diagnostics {
+                            let in_boundary = match &diagnostic.path {
+                                Some(path) => boundary_admits(selection, path),
+                                None => !root_already_judged,
+                            };
+                            if in_boundary {
+                                incomplete = true;
+                            }
+                        }
+                        now.extend(fresh.manifests);
                     }
+                    Err(_) => incomplete = true,
                 }
-                _ => {
-                    report.scope_blocked = Some(ScopeBlock::new(
-                        ScopeBlockReason::IncompleteDiscovery,
-                        "cleanup ownership universe could not be re-discovered after proof; no further cleanup commands were run".into(),
-                    ));
-                    report.counters = counters.clone();
-                    return Ok(report);
-                }
+            }
+            if incomplete {
+                report.scope_blocked = Some(ScopeBlock::new(
+                    ScopeBlockReason::IncompleteDiscovery,
+                    "cleanup ownership universe could not be re-discovered after proof; no further cleanup commands were run".into(),
+                ));
+                report.counters = counters.clone();
+                return Ok(report);
+            }
+            now.sort();
+            if !universe_manifests_stable(&initial_manifests, &now) {
+                report.scope_blocked = Some(ScopeBlock::new(
+                    ScopeBlockReason::IncompleteDiscovery,
+                    "cleanup ownership universe changed: manifest set differs after proof; no further cleanup commands were run".into(),
+                ));
+                report.counters = counters.clone();
+                return Ok(report);
             }
         }
 
@@ -2461,6 +2703,25 @@ fn boundary_admits(selection: &CleanupSelection, manifest: &Path) -> bool {
         CleanupSelection::WorkingDirectory => true,
         CleanupSelection::Ancestry(anchor) => under(manifest, anchor),
         CleanupSelection::Roots(roots) => roots.iter().any(|root| under(manifest, root)),
+        // M018: the excluded root is outside the proof boundary as well as
+        // out of the candidate set. ADR 008 §5 makes the Full cleanup's proof
+        // boundary the **proven** learned root: "It blocks each learned root
+        // whose own traversal did not complete, and reports those roots with
+        // a typed reason." The excluded root's uncertainty is therefore
+        // reported, not blocking — the treatment ADR 007 already gives every
+        // out-of-boundary unprovable.
+        //
+        // This is not the ADR 006 shortcut: the excluded root's manifests are
+        // still discovered, resolved and classified, so the universe does not
+        // narrow and a shared output between a proven root and an unproven one
+        // stays `Shared` and stays inventory-only. What the exclusion narrows
+        // is the *proof*, not the *discovery*.
+        CleanupSelection::ExcludeRoots { inner, roots } => {
+            inner.admits(manifest)
+                && !roots
+                    .iter()
+                    .any(|unproven| path_is_within(manifest, &unproven.root))
+        }
     }
 }
 
@@ -2517,22 +2778,43 @@ fn blocking_unresolved_count(
         .len()
 }
 
-/// Count of discovery-phase diagnostics inside the boundary. Pathless
-/// diagnostics cannot be attributed and count as in-boundary (fail-closed,
-/// the C035 kill-switch direction).
+/// Count of discovery-phase diagnostics inside the boundary.
+///
+/// A diagnostic that carries a path is judged by that path. A diagnostic with
+/// **no path** — a traversal error — cannot be attributed to a subtree: the
+/// upstream walk's error event has no child path. It is attributed to the
+/// **root whose walk produced it**, which is why the walk is per root (M018).
+/// A root outside the proof boundary does not block: its uncertainty was
+/// disclosed and that root was skipped, which is the per-root rule ADR 008 §5
+/// adopted in place of the withdrawn whole-system rule.
+///
+/// A diagnostic that belongs to no root's walk cannot be attributed at all,
+/// and an unattributable diagnostic is in-boundary — fail closed.
 fn boundary_discovery_diagnostic_count(
     diagnostics: &[ScanDiagnostic],
     discovery_diagnostic_count: usize,
     selection: &CleanupSelection,
+    root_diagnostics: &[(PathBuf, usize, usize)],
 ) -> usize {
-    diagnostics
-        .iter()
-        .take(discovery_diagnostic_count)
-        .filter(|diagnostic| match &diagnostic.path {
-            None => true,
-            Some(path) => boundary_admits(selection, path),
-        })
-        .count()
+    let mut count = 0;
+    let mut attributed = 0usize;
+    for (root, start, end) in root_diagnostics {
+        let root_already_judged = selection.excludes_coverage_root(root);
+        for diagnostic in diagnostics.get(*start..*end).unwrap_or_default() {
+            attributed += 1;
+            let in_boundary = match &diagnostic.path {
+                Some(path) => boundary_admits(selection, path),
+                // A traversal error carries no path: the root that produced it
+                // is the attribution, and only a root whose incompleteness the
+                // gate already judged and disclosed is out of the boundary.
+                None => !root_already_judged,
+            };
+            if in_boundary {
+                count += 1;
+            }
+        }
+    }
+    count + discovery_diagnostic_count.saturating_sub(attributed)
 }
 
 /// Resolve the cleanup candidate set for one scope: the bounded ownership
@@ -3050,29 +3332,51 @@ fn refresh_combined_universe(
     counters: &mut ScanCounters,
     selection: &CleanupSelection,
 ) -> Result<Vec<ResolvedWorkspace>, ProofFailure> {
-    let policy = crate::domain::EffectiveScanPolicy {
-        recency: Duration::ZERO,
-        scope: ScanScope::ExplicitRoots(roots.to_vec()),
-        discovery_filters: crate::domain::DiscoveryFilters::Bypassed,
-    };
-    let discovered = discovery::discover_manifests(&policy, &crate::progress::NoopObserver)
-        .map_err(|e| {
-            ProofFailure::new(
-                CleanupReasonCode::SkippedOwnershipUnproven,
-                format!("ownership could not be re-proven: combined root discovery failed: {e}"),
-            )
-        })?;
-    if !discovered.diagnostics.is_empty() {
-        return Err(ProofFailure::new(
-            CleanupReasonCode::SkippedOwnershipUnproven,
-            "ownership could not be re-proven: combined selected-root discovery is incomplete",
-        ));
+    // M018: the refresh walks per root, for the same reason the initial
+    // discovery does — a traversal error carries no path, so the root that
+    // produced it is the only attribution available. The refresh applies the
+    // same boundary rule: a diagnostic inside the proof boundary invalidates
+    // the refresh, one outside it does not. That root was already skipped and
+    // disclosed, and the uncertainty inside it is the residual ADR 008 §5
+    // accepts in exchange for the per-root rule.
+    let mut manifests: Vec<PathBuf> = Vec::new();
+    for root in roots {
+        let policy = crate::domain::EffectiveScanPolicy {
+            recency: Duration::ZERO,
+            scope: ScanScope::ExplicitRoots(vec![root.clone()]),
+            discovery_filters: crate::domain::DiscoveryFilters::Bypassed,
+        };
+        let discovered = discovery::discover_manifests(&policy, &crate::progress::NoopObserver)
+            .map_err(|e| {
+                ProofFailure::new(
+                    CleanupReasonCode::SkippedOwnershipUnproven,
+                    format!(
+                        "ownership could not be re-proven: combined root discovery failed: {e}"
+                    ),
+                )
+            })?;
+        let root_already_judged = selection.excludes_coverage_root(root);
+        for diagnostic in &discovered.diagnostics {
+            let in_boundary = match &diagnostic.path {
+                Some(path) => boundary_admits(selection, path),
+                None => !root_already_judged,
+            };
+            if in_boundary {
+                return Err(ProofFailure::new(
+                    CleanupReasonCode::SkippedOwnershipUnproven,
+                    "ownership could not be re-proven: combined selected-root discovery is incomplete",
+                ));
+            }
+        }
+        manifests.extend(discovered.manifests);
     }
+    manifests.sort();
+    manifests.dedup();
     let adapter = WorkspaceCleanupAdapter { runner };
     let mut diagnostics = Vec::new();
     let mut refreshed_counters = ScanCounters::default();
     let coverage = workspace::resolve_workspaces_with_coverage(
-        &discovered.manifests,
+        &manifests,
         &adapter,
         &mut refreshed_counters,
         &mut diagnostics,
@@ -4655,6 +4959,445 @@ mod tests {
             excluded.len(),
             2,
             "every deselected unit is reported, not silently dropped: {excluded:?}"
+        );
+    }
+
+    /// M018: two learned roots — one fully readable, one whose coverage could
+    /// not be proven — whose workspaces **share one output root**.
+    ///
+    /// The shared output is the whole point. If the unproven root were dropped
+    /// from *discovery* (the forbidden shortcut), the readable root's unit
+    /// would be classified `PrivateBounded` and cleaned. M018's exclusion
+    /// removes the unproven root from the *candidate* set only, so the shared
+    /// classification survives and the bytes are not touched.
+    fn coverage_gate_fixture() -> (TempDir, PathBuf, PathBuf, PathBuf) {
+        let d = tempfile::Builder::new()
+            .prefix("cargo-cleanme-m018-")
+            .tempdir()
+            .unwrap();
+        let root = d.path().canonicalize().unwrap().join("projects");
+        let readable = root.join("readable");
+        let unproven = root.join("unproven");
+        let alpha = readable.join("alpha");
+        let gamma = unproven.join("gamma");
+        for (name, dir) in [("alpha", &alpha), ("gamma", &gamma)] {
+            std::fs::create_dir_all(dir.join("src")).unwrap();
+            std::fs::write(
+                dir.join("Cargo.toml"),
+                format!("[package]\nname='{name}'\nversion='0.1.0'\nedition='2021'\n"),
+            )
+            .unwrap();
+            std::fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+            std::fs::write(dir.join("Cargo.lock"), "version = 4\n").unwrap();
+        }
+        // alpha owns a private target with real bytes in it.
+        let target = alpha.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(
+            target.join("CACHEDIR.TAG"),
+            b"Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .unwrap();
+        std::fs::write(target.join("artifact.bin"), vec![7u8; 4096]).unwrap();
+        // gamma redirects its build output into alpha's target: two live
+        // claimants, one physical directory.
+        let redirected = target.display().to_string();
+        std::fs::create_dir_all(gamma.join(".cargo")).unwrap();
+        std::fs::write(
+            gamma.join(".cargo/config.toml"),
+            format!("[build]\ntarget-dir = {redirected:?}\n"), // Debug: escapes `\` so Windows paths stay valid TOML
+        )
+        .unwrap();
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        backdate(d.path(), old);
+        (d, root, readable, unproven)
+    }
+
+    /// M018: a fixture whose *unproven* root has a real unreadable region, so
+    /// the walk produces a real traversal error rather than a simulated one.
+    ///
+    /// The traversal error carries no path — the upstream walk's error event
+    /// has no child path — so this is the fixture that proves the per-root
+    /// attribution works: the error belongs to one root, and the other root's
+    /// units must still be provable.
+    #[cfg(unix)]
+    fn unreadable_region_fixture() -> (TempDir, PathBuf, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::Builder::new()
+            .prefix("cargo-cleanme-m018-locked-")
+            .tempdir()
+            .unwrap();
+        let readable = d.path().join("readable");
+        let unproven = d.path().join("unproven");
+        for (name, dir) in [("readable", &readable), ("unproven", &unproven)] {
+            let project = dir.join(name);
+            std::fs::create_dir_all(project.join("src")).unwrap();
+            std::fs::write(
+                project.join("Cargo.toml"),
+                format!("[package]\nname='{name}'\nversion='0.1.0'\nedition='2021'\n"),
+            )
+            .unwrap();
+            std::fs::write(project.join("src/main.rs"), "fn main() {}\n").unwrap();
+            std::fs::write(project.join("Cargo.lock"), "version = 4\n").unwrap();
+            let target = project.join("target");
+            std::fs::create_dir_all(&target).unwrap();
+            std::fs::write(
+                target.join("CACHEDIR.TAG"),
+                b"Signature: 8a477f597d28d172789f06886806bc55\n",
+            )
+            .unwrap();
+            std::fs::write(target.join("artifact.bin"), vec![7u8; 4096]).unwrap();
+        }
+        // The unreadable region: a directory the walk cannot enter.
+        let locked = unproven.join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        assert!(
+            std::fs::read_dir(&locked).is_err(),
+            "premise: the fixture must produce an unreadable region"
+        );
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        backdate(d.path(), old);
+        (d, readable, unproven)
+    }
+
+    /// M018: an unproven root's unreadable region blocks **that root**, not
+    /// the whole scope.
+    ///
+    /// This is ADR 008 §5's per-root rule, and it is the difference between
+    /// a usable Full cleanup and the whole-system refusal the ADR withdrew.
+    /// The traversal error carries no path, so it is attributed to the root
+    /// whose walk produced it; a root outside the proof boundary does not
+    /// block.
+    ///
+    /// *Fails if:* the traversal error is treated as an unattributable,
+    /// always-blocking diagnostic — which is what the code did before the
+    /// per-root attribution, and what made the Full cleanup refuse on every
+    /// machine with one unreadable directory.
+    #[cfg(unix)]
+    #[test]
+    fn an_unproven_roots_unreadable_region_does_not_block_the_scope() {
+        let (_d, readable, unproven) = unreadable_region_fixture();
+        let noop = NoopObserver;
+        let selection = CleanupSelection::All.excluding(vec![crate::domain::UnprovenRoot {
+            root: unproven.clone(),
+            detail: "1 traversal error(s) under it".into(),
+        }]);
+        let admitted = vec![readable.clone(), unproven.clone()];
+        let report = clean_with_roots_policy_selector_guarded(
+            &admitted,
+            0,
+            &[],
+            CleanMode::Simulate,
+            &SystemCleanupRunner,
+            &noop,
+            &CleanupPolicy::default(),
+            None,
+            None,
+            &selection,
+        )
+        .unwrap();
+        assert!(
+            report.scope_blocked.is_none(),
+            "the unproven root's unreadable region must not block the scope: {:?}",
+            report.scope_blocked
+        );
+        let excluded: Vec<&CleanResult> = report
+            .results
+            .iter()
+            .filter(|row| row.reason_code == CleanupReasonCode::SkippedIncompleteCoverage)
+            .collect();
+        assert_eq!(
+            excluded.len(),
+            1,
+            "the unproven root's own unit is excluded with the typed reason: {:?}",
+            report.results
+        );
+        assert!(
+            excluded[0].display_path.starts_with(&unproven),
+            "the excluded unit must be the unproven root's own: {:?}",
+            excluded[0].display_path
+        );
+        // The proven root is not blocked by its neighbour's unreadable region.
+        let survivor = report
+            .results
+            .iter()
+            .find(|row| row.display_path.starts_with(&readable))
+            .expect("the readable root's unit is in the report");
+        assert_ne!(
+            survivor.reason_code,
+            CleanupReasonCode::SkippedIncompleteCoverage,
+            "the readable root must not be excluded"
+        );
+        assert_ne!(
+            survivor.reason_code,
+            CleanupReasonCode::SkippedOutsideSelection,
+            "the readable root is inside the selection: {:?}",
+            survivor
+        );
+    }
+
+    /// M018: an unreadable region inside the **proof boundary** still blocks.
+    ///
+    /// The per-root attribution must not become a general relaxation: a root
+    /// that is *not* excluded is inside the boundary, and its unreadable
+    /// region is an in-boundary discovery diagnostic that fails closed.
+    ///
+    /// *Fails if:* the attribution lets every pathless diagnostic through, or
+    /// attributes it to the wrong root.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_region_inside_the_proof_boundary_still_blocks() {
+        let (_d, readable, unproven) = unreadable_region_fixture();
+        let noop = NoopObserver;
+        let admitted = vec![readable.clone(), unproven.clone()];
+        let report = clean_with_roots_policy_selector_guarded(
+            &admitted,
+            0,
+            &[],
+            CleanMode::Simulate,
+            &SystemCleanupRunner,
+            &noop,
+            &CleanupPolicy::default(),
+            None,
+            None,
+            &CleanupSelection::All,
+        )
+        .unwrap();
+        let block = report
+            .scope_blocked
+            .expect("an unreadable region inside the boundary blocks the scope");
+        assert_eq!(block.reason, ScopeBlockReason::IncompleteDiscovery);
+        assert!(
+            block.message.contains("discovery diagnostic"),
+            "the block names the discovery diagnostics: {}",
+            block.message
+        );
+        assert!(
+            report.results.is_empty(),
+            "a blocked scope cleans nothing: {:?}",
+            report.results
+        );
+    }
+
+    /// M018: a unit under a root whose coverage could not be proven is
+    /// removed from the candidate set with a typed reason of its own, and the
+    /// reason names both the cause and what the operator can do.
+    ///
+    /// `skipped_outside_selection` would be a different fact — "you did not
+    /// ask for this" — and an operator reading it would look in the wrong
+    /// place.
+    #[test]
+    fn a_unit_under_an_unproven_root_is_reported_as_incomplete_coverage() {
+        let (_d, root, readable, unproven) = coverage_gate_fixture();
+        let noop = NoopObserver;
+        let selection = CleanupSelection::All.excluding(vec![crate::domain::UnprovenRoot {
+            root: unproven.clone(),
+            detail: "2 permission-denied region(s) under it".into(),
+        }]);
+        let report = clean_with_roots_policy_selector_guarded(
+            std::slice::from_ref(&root),
+            0,
+            &[],
+            CleanMode::Simulate,
+            &SystemCleanupRunner,
+            &noop,
+            &CleanupPolicy::default(),
+            None,
+            None,
+            &selection,
+        )
+        .unwrap();
+        assert!(report.scope_blocked.is_none(), "{:?}", report.scope_blocked);
+        let excluded: Vec<&CleanResult> = report
+            .results
+            .iter()
+            .filter(|row| row.reason_code == CleanupReasonCode::SkippedIncompleteCoverage)
+            .collect();
+        assert_eq!(
+            excluded.len(),
+            1,
+            "exactly the unit under the unproven root is excluded: {:?}",
+            report.results
+        );
+        assert!(
+            excluded[0].display_path.starts_with(&unproven),
+            "the excluded unit must be the unproven root's own: {:?}",
+            excluded[0].display_path
+        );
+        let detail = &excluded[0].detail;
+        assert!(
+            detail.contains("could not be proven"),
+            "the detail must name the cause: {detail}"
+        );
+        assert!(
+            detail.contains("scan --all"),
+            "the detail must name what the operator can do: {detail}"
+        );
+        // The readable root's unit is not excluded: the exclusion is per root.
+        let survivor = report
+            .results
+            .iter()
+            .find(|row| row.display_path.starts_with(&readable))
+            .expect("the readable root's unit is in the report");
+        assert_ne!(
+            survivor.reason_code,
+            CleanupReasonCode::SkippedIncompleteCoverage,
+            "the readable root must not be excluded"
+        );
+    }
+
+    /// M018: the shared-output hazard (the ADR 006 measurement).
+    ///
+    /// A workspace in the readable root shares its output root with a
+    /// workspace in the unproven root. The unproven root's workspace stays in
+    /// the *discovery* universe, so the shared output stays `Shared` and the
+    /// readable root's unit is inventory-only — and no `cargo clean` is
+    /// issued for it.
+    ///
+    /// The roots handed to the engine are the two the gate admits — the
+    /// proven root and the unproven one — which is the production shape. If
+    /// the gate withheld the unproven root, the engine would receive only the
+    /// proven root and the shared bytes would be classified `PrivateBounded`.
+    ///
+    /// *Fails if:* the unproven root is dropped from discovery. The shared
+    /// bytes would then be classified `PrivateBounded` and deleted.
+    #[test]
+    fn a_shared_output_with_an_unproven_root_stays_shared_and_is_not_cleaned() {
+        let (_d, _root, readable, unproven) = coverage_gate_fixture();
+        let noop = NoopObserver;
+        let selection = CleanupSelection::All.excluding(vec![crate::domain::UnprovenRoot {
+            root: unproven.clone(),
+            detail: "2 permission-denied region(s) under it".into(),
+        }]);
+        // The gate's admitted set: both learned roots, one proven and one not.
+        let admitted = vec![readable.clone(), unproven.clone()];
+        let report = clean_with_roots_policy_selector_guarded(
+            &admitted,
+            0,
+            &[],
+            CleanMode::Execute,
+            &SystemCleanupRunner,
+            &noop,
+            &CleanupPolicy::default(),
+            None,
+            None,
+            &selection,
+        )
+        .unwrap();
+        assert!(report.scope_blocked.is_none(), "{:?}", report.scope_blocked);
+        let alpha = report
+            .results
+            .iter()
+            .find(|row| row.display_path.starts_with(&readable))
+            .expect("the readable root's unit is in the report");
+        assert_eq!(
+            alpha.ownership,
+            OutputOwnershipClass::Shared,
+            "the unproven root's workspace is still a claimant, so the shared output stays shared: {:?}",
+            alpha
+        );
+        assert_ne!(
+            alpha.reason_code,
+            CleanupReasonCode::Cleaned,
+            "a shared output is inventory-only"
+        );
+        // The bytes are still there: no `cargo clean` was issued for it.
+        let artifact = readable.join("alpha/target/artifact.bin");
+        assert!(
+            artifact.exists(),
+            "the shared output must not be cleaned: {}",
+            artifact.display()
+        );
+    }
+
+    /// M018: the exclusion narrows a selection without ever widening it, and
+    /// it composes with every declared shape.
+    #[test]
+    fn the_coverage_exclusion_removes_candidates_and_names_the_cause() {
+        let unproven = crate::domain::UnprovenRoot {
+            root: PathBuf::from("/work/unproven"),
+            detail: "1 permission-denied region(s) under it".into(),
+        };
+        let selection = CleanupSelection::All.excluding(vec![unproven.clone()]);
+        assert!(
+            !selection.admits(Path::new("/work/unproven/project")),
+            "a unit under the unproven root is not a candidate"
+        );
+        assert!(
+            !selection.admits(Path::new("/work/unproven")),
+            "the unproven root itself is not a candidate"
+        );
+        assert!(
+            selection.admits(Path::new("/work/readable/project")),
+            "a unit outside the unproven root stays a candidate"
+        );
+        // Composing with an allow-list keeps the allow-list's meaning, and the
+        // exclusion still wins over it: an allow-list that names a unit under
+        // an unproven root does not make it a candidate again.
+        let narrowed = CleanupSelection::Roots(vec![
+            PathBuf::from("/work/readable"),
+            PathBuf::from("/work/unproven/project"),
+        ])
+        .excluding(vec![unproven.clone()]);
+        assert!(narrowed.admits(Path::new("/work/readable")));
+        assert!(
+            !narrowed.admits(Path::new("/work/unproven/project")),
+            "the exclusion narrows an allow-list; it never widens one"
+        );
+        // The typed reason is the coverage one, not "outside the selection".
+        let (code, detail) = selection
+            .exclusion_reason(Path::new("/work/unproven/project"))
+            .expect("the exclusion names its own reason");
+        assert_eq!(code, CleanupReasonCode::SkippedIncompleteCoverage);
+        assert!(
+            detail.contains("/work/unproven"),
+            "the detail names the root: {detail}"
+        );
+        assert!(
+            detail.contains("could not be proven"),
+            "the detail names the cause: {detail}"
+        );
+        assert!(
+            selection
+                .exclusion_reason(Path::new("/work/readable/project"))
+                .is_none(),
+            "a unit outside the unproven root has no coverage reason"
+        );
+    }
+
+    /// M018: the fail-closed shape dispatches nothing.
+    ///
+    /// A Full cleanup that proved nothing has no roots, and the engine
+    /// refuses an empty scope outright — so there is no `cargo clean` to
+    /// issue. The block that reports it is what makes the run non-zero; the
+    /// refusal is what makes it honest.
+    #[test]
+    fn a_scope_with_no_roots_dispatches_no_cleanup() {
+        let runner = FakeCleanupRunner::new(
+            Path::new("/nonexistent/workspace"),
+            Path::new("/nonexistent/target"),
+            1,
+        );
+        let outcome = clean_with_roots_policy_selector_guarded(
+            &[],
+            0,
+            &[],
+            CleanMode::Execute,
+            &runner,
+            &NoopObserver,
+            &CleanupPolicy::default(),
+            None,
+            None,
+            &CleanupSelection::All,
+        );
+        assert!(
+            outcome.is_err(),
+            "an empty scope is refused, never quietly cleaned"
+        );
+        assert!(
+            runner.clean_calls().is_empty(),
+            "a scope with no roots must issue no cargo clean"
         );
     }
 

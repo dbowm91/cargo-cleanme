@@ -3146,6 +3146,25 @@ fn scan_emits_exactly_one_json_document() {
         source.contains("enum EmitReport"),
         "the internal-scan report guard was removed; see architecture/13-orchestration.md §4"
     );
+
+    // M019 test 8: the Full cleanup's internal reconciliation must not emit
+    // its own report. The canonical spelling moved to the root, so the
+    // suppression now has to hold for `cargo cleanme --full` as well as for
+    // the hidden alias — and the assertion is made against the *Full branch*,
+    // not against the file as a whole: a suppression anywhere in the file
+    // would satisfy a weaker check.
+    let branch = source
+        .find("CleanupScope::Full =>")
+        .expect("the Full cleanup branch exists");
+    let call = source[branch..]
+        .find("run_scan(")
+        .map(|offset| &source[branch + offset..])
+        .expect("the Full branch runs a reconciliation");
+    let window = &call[..call.len().min(400)];
+    assert!(
+        window.contains("EmitReport::No"),
+        "the Full cleanup's internal scan must not emit a report: {window}"
+    );
 }
 
 // ---------------------------------------------------------------- update JSON
@@ -4693,4 +4712,149 @@ fn the_quiet_human_surface_is_a_row_per_cleaned_directory_and_one_tally() {
         !text.contains("observed decrease"),
         "the per-unit detail is the verbose surface's: {text}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// M019 — the root is the cleanup front door.
+//
+// The spelling moved; the intent did not. These cases pin the *refusals* the
+// move introduced: a cleanup flag handed to a read-only or local-only
+// subcommand is a usage error, never a silently discarded flag.
+//
+// Platform scope: none of these cases reaches the filesystem. The refusal
+// happens while argv is resolved, before any traversal, any Cargo spawn, or
+// any configuration file is created, so the cases are platform-neutral.
+// ---------------------------------------------------------------------------
+
+/// M019 test 4: the same override given at both levels is a usage error, and
+/// nothing is cleaned.
+///
+/// *Fails if:* one of the two values is silently preferred — the discarded-flag
+/// failure mode ADR 008 §3 exists to prevent.
+#[test]
+fn a_duplicate_override_is_a_usage_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
+    for args in [
+        vec!["--older-than", "3600", "clean", "--older-than", "60"],
+        vec![
+            "--min-reclaimable-bytes",
+            "10",
+            "clean",
+            "--min-reclaimable-bytes",
+            "20",
+        ],
+        vec!["--include", "/a/*", "clean", "--include", "/b/*"],
+        vec!["--full", "clean", "--full"],
+        vec!["--cargo-preview", "clean", "--cargo-preview"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+            .args([
+                "--config",
+                config.to_str().unwrap(),
+                "--no-progress",
+                "--format",
+                "json",
+            ])
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?} must be a usage error:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "{args:?} must not emit a document: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+}
+
+/// M019 test 5: a scope selector handed to a read-only or local-only
+/// subcommand is a usage error.
+///
+/// *Fails if:* the flag is accepted and discarded — the C034 "worst failure
+/// mode" shape, where the operator believes a machine-wide reconciliation was
+/// gated and it was not.
+#[test]
+fn a_scope_selector_on_a_read_only_subcommand_is_a_usage_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
+    for args in [
+        vec!["--full", "scan", "--all"],
+        vec!["--full", "config", "path"],
+        vec!["--full", "update"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+            .args([
+                "--config",
+                config.to_str().unwrap(),
+                "--no-progress",
+                "--format",
+                "json",
+            ])
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?} must be a usage error:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "{args:?} must not emit a document: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+}
+
+/// M019 test 6: a policy override handed to a read-only subcommand is a usage
+/// error.
+///
+/// *Fails if:* the override is ignored, as `--dry-run` is on `scan` — a
+/// `--profile` selects a Cargo target and means nothing to a read-only scan.
+#[test]
+fn a_policy_override_on_a_read_only_subcommand_is_a_usage_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
+    for args in [
+        vec!["--profile", "release", "scan", "--all"],
+        vec!["--older-than", "60", "scan", "--all"],
+        vec!["--package", "fixture", "update"],
+        vec!["--exclude", "/a/*", "config", "show"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+            .args([
+                "--config",
+                config.to_str().unwrap(),
+                "--no-progress",
+                "--format",
+                "json",
+            ])
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?} must be a usage error:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "{args:?} must not emit a document: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
 }

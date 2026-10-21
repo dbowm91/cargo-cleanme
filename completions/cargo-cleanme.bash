@@ -91,7 +91,7 @@ _cargo() {
             return 0
             ;;
         cargo__subcmd__cargo__subcmd__cleanme)
-            opts="-i -h -V --config --no-progress --stats --format --verbose --dry-run --dryrun --interactive --help --version scan config clean update"
+            opts="-i -h -V --config --no-progress --stats --format --verbose --dry-run --dryrun --interactive --full --min-reclaimable-bytes --older-than --include --exclude --profile --package --cargo-preview --help --version scan config clean update"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -103,6 +103,30 @@ _cargo() {
                     ;;
                 --format)
                     COMPREPLY=($(compgen -W "human json log" -- "${cur}"))
+                    return 0
+                    ;;
+                --min-reclaimable-bytes)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --older-than)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --include)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --exclude)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --profile)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --package)
+                    COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
                 *)

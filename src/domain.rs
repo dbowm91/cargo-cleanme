@@ -206,6 +206,51 @@ pub struct ResolutionCoverage {
     pub discovered_manifest_count: usize,
 }
 
+/// The coverage verdict for one walk root.
+///
+/// M018: the Full cleanup's proof boundary is the learned root. A root is
+/// *proven* when its own traversal completed with no traversal error and no
+/// unusable-root condition, and *unproven* otherwise. The verdict is per root
+/// because the granularity of the underlying failure is the whole root:
+/// `dua-core`'s error event carries a bare `io::Error` with no child path,
+/// only the root index — so a subtree's incompleteness cannot be attributed
+/// below the root that contains it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RootCoverage {
+    /// The root as it was spelled for the walk.
+    pub root: PathBuf,
+    /// The canonical identity of the root, used to match a learned root to its
+    /// verdict.
+    pub canonical_root: PathBuf,
+    /// Whether this root's own traversal completed.
+    pub complete: bool,
+    /// Traversal errors attributed to this root.
+    pub error_events: u64,
+    /// Of those, the ones that were permission-denied.
+    pub permission_denied: u64,
+    /// Of those, the ones that were "vanished" (not found).
+    pub vanished: u64,
+    /// Why the root is not complete, in operator-facing words. `None` when it
+    /// is complete.
+    pub detail: Option<String>,
+}
+
+/// A learned root whose coverage could not be proven.
+///
+/// M018: the Full cleanup cleans the learned roots it can prove and reports
+/// the ones it cannot. An unproven root's workspaces stay in the discovery
+/// universe — discovered, resolved, sized and classified like every other
+/// unit — but they are removed from the *candidate* set, so a shared output
+/// between a proven root and an unproven one stays `Shared` and stays
+/// inventory-only.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnprovenRoot {
+    /// The learned root as the discovery state recorded it.
+    pub root: PathBuf,
+    /// Why the root's coverage could not be proven, in operator-facing words.
+    pub detail: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OutputOwnershipClass {
     PrivateBounded,

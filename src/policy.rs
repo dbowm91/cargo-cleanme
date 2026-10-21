@@ -508,24 +508,71 @@ pub fn recheck_admission_premise(
 /// caller-selected explicit root or an automatic search hint.
 pub type CleanupCandidates = Vec<(PathBuf, RootProvenance)>;
 
+/// The Full cleanup's proof verdict over the learned roots.
+///
+/// M018: the Full cleanup's proof boundary is the **learned root**, not the
+/// platform root. The roots whose own traversal completed are cleanup
+/// candidates; the roots whose traversal did not complete are reported with a
+/// typed reason and are never candidates.
+#[derive(Clone, Debug)]
+pub struct FullCleanupVerdict {
+    /// The learned roots that were proven, with their provenance.
+    pub proven: CleanupCandidates,
+    /// The learned roots whose coverage could not be proven.
+    pub unproven: Vec<crate::domain::UnprovenRoot>,
+    /// The state generation the roots came from.
+    pub generation: Option<u64>,
+}
+
+impl FullCleanupVerdict {
+    /// Every learned root, proven or not, is a cleanup **root**.
+    ///
+    /// M018: the engine must discover the unproven roots' workspaces. Withholding
+    /// an unproven root from the cleanup scope would narrow the ownership
+    /// universe: the other claimant of a shared output would never be seen, and
+    /// those bytes would be promoted from `Shared` to `PrivateBounded` — the
+    /// ADR 006 defect, and the forbidden shortcut.
+    ///
+    /// The unproven roots are removed from the **candidate** set, by the
+    /// selection, not by withholding the root.
+    pub fn admitted_roots(&self) -> CleanupCandidates {
+        let mut roots: CleanupCandidates = self.proven.clone();
+        roots.extend(
+            self.unproven
+                .iter()
+                .map(|u| (u.root.clone(), RootProvenance::Automatic)),
+        );
+        roots
+    }
+}
+
 /// Decide `clean --full` roots from a finished Full reconciliation.
 ///
 /// The roots come from the in-memory generation the traversal just proved,
 /// never from a disk reload that could be an older generation when
 /// publication failed, was unsupported, or was unavailable. A failed save
 /// stays a stderr warning for the caller; only a missing fresh generation
-/// (or a non-zero reconciliation) refuses cleanup. Every returned root is
-/// [`RootProvenance::Automatic`] so the shared admission path applies.
+/// refuses cleanup. Every returned root is [`RootProvenance::Automatic`] so
+/// the shared admission path applies.
+///
+/// M018: a non-zero reconciliation code no longer refuses wholesale. The
+/// platform walk's incompleteness is not evidence that *every* learned root
+/// is unproven — it is evidence that the platform walk did not finish. The
+/// per-root verdict is `coverage`, the verification pass that re-walks each
+/// learned root as its own walk root; each root is then judged on its own
+/// traversal.
+///
+/// `coverage` is `None` when the platform walk completed (every learned root
+/// lies inside a traversal that read the whole platform, so every root is
+/// proven by definition and no verification pass is needed). When the
+/// platform walk was incomplete, `coverage` **must** carry the verification
+/// result; a missing verdict fails closed and marks every root unproven,
+/// because an unmeasured root is an unproven root.
 pub fn full_cleanup_roots(
     reconciliation_code: i32,
     state: Option<crate::discovery_state::DiscoveryState>,
-) -> Result<(CleanupCandidates, Option<u64>), AppError> {
-    if reconciliation_code != 0 {
-        return Err(AppError::Config(format!(
-            "full reconciliation reported an incomplete scan (exit {reconciliation_code}); \
-             no cleanup commands were run against its unproven learned roots"
-        )));
-    }
+    coverage: Option<&[crate::domain::RootCoverage]>,
+) -> Result<FullCleanupVerdict, AppError> {
     let Some(state) = state else {
         return Err(AppError::Config(
             "full reconciliation produced no fresh generation; \
@@ -534,12 +581,49 @@ pub fn full_cleanup_roots(
         ));
     };
     let generation = state.last_full_at;
-    let entries = state
-        .learned_roots
-        .into_iter()
-        .map(|r| (r.path, RootProvenance::Automatic))
-        .collect();
-    Ok((entries, generation))
+    let mut proven = CleanupCandidates::new();
+    let mut unproven = Vec::new();
+    for learned in state.learned_roots {
+        let canonical = fs::canonicalize(&learned.path).unwrap_or_else(|_| learned.path.clone());
+        let verdict = if reconciliation_code == 0 {
+            // The platform walk completed: it read every learned root's
+            // subtree, so there is nothing left to measure.
+            RootVerdict::Proven
+        } else {
+            match coverage.and_then(|entries| {
+                entries
+                    .iter()
+                    .find(|entry| entry.canonical_root == canonical)
+            }) {
+                Some(entry) if entry.complete => RootVerdict::Proven,
+                Some(entry) => RootVerdict::Unproven(entry.detail.clone()),
+                None => RootVerdict::Unproven(None),
+            }
+        };
+        match verdict {
+            RootVerdict::Proven => proven.push((learned.path, RootProvenance::Automatic)),
+            RootVerdict::Unproven(detail) => unproven.push(crate::domain::UnprovenRoot {
+                root: learned.path,
+                detail: detail.unwrap_or_else(|| {
+                    "its coverage could not be measured; it may have disappeared or become \
+                     unreadable since the reconciliation"
+                        .into()
+                }),
+            }),
+        }
+    }
+    Ok(FullCleanupVerdict {
+        proven,
+        unproven,
+        generation,
+    })
+}
+
+/// The per-root proof verdict the gate reaches.
+enum RootVerdict {
+    Proven,
+    /// Unproven, with the coverage detail when there is one.
+    Unproven(Option<String>),
 }
 
 /// Raw Routine cleanup candidates with provenance, before any
@@ -1130,9 +1214,123 @@ mod tests {
         assert_eq!(path, admitted);
     }
 
-    /// C028: `clean --full` consumes the fresh in-memory generation or
-    /// refuses. A non-zero reconciliation and a missing generation both stay
-    /// fatal; a failed save is the caller's warning, not this decision.
+    /// M018: the gate partitions the learned roots by their **own** coverage
+    /// verdict. A root whose traversal completed is a candidate; a root whose
+    /// traversal did not is reported with the reason and is never a
+    /// candidate.
+    ///
+    /// A global verdict would put both roots on one side of the line, and the
+    /// assertion below — one proven, one unproven — would fail.
+    #[test]
+    fn full_cleanup_gate_proves_the_roots_whose_own_traversal_completed() {
+        let state = || crate::discovery_state::DiscoveryState {
+            schema_version: crate::discovery_state::CURRENT_SCHEMA,
+            last_full_at: Some(77),
+            learned_roots: vec![
+                crate::discovery_state::LearnedRoot {
+                    path: PathBuf::from("/work/readable"),
+                    last_project_seen_at: 77,
+                },
+                crate::discovery_state::LearnedRoot {
+                    path: PathBuf::from("/work/unreadable"),
+                    last_project_seen_at: 77,
+                },
+            ],
+            ..Default::default()
+        };
+        let coverage = vec![
+            crate::domain::RootCoverage {
+                root: PathBuf::from("/work/readable"),
+                canonical_root: PathBuf::from("/work/readable"),
+                complete: true,
+                error_events: 0,
+                permission_denied: 0,
+                vanished: 0,
+                detail: None,
+            },
+            crate::domain::RootCoverage {
+                root: PathBuf::from("/work/unreadable"),
+                canonical_root: PathBuf::from("/work/unreadable"),
+                complete: false,
+                error_events: 3,
+                permission_denied: 2,
+                vanished: 0,
+                detail: Some("2 permission-denied region(s) under /work/unreadable".into()),
+            },
+        ];
+        let verdict = full_cleanup_roots(1, Some(state()), Some(&coverage))
+            .expect("the gate returns a verdict");
+        assert_eq!(
+            verdict.proven,
+            vec![(PathBuf::from("/work/readable"), RootProvenance::Automatic)],
+            "only the root whose own traversal completed is a candidate"
+        );
+        assert_eq!(verdict.unproven.len(), 1);
+        assert_eq!(verdict.unproven[0].root, PathBuf::from("/work/unreadable"));
+        assert!(
+            verdict.unproven[0].detail.contains("/work/unreadable"),
+            "the unproven root carries its own reason: {:?}",
+            verdict.unproven[0]
+        );
+        assert_eq!(verdict.generation, Some(77));
+    }
+
+    /// M018: a completed platform walk read every learned root's subtree, so
+    /// every root is proven by definition and no verification pass is needed.
+    #[test]
+    fn full_cleanup_gate_proves_every_root_when_the_platform_walk_completed() {
+        let state = || crate::discovery_state::DiscoveryState {
+            schema_version: crate::discovery_state::CURRENT_SCHEMA,
+            last_full_at: Some(77),
+            learned_roots: vec![crate::discovery_state::LearnedRoot {
+                path: PathBuf::from("/work/a"),
+                last_project_seen_at: 77,
+            }],
+            ..Default::default()
+        };
+        // No coverage at all: the completed walk is the proof.
+        let verdict =
+            full_cleanup_roots(0, Some(state()), None).expect("the gate returns a verdict");
+        assert_eq!(verdict.proven.len(), 1);
+        assert!(verdict.unproven.is_empty());
+    }
+
+    /// M018: an incomplete walk whose verification pass measured nothing
+    /// proves nothing. Every root is unproven, so the caller fails closed —
+    /// the operation must never exit 0 with zero rows (the M012A silent
+    /// no-op).
+    #[test]
+    fn full_cleanup_gate_proves_nothing_when_the_coverage_was_never_measured() {
+        let state = || crate::discovery_state::DiscoveryState {
+            schema_version: crate::discovery_state::CURRENT_SCHEMA,
+            last_full_at: Some(77),
+            learned_roots: vec![crate::discovery_state::LearnedRoot {
+                path: PathBuf::from("/work/a"),
+                last_project_seen_at: 77,
+            }],
+            ..Default::default()
+        };
+        let verdict =
+            full_cleanup_roots(1, Some(state()), None).expect("the gate returns a verdict");
+        assert!(
+            verdict.proven.is_empty(),
+            "an unmeasured root must never become a candidate"
+        );
+        assert_eq!(verdict.unproven.len(), 1);
+        assert!(
+            verdict.unproven[0].detail.contains("could not be measured"),
+            "the reason must say the coverage was never measured: {:?}",
+            verdict.unproven[0]
+        );
+    }
+
+    /// C028 + M018: `clean --full` consumes the fresh in-memory generation or
+    /// refuses. A missing generation stays fatal; a failed save is the
+    /// caller's warning, not this decision.
+    ///
+    /// M018: an incomplete reconciliation no longer refuses wholesale. It
+    /// produces a *per-root* verdict, and a root whose coverage was not
+    /// measured is unproven — never a candidate.
     #[test]
     fn full_cleanup_consumes_only_a_fresh_in_memory_generation() {
         let state = || crate::discovery_state::DiscoveryState {
@@ -1145,16 +1343,27 @@ mod tests {
             ..Default::default()
         };
         // No fresh generation, no cleanup — even with a zero exit code.
-        assert!(full_cleanup_roots(0, None).is_err());
-        // An incomplete reconciliation never authorizes stale roots.
-        assert!(full_cleanup_roots(1, Some(state())).is_err());
+        assert!(full_cleanup_roots(0, None, None).is_err());
+        // An incomplete reconciliation whose coverage was never measured: the
+        // root's coverage is unknown, so it is unproven and not a candidate.
+        // The old shape asserted `is_err()` on a literal `1`, which proved
+        // only that a non-zero code was refused — never that a real traversal
+        // produces one, which is how the defect survived.
+        let verdict = full_cleanup_roots(1, Some(state()), None).unwrap();
+        assert!(
+            verdict.proven.is_empty(),
+            "an unmeasured root must never become a cleanup candidate"
+        );
+        assert_eq!(verdict.unproven.len(), 1);
+        assert_eq!(verdict.unproven[0].root, PathBuf::from("/work/a"));
         // The fresh generation yields automatic roots plus its timestamp.
-        let (entries, generation) = full_cleanup_roots(0, Some(state())).unwrap();
+        let verdict = full_cleanup_roots(0, Some(state()), None).unwrap();
         assert_eq!(
-            entries,
+            verdict.proven,
             vec![(PathBuf::from("/work/a"), RootProvenance::Automatic)]
         );
-        assert_eq!(generation, Some(77));
+        assert_eq!(verdict.generation, Some(77));
+        assert!(verdict.unproven.is_empty());
     }
 
     /// C028: cleanup candidates preserve a symlinked seed's own identity.

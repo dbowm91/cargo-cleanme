@@ -4,43 +4,18 @@
 .SH NAME
 clean \- Preview or execute cleanup of revalidated Cargo build artifacts
 .SH SYNOPSIS
-\fBclean\fR [\fB\-\-known\fR] [\fB\-\-full\fR] [\fB\-\-min\-reclaimable\-bytes\fR] [\fB\-\-older\-than\fR] [\fB\-\-include\fR] [\fB\-\-exclude\fR] [\fB\-\-profile\fR] [\fB\-\-package\fR] [\fB\-\-dry\-run\fR] [\fB\-\-cargo\-preview\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIROOT\fR] 
+\fBclean\fR [\fB\-\-known\fR] [\fB\-\-dry\-run\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIROOT\fR] 
 .SH DESCRIPTION
-Preview or execute cleanup of revalidated Cargo build artifacts
+Preview or execute cleanup of revalidated Cargo build artifacts.
+.PP
+A hidden compatibility alias (ADR 008 §4b): the root is the canonical cleanup front door, and this subcommand keeps every published spelling working — `clean ROOT`, `clean \-\-known` and `clean \-\-full` — without advertising a second front door.
 .SH OPTIONS
 .TP
 \fB\-\-known\fR
 Clean bounded roots selected by the current Routine policy
 .TP
-\fB\-\-full\fR
-Complete Full reconciliation before cleaning its learned roots
-.TP
-\fB\-\-min\-reclaimable\-bytes\fR \fI<MIN_RECLAIMABLE_BYTES>\fR
-Require at least this many reclaimable bytes per workspace
-.TP
-\fB\-\-older\-than\fR \fI<OLDER_THAN>\fR
-Require this many seconds of inactivity
-.TP
-\fB\-\-include\fR \fI<INCLUDE>\fR
-Include canonical workspace roots matching this glob (repeatable)
-.TP
-\fB\-\-exclude\fR \fI<EXCLUDE>\fR
-Exclude canonical workspace roots matching this glob (repeatable)
-.TP
-\fB\-\-profile\fR \fI<PROFILE>\fR
-Ask Cargo to clean one named profile. Selector byte estimates are unknown
-.TP
-\fB\-\-package\fR \fI<PACKAGE>\fR
-Clean one validated workspace package through qualified Cargo versions
-.TP
 \fB\-\-dry\-run\fR
 Application simulation: run the full decision/proof/report path but invoke no Cargo clean command. The default mode is Execute
 .TP
-\fB\-\-cargo\-preview\fR
-Cargo preview: after the same complete final proof, invoke Cargo\*(Aqs own `clean \-\-dry\-run \-\-verbose`. Never removes anything
-.TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
-.TP
-[\fIROOT\fR]
-Optional bounded sandbox root. Omit to use the maintenance scope (identical to bare invocation) or select `\-\-known` / `\-\-full`
+Print help (see a summary with \*(Aq\-h\*(Aq)

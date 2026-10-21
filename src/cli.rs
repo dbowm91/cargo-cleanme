@@ -26,6 +26,11 @@ discovered participant, and executes eligible Cargo cleanup units. The working \
 directory is part of that scope, so a bare run cleans what is under it -- and the \
 scope only ever grows, never narrows. `--dry-run` performs the identical decision \
 and proof path while invoking no `cargo clean` process at all.\n\n\
+The root is the cleanup front door: `cargo cleanme ROOT` cleans one bounded \
+root, `cargo cleanme --full` runs the Full cleanup -- a complete machine \
+reconciliation, then the learned roots it can prove -- and `--cargo-preview` and \
+the policy overrides work here too. A directory whose name collides with a \
+subcommand name is read as that subcommand; spell it `./scan` to name it.\n\n\
 `cargo cleanme scan` needs a scope: `--all` is the full read-only machine \
 reconciliation and the only operation allowed to expire learned roots, \
 `scan ROOT` is a bounded explicit scan, and `scan --known` is the read-only \
@@ -81,6 +86,42 @@ pub struct Cli {
     /// review a selection without invoking `cargo clean`.
     #[arg(short = 'i', long, global = true)]
     pub interactive: bool,
+    /// Complete Full reconciliation before cleaning its learned roots.
+    ///
+    /// The canonical spelling of the Full cleanup operation (ADR 008 §4b).
+    /// `cargo cleanme clean --full` remains accepted as a hidden alias.
+    #[arg(long, conflicts_with = "root")]
+    pub full: bool,
+    /// Optional bounded sandbox root. Omit to use the maintenance scope
+    /// (identical to bare invocation) or select `--full`.
+    ///
+    /// A directory whose name collides with a subcommand name (`scan`,
+    /// `clean`, `config`, `update`) is read as that subcommand: the
+    /// subcommand wins. Spell such a directory `./scan` to name it.
+    #[arg(conflicts_with = "full")]
+    pub root: Option<PathBuf>,
+    /// Require at least this many reclaimable bytes per workspace.
+    #[arg(long)]
+    pub min_reclaimable_bytes: Option<u64>,
+    /// Require this many seconds of inactivity.
+    #[arg(long)]
+    pub older_than: Option<u64>,
+    /// Include canonical workspace roots matching this glob (repeatable).
+    #[arg(long = "include")]
+    pub include: Vec<String>,
+    /// Exclude canonical workspace roots matching this glob (repeatable).
+    #[arg(long = "exclude")]
+    pub exclude: Vec<String>,
+    /// Ask Cargo to clean one named profile. Selector byte estimates are unknown.
+    #[arg(long, conflicts_with = "package", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+    pub profile: Option<String>,
+    /// Clean one validated workspace package through qualified Cargo versions.
+    #[arg(long, conflicts_with = "profile", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+    pub package: Option<String>,
+    /// Cargo preview: after the same complete final proof, invoke Cargo's own
+    /// `clean --dry-run --verbose`. Never removes anything.
+    #[arg(long, conflicts_with_all = ["dry_run", "dryrun_legacy"])]
+    pub cargo_preview: bool,
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -119,33 +160,40 @@ pub enum Command {
         command: ConfigCommand,
     },
     /// Preview or execute cleanup of revalidated Cargo build artifacts.
+    ///
+    /// A hidden compatibility alias (ADR 008 §4b): the root is the canonical
+    /// cleanup front door, and this subcommand keeps every published spelling
+    /// working — `clean ROOT`, `clean --known` and `clean --full` — without
+    /// advertising a second front door.
+    #[command(hide = true)]
     Clean {
         /// Optional bounded sandbox root. Omit to use the maintenance scope
         /// (identical to bare invocation) or select `--known` / `--full`.
+        #[arg(hide = true)]
         root: Option<PathBuf>,
         /// Clean bounded roots selected by the current Routine policy.
         #[arg(long, conflicts_with_all = ["root", "full"])]
         known: bool,
         /// Complete Full reconciliation before cleaning its learned roots.
-        #[arg(long, conflicts_with_all = ["root", "known"])]
+        #[arg(long, hide = true, conflicts_with_all = ["root", "known"])]
         full: bool,
         /// Require at least this many reclaimable bytes per workspace.
-        #[arg(long)]
+        #[arg(long, hide = true)]
         min_reclaimable_bytes: Option<u64>,
         /// Require this many seconds of inactivity.
-        #[arg(long)]
+        #[arg(long, hide = true)]
         older_than: Option<u64>,
         /// Include canonical workspace roots matching this glob (repeatable).
-        #[arg(long = "include")]
+        #[arg(long = "include", hide = true)]
         include: Vec<String>,
         /// Exclude canonical workspace roots matching this glob (repeatable).
-        #[arg(long = "exclude")]
+        #[arg(long = "exclude", hide = true)]
         exclude: Vec<String>,
         /// Ask Cargo to clean one named profile. Selector byte estimates are unknown.
-        #[arg(long, conflicts_with = "package", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+        #[arg(long, hide = true, conflicts_with = "package", value_parser = clap::builder::NonEmptyStringValueParser::new())]
         profile: Option<String>,
         /// Clean one validated workspace package through qualified Cargo versions.
-        #[arg(long, conflicts_with = "profile", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+        #[arg(long, hide = true, conflicts_with = "profile", value_parser = clap::builder::NonEmptyStringValueParser::new())]
         package: Option<String>,
         /// Application simulation: run the full decision/proof/report path but
         /// invoke no Cargo clean command. The default mode is Execute.
@@ -153,7 +201,7 @@ pub enum Command {
         dry_run: bool,
         /// Cargo preview: after the same complete final proof, invoke Cargo's
         /// own `clean --dry-run --verbose`. Never removes anything.
-        #[arg(long, conflicts_with_all = ["dry_run", "yes_legacy", "dryrun_legacy"])]
+        #[arg(long, hide = true, conflicts_with_all = ["dry_run", "yes_legacy", "dryrun_legacy"])]
         cargo_preview: bool,
         /// Historical spelling of the (now default) Execute mode; retained as a
         /// hidden alias.
@@ -329,38 +377,52 @@ impl Cli {
     pub fn invocation(&self) -> Invocation {
         match &self.command {
             // No subcommand *is* routine maintenance, not a scan fallthrough.
-            None => Invocation::Cleanup(CleanupRequest {
-                scope: CleanupScope::Maintenance,
-                mode: clean_mode(self.dry_run, false, self.dryrun_legacy),
-                overrides: CleanupOverrides::default(),
-                selection: CleanupSelection::WorkingDirectory,
-                interactive: self.interactive,
-            }),
+            // The root is the cleanup front door (ADR 008 §4b): it carries the
+            // scope, the mode, and the policy overrides.
+            None => match self.root_cleanup_request() {
+                Ok(request) => Invocation::Cleanup(request),
+                Err(message) => Invocation::UsageError(message),
+            },
             Some(Command::Scan {
                 root,
                 known,
                 all,
                 full,
-            }) => match (root, *known, *all || *full) {
-                (Some(root), _, _) => Invocation::Scan(ScanIntent::Explicit(root.clone())),
-                (None, true, _) => Invocation::Scan(ScanIntent::Maintenance),
-                // clap requires one of ROOT / --known / --all, so reaching the
-                // Full arm means an explicit flag (or its hidden alias) was
-                // actually given rather than defaulted.
-                (None, false, true) => Invocation::Scan(ScanIntent::Full),
-                // Unreachable through `clap`; fail closed rather than guess.
-                (None, false, false) => {
-                    Invocation::UsageError("scan requires a ROOT, --known, or --all".into())
+            }) => {
+                if let Some(message) = self.reject_cleanup_flags_for("scan") {
+                    return Invocation::UsageError(message);
                 }
-            },
-            Some(Command::Config { command }) => Invocation::Config(*command),
+                match (root, *known, *all || *full) {
+                    (Some(root), _, _) => Invocation::Scan(ScanIntent::Explicit(root.clone())),
+                    (None, true, _) => Invocation::Scan(ScanIntent::Maintenance),
+                    // clap requires one of ROOT / --known / --all, so reaching the
+                    // Full arm means an explicit flag (or its hidden alias) was
+                    // actually given rather than defaulted.
+                    (None, false, true) => Invocation::Scan(ScanIntent::Full),
+                    // Unreachable through `clap`; fail closed rather than guess.
+                    (None, false, false) => {
+                        Invocation::UsageError("scan requires a ROOT, --known, or --all".into())
+                    }
+                }
+            }
+            Some(Command::Config { command }) => {
+                if let Some(message) = self.reject_cleanup_flags_for("config") {
+                    return Invocation::UsageError(message);
+                }
+                Invocation::Config(*command)
+            }
             // The root-level `--dry-run` is honoured here too, not only on the
             // bare front door: `cargo cleanme --dry-run clean ROOT` is the
             // spelling Cargo itself passes, so a flag parsed before the
             // subcommand must never silently fall back to Execute.
-            Some(Command::Update { dry_run }) => Invocation::Update {
-                dry_run: *dry_run || self.dry_run || self.dryrun_legacy,
-            },
+            Some(Command::Update { dry_run }) => {
+                if let Some(message) = self.reject_cleanup_flags_for("update") {
+                    return Invocation::UsageError(message);
+                }
+                Invocation::Update {
+                    dry_run: *dry_run || self.dry_run || self.dryrun_legacy,
+                }
+            }
             // `yes_legacy` is intentionally not bound: `--yes` used to be the
             // only way to ask for Execute, Execute is now the default, so the
             // flag carries no intent of its own and printing nothing about it
@@ -378,45 +440,259 @@ impl Cli {
                 exclude,
                 profile,
                 package,
-                ..
-            }) => {
-                let scope = match (root, *full, *known) {
-                    (Some(root), _, _) => CleanupScope::Root(root.clone()),
-                    (None, true, _) => CleanupScope::Full,
-                    // `clean` with no selector is the same intent as bare
-                    // invocation, not a third scope.
-                    (None, false, _) => CleanupScope::Maintenance,
-                };
-                // M014: the working-directory anchor belongs to the
-                // *maintenance* spellings, which are the ones whose Routine
-                // scope spans the machine. `clean ROOT` and `clean --full`
-                // already bound their own scope and stay unfiltered, so the
-                // two cannot silently disagree about what "everything" means.
-                let selection = match scope {
-                    CleanupScope::Maintenance => CleanupSelection::WorkingDirectory,
-                    CleanupScope::Root(_) | CleanupScope::Full => CleanupSelection::All,
-                };
-                Invocation::Cleanup(CleanupRequest {
-                    scope,
-                    mode: if self.dry_run || self.dryrun_legacy {
-                        CleanMode::Simulate
-                    } else {
-                        clean_mode(*dry_run, *cargo_preview, *dryrun_legacy)
-                    },
-                    overrides: CleanupOverrides {
-                        min_reclaimable_bytes: *min_reclaimable_bytes,
-                        older_than: *older_than,
-                        include: include.clone(),
-                        exclude: exclude.clone(),
-                        profile: profile.clone(),
-                        package: package.clone(),
-                    },
-                    selection,
-                    interactive: self.interactive,
-                })
-            }
+                yes_legacy: _,
+            }) => match self.merged_cleanup_request(CleanAlias {
+                root: root.clone(),
+                known: *known,
+                full: *full,
+                dry_run: *dry_run,
+                cargo_preview: *cargo_preview,
+                dryrun_legacy: *dryrun_legacy,
+                overrides: CleanupOverrides {
+                    min_reclaimable_bytes: *min_reclaimable_bytes,
+                    older_than: *older_than,
+                    include: include.clone(),
+                    exclude: exclude.clone(),
+                    profile: profile.clone(),
+                    package: package.clone(),
+                },
+            }) {
+                Ok(request) => Invocation::Cleanup(request),
+                Err(message) => Invocation::UsageError(message),
+            },
         }
     }
+
+    /// The root's own cleanup intent, with no subcommand present.
+    ///
+    /// M019: the root is the canonical cleanup front door. `cargo cleanme` is
+    /// the maintenance scope, `cargo cleanme ROOT` is a bounded root, and
+    /// `cargo cleanme --full` is the Full cleanup.
+    fn root_cleanup_request(&self) -> Result<CleanupRequest, String> {
+        let scope = if self.full {
+            CleanupScope::Full
+        } else if let Some(root) = &self.root {
+            CleanupScope::Root(root.clone())
+        } else {
+            CleanupScope::Maintenance
+        };
+        Ok(CleanupRequest {
+            selection: selection_for(&scope),
+            scope,
+            mode: merged_clean_mode(
+                (self.dry_run, self.cargo_preview, self.dryrun_legacy),
+                (false, false, false),
+            ),
+            overrides: self.root_overrides(),
+            interactive: self.interactive,
+        })
+    }
+
+    /// The cleanup intent behind the hidden `clean` alias, merged with the
+    /// root's own flags.
+    ///
+    /// M019: the root and `clean` are two spellings of one intent. A value
+    /// given at the root wins; a value given on `clean` is used when the root
+    /// did not supply one; the same override at both levels is a usage error,
+    /// because silently preferring one of two values is the discarded-flag
+    /// failure mode ADR 008 §3 exists to prevent.
+    fn merged_cleanup_request(&self, alias: CleanAlias) -> Result<CleanupRequest, String> {
+        // The scope selectors: `--full` and the ROOT positional at either
+        // level, and `--known` on `clean`.
+        if self.full && alias.full {
+            return Err(duplicate_override("--full"));
+        }
+        if self.root.is_some() && alias.root.is_some() {
+            return Err(duplicate_override("ROOT"));
+        }
+        if self.cargo_preview && alias.cargo_preview {
+            return Err(duplicate_override("--cargo-preview"));
+        }
+        let scope = if self.full || alias.full {
+            // `clean --known` is the bare invocation, and the bare invocation
+            // is the maintenance scope: a Full scope and `--known` select
+            // different scopes, and `clean --full --known` is already refused
+            // by clap.
+            if alias.known {
+                return Err(duplicate_override("--known"));
+            }
+            CleanupScope::Full
+        } else if let Some(root) = self.root.clone().or_else(|| alias.root.clone()) {
+            if alias.known {
+                return Err(duplicate_override("--known"));
+            }
+            CleanupScope::Root(root)
+        } else {
+            // `clean` with no selector is the same intent as the bare
+            // invocation, not a third scope.
+            CleanupScope::Maintenance
+        };
+        Ok(CleanupRequest {
+            selection: selection_for(&scope),
+            scope,
+            mode: merged_clean_mode(
+                (self.dry_run, self.cargo_preview, self.dryrun_legacy),
+                (alias.dry_run, alias.cargo_preview, alias.dryrun_legacy),
+            ),
+            overrides: merge_overrides(&self.root_overrides(), &alias.overrides)?,
+            interactive: self.interactive,
+        })
+    }
+
+    /// The root's own policy overrides.
+    fn root_overrides(&self) -> CleanupOverrides {
+        CleanupOverrides {
+            min_reclaimable_bytes: self.min_reclaimable_bytes,
+            older_than: self.older_than,
+            include: self.include.clone(),
+            exclude: self.exclude.clone(),
+            profile: self.profile.clone(),
+            package: self.package.clone(),
+        }
+    }
+
+    /// A root-level cleanup flag handed to a read-only or local-only
+    /// subcommand is a usage error, never a silently discarded flag.
+    ///
+    /// M019: `--full` selects a cleanup operation and the policy overrides
+    /// select Cargo targets; neither means anything to `scan`, `config` or
+    /// `update`. Discarding them would look exactly like the flag was
+    /// honoured.
+    fn reject_cleanup_flags_for(&self, subcommand: &str) -> Option<String> {
+        let mut given: Vec<&str> = Vec::new();
+        if self.full {
+            given.push("--full");
+        }
+        if self.root.is_some() {
+            given.push("ROOT");
+        }
+        if self.min_reclaimable_bytes.is_some() {
+            given.push("--min-reclaimable-bytes");
+        }
+        if self.older_than.is_some() {
+            given.push("--older-than");
+        }
+        if !self.include.is_empty() {
+            given.push("--include");
+        }
+        if !self.exclude.is_empty() {
+            given.push("--exclude");
+        }
+        if self.profile.is_some() {
+            given.push("--profile");
+        }
+        if self.package.is_some() {
+            given.push("--package");
+        }
+        if self.cargo_preview {
+            given.push("--cargo-preview");
+        }
+        if given.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "`{subcommand}` does not accept {}: these are cleanup flags, and \
+             `cargo cleanme {subcommand}` is read-only. Run the cleanup without the \
+             subcommand, or run `{subcommand}` on its own.",
+            given.join(", ")
+        ))
+    }
+}
+
+/// The selection that goes with a scope.
+///
+/// M014: the working-directory anchor belongs to the *maintenance* spellings,
+/// whose Routine scope spans the machine. A bounded root and the Full scope
+/// already bound their own scope and stay unfiltered, so the two cannot
+/// silently disagree about what "everything" means.
+fn selection_for(scope: &CleanupScope) -> CleanupSelection {
+    match scope {
+        CleanupScope::Maintenance => CleanupSelection::WorkingDirectory,
+        CleanupScope::Root(_) | CleanupScope::Full => CleanupSelection::All,
+    }
+}
+
+/// The cleanup mode across the root and the `clean` alias.
+///
+/// M019: a simulation at either level wins over a Cargo preview at either
+/// level. `--dry-run` says "invoke no `cargo clean` at all"; a Cargo preview
+/// does invoke one. The single-level [`clean_mode`] keeps its stricter
+/// contract, because there clap has already rejected the combination.
+fn merged_clean_mode(root: (bool, bool, bool), clean: (bool, bool, bool)) -> CleanMode {
+    let (root_dry_run, root_cargo_preview, root_dryrun_legacy) = root;
+    let (clean_dry_run, clean_cargo_preview, clean_dryrun_legacy) = clean;
+    if root_dry_run || root_dryrun_legacy || clean_dry_run || clean_dryrun_legacy {
+        CleanMode::Simulate
+    } else if root_cargo_preview || clean_cargo_preview {
+        CleanMode::CargoPreview
+    } else {
+        CleanMode::Execute
+    }
+}
+
+/// The same override given at two levels is ambiguous.
+fn duplicate_override(flag: &str) -> String {
+    format!(
+        "{flag} was given at the root and on `clean`. The two values are ambiguous; \
+         give it at one level only."
+    )
+}
+
+/// Merge the root's cleanup overrides with `clean`'s.
+///
+/// M019: a value given at the root wins; a value given on `clean` is used when
+/// the root did not supply one; the same override at both levels is a usage
+/// error.
+fn merge_overrides(
+    root: &CleanupOverrides,
+    clean: &CleanupOverrides,
+) -> Result<CleanupOverrides, String> {
+    Ok(CleanupOverrides {
+        min_reclaimable_bytes: merge_one(
+            "--min-reclaimable-bytes",
+            root.min_reclaimable_bytes,
+            clean.min_reclaimable_bytes,
+        )?,
+        older_than: merge_one("--older-than", root.older_than, clean.older_than)?,
+        include: merge_many("--include", &root.include, &clean.include)?,
+        exclude: merge_many("--exclude", &root.exclude, &clean.exclude)?,
+        profile: merge_one("--profile", root.profile.clone(), clean.profile.clone())?,
+        package: merge_one("--package", root.package.clone(), clean.package.clone())?,
+    })
+}
+
+/// Merge one optional override given at the root and on `clean`.
+fn merge_one<T: Clone>(flag: &str, root: Option<T>, clean: Option<T>) -> Result<Option<T>, String> {
+    match (root, clean) {
+        (Some(_), Some(_)) => Err(duplicate_override(flag)),
+        (Some(value), None) => Ok(Some(value)),
+        (None, Some(value)) => Ok(Some(value)),
+        (None, None) => Ok(None),
+    }
+}
+
+/// Merge one repeatable override given at the root and on `clean`.
+fn merge_many(flag: &str, root: &[String], clean: &[String]) -> Result<Vec<String>, String> {
+    match (root.is_empty(), clean.is_empty()) {
+        (false, false) => Err(duplicate_override(flag)),
+        (false, true) => Ok(root.to_vec()),
+        (true, false) => Ok(clean.to_vec()),
+        (true, true) => Ok(Vec::new()),
+    }
+}
+
+/// The hidden `clean` alias's own parsed flags.
+///
+/// M019: the alias carries the same intent as the root, so it is merged with
+/// the root's flags rather than resolved on its own.
+struct CleanAlias {
+    root: Option<PathBuf>,
+    known: bool,
+    full: bool,
+    dry_run: bool,
+    cargo_preview: bool,
+    dryrun_legacy: bool,
+    overrides: CleanupOverrides,
 }
 
 /// Normalize Cargo external-subcommand argv before clap parses it.
@@ -525,6 +801,339 @@ mod tests {
             interactive: false,
         }
     }
+    /// M019 test 1: the canonical spelling resolves to the Full scope — the
+    /// *same* value the compatibility alias resolves to.
+    ///
+    /// *Fails if:* the root flag is parsed but not bound.
+    #[test]
+    fn the_root_full_flag_resolves_to_the_full_scope() {
+        let canonical = Cli::try_parse_from(["cargo-cleanme", "--full"])
+            .unwrap()
+            .invocation();
+        assert_eq!(
+            canonical,
+            Invocation::Cleanup(cleanup(CleanupScope::Full, CleanMode::Execute)),
+            "the canonical spelling must resolve to the Full scope"
+        );
+        // The alias resolves to the same value: the spelling changed, the
+        // intent did not.
+        let alias = Cli::try_parse_from(["cargo-cleanme", "clean", "--full"])
+            .unwrap()
+            .invocation();
+        assert_eq!(canonical, alias, "the two spellings must not drift");
+    }
+
+    /// M019 test 2: the compatibility alias still resolves, and `clean` is
+    /// absent from the root help.
+    ///
+    /// *Fails if:* the alias is dropped, or the hidden subcommand reappears in
+    /// the help text.
+    #[test]
+    fn the_clean_alias_still_resolves_and_is_hidden_from_the_help() {
+        assert_eq!(
+            Cli::try_parse_from(["cargo-cleanme", "clean", "--full"])
+                .unwrap()
+                .invocation(),
+            Invocation::Cleanup(cleanup(CleanupScope::Full, CleanMode::Execute))
+        );
+        let help = Cli::command().render_long_help().to_string();
+        // The `Commands:` section must not list the hidden subcommand. The
+        // check is on the command *names*, not on the prose: the long-about
+        // names `cargo cleanme` throughout.
+        let listed: Vec<&str> = help
+            .split("Commands:")
+            .nth(1)
+            .and_then(|rest| rest.split("Arguments:").next())
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| line.split_whitespace().next())
+            .collect();
+        assert!(
+            !listed.contains(&"clean"),
+            "the hidden subcommand must not reappear in the help text: {listed:?}"
+        );
+        let command = Cli::command();
+        let clean = command.find_subcommand("clean").expect("clean subcommand");
+        assert!(
+            clean.is_hide_set(),
+            "the clean alias must stay hidden from the root help"
+        );
+        assert!(
+            help.contains("--full"),
+            "the canonical Full cleanup flag must be advertised: {help}"
+        );
+    }
+
+    /// M019 test 3: the policy overrides work at the root.
+    ///
+    /// *Fails if:* the root value is parsed but discarded.
+    #[test]
+    fn the_policy_overrides_work_at_the_root() {
+        let root = Cli::try_parse_from([
+            "cargo-cleanme",
+            "--older-than",
+            "3600",
+            "--min-reclaimable-bytes",
+            "4096",
+            "--include",
+            "/a/*",
+            "--exclude",
+            "/b/*",
+        ])
+        .unwrap()
+        .invocation();
+        let alias = Cli::try_parse_from([
+            "cargo-cleanme",
+            "clean",
+            "--older-than",
+            "3600",
+            "--min-reclaimable-bytes",
+            "4096",
+            "--include",
+            "/a/*",
+            "--exclude",
+            "/b/*",
+        ])
+        .unwrap()
+        .invocation();
+        let Invocation::Cleanup(root_request) = root else {
+            panic!("the root spelling must resolve to a cleanup");
+        };
+        let Invocation::Cleanup(alias_request) = alias else {
+            panic!("the alias must resolve to a cleanup");
+        };
+        assert_eq!(root_request.overrides, alias_request.overrides);
+        assert_eq!(root_request.overrides.older_than, Some(3600));
+        assert_eq!(root_request.overrides.min_reclaimable_bytes, Some(4096));
+        assert_eq!(root_request.overrides.include, vec!["/a/*".to_string()]);
+        assert_eq!(root_request.overrides.exclude, vec!["/b/*".to_string()]);
+    }
+
+    /// M019 test 11: the root positional resolves to the bounded-root scope —
+    /// the *same* value the compatibility alias resolves to.
+    ///
+    /// *Fails if:* the root positional is parsed but not bound, or is bound to
+    /// the maintenance scope.
+    #[test]
+    fn the_root_positional_resolves_to_the_bounded_root_scope() {
+        let canonical = Cli::try_parse_from(["cargo-cleanme", "/tmp/projects"])
+            .unwrap()
+            .invocation();
+        assert_eq!(
+            canonical,
+            Invocation::Cleanup(cleanup(
+                CleanupScope::Root(PathBuf::from("/tmp/projects")),
+                CleanMode::Execute
+            ))
+        );
+        let alias = Cli::try_parse_from(["cargo-cleanme", "clean", "/tmp/projects"])
+            .unwrap()
+            .invocation();
+        assert_eq!(canonical, alias, "the two spellings must not drift");
+    }
+
+    /// M019 test 12: a subcommand still wins over a positional of the same
+    /// shape.
+    ///
+    /// *Fails if:* the positional/subcommand precedence is left to a default
+    /// that resolves the other way — the case that would make
+    /// `cargo cleanme scan` silently become a bounded cleanup of a directory
+    /// called `scan`.
+    #[test]
+    fn a_subcommand_wins_over_a_positional_of_the_same_shape() {
+        assert_eq!(
+            Cli::try_parse_from(["cargo-cleanme", "scan", "--all"])
+                .unwrap()
+                .invocation(),
+            Invocation::Scan(ScanIntent::Full)
+        );
+        assert_eq!(
+            Cli::try_parse_from(["cargo-cleanme", "config", "path"])
+                .unwrap()
+                .invocation(),
+            Invocation::Config(ConfigCommand::Path)
+        );
+    }
+
+    /// M019 test 13: the deliberate behaviour change is pinned.
+    ///
+    /// `cargo cleanme .` no longer exits 2 with "unrecognized subcommand": it
+    /// resolves to the bounded-root scope. A directory named like a
+    /// subcommand is still the subcommand — `./scan` names such a directory.
+    #[test]
+    fn the_dot_positional_is_a_bounded_cleanup_and_not_a_usage_error() {
+        assert_eq!(
+            Cli::try_parse_from(["cargo-cleanme", "."])
+                .unwrap()
+                .invocation(),
+            Invocation::Cleanup(cleanup(
+                CleanupScope::Root(PathBuf::from(".")),
+                CleanMode::Execute
+            ))
+        );
+        // A directory whose name collides with a subcommand is the subcommand.
+        assert!(
+            Cli::try_parse_from(["cargo-cleanme", "./scan"]).is_ok(),
+            "an explicitly relative name must stay addressable"
+        );
+    }
+
+    /// M019 test 15: `clean --known` is not orphaned by the hiding.
+    ///
+    /// It resolves to the bare invocation — the maintenance scope anchored to
+    /// the working directory — so hiding `clean` orphans nothing by it.
+    #[test]
+    fn the_known_alias_is_not_orphaned_by_the_hiding() {
+        let alias = Cli::try_parse_from(["cargo-cleanme", "clean", "--known"])
+            .unwrap()
+            .invocation();
+        let bare = Cli::try_parse_from(["cargo-cleanme"]).unwrap().invocation();
+        assert_eq!(alias, bare, "`clean --known` must stay the bare invocation");
+        let Invocation::Cleanup(request) = alias else {
+            panic!("`clean --known` must resolve to a cleanup");
+        };
+        assert_eq!(request.scope, CleanupScope::Maintenance);
+        assert_eq!(request.selection, CleanupSelection::WorkingDirectory);
+    }
+
+    /// M019 test 10: the root help describes the canonical Full cleanup
+    /// spelling, and the root man page renders from the same text.
+    #[test]
+    fn the_root_help_names_the_canonical_full_cleanup_spelling() {
+        let help = Cli::command().render_long_help().to_string();
+        assert!(
+            help.contains("cargo cleanme --full"),
+            "the help must name the canonical Full cleanup spelling: {help}"
+        );
+        assert!(
+            help.contains("cargo cleanme ROOT"),
+            "the help must name the canonical bounded-root spelling: {help}"
+        );
+    }
+
+    /// M019: the resolved intent is unchanged by the spelling change. The
+    /// root's spellings and the hidden alias's spellings must resolve to the
+    /// same `CleanupRequest` — the scope, the selection, the mode and the
+    /// overrides.
+    ///
+    /// This is what makes the change safe to review: the diff in the cleanup
+    /// engine is zero.
+    #[test]
+    fn the_root_and_the_alias_resolve_to_the_same_intent() {
+        for (root_args, alias_args) in [
+            (vec!["cargo-cleanme"], vec!["cargo-cleanme", "clean"]),
+            (
+                vec!["cargo-cleanme", "/tmp/p"],
+                vec!["cargo-cleanme", "clean", "/tmp/p"],
+            ),
+            (
+                vec!["cargo-cleanme", "--full"],
+                vec!["cargo-cleanme", "clean", "--full"],
+            ),
+            (
+                vec!["cargo-cleanme", "--dry-run"],
+                vec!["cargo-cleanme", "clean", "--dry-run"],
+            ),
+        ] {
+            let root = Cli::try_parse_from(root_args.clone()).unwrap().invocation();
+            let alias = Cli::try_parse_from(alias_args.clone())
+                .unwrap()
+                .invocation();
+            assert_eq!(root, alias, "{root_args:?} and {alias_args:?} must agree");
+        }
+    }
+
+    /// M019: a scope selector or a policy override handed to a read-only
+    /// subcommand is a usage error, never a silently discarded flag.
+    ///
+    /// *Fails if:* the flag is accepted and discarded — the C034 "worst
+    /// failure mode" shape.
+    #[test]
+    fn a_cleanup_flag_on_a_read_only_subcommand_is_a_usage_error() {
+        for args in [
+            vec!["cargo-cleanme", "--full", "scan", "--all"],
+            vec!["cargo-cleanme", "--full", "config", "path"],
+            vec!["cargo-cleanme", "--full", "update"],
+            vec!["cargo-cleanme", "--profile", "release", "scan", "--all"],
+            vec!["cargo-cleanme", "--older-than", "60", "scan", "--all"],
+            vec!["cargo-cleanme", "--include", "/a/*", "update"],
+            vec!["cargo-cleanme", "--cargo-preview", "config", "show"],
+        ] {
+            let parsed = Cli::try_parse_from(args.clone())
+                .unwrap_or_else(|error| panic!("{args:?} must parse: {error}"));
+            match parsed.invocation() {
+                Invocation::UsageError(message) => {
+                    assert!(!message.is_empty(), "{args:?} must say what it refused");
+                }
+                other => panic!("{args:?} must be a usage error, got {other:?}"),
+            }
+        }
+    }
+
+    /// M019: the same override at both levels is a usage error.
+    ///
+    /// *Fails if:* one of the two values is silently preferred — the
+    /// discarded-flag failure mode ADR 008 §3 exists to prevent.
+    #[test]
+    fn the_same_override_at_both_levels_is_a_usage_error() {
+        for args in [
+            vec![
+                "cargo-cleanme",
+                "--older-than",
+                "3600",
+                "clean",
+                "--older-than",
+                "60",
+            ],
+            vec![
+                "cargo-cleanme",
+                "--min-reclaimable-bytes",
+                "10",
+                "clean",
+                "--min-reclaimable-bytes",
+                "20",
+            ],
+            vec![
+                "cargo-cleanme",
+                "--include",
+                "/a/*",
+                "clean",
+                "--include",
+                "/b/*",
+            ],
+            vec!["cargo-cleanme", "--full", "clean", "--full"],
+            vec![
+                "cargo-cleanme",
+                "--cargo-preview",
+                "clean",
+                "--cargo-preview",
+            ],
+        ] {
+            let parsed = Cli::try_parse_from(args.clone())
+                .unwrap_or_else(|error| panic!("{args:?} must parse: {error}"));
+            assert!(
+                matches!(parsed.invocation(), Invocation::UsageError(_)),
+                "{args:?} must be a usage error, got {:?}",
+                parsed.invocation()
+            );
+        }
+    }
+
+    /// M019: a root-level flag that the `clean` alias also carries is merged,
+    /// not duplicated. The root wins; the alias's value is used when the root
+    /// did not supply one.
+    #[test]
+    fn a_root_level_override_wins_over_the_alias() {
+        let parsed =
+            Cli::try_parse_from(["cargo-cleanme", "--older-than", "3600", "clean", "/tmp/p"])
+                .unwrap();
+        let Invocation::Cleanup(request) = parsed.invocation() else {
+            panic!("must resolve to a cleanup");
+        };
+        assert_eq!(request.overrides.older_than, Some(3600));
+        assert_eq!(request.scope, CleanupScope::Root(PathBuf::from("/tmp/p")));
+    }
+
     #[test]
     fn bare_invocation_is_routine_execute_maintenance_not_scan() {
         // ADR 003 §1: bare invocation is the canonical maintenance operation.
@@ -843,9 +1452,29 @@ mod tests {
 
     #[test]
     fn hidden_full_alias_is_not_advertised_in_scan_help() {
-        let help = Cli::command().render_long_help().to_string();
-        assert!(!help.contains("--full"), "{help}");
-        assert!(help.contains("--known"), "{help}");
+        // The *scan* subcommand's `--full` is the hidden alias for `--all`, and
+        // it must not be advertised there. The root's own `--full` is the
+        // canonical Full cleanup flag (M019) and is advertised at the root.
+        let command = Cli::command();
+        let scan = command.find_subcommand("scan").expect("scan subcommand");
+        let full = scan
+            .get_arguments()
+            .find(|arg| arg.get_id() == "full")
+            .expect("the scan --full alias");
+        assert!(
+            full.is_hide_set(),
+            "the scan's --full alias must stay hidden"
+        );
+        let all = scan
+            .get_arguments()
+            .find(|arg| arg.get_id() == "all")
+            .expect("the scan --all flag");
+        assert!(!all.is_hide_set(), "--all must stay advertised");
+        let known = scan
+            .get_arguments()
+            .find(|arg| arg.get_id() == "known")
+            .expect("the scan --known flag");
+        assert!(!known.is_hide_set(), "--known must stay advertised");
     }
 
     #[test]
@@ -881,6 +1510,25 @@ mod tests {
         assert!(Cli::try_parse_from(["cargo-cleanme", "clean", "/x", "--known"]).is_err());
         assert!(Cli::try_parse_from(["cargo-cleanme", "clean", "--known", "--full"]).is_err());
         assert!(Cli::try_parse_from(["cargo-cleanme", "clean", "/x", "--full"]).is_err());
+    }
+
+    /// M018 asserted that this milestone grew no root-level flag. M019
+    /// superseded it: the root-level `--full` is now the canonical Full
+    /// cleanup spelling (ADR 008 §4b), and `clean --full` remains a hidden
+    /// alias.
+    ///
+    /// The assertion became "the alias still resolves to the Full scope on its
+    /// own" — the canonical spelling and the alias agreeing is pinned
+    /// separately by `the_root_full_flag_resolves_to_the_full_scope`, so a
+    /// change that made only one of them move would be caught.
+    #[test]
+    fn the_full_cleanup_alias_still_resolves_after_the_root_moved() {
+        assert_eq!(
+            Cli::try_parse_from(["cargo-cleanme", "clean", "--full"])
+                .unwrap()
+                .invocation(),
+            Invocation::Cleanup(cleanup(CleanupScope::Full, CleanMode::Execute))
+        );
     }
 
     #[test]
@@ -945,8 +1593,40 @@ mod tests {
             .to_string();
         assert!(!clean_help.contains("--yes"), "{clean_help}");
         assert!(!clean_help.contains("--dryrun"), "{clean_help}");
-        assert!(clean_help.contains("--cargo-preview"), "{clean_help}");
+        // `--dry-run` is unchanged: it was already global.
         assert!(clean_help.contains("--dry-run"), "{clean_help}");
+        // M019: the alias's own flags are hidden aliases too — the root is the
+        // only advertised front door. The declaration is checked, not the
+        // rendered prose: the alias's own long-about *names* `clean --full`,
+        // and prose is not an advertisement of the flag.
+        let command = Cli::command();
+        let clean = command.find_subcommand("clean").expect("clean subcommand");
+        for flag in [
+            "root",
+            "full",
+            "min_reclaimable_bytes",
+            "older_than",
+            "include",
+            "exclude",
+            "profile",
+            "package",
+            "cargo_preview",
+            "yes_legacy",
+            "dryrun_legacy",
+        ] {
+            let arg = clean
+                .get_arguments()
+                .find(|arg| arg.get_id() == flag)
+                .unwrap_or_else(|| panic!("the clean alias must still carry {flag}"));
+            assert!(arg.is_hide_set(), "{flag} must be a hidden alias");
+        }
+        for flag in ["dry_run", "known"] {
+            let arg = clean
+                .get_arguments()
+                .find(|arg| arg.get_id() == flag)
+                .unwrap_or_else(|| panic!("the clean alias must still carry {flag}"));
+            assert!(!arg.is_hide_set(), "{flag} must stay advertised");
+        }
     }
 
     #[test]

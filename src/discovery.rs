@@ -315,6 +315,12 @@ pub struct ManifestDiscovery {
     /// False when traversal skipped any region whose exact location was not
     /// supplied by dua-core. Such a walk is positive inventory only.
     pub coverage_complete: bool,
+    /// The per-walk-root coverage verdict.
+    ///
+    /// M018: one entry per walk root, in walk-root order. A root with no
+    /// traversal error and no unusable-root condition is *proven*; every other
+    /// root is *unproven* and carries the reason in its `detail`.
+    pub root_coverage: Vec<RootCoverage>,
 }
 
 /// Manifest-first discovery: every plausible user `Cargo.toml` without
@@ -380,22 +386,10 @@ pub fn discover_manifests_with_attribution(
             });
         }
         let profile_subtrees = env::var_os("CARGO_CLEANME_PROFILE_SUBTREES").is_some();
-        let discovery_workers = discovery_profile_workers(
-            profile_subtrees,
-            env::var("CARGO_CLEANME_PROFILE_THREADS").ok().as_deref(),
-            traverse::worker_threads().min(GLOBAL_DISCOVERY_WORKER_CAP),
-        );
-        let skip_metadata = discovery_profile_skip_metadata(
-            profile_subtrees,
-            env::var("CARGO_CLEANME_PROFILE_SKIP_METADATA")
-                .ok()
-                .as_deref(),
-            cfg!(any(target_os = "linux", target_os = "macos")),
-        );
-        let order = discovery_profile_order(
-            profile_subtrees,
-            env::var("CARGO_CLEANME_PROFILE_ORDER").ok().as_deref(),
-        );
+        let knobs = global_walk_knobs();
+        let discovery_workers = knobs.workers;
+        let skip_metadata = knobs.skip_metadata;
+        let order = knobs.order;
         return discover_global_roots(
             &roots,
             &filters,
@@ -458,6 +452,9 @@ pub fn discover_manifests_with_attribution(
         counters,
         top_level_entries: std::collections::BTreeMap::new(),
         coverage_complete,
+        // A bounded walk is not a global walk: it has one root, and the M018
+        // per-root verdict is only about the Full cleanup's learned roots.
+        root_coverage: Vec::new(),
     })
 }
 
@@ -503,14 +500,7 @@ fn path_is_symlink(path: &Path) -> bool {
 /// so a symlinked root has to be refused explicitly: it would otherwise report a
 /// successful *empty* scan for a directory the user asked for (L7).
 fn root_is_usable(root: &Path, diagnostics: &mut Vec<ScanDiagnostic>) -> bool {
-    let problem = if path_is_symlink(root) {
-        Some("scan root is a symlink; pass the real directory instead")
-    } else if !root.is_dir() {
-        Some("scan root is unavailable")
-    } else {
-        None
-    };
-    match problem {
+    match root_unusable_reason(root) {
         None => true,
         Some(message) => {
             diagnostics.push(ScanDiagnostic {
@@ -522,6 +512,113 @@ fn root_is_usable(root: &Path, diagnostics: &mut Vec<ScanDiagnostic>) -> bool {
             false
         }
     }
+}
+
+/// Why a root cannot be walked, in the words the diagnostic uses.
+///
+/// Split out from [`root_is_usable`] so the M018 coverage verdict can name the
+/// same cause the diagnostic does, instead of inventing a second wording for
+/// one fact.
+fn root_unusable_reason(root: &Path) -> Option<&'static str> {
+    if path_is_symlink(root) {
+        Some("scan root is a symlink; pass the real directory instead")
+    } else if !root.is_dir() {
+        Some("scan root is unavailable")
+    } else {
+        None
+    }
+}
+
+/// The traversal knobs a global walk uses.
+///
+/// M018: the verification pass stands in for the platform walk, so it must
+/// use the same knobs. A verdict computed under different traversal settings
+/// is not comparable to the verdict it replaces, and comparing them would
+/// make the gate meaningless.
+struct GlobalWalkKnobs {
+    workers: usize,
+    profile_subtrees: bool,
+    skip_metadata: bool,
+    order: dua_core::Order,
+}
+
+/// Read the global walk's knobs from the environment.
+///
+/// Shared by the platform walk and the M018 verification pass so the two
+/// cannot drift: the knobs are read once, from one place, by both.
+fn global_walk_knobs() -> GlobalWalkKnobs {
+    let profile_subtrees = env::var_os("CARGO_CLEANME_PROFILE_SUBTREES").is_some();
+    GlobalWalkKnobs {
+        workers: discovery_profile_workers(
+            profile_subtrees,
+            env::var("CARGO_CLEANME_PROFILE_THREADS").ok().as_deref(),
+            traverse::worker_threads().min(GLOBAL_DISCOVERY_WORKER_CAP),
+        ),
+        profile_subtrees,
+        skip_metadata: discovery_profile_skip_metadata(
+            profile_subtrees,
+            env::var("CARGO_CLEANME_PROFILE_SKIP_METADATA")
+                .ok()
+                .as_deref(),
+            cfg!(any(target_os = "linux", target_os = "macos")),
+        ),
+        order: discovery_profile_order(
+            profile_subtrees,
+            env::var("CARGO_CLEANME_PROFILE_ORDER").ok().as_deref(),
+        ),
+    }
+}
+
+/// Verify each root as its own walk root and report its coverage.
+///
+/// M018: the Full cleanup's proof boundary is the learned root. When the
+/// platform walk could not complete, each learned root is re-walked as its
+/// own walk root, so the existing per-walk-root attribution decides — per
+/// root — whether that root's subtree was fully read. A root with no
+/// traversal error and no unusable-root condition is proven; every other root
+/// is unproven and carries the reason.
+///
+/// The pass uses the same prune and filter sets as the platform walk: a
+/// verdict computed under different rules is not comparable to the verdict it
+/// stands in for. It collects no manifests — the platform walk already
+/// discovered them — so this is a coverage measurement, not a second
+/// discovery.
+pub fn verify_root_coverage(
+    roots: &[PathBuf],
+    policy: &EffectiveScanPolicy,
+    observer: &dyn ProgressObserver,
+) -> Result<(Vec<RootCoverage>, Vec<ScanDiagnostic>), AppError> {
+    let (ignore, unignore) = match &policy.discovery_filters {
+        DiscoveryFilters::Active { ignore, unignore } => (ignore.as_slice(), unignore.as_slice()),
+        DiscoveryFilters::Bypassed => (&[][..], &[][..]),
+    };
+    let filters = Filters::new(ignore, unignore)?;
+    let platform = crate::policy::global_discovery_policy();
+    let knobs = global_walk_knobs();
+    let mut manifests = Vec::new();
+    let mut diagnostics = Vec::new();
+    let mut visited = 0u64;
+    let mut pruned = 0u64;
+    let mut coverage_complete = true;
+    let discovery = discover_global_roots(
+        roots,
+        &filters,
+        &cargo_home_prunes(),
+        &platform.managed_tool_prunes,
+        &platform.global_only_prunes,
+        &mut manifests,
+        &mut diagnostics,
+        &mut visited,
+        &mut pruned,
+        &mut coverage_complete,
+        observer,
+        knobs.workers,
+        knobs.profile_subtrees,
+        false,
+        knobs.skip_metadata,
+        knobs.order,
+    )?;
+    Ok((discovery.root_coverage, discovery.diagnostics))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -544,25 +641,56 @@ fn discover_global_roots(
     order: dua_core::Order,
 ) -> Result<ManifestDiscovery, AppError> {
     let mut canonical_roots = Vec::new();
+    // M018: one coverage entry per walk root, in walk-root order. The ledger
+    // is built here rather than after the walk so an unusable root — which
+    // never reaches the walker at all — still has a verdict.
+    let mut coverage: Vec<RootCoverage> = Vec::new();
     for root in roots {
+        let canonical = fs::canonicalize(root).unwrap_or_else(|_| root.clone());
+        let coverage_index = coverage.len();
         if !root_is_usable(root, diagnostics) {
             *coverage_complete = false;
+            coverage.push(RootCoverage {
+                root: root.clone(),
+                canonical_root: canonical,
+                complete: false,
+                error_events: 0,
+                permission_denied: 0,
+                vanished: 0,
+                detail: Some(format!(
+                    "{} could not be walked: {}",
+                    root.display(),
+                    root_unusable_reason(root).unwrap_or("the root is unavailable")
+                )),
+            });
             continue;
         }
-        canonical_roots.push((
-            fs::canonicalize(root).unwrap_or_else(|_| root.clone()),
-            root.clone(),
-        ));
+        coverage.push(RootCoverage {
+            root: root.clone(),
+            canonical_root: canonical.clone(),
+            complete: true,
+            error_events: 0,
+            permission_denied: 0,
+            vanished: 0,
+            detail: None,
+        });
+        canonical_roots.push((canonical, root.clone(), coverage_index));
     }
     canonical_roots.sort_by(|a, b| a.0.cmp(&b.0));
     canonical_roots.dedup_by(|a, b| a.0 == b.0);
     // Use canonical identities for de-duplication while preserving each
     // selected root's spelling for ignore globs and diagnostics.
     let roots: Vec<_> = canonical_roots
-        .into_iter()
-        .map(|(_, logical)| logical)
+        .iter()
+        .map(|(_, logical, _)| logical.clone())
         .collect();
     let roots: Vec<_> = roots.into_iter().enumerate().collect();
+    // Walk-root index → coverage-ledger index. The walk reports errors by
+    // walk-root index, and the ledger is keyed by the root's own identity.
+    let walk_to_coverage: Vec<usize> = canonical_roots
+        .iter()
+        .map(|(_, _, coverage_index)| *coverage_index)
+        .collect();
     let filters = Filters {
         globs: filters.globs.clone(),
         unignore: filters.unignore.clone(),
@@ -780,6 +908,23 @@ fn discover_global_roots(
             .get(idx)
             .map(|(_, r)| format!(" under {}", r.display()))
             .unwrap_or_default();
+        // M018: the same failure, recorded against the root that produced it.
+        // The verdict is per root because the error event's granularity *is*
+        // the root: no child path is available, so a subtree's incompleteness
+        // cannot be attributed below it.
+        if let Some(coverage_index) = walk_to_coverage.get(idx).copied()
+            && let Some(entry) = coverage.get_mut(coverage_index)
+        {
+            entry.complete = false;
+            entry.error_events = events;
+            entry.permission_denied = denied;
+            entry.vanished = vanished;
+            entry.detail = Some(format!(
+                "{events} traversal error(s) under {}: {denied} permission-denied, {vanished} vanished, {} other; the skipped region's location is unknown",
+                entry.root.display(),
+                events.saturating_sub(denied).saturating_sub(vanished)
+            ));
+        }
         diagnostics.push(ScanDiagnostic {
             severity: DiagnosticSeverity::Warning,
             category: if denied > 0 {
@@ -850,6 +995,7 @@ fn discover_global_roots(
         counters,
         top_level_entries,
         coverage_complete: *coverage_complete,
+        root_coverage: coverage,
     })
 }
 
@@ -1708,6 +1854,144 @@ mod tests {
         assert_eq!(ordinary.counters, qualified.counters);
         assert!(!qualified.top_level_entries.is_empty());
     }
+    /// M018: the verification pass judges **each learned root on its own
+    /// traversal**. A root whose subtree was fully read is proven; a root with
+    /// an unreadable region is not — and the diagnostic must name the root
+    /// that failed, not its neighbour.
+    ///
+    /// A global verdict would pass a weaker assertion ("some root was
+    /// skipped") and fail this one: the readable root would be skipped too.
+    #[cfg(unix)]
+    #[test]
+    fn verification_pass_attributes_coverage_to_the_root_that_failed() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempdir().unwrap();
+        let readable = d.path().join("readable");
+        let unreadable = d.path().join("unreadable");
+        fs::create_dir_all(readable.join("project")).unwrap();
+        fs::create_dir_all(unreadable.join("project")).unwrap();
+        let locked = unreadable.join("locked");
+        fs::create_dir_all(&locked).unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        assert!(
+            fs::read_dir(&locked).is_err(),
+            "premise: the fixture must produce an unreadable region"
+        );
+        let policy = EffectiveScanPolicy {
+            recency: std::time::Duration::from_secs(300),
+            scope: ScanScope::Global(vec![d.path().to_path_buf()]),
+            discovery_filters: DiscoveryFilters::Bypassed,
+        };
+        let (coverage, diagnostics) = verify_root_coverage(
+            &[readable.clone(), unreadable.clone()],
+            &policy,
+            &NoopObserver,
+        )
+        .unwrap();
+        assert_eq!(coverage.len(), 2, "{coverage:?}");
+        let readable_verdict = &coverage[0];
+        let unreadable_verdict = &coverage[1];
+        assert!(
+            readable_verdict.complete,
+            "a fully readable root must be proven: {readable_verdict:?}"
+        );
+        assert!(
+            !unreadable_verdict.complete,
+            "a root with an unreadable region must not be proven: {unreadable_verdict:?}"
+        );
+        let detail = unreadable_verdict.detail.as_deref().unwrap_or_default();
+        assert!(
+            detail.contains(&unreadable.display().to_string()),
+            "the verdict must name the root that failed: {detail}"
+        );
+        assert!(
+            !detail.contains(&readable.display().to_string()),
+            "the verdict must not blame the other root: {detail}"
+        );
+        // The diagnostic names the same root, not its neighbour.
+        let named: Vec<&ScanDiagnostic> = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("traversal error"))
+            .collect();
+        assert_eq!(named.len(), 1, "{diagnostics:?}");
+        assert!(
+            named[0].message.contains(&unreadable.display().to_string()),
+            "the diagnostic must name the failing root: {}",
+            named[0].message
+        );
+    }
+
+    /// M018: the code the gate judges must be one a **real traversal**
+    /// produced, not a literal.
+    ///
+    /// The old shape asserted `full_cleanup_roots(1, Some(state())).is_err()`
+    /// — a literal `1` proving only that a non-zero code was refused. ADR 008
+    /// names that as the reason the defect survived: nothing in the corpus
+    /// ever showed a real traversal producing the code the gate saw.
+    #[cfg(unix)]
+    #[test]
+    fn a_real_traversal_produces_the_code_the_gate_judges() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempdir().unwrap();
+        let readable = d.path().join("readable");
+        let unreadable = d.path().join("unreadable");
+        fs::create_dir_all(readable.join("project")).unwrap();
+        fs::create_dir_all(unreadable.join("project")).unwrap();
+        let locked = unreadable.join("locked");
+        fs::create_dir_all(&locked).unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        assert!(
+            fs::read_dir(&locked).is_err(),
+            "premise: the fixture must produce an unreadable region"
+        );
+        let policy = EffectiveScanPolicy {
+            recency: std::time::Duration::from_secs(300),
+            scope: ScanScope::Global(vec![d.path().to_path_buf()]),
+            discovery_filters: DiscoveryFilters::Bypassed,
+        };
+        // The production traversal over the bounded fixture. It must report
+        // that it could not complete — that report is the fact the Full
+        // cleanup's exit code is derived from.
+        let found = discover_manifests_with_attribution(&policy, &NoopObserver, false).unwrap();
+        assert!(
+            !found.coverage_complete,
+            "the real traversal must report that it could not complete"
+        );
+        let reconciliation_code = i32::from(!found.coverage_complete);
+        // The per-root verdict the verification pass produces.
+        let (coverage, _) = verify_root_coverage(
+            &[readable.clone(), unreadable.clone()],
+            &policy,
+            &NoopObserver,
+        )
+        .unwrap();
+        let canonical = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let state = crate::discovery_state::DiscoveryState {
+            schema_version: crate::discovery_state::CURRENT_SCHEMA,
+            last_full_at: Some(1),
+            learned_roots: vec![
+                crate::discovery_state::LearnedRoot {
+                    path: canonical(&readable),
+                    last_project_seen_at: 1,
+                },
+                crate::discovery_state::LearnedRoot {
+                    path: canonical(&unreadable),
+                    last_project_seen_at: 1,
+                },
+            ],
+            ..Default::default()
+        };
+        // The gate, fed the real code and the real coverage, proves the
+        // readable root and refuses the other.
+        let verdict =
+            crate::policy::full_cleanup_roots(reconciliation_code, Some(state), Some(&coverage))
+                .expect("the gate returns a verdict");
+        assert_eq!(verdict.proven.len(), 1, "{verdict:?}");
+        assert_eq!(verdict.proven[0].0, canonical(&readable));
+        assert_eq!(verdict.unproven.len(), 1, "{verdict:?}");
+        assert_eq!(verdict.unproven[0].root, canonical(&unreadable));
+    }
+
     #[test]
     fn manifest_discovery_finds_project_without_target() {
         let d = tempdir().unwrap();
