@@ -294,7 +294,7 @@ Absoluteness is not cosmetic: patterns are matched against the **canonical**
 walk path, so a relative or symlink-spelled pattern would silently match
 nothing. `config::load` rewrites the glob-free literal prefix of every pattern
 to its canonical spelling via `canonical_pattern_prefix` (`config.rs:155-187`,
-`:442-492`), leaving the glob tail verbatim. A pattern naming a non-existent
+`config.rs:353-403`), leaving the glob tail verbatim. A pattern naming a non-existent
 path is left untouched — it still means exactly what it says, i.e. it matches
 nothing. Glob *syntax* is validated at load time too (`config.rs:147-151` for
 `scan.ignore`, `config.rs:137-146` for the cleanup include/exclude globs), so
@@ -562,7 +562,7 @@ and both were once missing:
 2. **Application.** A root that survived composition would still be unwalked:
    `entry_is_within` matches on `parent_path`, so with root `/usr/local` every
    entry's parent `starts_with("/usr")` and the subtree read as pruned.
-   `discovery::entry_is_system_pruned` (`discovery.rs:270-283`) exempts a walk
+   `discovery::entry_is_system_pruned` (`discovery.rs:279-292`) exempts a walk
    root strictly inside a system prune. The exemption is scoped to *global-only*
    prunes on purpose: a Cargo or rustup home stays refused even when a root sits
    inside it.

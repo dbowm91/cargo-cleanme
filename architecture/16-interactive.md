@@ -321,7 +321,7 @@ visible width (`src/interactive.rs:1026-1034`). The test
 `the_frame_does_not_grow_with_the_candidate_count`
 (`src/interactive.rs:1727-1754`) pins the boundedness, and
 `a_long_display_name_is_truncated_from_the_left_not_the_right`
-(`src/interactive.rs:1773-1786`) pins the truncation.
+(`src/interactive.rs:1773-1785`) pins the truncation.
 
 ### A row is named, not spelled out
 

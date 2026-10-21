@@ -84,8 +84,8 @@ session ends, on both the commit and the quit path.
 
 The path: `run_interactive` settles an empty candidate list before the terminal
 precondition (`src/interactive.rs:1281-1283`) → the orchestrator maps it to
-`SelectionOutcome::NothingToClean` (`src/main.rs:597-610`) → one line on
-stdout and `Ok(0)` (`src/main.rs:430-438`).
+`SelectionOutcome::NothingToClean` (`src/main.rs:609-622`) → one line on
+stdout and `Ok(0)` (`src/main.rs:439-447`).
 
 The two spellings of one scope now agree, which is the point: an unattended
 caller can tell "there was nothing to do"
@@ -95,10 +95,10 @@ The other two interactive exits, for contrast:
 
 - **Cancel** (`q`, `Esc` `Esc`, `Ctrl-C`) → exit **0**, with one plain stderr
   line: `cargo-cleanme: interactive selection cancelled; no cleanup commands
-  were run` (`src/main.rs:422-438`). A deliberate operator decision is a
+  were run` (`src/main.rs:431-447`). A deliberate operator decision is a
   success, not a failure.
 - **A blocked scope** → the listing is refused outright
-  (`src/main.rs:577-586`) → exit **2**, with the blocked-scope detail. Offering
+  (`src/main.rs:589-598`) → exit **2**, with the blocked-scope detail. Offering
   rows from an unproven universe would be the ADR 006 shape in a new costume:
   the operator would be picking from a list whose classification is exactly what
   failed.
@@ -204,7 +204,7 @@ things to know if you build one:
 
 - `should_show_progress` (`src/progress.rs:163`) is the single gate: the flag,
   the `TERM=dumb` check, and whether stderr is attended.
-- `--format json` gets **no progress at all** (`src/main.rs:1056-1057`), because
+- `--format json` gets **no progress at all** (`src/main.rs:1246-1247`), because
   the gate tests the *format* rather than the *stream*. Progress is on stderr,
   so a `jq` consumer is unaffected — but a minutes-long JSON scan gives the
   operator nothing.

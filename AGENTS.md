@@ -68,7 +68,7 @@ a file that is being rewritten rots immediately.
 | 7 | The cleanup pipeline | What happens on `clean`, end to end |
 | 8 | Cross-cutting invariants | The eight rules that span modules — read before changing any of them |
 | 9 | Tooling and verification surfaces | The gates, and what each one actually proves |
-| 10 | Findings from the deep dives | 63 known defects and their dispositions — **check here before adding a new one** |
+| 10 | Findings from the deep dives | 64 known defects and their dispositions — **check here before adding a new one** |
 | 11 | How the code got this way | The plan corpus |
 | 12 | Index of deep dives | The sixteen deep dives |
 | 13 | Reading order | If you read one thing, read this |
@@ -149,7 +149,7 @@ run is worse than no record, because the next milestone trusts it.
 
 - **One spawn boundary.** Every external `cargo` invocation goes through the
   `CargoRunner` / `CleanupRunner` traits (`src/workspace.rs:82` for
-  `cargo metadata`, `src/cleanup.rs:700` for `cargo clean`) so tests can
+  `cargo metadata`, `src/cleanup.rs:891` for `cargo clean`) so tests can
   substitute fakes. Do not add a bare `Command::new("cargo")` — that seam is the
   project's main testability mechanism and its main risk.
 - **`config.toml` is a compile-time input.** `src/config.rs:12` embeds it with

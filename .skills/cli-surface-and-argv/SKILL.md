@@ -76,9 +76,9 @@ There are **three** `--dry-run` declarations, and they are not the same flag:
 
 | Declaration | Where | Meaning |
 |---|---|---|
-| `dry_run` | root (`src/cli.rs:56-57`) | honoured wherever it appears, but only `clean` and `update` act on it; `scan` and `config` ignore it |
-| `dry_run` | `clean` (`src/cli.rs:143-144`) | Simulate mode for cleanup |
-| `dry_run` | `update` (`src/cli.rs:167-168`) | resolve the update plan, acquire nothing |
+| `dry_run` | root (`src/cli.rs:65-66`) | honoured wherever it appears, but only `clean` and `update` act on it; `scan` and `config` ignore it |
+| `dry_run` | `clean` (`src/cli.rs:152-153`) | Simulate mode for cleanup |
+| `dry_run` | `update` (`src/cli.rs:176-177`) | resolve the update plan, acquire nothing |
 
 The canonical mapping is one function:
 
@@ -93,7 +93,7 @@ mapping runs. If you add a fourth mode, that assertion is what you must update
 *and* what must keep failing when two modes are combined.
 
 **The root-level `--dry-run` wins over the `clean`-level `--cargo-preview`.**
-`src/cli.rs:392-396` checks the root flag *first*, because `--dry-run` spawns
+`src/cli.rs:401-405` checks the root flag *first*, because `--dry-run` spawns
 nothing while `--cargo-preview` spawns a Cargo process. The safe mode wins the
 tie. Clap cannot express this, because the two flags live at different levels
 of the command tree and therefore never conflict with each other.
@@ -117,7 +117,7 @@ nothing.
 
 ## One cleanup code path, on purpose
 
-`CleanupScope::Maintenance` (`src/cli.rs:186-195`) covers **both** bare
+`CleanupScope::Maintenance` (`src/cli.rs:195-204`) covers **both** bare
 invocation and `clean` with no scope selector. The doc comment says why: bare
 maintenance and every advanced cleanup spelling produce the same
 `CleanupRequest`, so there is exactly one cleanup engine and one set of gates
@@ -129,7 +129,7 @@ invocation is a bug, and a change that splits the two is a regression. Keep
 
 Policy overrides (`--min-reclaimable-bytes`, `--older-than`, `--include`,
 `--exclude`, `--profile`, `--package`) live **only on `clean`** today (M012A
-work package D, `src/cli.rs:124-140`), because M012A deliberately declined to
+work package D, `src/cli.rs:133-149`), because M012A deliberately declined to
 clone them onto the root command.
 
 **That decision has been superseded.** ADR 008 §4 was resolved to **4b** on
@@ -152,7 +152,7 @@ lie and the drift gate could not catch it.
 
 That was **C036 D1**, and it is **discharged**: C040 (ADR 009) rewrote the
 root `long_about` so it states that `scan` needs a scope, and made the root
-man page render from **that same `long_about`** (`src/main.rs:148-156`)
+man page render from **that same `long_about`** (`src/main.rs:151-159`)
 instead of from a generator-side block. The two surfaces can no longer drift.
 
 The lesson survives the fix: a surface that is rendered from a *different*

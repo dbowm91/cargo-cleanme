@@ -17,7 +17,7 @@ projection (`show`, `src/config.rs:610-612`); editor resolution
 (`editor::resolve_editor`, `src/editor.rs:7-37`).
 
 **Does not own** — any policy *decision* (`config.rs` validates shape and range;
-scope and recency belong to `policy::resolve`, `src/policy.rs:19-58`, and the
+scope and recency belong to `policy::resolve`, `src/policy.rs:19-56`, and the
 CLI-over-config merge of the *cleanup policy* to `src/main.rs:337-352`; see
 [Policy & scope](04-policy-and-scope.md)); any authorization decision
 (`cleanup.allowed_output_roots` is carried and absoluteness-checked here,

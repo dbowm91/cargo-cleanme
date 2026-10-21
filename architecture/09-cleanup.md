@@ -13,7 +13,7 @@ still holds, and only then acts.
 ## 1. Responsibility
 
 `cleanup.rs` owns the entire destructive path: mode selection semantics
-(`CleanMode` `:36`, mapped by `cli::clean_mode` at `cli.rs:292`), the
+(`CleanMode` `:36`, mapped by `cli::clean_mode` at `cli.rs:301`), the
 authorization gate (`covering_is_authorized_roots` `:800`), the unit-wide
 destructive gate (`unit_block_reason_roots` `:929`), the final ownership proof
 (`final_cleanup_proof_roots` `:3088`), the frozen Cargo invocation
@@ -264,18 +264,18 @@ a real target tree.
 | `Simulate` | `simulate` | `--dry-run` (hidden alias `--dryrun`) | Identical gate set; the unit reached the spawn point. | No `cargo clean` of any kind, and no Cargo process for the clean at all. Reported as `Simulated`, never as recovered space (`:1764-1770`). |
 | `CargoPreview` | `preview` | `--cargo-preview` | Every gate through the final proof ran; Cargo itself reported what it *would* remove. | Nothing removed by us — but Cargo *was* spawned. |
 
-The mapping lives in `cli::clean_mode` (`cli.rs:292-304`): `--dry-run` (or the
+The mapping lives in `cli::clean_mode` (`cli.rs:301-313`): `--dry-run` (or the
 hidden `--dryrun`) ⇒ `Simulate`; `--cargo-preview` ⇒ `CargoPreview`; no mode
 flag ⇒ `Execute`. Clap makes the three flags mutually exclusive
-(`cli.rs:142-155`), and `clean_mode` carries a `debug_assert!` that the
-conflicting pair never reaches it (`cli.rs:293-296`). The `clean` subcommand
-resolves the same way at `cli.rs:392-396`, and a root-level `--dry-run` is
-honoured on the bare front door too (`cli.rs:325`), so
+(`cli.rs:151-164`), and `clean_mode` carries a `debug_assert!` that the
+conflicting pair never reaches it (`cli.rs:302-305`). The `clean` subcommand
+resolves the same way at `cli.rs:401-405`, and a root-level `--dry-run` is
+honoured on the bare front door too (`cli.rs:334`), so
 `cargo cleanme --dry-run clean ROOT` never silently falls back to Execute.
 
 **`--yes` is now a hidden no-op alias.** It used to be the only way to ask for
 Execute; Execute is the default, so the flag carries no intent of its own
-(`cli.rs:149-152`, and the comment at `cli.rs:355-358`). The comment there is explicit that
+(`cli.rs:158-161`, and the comment at `cli.rs:364-367`). The comment there is explicit that
 printing nothing about it is what keeps unattended runs quiet.
 
 **Bare `cargo cleanme` is Routine Execute** (ADR 003), with `--dry-run` the
@@ -299,7 +299,7 @@ admission→validation race: a fatal `InvalidRoot` over an automatic scope
 triggers one fresh reclassification, and only a now-proven-omittable offender
 rebuilds the universe from scratch (`main.rs:657-695`); anything else becomes a
 typed block, never a sibling cleanup against a stale proof.
-`cleanup.rs:1204` applies `collapse_roots` again and re-validates the collapsed
+`cleanup.rs:1395` applies `collapse_roots` again and re-validates the collapsed
 set at `:1213-1215` with the comment at `:1211-1212` that collapsing only
 narrows the set, so survivors still need checking. The roots are validated
 *before* any observable work at `:1201-1203`, so a malformed root can neither
@@ -309,11 +309,11 @@ traversing anything.
 
 ### The admission premise and its late recheck (C028)
 
-`AdmissionPremise` (`cleanup.rs:1145`) carries the safely omitted automatic
+`AdmissionPremise` (`cleanup.rs:1336`) carries the safely omitted automatic
 roots alongside the admitted set. The engine re-examines the premise with
 fresh `symlink_metadata` — no timers, sleeps, or cached metadata — at two
-moments: before the first candidate reaches final proof (`cleanup.rs:1588-1592`)
-and before every later Cargo spawn (`cleanup.rs:1782-1787`). A violated premise
+moments: before the first candidate reaches final proof (`cleanup.rs:1779-1783`)
+and before every later Cargo spawn (`cleanup.rs:1973-1978`). A violated premise
 returns the completed results plus a whole-scope `IncompleteDiscovery` block
 instead of spawning. Policy-skipped units never reach proof and need no
 guard. `violated_admission_premise_blocks_with_zero_cargo_spawns`
@@ -526,7 +526,7 @@ asserts the proof spawn count grows linearly, not quadratically.
 
 ### `ExecutionProof` field by field
 
-`cleanup.rs:2495-2512`. The doc comment `:2480-2494` is the contract: it "binds
+`cleanup.rs:2686-2703`. The doc comment `:2480-2494` is the contract: it "binds
 the complete frozen state of ONE workspace CleanupUnit … all re-proven against
 the complete bounded ownership universe discovered under clean ROOT", and is
 "consumed with no intervening mutation window beyond the spawn itself. This
@@ -714,11 +714,11 @@ virtual-workspace layout a silent no-op. `resolved` (`:122-135`) turns
 an `AppError::InvalidRoot` usage error, never a silent fallback to `All`.
 
 `cli.rs` resolves argv but must not perform IO, so the maintenance spellings
-emit the *unresolved* `CleanupSelection::WorkingDirectory` (`cli.rs:327`,
-`cli.rs:386-389`, and the `Cli::cleanup` mirror at `cli.rs:507-510`), and
+emit the *unresolved* `CleanupSelection::WorkingDirectory` (`cli.rs:336`,
+`cli.rs:395-398`, and the `Cli::cleanup` mirror at `cli.rs:516-519`), and
 `main.rs` calls `CleanupSelection::resolved` before the engine runs
 (`main.rs:535`, and `main.rs:574` on the `-i` path). The `CleanupRequest`
-doc comment says so at `cli.rs:247-248`. `clean ROOT` and `clean --full`
+doc comment says so at `cli.rs:256-257`. `clean ROOT` and `clean --full`
 use `CleanupSelection::All` because they already bound their own scope.
 
 **Units removed by the selection are reported, never dropped.** The engine
@@ -874,7 +874,7 @@ the `CargoPreview | Execute` arm (`:1819`) and adds `--dry-run --verbose` only
 for `CargoPreview` (`:3593-3596`). So `Simulate` is prevented twice over: it
 never reaches the dispatch, and if it somehow did, the arg builder would not
 produce a non-dry-run clean. No flag combination turns `Simulate` into a clean;
-`cli.rs:142-155` makes the mode flags mutually exclusive. `Simulate` does run
+`cli.rs:151-164` makes the mode flags mutually exclusive. `Simulate` does run
 the *full* proof — it is a rehearsal of the destructive path, not a cheaper one.
 
 ### What happens when the ownership universe is incomplete?
@@ -1162,7 +1162,7 @@ safety hole.
 ## 10. Testing
 
 **Numbers (verified by grep):** 114 `#[test]` functions; the test module opens at
-`cleanup.rs:3747` (`#[cfg(test)]`), so production is lines 1–3746 (3746 lines)
+`cleanup.rs:3938` (`#[cfg(test)]`), so production is lines 1–3746 (3746 lines)
 and the test region is 3747–9983 (6237 lines, 62% of the file). No fixture
 files are needed: workspaces are built on disk and mtimes backdated so recency
 gates run without sleeping.
