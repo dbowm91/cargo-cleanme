@@ -66,6 +66,8 @@ struct RunOptions {
     no_progress: bool,
     stats: bool,
     format: OutputFormat,
+    /// The detailed human surface. Never affects the JSON or log projections.
+    verbose: bool,
 }
 fn run(cli: Cli) -> Result<i32, AppError> {
     let path = ConfigPathResolver::new(cli.config.clone()).path()?;
@@ -73,6 +75,7 @@ fn run(cli: Cli) -> Result<i32, AppError> {
         no_progress: cli.no_progress,
         stats: cli.stats,
         format: cli.format,
+        verbose: cli.verbose,
     };
     // One resolved intent per invocation. Bare maintenance, `clean ROOT`,
     // `clean --known`, and `clean --full` all arrive as a CleanupRequest, so
@@ -445,7 +448,7 @@ fn run_cleanup(
     };
     let show = options.format == OutputFormat::Human
         && cargo_cleanme::progress::should_show_progress(options.no_progress);
-    let renderer = cargo_cleanme::progress::IndicatifRenderer::new(!show);
+    let renderer = cargo_cleanme::progress::IndicatifRenderer::new(!show, options.verbose);
     let wall_start = std::time::Instant::now();
     // The bar must come down on the failure path too. `?` returned to the
     // top-level error reporter with the bar still live, and `BarState::drop`
@@ -467,8 +470,11 @@ fn run_cleanup(
     renderer.finish_and_clear();
     let report = cleanup?;
     if options.format == OutputFormat::Human
+        && options.verbose
         && let Some(generation) = resolved.state_generation
     {
+        // Which state generation the cleanup used is debugging information, not
+        // a result. It belongs to the verbose surface (M020).
         println!("state generation last_full_at={generation} (Unix seconds)");
     }
     emit_cleanup(&report, &resolved, &resolved.roots, options, "")?;
@@ -564,7 +570,7 @@ fn resolve_candidate_selection(
     }
     // Progress bars would fight the repainting list, so the listing runs
     // silent. It is a read-only resolution: `cargo metadata` only.
-    let silent = cargo_cleanme::progress::IndicatifRenderer::new(true);
+    let silent = cargo_cleanme::progress::IndicatifRenderer::new(true, options.verbose);
     // M014/ADR 006: the working directory anchors selection, not discovery.
     // Resolve the declared selection first so `-i` on a maintenance scope
     // offers only anchor-matching units. The proof universe stays wide —
@@ -1040,17 +1046,79 @@ fn emit_cleanup(
         // scope census and a summary of zeroes.
         println!("Nothing to clean.");
     } else {
-        println!(
-            "combined roots {}\n{}",
-            roots
-                .iter()
-                .map(|r| r.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", "),
-            report.render()
-        );
+        let human = human_options(options, human_cleanup_roots(resolved));
+        if options.verbose {
+            // The verbose surface is the debugging surface: it keeps the
+            // preamble that names the roots the run walked.
+            println!(
+                "combined roots {}\n{}",
+                roots
+                    .iter()
+                    .map(|r| r.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                report.render(&human)
+            );
+        } else {
+            println!("{}", report.render(&human));
+        }
     }
     Ok(())
+}
+
+/// The human surface's rendering options for a run.
+///
+/// The verbose surface spells every path absolutely — it is the debugging
+/// surface. The quiet surface spells a bounded scope's paths relative to the
+/// scope root.
+fn human_options(
+    options: RunOptions,
+    roots: Vec<std::path::PathBuf>,
+) -> cargo_cleanme::report::HumanOptions {
+    if options.verbose {
+        cargo_cleanme::report::HumanOptions::verbose()
+    } else {
+        cargo_cleanme::report::HumanOptions::quiet(roots)
+    }
+}
+
+/// The scope roots a cleanup report's paths are shown relative to.
+///
+/// A Full cleanup has no single root — it is the platform — so its paths stay
+/// absolute. Every other scope is bounded.
+fn human_cleanup_roots(resolved: &ResolvedCleanup) -> Vec<std::path::PathBuf> {
+    if resolved.scope_label == "full" {
+        Vec::new()
+    } else {
+        resolved.roots.clone()
+    }
+}
+
+/// The scope roots a scan report's paths are shown relative to.
+fn human_scan_roots(scope: &cargo_cleanme::domain::ScanScope) -> Vec<std::path::PathBuf> {
+    match scope {
+        cargo_cleanme::domain::ScanScope::Explicit(root) => {
+            vec![absolutize_for_display(root)]
+        }
+        cargo_cleanme::domain::ScanScope::ExplicitRoots(roots) => {
+            roots.iter().map(|r| absolutize_for_display(r)).collect()
+        }
+        cargo_cleanme::domain::ScanScope::Routine(roots) => {
+            roots.iter().map(|r| absolutize_for_display(r)).collect()
+        }
+        // The Full scope is the platform root: a relative path under `/` would
+        // name a fragment, not a place.
+        cargo_cleanme::domain::ScanScope::Global(_) => Vec::new(),
+    }
+}
+
+/// The absolute spelling of a scope root, for the relative-path base.
+///
+/// The scope keeps the root as the operator spelled it (`scan .`), while the
+/// report's paths are absolute. The base has to be absolute too, or the two
+/// never match and every path stays absolute.
+fn absolutize_for_display(root: &std::path::Path) -> std::path::PathBuf {
+    cargo_cleanme::cli::absolutize_root(root).unwrap_or_else(|_| root.to_path_buf())
 }
 
 /// Whether a cleanup report carries nothing beyond the empty case.
@@ -1177,7 +1245,7 @@ fn run_scan(
     // Non-TTY or `--no-progress` forces the no-op path without control noise.
     let show = options.format == OutputFormat::Human
         && progress::should_show_progress(options.no_progress);
-    let renderer = progress::IndicatifRenderer::new(!show);
+    let renderer = progress::IndicatifRenderer::new(!show, options.verbose);
     // Progress-render failure must degrade to hidden rather than fail a scan.
     // Construction is infallible; refresh throttling bounds overhead.
     let observer: &dyn progress::ProgressObserver = &renderer;
@@ -1418,7 +1486,8 @@ fn run_scan(
             cargo_cleanme::output::log::scan(&report, scope_label(&policy.scope), full_incomplete)
         );
     } else {
-        println!("{}", cargo_cleanme::report::render(&mut report));
+        let human = human_options(options, human_scan_roots(&policy.scope));
+        println!("{}", cargo_cleanme::report::render(&mut report, &human));
     }
     // Normal diagnostic fan-out is human-readable detail on stderr. Log mode
     // carries `diagnostics=N` in its one line instead, so a retained history
@@ -1428,79 +1497,86 @@ fn run_scan(
             "{} filesystem diagnostics; rerun with a bounded root if needed",
             report.diagnostics.len()
         );
-        // Cargo failures can repeat for hundreds of manifests. Keep their
-        // complete per-manifest diagnostics in the report/JSON, but group the
-        // human presentation by the bounded cause excerpt.
-        let mut cargo_groups: BTreeMap<String, (usize, Vec<String>)> = BTreeMap::new();
-        let mut other_diagnostics = Vec::new();
-        for diagnostic in &report.diagnostics {
-            let (stage, reason) = if let Some(reason) = diagnostic
-                .message
-                .strip_prefix("cargo locate-project failed:")
-            {
-                ("locate", reason)
-            } else if let Some(reason) = diagnostic.message.strip_prefix("cargo metadata failed:") {
-                ("metadata", reason)
-            } else {
-                other_diagnostics.push(diagnostic);
-                continue;
-            };
-            let cause = reason.split(" | ").skip(1).collect::<Vec<_>>().join(" | ");
-            let reason_key = if cause.is_empty() {
-                reason.trim()
-            } else {
-                &cause
-            };
-            let group = cargo_groups
-                .entry(format!("{stage}: {reason_key}"))
-                .or_insert_with(|| (0, Vec::new()));
-            group.0 += 1;
-            if group.1.len() < 3
-                && let Some(path) = &diagnostic.path
-            {
-                group.1.push(
-                    path.display()
-                        .to_string()
-                        .chars()
-                        .filter(|ch| !ch.is_control())
-                        .take(200)
-                        .collect(),
+        // The detail behind the count is debugging information: it belongs to
+        // the verbose surface (M020), not to every run. The count itself
+        // stays on the default surface — one line, always.
+        if options.verbose {
+            // Cargo failures can repeat for hundreds of manifests. Keep their
+            // complete per-manifest diagnostics in the report/JSON, but group the
+            // human presentation by the bounded cause excerpt.
+            let mut cargo_groups: BTreeMap<String, (usize, Vec<String>)> = BTreeMap::new();
+            let mut other_diagnostics = Vec::new();
+            for diagnostic in &report.diagnostics {
+                let (stage, reason) = if let Some(reason) = diagnostic
+                    .message
+                    .strip_prefix("cargo locate-project failed:")
+                {
+                    ("locate", reason)
+                } else if let Some(reason) =
+                    diagnostic.message.strip_prefix("cargo metadata failed:")
+                {
+                    ("metadata", reason)
+                } else {
+                    other_diagnostics.push(diagnostic);
+                    continue;
+                };
+                let cause = reason.split(" | ").skip(1).collect::<Vec<_>>().join(" | ");
+                let reason_key = if cause.is_empty() {
+                    reason.trim()
+                } else {
+                    &cause
+                };
+                let group = cargo_groups
+                    .entry(format!("{stage}: {reason_key}"))
+                    .or_insert_with(|| (0, Vec::new()));
+                group.0 += 1;
+                if group.1.len() < 3
+                    && let Some(path) = &diagnostic.path
+                {
+                    group.1.push(
+                        path.display()
+                            .to_string()
+                            .chars()
+                            .filter(|ch| !ch.is_control())
+                            .take(200)
+                            .collect(),
+                    );
+                }
+            }
+            for (cause, (count, paths)) in cargo_groups.iter().take(8) {
+                if let Some((stage, reason)) = cause.split_once(": ") {
+                    eprintln!("  {count} Cargo {stage} failure(s): {reason}");
+                } else {
+                    eprintln!("  {count} Cargo resolution failure(s): {cause}");
+                }
+                if !paths.is_empty() {
+                    eprintln!("    examples: {}", paths.join(", "));
+                }
+            }
+            let hidden_cargo_groups = cargo_groups.len().saturating_sub(8);
+            if hidden_cargo_groups > 0 {
+                eprintln!("  … {hidden_cargo_groups} additional Cargo failure cause(s)");
+            }
+            // Preserve other diagnostic detail, capped independently of Cargo's
+            // repetition so the normal stderr path remains bounded.
+            for diagnostic in other_diagnostics.iter().take(10) {
+                eprintln!(
+                    "  {}: {}{}",
+                    diagnostic.severity.as_str(),
+                    diagnostic.message,
+                    diagnostic
+                        .path
+                        .as_ref()
+                        .map(|p| format!(" ({})", p.display()))
+                        .unwrap_or_default()
                 );
             }
-        }
-        for (cause, (count, paths)) in cargo_groups.iter().take(8) {
-            if let Some((stage, reason)) = cause.split_once(": ") {
-                eprintln!("  {count} Cargo {stage} failure(s): {reason}");
-            } else {
-                eprintln!("  {count} Cargo resolution failure(s): {cause}");
+            if other_diagnostics.len() > 10 {
+                eprintln!(
+                    "  … {} more non-Cargo diagnostic(s)",
+                    other_diagnostics.len() - 10
+                );
             }
-            if !paths.is_empty() {
-                eprintln!("    examples: {}", paths.join(", "));
-            }
-        }
-        let hidden_cargo_groups = cargo_groups.len().saturating_sub(8);
-        if hidden_cargo_groups > 0 {
-            eprintln!("  … {hidden_cargo_groups} additional Cargo failure cause(s)");
-        }
-        // Preserve other diagnostic detail, capped independently of Cargo's
-        // repetition so the normal stderr path remains bounded.
-        for diagnostic in other_diagnostics.iter().take(10) {
-            eprintln!(
-                "  {}: {}{}",
-                diagnostic.severity.as_str(),
-                diagnostic.message,
-                diagnostic
-                    .path
-                    .as_ref()
-                    .map(|p| format!(" ({})", p.display()))
-                    .unwrap_or_default()
-            );
-        }
-        if other_diagnostics.len() > 10 {
-            eprintln!(
-                "  … {} more non-Cargo diagnostic(s)",
-                other_diagnostics.len() - 10
-            );
         }
     }
     // C002 §7.8: detailed counters/timings are opt-in via `--stats` on

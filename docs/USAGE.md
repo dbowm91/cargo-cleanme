@@ -13,6 +13,7 @@ quickstart; this document has the detail.
 - [Exit codes](#exit-codes)
 - [Configuration](#configuration)
 - [JSON output](#json-output)
+- [The human output surface](#the-human-output-surface)
 - [Cleanup selectors](#cleanup-selectors)
 - [Learned state](#learned-state)
 - [Progress UI](#progress-ui)
@@ -43,6 +44,7 @@ scan form walks the platform roots, and the cleanup form reconciles them first.
 | `--dry-run` | simulate: the whole decision path, zero `cargo clean` processes |
 | `--no-progress` | disable the transient TTY UI (stderr only) |
 | `--stats` | counters and phase timings **on stderr**; stdout stays byte-identical |
+| `--verbose` | the detailed **human** surface: every workspace considered, the scope census, the counters, the diagnostic detail. `--format json` and `--format log` are byte-identical with and without it |
 | `--config PATH` | use a specific `config.toml` |
 | `--min-reclaimable-bytes N` | only clean units above this measured size (`clean`) |
 | `--older-than SECONDS` | extra quiet-age requirement; never replaces the recency guard (`clean`) |
@@ -625,7 +627,7 @@ contract case covers the JSON refusal path.
 
 | `--format` | Shape | Use it when |
 |---|---|---|
-| `human` (default) | tables, per-unit rows, diagnostic detail | a person is reading |
+| `human` (default) | one line per directory acted on, one tally, one progress line | a person is reading |
 | `json` | exactly one schema-1 document on stdout | software needs complete, per-unit data |
 | `log` | exactly one bounded ASCII line on stdout | a scheduler retains a short history tail |
 
@@ -654,6 +656,59 @@ bounded stderr line carrying a typed `reason=` code.
 
 → [docs/AUTOMATION.md](AUTOMATION.md) for the common field list, the scheduling
 integration, and exit-code triage.
+
+## The human output surface
+
+The default human surface answers one question — **what happened, and how much
+space did it free** — and stops there.
+
+**While it runs**, exactly one line on stderr: a spinner and the phase. It is
+cleared before the report is printed.
+
+**When it finishes**, one line per directory the run actually cleaned (or would
+clean, in a simulation or a Cargo preview), with the size, and the path spelled
+**relative to the scope root**:
+
+```console
+$ cargo cleanme clean ~/projects/my-app
+Cleaned  my-app/target  4.02 MiB
+
+4.02 MiB reclaimed from 1 directory
+```
+
+- The path is the physical directory Cargo emptied. It is relative whenever the
+  scope is bounded; a Full scan has no single root to be relative to, so its
+  paths stay absolute. A path no scope root contains stays absolute too.
+- The workspaces the run **skipped** are not listed. Their count appears in the
+  tally as `(N skipped)`, so the run is still honest about what it did not
+  pick — in one number, not one line each.
+- A **failed** unit is always listed. A failure is not a skip.
+- The tally says `reclaimed` for an executed cleanup and `would be reclaimed`
+  for a simulation or a Cargo preview. The two are distinguishable, and a
+  simulation also says that no `cargo clean` command was invoked.
+
+The safety disclosures are **never** withheld: the scope block, the
+unresolved-participant listing, and the out-of-scope count stay on the default
+surface, because they say what the report *means* and not merely how long it
+is. "Boundary clean" must never read as "system clean".
+
+`--verbose` restores the detailed surface: every workspace considered
+(including the skipped ones), the scope census, the per-phase counters, and the
+diagnostic detail on stderr.
+
+```console
+$ cargo cleanme clean ~/projects/my-app --verbose
+combined roots ~/projects/my-app
+combined scope: 1 root(s) [~/projects/my-app], 1 manifest(s), 1 resolved workspace(s), 1 CleanupUnit(s), 0 unresolved ownership participant(s)
+Cleaned  ~/projects/my-app  [private]  output ~/projects/my-app/target  before   4.02 MiB  after   0.00 B  observed decrease   4.02 MiB  — Removed 4 files, 4.0MiB total
+
+cleanup: 1 cleaned, 0 skipped, 0 failed; pre-clean estimate   4.02 MiB, post-clean measured   0.00 B, observed decrease   4.02 MiB; 0 filesystem diagnostics
+```
+
+`--verbose` changes the **human** format only. `--format json` and
+`--format log` are byte-for-byte identical with and without it — those are the
+versioned machine contracts, and a rendering flag must not move a byte in
+either.
 
 ## Cleanup selectors
 
@@ -751,10 +806,17 @@ Full scan can be "incomplete" while still returning a usable report.
 
 ## Progress UI
 
-Attended terminals show inline progress on **stderr** only: one coordinated
-`MultiProgress` owns the main bar plus up to five candidate rows, so bars never
-fight for terminal state.
+Attended terminals show inline progress on **stderr** only, and it is
+**exactly one line**: a spinner and the phase.
 
+```console
+⠁ scanning…
+⠁ resolving workspaces…
+⠁ analyzing output 3/12…
+```
+
+- The line names the phase, so the transition from discovery to resolution to
+  analysis is visible.
 - Discovery is indeterminate — there is no wasteful pre-scan.
 - Analysis and cleanup become determinate once counts are known, via the
   `ProgressObserver::units_total` / `unit_completed` contract. Callers never
@@ -764,5 +826,8 @@ fight for terminal state.
 - Output is capped at 10 Hz, with no alternate screen and no raw mode.
 - Progress clears before the final stdout report and never changes results.
 - `--no-progress` forces hidden output; `TERM=dumb` and non-TTY are plain.
+
+`--verbose` adds the counters to **the same line** — the frame is never more
+than one line tall, whatever the verbosity.
 
 `--no-progress --stats` is the canonical benchmark and debug combination.

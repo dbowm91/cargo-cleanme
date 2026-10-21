@@ -191,28 +191,30 @@ fn stderr_is_terminal() -> bool {
     std::io::stderr().is_terminal()
 }
 
-fn format_bytes(n: u64) -> String {
-    crate::report::format_bytes(n)
-}
-
 /// Inline attended-terminal renderer on stderr.
 ///
-/// One [`indicatif::MultiProgress`] owns the main bar plus up to five
-/// candidate rows (C002 §7.4), so bars share a single cursor/draw owner and
-/// cannot independently fight for terminal state.
+/// **One line, and one line only.** The renderer owns a single
+/// [`indicatif::ProgressBar`]; there is no `MultiProgress` fan-out and no
+/// candidate rows beneath the bar. M020 retired the five transient candidate
+/// rows that M005A §7.4 specified: on a real run they were empty (a spinner
+/// glyph and nothing else) for almost the whole traversal, so the "progress"
+/// occupied six terminal lines and said nothing.
 ///
-/// - Discovery uses an indeterminate spinner (total unknown without pre-scan).
-/// - Analysis/cleanup switch to determinate once group/candidate count is
-///   known via [`ProgressObserver::units_total`].
-/// - At most five reportable rows beneath the main bar, largest-first.
+/// - The **phase** is the message. The phase transitions (`Discovery`,
+///   `Resolution`, `Analysis`, `Cleanup`) are visible, which they were not
+///   before: the phase used to be written into the bar's *prefix*, and
+///   indicatif's default spinner template is `{spinner} {msg}` — it does not
+///   render the prefix at all.
+/// - The quiet surface shows the phase and, once the total is known, the
+///   fraction done. `--verbose` adds the counters to the same line.
 /// - Refresh capped at 10 Hz; never redrawn per filesystem entry.
 /// - `finish_and_clear` clears before the deterministic stdout report.
 /// - Hidden renderer emits no terminal output and never fails a scan.
 pub struct IndicatifRenderer {
     hidden: bool,
+    verbose: bool,
     multi: Option<indicatif::MultiProgress>,
     main: Option<indicatif::ProgressBar>,
-    rows: Vec<indicatif::ProgressBar>,
     top: Mutex<Vec<(PathBuf, u64)>>,
     last_draw: Mutex<Option<Instant>>,
     pub refreshes: AtomicU64,
@@ -231,15 +233,15 @@ pub struct IndicatifRenderer {
 impl IndicatifRenderer {
     fn assemble(
         hidden: bool,
+        verbose: bool,
         multi: Option<indicatif::MultiProgress>,
         main: Option<indicatif::ProgressBar>,
-        rows: Vec<indicatif::ProgressBar>,
     ) -> Self {
         Self {
             hidden,
+            verbose,
             multi,
             main,
-            rows,
             top: Mutex::new(Vec::new()),
             last_draw: Mutex::new(None),
             refreshes: AtomicU64::new(0),
@@ -256,44 +258,38 @@ impl IndicatifRenderer {
         }
     }
 
-    pub fn new(hidden: bool) -> Self {
+    pub fn new(hidden: bool, verbose: bool) -> Self {
         if hidden {
-            return Self::assemble(true, None, None, Vec::new());
+            return Self::assemble(true, verbose, None, None);
         }
-        // One coordinated draw target owns all six lines. Bars added via
-        // `MultiProgress::add` have their draw target intercepted by the
-        // multi object, so they never fight for cursor state independently.
+        // One coordinated draw target owns the single line. The `MultiProgress`
+        // is retained so there is exactly one owner of terminal state, even
+        // though there is only one bar in it.
         let multi = indicatif::MultiProgress::with_draw_target(
             indicatif::ProgressDrawTarget::stderr_with_hz(10),
         );
         let main = multi.add(indicatif::ProgressBar::new_spinner());
         main.enable_steady_tick(Duration::from_millis(100));
         main.set_message("scanning…");
-        let mut rows = Vec::new();
-        for _ in 0..5 {
-            let row = multi.add(indicatif::ProgressBar::new_spinner());
-            rows.push(row);
-        }
-        Self::assemble(false, Some(multi), Some(main), rows)
+        Self::assemble(false, verbose, Some(multi), Some(main))
     }
 
     /// In-memory coordinated renderer for tests.
     ///
     /// Uses the same one-`MultiProgress` composition as production but draws
     /// into an [`indicatif::InMemoryTerm`] so tests can assert the composed
-    /// multi-line frame without touching a real terminal.
-    pub fn new_in_memory_for_test() -> (Self, indicatif::InMemoryTerm) {
+    /// frame without touching a real terminal.
+    pub fn new_in_memory_for_test(verbose: bool) -> (Self, indicatif::InMemoryTerm) {
         let term = indicatif::InMemoryTerm::new(24, 120);
         let multi = indicatif::MultiProgress::with_draw_target(
             indicatif::ProgressDrawTarget::term_like_with_hz(Box::new(term.clone()), 10),
         );
         let main = multi.add(indicatif::ProgressBar::new_spinner());
-        main.set_message("test");
-        let mut rows = Vec::new();
-        for _ in 0..5 {
-            rows.push(multi.add(indicatif::ProgressBar::new_spinner()));
-        }
-        (Self::assemble(false, Some(multi), Some(main), rows), term)
+        main.set_message("scanning…");
+        (
+            Self::assemble(false, verbose, Some(multi), Some(main)),
+            term,
+        )
     }
 
     pub fn is_hidden(&self) -> bool {
@@ -302,13 +298,13 @@ impl IndicatifRenderer {
 
     /// Number of progress bars owned by the coordinated renderer.
     ///
-    /// Production attended renderer owns exactly six (one main + five rows);
-    /// hidden owns zero.
+    /// The attended renderer owns exactly **one** (M020 retired the five
+    /// transient candidate rows); a hidden renderer owns zero.
     pub fn coordinated_bar_count(&self) -> usize {
         if self.hidden {
             return 0;
         }
-        self.rows.len() + usize::from(self.main.is_some())
+        usize::from(self.main.is_some())
     }
 
     pub fn has_shared_draw_target(&self) -> bool {
@@ -325,12 +321,6 @@ impl IndicatifRenderer {
     /// same state.
     pub fn set_determinate_total(&self, total: u64) {
         self.determinate_total.store(total, Ordering::Relaxed);
-        if self.hidden {
-            return;
-        }
-        if let Some(main) = &self.main {
-            main.set_length(total);
-        }
     }
 
     fn reset_totals_for_phase(&self, phase: ScanPhase) {
@@ -339,12 +329,6 @@ impl IndicatifRenderer {
             *current = Some(phase);
             self.determinate_total.store(0, Ordering::Relaxed);
             self.determinate_done.store(0, Ordering::Relaxed);
-            if !self.hidden
-                && let Some(main) = &self.main
-            {
-                main.set_length(0);
-                main.set_position(0);
-            }
         }
     }
 
@@ -354,17 +338,53 @@ impl IndicatifRenderer {
         // leak into cleanup counts (C002 §7.5).
         self.determinate_total.store(total, Ordering::Relaxed);
         self.determinate_done.store(0, Ordering::Relaxed);
-        if self.hidden {
-            return;
-        }
-        if let Some(main) = &self.main {
-            main.set_length(total);
-            main.set_position(0);
-        }
     }
 
     fn apply_completed(&self) {
         self.determinate_done.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The phase's label, without the ellipsis.
+    fn phase_label(phase: ScanPhase) -> &'static str {
+        match phase {
+            ScanPhase::Discovery => "scanning",
+            ScanPhase::Resolution => "resolving workspaces",
+            ScanPhase::Analysis => "analyzing output",
+            ScanPhase::Reporting => "reporting",
+            ScanPhase::CleanupPreview => "previewing cleanup",
+            ScanPhase::CleanupSimulate => "simulating cleanup",
+            ScanPhase::CleanupExecute => "cleaning",
+        }
+    }
+
+    /// The one line the renderer draws.
+    ///
+    /// Quiet: the phase, plus the fraction once the total is known. Verbose:
+    /// the phase and the counters, on the *same* line — the surface is never
+    /// more than one line tall, whatever the verbosity.
+    fn compose_message(&self) -> String {
+        let phase = *self.current_phase.lock().unwrap_or_else(|e| e.into_inner());
+        let label = Self::phase_label(phase.unwrap_or(ScanPhase::Discovery));
+        let done = self.determinate_done.load(Ordering::Relaxed);
+        let total = self.determinate_total.load(Ordering::Relaxed);
+        let fraction = if total > 0 {
+            format!(" {done}/{total}")
+        } else {
+            String::new()
+        };
+        if !self.verbose {
+            return format!("{label}{fraction}…");
+        }
+        let visited = self.visited.load(Ordering::Relaxed);
+        let pruned = self.pruned.load(Ordering::Relaxed);
+        let manifests = self.manifests.load(Ordering::Relaxed);
+        let discovery_issues = self.discovery_issues.load(Ordering::Relaxed);
+        let workspaces = self.workspaces.load(Ordering::Relaxed);
+        let cargo_failures = self.cargo_failures.load(Ordering::Relaxed);
+        let eligible = self.eligible.load(Ordering::Relaxed);
+        format!(
+            "{label}{fraction}… visited {visited} pruned {pruned} manifests {manifests} workspaces {workspaces} discovery-errors {discovery_issues} cargo-failures {cargo_failures} eligible {eligible}"
+        )
     }
 
     fn maybe_draw(&self) {
@@ -381,39 +401,16 @@ impl IndicatifRenderer {
         *last = Some(now);
         drop(last);
         self.refreshes.fetch_add(1, Ordering::Relaxed);
-        let visited = self.visited.load(Ordering::Relaxed);
-        let pruned = self.pruned.load(Ordering::Relaxed);
-        let manifests = self.manifests.load(Ordering::Relaxed);
-        let discovery_issues = self.discovery_issues.load(Ordering::Relaxed);
-        let workspaces = self.workspaces.load(Ordering::Relaxed);
-        let cargo_failures = self.cargo_failures.load(Ordering::Relaxed);
-        let eligible = self.eligible.load(Ordering::Relaxed);
-        let done = self.determinate_done.load(Ordering::Relaxed);
-        let total = self.determinate_total.load(Ordering::Relaxed);
-        let msg = if total > 0 {
-            format!(
-                "analyzing {done}/{total} visited {visited} pruned {pruned} manifests {manifests} workspaces {workspaces} discovery-errors {discovery_issues} cargo-failures {cargo_failures} eligible {eligible}"
-            )
-        } else {
-            format!(
-                "scanning visited {visited} pruned {pruned} manifests {manifests} workspaces {workspaces} discovery-errors {discovery_issues} cargo-failures {cargo_failures} eligible {eligible}"
-            )
-        };
+        let msg = self.compose_message();
         if let Some(main) = &self.main {
             main.set_message(msg);
+            // `tick` advances the spinner glyph in both modes: without it the
+            // line froze the moment the total became known.
+            main.tick();
+            let total = self.determinate_total.load(Ordering::Relaxed);
             if total > 0 {
+                let done = self.determinate_done.load(Ordering::Relaxed);
                 main.set_position(done.min(total));
-            } else {
-                main.tick();
-            }
-        }
-        let top = self.top.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        for (i, row) in self.rows.iter().enumerate() {
-            if let Some((path, bytes)) = top.get(i) {
-                let text = format!("{}  {}", format_bytes(*bytes), path.to_string_lossy());
-                row.set_message(text);
-            } else {
-                row.set_message(String::new());
             }
         }
     }
@@ -428,9 +425,6 @@ impl IndicatifRenderer {
         }
         if let Some(main) = &self.main {
             main.finish_and_clear();
-        }
-        for row in &self.rows {
-            row.finish_and_clear();
         }
     }
 
@@ -457,18 +451,9 @@ impl ProgressObserver for IndicatifRenderer {
         if self.hidden {
             return;
         }
-        if let Some(main) = &self.main {
-            let label = match phase {
-                ScanPhase::Discovery => "discovering manifests…",
-                ScanPhase::Resolution => "resolving workspaces…",
-                ScanPhase::Analysis => "analyzing output…",
-                ScanPhase::Reporting => "reporting…",
-                ScanPhase::CleanupPreview => "previewing cleanup…",
-                ScanPhase::CleanupSimulate => "simulating cleanup…",
-                ScanPhase::CleanupExecute => "cleaning…",
-            };
-            main.set_prefix(label.to_owned());
-        }
+        // The phase goes into the *message*, not the prefix: indicatif's
+        // default spinner template is `{spinner} {msg}` and never renders the
+        // prefix, so a phase written there was invisible on the terminal.
         self.maybe_draw();
     }
     fn dirs_visited(&self, batch: u64) {
@@ -542,7 +527,7 @@ mod tests {
         noop.reportable_group(Path::new("/tmp/x"), 10);
         noop.units_total(ScanPhase::Analysis, 3);
         noop.unit_completed(ScanPhase::Analysis);
-        let hidden = IndicatifRenderer::new(true);
+        let hidden = IndicatifRenderer::new(true, false);
         assert!(hidden.is_hidden());
         assert_eq!(hidden.refresh_count(), 0);
         assert_eq!(hidden.coordinated_bar_count(), 0);
@@ -555,23 +540,38 @@ mod tests {
         hidden.finish_and_clear();
     }
 
+    /// M020: the attended renderer owns **one** bar, not six.
+    ///
+    /// The five transient candidate rows M005A §7.4 specified are retired: on a
+    /// real run they were empty for almost the whole traversal, so the
+    /// "progress" occupied six terminal lines and said nothing. *Fails if:* a
+    /// second bar is ever added to the renderer.
     #[test]
-    fn coordinated_renderer_owns_six_bars_on_one_draw_target() {
-        let (r, _term) = IndicatifRenderer::new_in_memory_for_test();
+    fn coordinated_renderer_owns_exactly_one_bar_on_one_draw_target() {
+        let (r, _term) = IndicatifRenderer::new_in_memory_for_test(false);
         assert!(!r.is_hidden());
-        assert_eq!(r.coordinated_bar_count(), 6);
+        assert_eq!(r.coordinated_bar_count(), 1);
         assert!(r.has_shared_draw_target());
         r.finish_and_clear();
     }
 
+    /// The drawn frame is **one** line, and the phase is on it.
+    ///
+    /// Two properties, one test: the frame must not grow a second line, and it
+    /// must name the phase. The phase used to be written into the bar's
+    /// *prefix*, and indicatif's default spinner template (`{spinner} {msg}`)
+    /// never renders the prefix — so the phase transitions were invisible on
+    /// the terminal. *Fails if:* the phase is written anywhere the template
+    /// does not render, or a second bar appears.
     #[test]
-    fn in_memory_frame_contains_at_most_six_progress_lines() {
-        let (r, term) = IndicatifRenderer::new_in_memory_for_test();
+    fn in_memory_frame_contains_exactly_one_progress_line_naming_the_phase() {
+        let (r, term) = IndicatifRenderer::new_in_memory_for_test(false);
         r.phase(ScanPhase::Analysis);
         r.discovery_issues(7);
         r.cargo_failure();
         r.cargo_failure();
         r.units_total(ScanPhase::Analysis, 6);
+        r.unit_completed(ScanPhase::Analysis);
         for i in 0..6 {
             r.reportable_group(&PathBuf::from(format!("/tmp/g{i}")), (i as u64 + 1) * 100);
             std::thread::sleep(Duration::from_millis(110));
@@ -579,13 +579,19 @@ mod tests {
         // Allow the 10 Hz draw target to flush.
         std::thread::sleep(Duration::from_millis(150));
         let contents = term.contents();
-        assert!(contents.contains("discovery-errors 7"), "{contents:?}");
-        assert!(contents.contains("cargo-failures 2"), "{contents:?}");
         let non_empty: Vec<&str> = contents.lines().filter(|l| !l.trim().is_empty()).collect();
         assert!(
-            non_empty.len() <= 6,
-            "composed frame must contain at most six progress lines, got {}: {contents:?}",
+            non_empty.len() <= 1,
+            "the composed frame must be one line, got {}: {contents:?}",
             non_empty.len()
+        );
+        assert!(
+            contents.contains("analyzing output"),
+            "the phase must be visible on the drawn line: {contents:?}"
+        );
+        assert!(
+            contents.contains("1/6"),
+            "the done fraction must be visible once the total is known: {contents:?}"
         );
         // Repeated refreshes must not append an unbounded scrolling log.
         for _ in 0..20 {
@@ -596,15 +602,85 @@ mod tests {
         let after = term.contents();
         let after_lines: Vec<&str> = after.lines().filter(|l| !l.trim().is_empty()).collect();
         assert!(
-            after_lines.len() <= 6,
+            after_lines.len() <= 1,
             "refreshes must not scroll unboundedly: {after:?}"
         );
         r.finish_and_clear();
     }
 
+    /// The verbose surface adds the counters to the **same** line.
+    ///
+    /// Verbosity must never make the frame taller: it makes the one line
+    /// *say more*. *Fails if:* the counters go onto a second line, or if the
+    /// verbose renderer stops showing them.
     #[test]
-    fn renderer_caps_rows_at_five_largest_first() {
-        let r = IndicatifRenderer::new(true);
+    fn the_verbose_surface_adds_counters_to_the_same_single_line() {
+        let (r, term) = IndicatifRenderer::new_in_memory_for_test(true);
+        r.phase(ScanPhase::Analysis);
+        r.units_total(ScanPhase::Analysis, 6);
+        // The draw is throttled to 10 Hz, so the events have to straddle the
+        // throttle window before the frame carries them.
+        std::thread::sleep(Duration::from_millis(110));
+        r.discovery_issues(7);
+        r.cargo_failure();
+        r.cargo_failure();
+        std::thread::sleep(Duration::from_millis(110));
+        r.maybe_draw();
+        std::thread::sleep(Duration::from_millis(150));
+        let contents = term.contents();
+        let non_empty: Vec<&str> = contents.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert!(
+            non_empty.len() <= 1,
+            "the verbose frame must still be one line, got {}: {contents:?}",
+            non_empty.len()
+        );
+        assert!(
+            contents.contains("discovery-errors 7"),
+            "the verbose line carries the counters: {contents:?}"
+        );
+        assert!(
+            contents.contains("cargo-failures 2"),
+            "the verbose line carries the counters: {contents:?}"
+        );
+        assert!(
+            contents.contains("analyzing output"),
+            "the verbose line still names the phase: {contents:?}"
+        );
+        r.finish_and_clear();
+    }
+
+    /// The quiet surface carries no counters.
+    ///
+    /// The counters are debugging information; the default surface must not
+    /// carry them. *Fails if:* a counter is added to the quiet message.
+    #[test]
+    fn the_quiet_surface_carries_no_counters() {
+        let (r, term) = IndicatifRenderer::new_in_memory_for_test(false);
+        r.phase(ScanPhase::Analysis);
+        r.units_total(ScanPhase::Analysis, 6);
+        std::thread::sleep(Duration::from_millis(110));
+        r.discovery_issues(7);
+        r.cargo_failure();
+        std::thread::sleep(Duration::from_millis(110));
+        r.maybe_draw();
+        std::thread::sleep(Duration::from_millis(150));
+        let contents = term.contents();
+        assert!(
+            !contents.contains("visited") && !contents.contains("cargo-failures"),
+            "the quiet surface carries no counters: {contents:?}"
+        );
+        assert!(contents.contains("analyzing output"), "{contents:?}");
+        r.finish_and_clear();
+    }
+
+    /// The largest candidates observed are still recorded.
+    ///
+    /// The transient rows that used to draw them are gone, but the renderer
+    /// still observes every reportable group, and `top_groups` remains the
+    /// accessor for the largest ones. *Fails if:* the observation is dropped.
+    #[test]
+    fn renderer_caps_the_observed_candidates_at_five_largest_first() {
+        let r = IndicatifRenderer::new(true, false);
         for i in 0..10 {
             r.reportable_group(&PathBuf::from(format!("/tmp/g{i}")), i * 100);
         }
@@ -672,7 +748,7 @@ mod tests {
         // renderer throttles to 10 Hz via `maybe_draw` time gate. Here we
         // assert the hidden bound and that visible construction does not
         // allocate per entry (batched counters only).
-        let hidden = IndicatifRenderer::new(true);
+        let hidden = IndicatifRenderer::new(true, false);
         for _ in 0..10_000 {
             hidden.dirs_visited(1);
         }
@@ -684,7 +760,7 @@ mod tests {
         // Discovery uses an indeterminate spinner (no total); analysis may
         // switch to determinate once workspace/group count is known via the
         // semantic `units_total` / `unit_completed` contract (C002 §7.5).
-        let r = IndicatifRenderer::new(true);
+        let r = IndicatifRenderer::new(true, false);
         r.phase(ScanPhase::Discovery);
         assert_eq!(
             r.determinate_total_value(),
@@ -710,7 +786,7 @@ mod tests {
         // M8: the renderer honours the phase carried by the event itself, so
         // cleanup totals can never inherit analysis counts even if a caller
         // forgets to announce the transition.
-        let r = IndicatifRenderer::new(true);
+        let r = IndicatifRenderer::new(true, false);
         r.units_total(ScanPhase::Analysis, 5);
         r.unit_completed(ScanPhase::Analysis);
         r.unit_completed(ScanPhase::Analysis);
@@ -726,7 +802,7 @@ mod tests {
 
     #[test]
     fn phase_total_resets_so_cleanup_cannot_reuse_analysis_counts() {
-        let r = IndicatifRenderer::new(true);
+        let r = IndicatifRenderer::new(true, false);
         r.phase(ScanPhase::Analysis);
         r.units_total(ScanPhase::Analysis, 5);
         r.unit_completed(ScanPhase::Analysis);
@@ -742,12 +818,12 @@ mod tests {
 
     #[test]
     fn sizes_render_in_top_rows_and_clear_before_report() {
-        let r = IndicatifRenderer::new(true);
+        let r = IndicatifRenderer::new(true, false);
         r.reportable_group(Path::new("/tmp/big"), 2048);
         let top = r.top_groups();
         assert_eq!(top.len(), 1);
         // Sizes render via the shared byte formatter.
-        assert!(format_bytes(2048).contains("2.00"));
+        assert!(crate::report::format_bytes(2048).contains("2.00"));
         // Final clear occurs before report write and never fails.
         r.finish_and_clear();
         r.finish_and_clear();
@@ -757,7 +833,7 @@ mod tests {
     fn renderer_error_falls_back_without_failing_scan() {
         // Construction is infallible; hidden fallback never fails a scan even
         // if terminal state is unavailable (non-TTY, dumb, or --no-progress).
-        let hidden = IndicatifRenderer::new(true);
+        let hidden = IndicatifRenderer::new(true, false);
         hidden.phase(ScanPhase::Discovery);
         hidden.dirs_visited(10);
         hidden.reportable_group(Path::new("/a"), 1);
@@ -789,7 +865,6 @@ mod tests {
     /// observable here that separates cleared from live.
     fn live_bars(renderer: &IndicatifRenderer) -> usize {
         std::iter::once(renderer.main.as_ref())
-            .chain(renderer.rows.iter().map(Some))
             .flatten()
             .filter(|bar| !bar.is_finished())
             .count()
@@ -814,7 +889,7 @@ mod tests {
     /// any bar live, or a path that draws again after the clear.
     #[test]
     fn finish_and_clear_leaves_no_live_bar_for_a_later_error_or_drop() {
-        let (r, term) = IndicatifRenderer::new_in_memory_for_test();
+        let (r, term) = IndicatifRenderer::new_in_memory_for_test(false);
         draw_cleanup_bar(&r);
         flush_draw_target();
         // Preconditions, or every assertion below is true by construction: the
@@ -826,8 +901,8 @@ mod tests {
         );
         assert_eq!(
             live_bars(&r),
-            6,
-            "all six coordinated bars are live before the clear"
+            1,
+            "the single coordinated bar is live before the clear"
         );
 
         // Mirrors `run_cleanup` on the failure path: the fallible call is bound,

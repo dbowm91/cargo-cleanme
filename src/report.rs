@@ -1,5 +1,89 @@
 use crate::domain::*;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// The human surface's rendering options (M020).
+///
+/// Two decisions travel together here: **which shape** the report takes, and
+/// **how paths are spelled**.
+///
+/// - **Quiet** names only what the run acted on. It is the default, because a
+///   machine with a thousand Cargo workspaces would otherwise print a thousand
+///   lines saying "skipped".
+/// - **Verbose** names everything: every workspace considered, the scope
+///   census, the counters, the diagnostic detail.
+///
+/// The path base is a property of the **scope**, not of the verbosity: a
+/// bounded scope has a root to be relative to and a Full scope does not. The
+/// verbose surface always spells paths absolutely — it is the debugging
+/// surface, and an absolute path is unambiguous.
+#[derive(Clone, Debug, Default)]
+pub struct HumanOptions {
+    /// Scope roots. A path under one of them is shown relative to it; a path
+    /// under none of them stays absolute. Empty means "always absolute".
+    pub roots: Vec<PathBuf>,
+    /// Show the detailed surface.
+    pub verbose: bool,
+}
+
+impl HumanOptions {
+    /// The quiet surface of a scope.
+    ///
+    /// `roots` are the scope's roots. Pass an empty list for a Full scope:
+    /// there is no single root to be relative to, and a relative path under
+    /// `/` would be a lie.
+    pub fn quiet(roots: Vec<PathBuf>) -> Self {
+        Self {
+            roots,
+            verbose: false,
+        }
+    }
+
+    /// The verbose surface. Paths are absolute.
+    pub fn verbose() -> Self {
+        Self {
+            roots: Vec::new(),
+            verbose: true,
+        }
+    }
+
+    /// The path as the human surface spells it.
+    pub fn path(&self, p: &Path) -> String {
+        path_text(&self.relativized(p))
+    }
+
+    /// The path relative to the scope root that contains it.
+    ///
+    /// A path no scope root contains stays absolute: a relative path with no
+    /// root to be relative to is a guess.
+    ///
+    /// A result of **one** component is qualified with the scope root's own
+    /// name — `~/projects/my-app` + `target` reads as `my-app/target`, not as
+    /// a bare `target`. Two reasons, and both are about the operator being
+    /// able to tell the rows apart: a bare `target` says nothing about
+    /// *which* project it belongs to, and two scope roots that each hold a
+    /// `target` child would produce two indistinguishable rows.
+    pub fn relativized(&self, p: &Path) -> PathBuf {
+        for root in &self.roots {
+            if let Ok(rest) = p.strip_prefix(root) {
+                let components = rest.components().count();
+                if components >= 2 {
+                    return rest.to_path_buf();
+                }
+                let Some(name) = root.file_name() else {
+                    // The scope root is the filesystem root: it has no name to
+                    // qualify the path with.
+                    return rest.to_path_buf();
+                };
+                if components == 0 {
+                    // The path *is* the scope root.
+                    return PathBuf::from(name);
+                }
+                return PathBuf::from(name).join(rest);
+            }
+        }
+        p.to_path_buf()
+    }
+}
 
 /// Render a path for human stdout.
 ///
@@ -41,7 +125,13 @@ pub fn format_bytes(n: u64) -> String {
     let number = format!("{}.{:02}", hundredths / 100, hundredths % 100);
     format!("{number:>6} {}", UNITS[unit])
 }
-pub fn render(report: &mut ScanReport) -> String {
+/// The human scan report.
+///
+/// One line per eligible output group, then one tally. The group list *is*
+/// the answer a scan gives — the groups are what a cleanup would pick — so
+/// the quiet surface keeps every group, with its ownership class, and only
+/// shortens the paths.
+pub fn render(report: &mut ScanReport, options: &HumanOptions) -> String {
     report.groups.sort_by(|a, b| {
         b.bytes
             .cmp(&a.bytes)
@@ -52,11 +142,18 @@ pub fn render(report: &mut ScanReport) -> String {
         .iter()
         .fold(0u64, |s, g| s.saturating_add(g.bytes));
     let mut o = String::new();
+    // One column width for the whole table, so the sizes line up.
+    let width = report
+        .groups
+        .iter()
+        .map(|g| options.path(&g.display_path).chars().count())
+        .max()
+        .unwrap_or(0);
     for g in &report.groups {
         o.push_str(&format!(
-            "{}  {}  [{}]\n",
-            format_bytes(g.bytes),
-            path_text(&g.display_path),
+            "{:<width$}  {}  [{}]\n",
+            options.path(&g.display_path),
+            format_bytes(g.bytes).trim(),
             g.ownership.label(),
         ));
     }
@@ -91,7 +188,7 @@ mod tests {
         let mut r = ScanReport::default();
         // A valid-UTF-8 name carrying terminal control bytes.
         r.groups.push(group("/tmp/esc\u{1b}[2J-bell\u{7}", 1));
-        let text = render(&mut r);
+        let text = render(&mut r, &HumanOptions::default());
         // Escaped, never written raw: a terminal cannot be driven by the name.
         assert!(text.contains("\\u{1b}"));
         assert!(text.contains("\\u{7}"));
@@ -114,7 +211,7 @@ mod tests {
             artifact_entries: 1,
             ownership: OutputOwnershipClass::PrivateBounded,
         });
-        let text = render(&mut r);
+        let text = render(&mut r, &HumanOptions::default());
         // Only the report's own newlines survive; the path contributes nothing
         // that a terminal would interpret.
         assert!(!text.chars().any(|c| c.is_control() && c != '\n'));
@@ -123,18 +220,18 @@ mod tests {
     #[test]
     fn report_ordering_and_zero_report() {
         let mut r = ScanReport::default();
-        assert!(render(&mut r).contains("0.00 B inventory estimate"));
+        assert!(render(&mut r, &HumanOptions::default()).contains("0.00 B inventory estimate"));
         r.groups.push(group("/z", 3));
         r.groups.push(group("/a", 3));
-        let text = render(&mut r);
+        let text = render(&mut r, &HumanOptions::default());
         assert!(text.find("/a").unwrap() < text.find("/z").unwrap());
     }
     #[test]
     fn zero_state_uses_the_same_inventory_wording_as_results() {
-        let empty = render(&mut ScanReport::default());
+        let empty = render(&mut ScanReport::default(), &HumanOptions::default());
         let mut r = ScanReport::default();
         r.groups.push(group("/a", 10));
-        let with_results = render(&mut r);
+        let with_results = render(&mut r, &HumanOptions::default());
         assert!(with_results.contains("inventory estimate"));
         assert!(empty.contains("inventory estimate"));
         // The zero state must never claim bytes were reclaimed.
@@ -168,7 +265,7 @@ mod tests {
                 ..group(path, bytes)
             });
         }
-        let text = render(&mut r);
+        let text = render(&mut r, &HumanOptions::default());
         // Deterministic size-desc with path tie-break: /a before /z at equal size.
         assert!(text.find("/a/private").unwrap() < text.find("/z/shared").unwrap());
         // Every group printed, not only transient top rows.
@@ -188,8 +285,81 @@ mod tests {
             artifact_entries: 2,
             ..group("/ws/target", 500)
         });
-        let text = render(&mut r);
+        let text = render(&mut r, &HumanOptions::default());
         assert!(text.contains("500"));
         assert!(text.contains("1 inactive Cargo output group"));
+    }
+
+    /// A bounded scope spells its paths relative to the scope root.
+    ///
+    /// *Fails if:* the relativization never happens, or if it happens for a
+    /// path no root contains.
+    #[test]
+    fn a_bounded_scope_spells_its_paths_relative_to_the_scope_root() {
+        let mut r = ScanReport::default();
+        r.groups.push(group("/work/alpha/target", 10));
+        r.groups.push(group("/elsewhere/beta/target", 20));
+        let text = render(&mut r, &HumanOptions::quiet(vec![PathBuf::from("/work")]));
+        assert!(
+            text.contains("alpha/target"),
+            "a path under the scope root is relative: {text}"
+        );
+        assert!(
+            text.contains("/elsewhere/beta/target"),
+            "a path under no scope root stays absolute: {text}"
+        );
+        assert!(
+            !text.contains("/work/alpha/target"),
+            "the relative path must not keep the root prefix: {text}"
+        );
+    }
+
+    /// A Full scope has no root to be relative to, so its paths stay absolute.
+    ///
+    /// *Fails if:* the Full scope's paths are relativized against `/`, which
+    /// would turn every path into a fragment and lose the machine it names.
+    #[test]
+    fn a_full_scope_spells_its_paths_absolutely() {
+        let mut r = ScanReport::default();
+        r.groups.push(group("/home/user/alpha/target", 10));
+        let text = render(&mut r, &HumanOptions::quiet(Vec::new()));
+        assert!(
+            text.contains("/home/user/alpha/target"),
+            "the Full scope's paths are absolute: {text}"
+        );
+    }
+
+    /// A one-component path is qualified with the scope root's own name.
+    ///
+    /// `~/projects/my-app` + `target` must read as `my-app/target`: a bare
+    /// `target` says nothing about which project it belongs to, and two scope
+    /// roots that each hold a `target` child would produce two
+    /// indistinguishable rows. *Fails if:* the qualification never happens.
+    #[test]
+    fn a_one_component_path_is_qualified_with_the_scope_root_name() {
+        let mut r = ScanReport::default();
+        r.groups.push(group("/projects/my-app/target", 10));
+        let text = render(
+            &mut r,
+            &HumanOptions::quiet(vec![PathBuf::from("/projects/my-app")]),
+        );
+        assert!(text.contains("my-app/target"), "{text}");
+        assert!(!text.contains("/projects/my-app/target"), "{text}");
+    }
+
+    /// The scope root itself is spelled with the root's own name.
+    ///
+    /// *Fails if:* stripping the root leaves an empty path, which renders as
+    /// an empty column rather than the directory it names.
+    #[test]
+    fn the_scope_root_itself_is_spelled_with_its_own_name() {
+        let mut r = ScanReport::default();
+        r.groups.push(group("/work", 10));
+        let text = render(&mut r, &HumanOptions::quiet(vec![PathBuf::from("/work")]));
+        assert!(text.contains("work"), "the scope root names itself: {text}");
+        assert!(
+            !text.contains("  /work"),
+            "the scope root is not spelled absolutely: {text}"
+        );
     }
 }

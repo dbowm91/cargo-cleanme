@@ -47,6 +47,15 @@ pub struct Cli {
     /// one bounded ASCII summary line for unattended schedulers.
     #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Human)]
     pub format: OutputFormat,
+    /// Show the detailed human surface: every workspace considered (including
+    /// the ones that were skipped), the scope census, the per-phase counters,
+    /// and the diagnostic detail.
+    ///
+    /// The default surface names only what the run acted on. This flag changes
+    /// the *human* format only — the JSON document and the log line are
+    /// identical with and without it.
+    #[arg(long, global = true)]
+    pub verbose: bool,
     /// Simulate: run every decision, proof, and reporting step, but invoke no
     /// `cargo clean` process at all. Honoured wherever it appears, so the
     /// `cargo cleanme --dry-run clean ROOT` spelling cannot fall back to

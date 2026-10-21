@@ -290,6 +290,7 @@ fn repeated_real_cargo_failures_are_grouped_without_losing_json_diagnostics() {
             "--config",
             config.to_str().unwrap(),
             "--no-progress",
+            "--verbose",
             "--stats",
             "--format",
             "json",
@@ -509,6 +510,7 @@ fn unavailable_cargo_executable_is_reported_as_a_locate_spawn_failure() {
             "--config",
             config.to_str().unwrap(),
             "--no-progress",
+            "--verbose",
             "--stats",
             "--format",
             "json",
@@ -590,6 +592,7 @@ fn cargo_failures_with_shared_generic_line_keep_distinct_cause_groups() {
             "--config",
             config.to_str().unwrap(),
             "--no-progress",
+            "--verbose",
             "--format",
             "json",
             "scan",
@@ -3051,6 +3054,7 @@ fn json_and_human_output_are_unchanged_by_log_mode() {
             "--config",
             json_fixture.config.to_str().unwrap(),
             "--no-progress",
+            "--verbose",
         ])
         .env("PATH", path_with(&json_fixture.bin))
         .env("FIXTURE_ROOT", &json_fixture.root)
@@ -4594,5 +4598,99 @@ fn a_working_directory_that_already_contains_a_routine_root_does_not_widen_the_s
     assert_eq!(
         json["result"]["discovered_manifests"], 1,
         "only the seed root's project may be discovered: {json}"
+    );
+}
+
+/// M020: `--verbose` changes the *human* surface and nothing else.
+///
+/// The JSON document and the log line are the versioned machine contract;
+/// a rendering flag must not move a byte in either. *Fails if:* a rendering
+/// option leaks into the projection, or the flag is not parsed at all.
+#[cfg(unix)]
+#[test]
+fn the_machine_contract_is_identical_with_and_without_verbose() {
+    let fixture = MaintenanceFixture::new(false);
+    let root = fixture.root.to_str().unwrap();
+
+    for format in ["json", "log"] {
+        // `--dry-run` keeps the two runs on the *same* filesystem state: an
+        // executing run would clean the artifact, and the second run would
+        // then measure different bytes — a difference caused by the fixture,
+        // not by the flag.
+        let quiet = fixture.run_with_format(&["--dry-run", "clean", root], format);
+        let verbose = fixture.run_with_format(&["--verbose", "--dry-run", "clean", root], format);
+        assert_eq!(
+            quiet.status.code(),
+            verbose.status.code(),
+            "{format}: the exit code must not depend on --verbose"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&quiet.stdout),
+            String::from_utf8_lossy(&verbose.stdout),
+            "{format}: the machine contract must not depend on --verbose"
+        );
+    }
+}
+
+/// M020: a bounded cleanup names its directories relative to the scope root.
+///
+/// *Fails if:* the relative spelling never happens, or the absolute path
+/// leaks into the human surface.
+#[cfg(unix)]
+#[test]
+fn a_bounded_cleanup_names_its_directories_relative_to_the_scope_root() {
+    let fixture = MaintenanceFixture::new(false);
+    let output = fixture.run_human(&["clean", fixture.root.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains("target"),
+        "the cleaned directory is named relative to the scope root: {text}"
+    );
+    assert!(
+        !text.contains(fixture.root.to_str().unwrap()),
+        "the absolute scope root leaked into the human surface: {text}"
+    );
+    assert!(
+        text.contains("reclaimed"),
+        "the tally states the space saved: {text}"
+    );
+}
+
+/// M020: the quiet surface is quiet — one line per cleaned directory, one
+/// tally, and no per-unit detail for the workspaces that were skipped.
+///
+/// *Fails if:* the quiet surface re-admits the detail rows, or the tally is
+/// missing.
+#[cfg(unix)]
+#[test]
+fn the_quiet_human_surface_is_a_row_per_cleaned_directory_and_one_tally() {
+    let fixture = MaintenanceFixture::new(false);
+    let output = fixture.run_human(&["clean", fixture.root.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    // One row for the cleaned directory, plus the tally.
+    assert!(
+        lines.len() <= 2,
+        "the quiet surface is a row per cleaned directory and a tally: {text}"
+    );
+    assert!(
+        !text.contains("combined scope:"),
+        "the scope census is the verbose surface's: {text}"
+    );
+    assert!(
+        !text.contains("observed decrease"),
+        "the per-unit detail is the verbose surface's: {text}"
     );
 }

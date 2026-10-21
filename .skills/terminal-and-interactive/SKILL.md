@@ -208,11 +208,24 @@ things to know if you build one:
   the gate tests the *format* rather than the *stream*. Progress is on stderr,
   so a `jq` consumer is unaffected — but a minutes-long JSON scan gives the
   operator nothing.
-- The bar's message template hardcodes `"analyzing {done}/{total} …"` whenever a
-  total exists (`src/progress.rs:395`), so a cleanup bar reads *"analyzing
-  3/12 …"*.
-- `set_determinate_total` (`src/progress.rs:326`) is dead and inconsistent: it
+- **The frame is exactly one line.** M020 retired M005A §7.4's five transient
+  candidate rows: on a real run they were empty — a spinner glyph and nothing
+  else — for almost the whole traversal, so the "progress" occupied six
+  terminal lines and said nothing. `coordinated_bar_count()`
+  (`src/progress.rs:303`) is **1** visible / 0 hidden, and it must stay 1: a
+  second bar is a regression, and `coordinated_renderer_owns_exactly_one_bar_on_one_draw_target`
+  (`src/progress.rs:550`) fails if one appears.
+- **The phase goes in the message, never the prefix.** indicatif's default
+  spinner template is `{spinner} {msg}` (indicatif 0.18.6,
+  `src/style.rs:41`) and does **not** render the prefix, so a phase written
+  with `set_prefix` was invisible on the terminal. `compose_message()`
+  (`src/progress.rs:365`) builds the whole line: the phase, then ` {done}/{total}`
+  once a total is known, then the counters under `--verbose`. The counters go
+  on **the same line** — verbosity must never make the frame taller.
+- `set_determinate_total` (`src/progress.rs:322`) is still inconsistent: it
   sets the total without zeroing `determinate_done`, unlike `apply_total`.
+  It no longer touches the bar's length, so the inconsistency is now state
+  only.
 
 ## Before you claim the change is safe
 

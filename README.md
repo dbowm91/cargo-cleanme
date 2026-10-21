@@ -39,11 +39,9 @@ reporting — and spawns nothing at all:
 
 ```console
 $ cargo cleanme clean ~/projects/my-app --dry-run --no-progress
-combined roots ~/projects/my-app
-combined scope: 1 root(s) [~/projects/my-app], 1 manifest(s), 1 resolved workspace(s), 1 CleanupUnit(s), 0 unresolved ownership participant(s)
-Simulated  ~/projects/my-app  [private]  output ~/projects/my-app/target  before   4.02 MiB  — simulation: no `cargo clean` command was invoked
+Simulated  my-app/target  4.02 MiB
 
-simulation: 1 would-clean, 0 skipped, 0 failed; estimated would-clean   4.02 MiB; no `cargo clean` command was invoked; 0 filesystem diagnostics
+4.02 MiB would be reclaimed from 1 directory (simulation only — no `cargo clean` command was invoked)
 ```
 
 **2. Scan is read-only.** `scan` needs an explicit scope selector; bare `scan`
@@ -52,7 +50,7 @@ the front door:
 
 ```console
 $ cargo cleanme scan ~/projects --no-progress
-  4.02 MiB  ~/projects/my-app/target  [private]
+my-app/target  4.02 MiB  [private]
 
   4.02 MiB inventory estimate across 1 inactive Cargo output groups
 ```
@@ -69,12 +67,20 @@ are never cleaned.
 
 ```console
 $ cargo cleanme clean ~/projects/my-app --no-progress
-combined roots ~/projects/my-app
-combined scope: 1 root(s) [~/projects/my-app], 1 manifest(s), 1 resolved workspace(s), 1 CleanupUnit(s), 0 unresolved ownership participant(s)
-Cleaned  ~/projects/my-app  [private]  output ~/projects/my-app/target  before   4.02 MiB  after   0.00 B  observed decrease   4.02 MiB  — Removed 4 files, 4.0MiB total
+Cleaned  my-app/target  4.02 MiB
 
-cleanup: 1 cleaned, 0 skipped, 0 failed; pre-clean estimate   4.02 MiB, post-clean measured   0.00 B, observed decrease   4.02 MiB; 0 filesystem diagnostics
+4.02 MiB reclaimed from 1 directory
 ```
+
+The default surface says **what happened and how much space it freed** — one
+line per directory that was actually cleaned, and one tally at the bottom. The
+workspaces it *skipped* are counted, not listed: on a machine with a thousand
+Cargo workspaces, a line each would be debugging information, not a result.
+
+Add `--verbose` when you want the full detail: every workspace considered
+(including the skipped ones), the scope census, the per-phase counters, and
+the diagnostic detail. It changes the **human** surface only — `--format json`
+and `--format log` are byte-for-byte identical with and without it.
 
 **4. Or parse it.** One versioned JSON document on stdout, nothing else:
 

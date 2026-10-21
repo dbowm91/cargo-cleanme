@@ -134,7 +134,7 @@ concern, covered in §3.8.
 | `OutputOwnershipClass` | enum | `PrivateBounded` / `ExternalUnproven` / `Shared` / `Uncertain` (`domain.rs:210-215`). |
 | `PhysicalOutputGroup` | struct | A measured group, pre-report: `covering_roots`, `physical_paths`, `display_path`, `owners: Vec<WorkspaceId>`, `ownership`, `bytes`, `metric`, `newest_mtime`, `artifact_entries`, `uncertain` (`domain.rs:229-243`). |
 | `EligibleOutputGroup` | struct | The report projection: same identity/size fields, but `workspace_roots: Vec<PathBuf>` instead of `owners`, and **no `covering_roots`, no `uncertain`** (`domain.rs:246-255`). |
-| `ScanReport` | struct | `groups: Vec<EligibleOutputGroup>`, `diagnostics`, `discovered: u64`, `visited_entries: u64`, `counters: ScanCounters` (`domain.rs:87-93`). Rendered by mutable reference (`report.rs:44`). |
+| `ScanReport` | struct | `groups: Vec<EligibleOutputGroup>`, `diagnostics`, `discovered: u64`, `visited_entries: u64`, `counters: ScanCounters` (`domain.rs:87-93`). Rendered by mutable reference (`report.rs:134`). |
 | `ScanCounters` | struct | 34 `u64` fields spanning prune attribution, Cargo call counts, gate exits, per-phase timings (`domain.rs:262-301`). |
 | `elapsed_nanos(Duration) -> u64` | free fn | Saturating `Duration` → nanosecond conversion (`domain.rs:308-310`). |
 
@@ -521,7 +521,7 @@ clamping to the epoch is intended (`policy.rs:574`, `policy.rs:621`,
 `cleanup.rs:1885` (`proof.pre_bytes.saturating_sub(after)` — clamping to `0`
 when output *grew* between proof and verification, the only safe reading), the
 count clamps at `cleanup.rs:489`, `cleanup.rs:2010`,
-`discovery.rs:795`, `discovery.rs:994` and `main.rs:1481`, and the
+`discovery.rs:795`, `discovery.rs:994` and `main.rs:1556`, and the
 scroll/index clamps in the interactive list (`interactive.rs:284`,
 `interactive.rs:355`, `interactive.rs:441`, `interactive.rs:471`,
 `interactive.rs:539`, `interactive.rs:646`, `interactive.rs:648`,
@@ -549,7 +549,7 @@ misunderstand the pipeline.
 
 **5.7 `ScanReport` is mutable and `render` re-sorts it.** `report::render` takes
 `&mut ScanReport` and sorts `groups` in place by descending bytes then display
-path (`report.rs:44-49`). Rendering is therefore not order-preserving; a caller
+path (`report.rs:135-139`). Rendering is therefore not order-preserving; a caller
 needing the pre-sort order must copy first.
 
 **5.8 `ActivityState` and `DiscoveredProject` are dead public API.** Both are

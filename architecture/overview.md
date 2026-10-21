@@ -19,7 +19,7 @@ distinction matters.
 - **What it is:** a Cargo subcommand (`cargo cleanme`) that finds inactive Cargo
   build artifacts on a machine and either reports or safely reclaims them.
 - **Shape:** one binary (`src/main.rs`) over one library (`src/lib.rs`) of 16
-  modules, 18 source files, 34,445 lines in `src/` (15,760 of them outside
+  modules, 18 source files, 35,190 lines in `src/` (16,113 of them outside
   every `#[cfg(test)]` scope), no async runtime of its own, and exactly one
   binary dependency that matters for safety (`cargo metadata`).
 - **Version:** 0.2.9 (unpublished; latest published tag `v0.2.8`) ·
@@ -97,9 +97,9 @@ Execute mode). `scan --full` is a hidden alias of `scan --all`.
 |---|---|---|
 | Source files | 18 | `src/` |
 | Library modules | 16 | `src/lib.rs` |
-| Total lines in `src/` | 34,445 | `wc -l src/*.rs` |
-| Production lines | 15,760 | total minus every `#[cfg(test)]` scope |
-| Inline `#[test]` functions | 481 | `#[test]` attributes in `src/` |
+| Total lines in `src/` | 35,190 | `wc -l src/*.rs` |
+| Production lines | 16,113 | total minus every `#[cfg(test)]` scope |
+| Inline `#[test]` functions | 493 | `#[test]` attributes in `src/` |
 | Integration test files | 2 | `tests/cli_contract.rs`, `tests/end_to_end.rs` |
 | Contract-checker scripts | 17 | `scripts/` — the set is machine-gated, see §9 |
 | GitHub workflows | 6 | `.github/workflows/` |
@@ -129,14 +129,14 @@ the file itself; the integration suites in `tests/` are counted separately in
 
 | Module | total | prod | tests | Module | total | prod | tests |
 |---|---:|---:|---:|---|---:|---:|---:|
-| `cleanup.rs` | 9983 | 3746 | 114 | `output.rs` | 1065 | 540 | 21 |
-| `workspace.rs` | 6301 | 2160 | 79 | `progress.rs` | 873 | 533 | 13 |
-| `update.rs` | 2886 | 1289 | 47 | `report.rs` | 195 | 71 | 7 |
+| `cleanup.rs` | 10403 | 3937 | 120 | `output.rs` | 1065 | 540 | 21 |
+| `workspace.rs` | 6301 | 2160 | 79 | `progress.rs` | 945 | 515 | 15 |
+| `update.rs` | 2886 | 1289 | 47 | `report.rs` | 365 | 168 | 11 |
 | `discovery.rs` | 2363 | 1000 | 39 | `traverse.rs` | 624 | 494 | 6 |
 | `interactive.rs` | 2426 | 1311 | 58 | `domain.rs` | 435 | 406 | 1 |
 | `config.rs` | 1499 | 613 | 20 | `editor.rs` | 215 | 155 | 2 |
-| `main.rs` | 1684 | 1547 | 4 | `error.rs` | 16 | 16 | 0 |
-| `cli.rs` | 1284 | 492 | 32 | `lib.rs` | 16 | 16 | 0 |
+| `main.rs` | 1758 | 1621 | 4 | `error.rs` | 16 | 16 | 0 |
+| `cli.rs` | 1293 | 501 | 32 | `lib.rs` | 16 | 16 | 0 |
 | `policy.rs` | 1451 | 791 | 21 | | | | |
 | `discovery_state.rs` | 1129 | 580 | 17 | | | | |
 
@@ -340,7 +340,7 @@ responsible for; the **Breaks** line says what a defect there would cost.
 ### 4.13 `report.rs` — human rendering
 
 - **Owns:** the human-readable rendering of a `ScanReport` — `render`
-  (`src/report.rs:44`) — and `format_bytes` (`src/report.rs:25`).
+  (`src/report.rs:134`) — and `format_bytes` (`src/report.rs:25`).
 - **Depends on:** `domain` only.
 - **Deep dive:** [10 — Reporting](10-reporting.md)
 
@@ -365,7 +365,9 @@ responsible for; the **Breaks** line says what a defect there would cost.
   every long-running phase reports through — the `indicatif` renderer, and
   the terminal capability decision `should_show_progress`
   (`src/progress.rs:163`).
-- **Depends on:** `report`, `error`.
+- **Depends on:** `error`. (`report` is **test-only**: until M020 the renderer
+  wrote its candidate rows through `report::format_bytes`; the single-line
+  renderer composes its own text, so the production edge is gone.)
 - **Breaks:** progress writes to a terminal. If it writes when it should not,
   it corrupts a machine-readable stream; if it draws when the terminal is
   absent, it corrupts a log.
@@ -521,7 +523,7 @@ The **test-only** back edges are numerous and are not production dependencies:
 | `output` | `cleanup`, `domain`, `update` |
 | `policy` | `config`, `discovery_state`, `error` |
 | `workspace` | `cleanup`, `progress` |
-| `progress` | `error` |
+| `progress` | `error`, `report` |
 | `discovery` | `progress` |
 | `interactive` | `domain` |
 
@@ -665,10 +667,10 @@ things a reviewer should check first in any change.
 
 | Surface | What it is | Deep dive |
 |---|---|---|
-| `tests/cli_contract.rs` | 63 contract tests over the CLI surface, exit codes, and reason codes. | [14 — Testing](14-testing-and-verification.md) |
+| `tests/cli_contract.rs` | 74 contract tests over the CLI surface, exit codes, and reason codes. | [14 — Testing](14-testing-and-verification.md) |
 | `tests/end_to_end.rs` | 4 end-to-end tests over a real fixture. | [14 — Testing](14-testing-and-verification.md) |
 | `tests/common/` | The shared fixture harness. | [14 — Testing](14-testing-and-verification.md) |
-| `src/**/*.rs` inline tests | 451 `#[test]` functions, concentrated in `cleanup.rs` (114) and `workspace.rs` (76). | [14 — Testing](14-testing-and-verification.md) |
+| `src/**/*.rs` inline tests | 493 `#[test]` functions, concentrated in `cleanup.rs` (120) and `workspace.rs` (79). | [14 — Testing](14-testing-and-verification.md) |
 | `scripts/` (17) | The contract-checker set: release contract, release identity, staged-release validation, installer contract, doc citations, fixture portability, selector qualification, post-release smoke contract, and the release/benchmark tooling. The exact set is machine-gated — a new checker cannot ship undocumented. | [14 — Testing](14-testing-and-verification.md) §5 |
 | `.github/workflows/` (6) | `ci.yml`, `post-release-smoke.yml`, `qualify-cargo-selectors.yml`, `release-binaries.yml`, `release-drift.yml`, `validate-staged-release.yml`. | [15 — Distribution](15-distribution-and-release.md) |
 | `packaging/` | `install.sh` and `install.ps1` plus their qualification harness. | [15 — Distribution](15-distribution-and-release.md) |
@@ -698,7 +700,7 @@ C018/C019/C021-C025 are now closed). Their findings were real when recorded and
 each is now closed by shipped code; the deep dives that carry them were updated in
 the same pass, so these rows point at completed work rather than at a plan.
 
-**Sixty-two** findings are recorded here. The count is re-derivable: it is the
+**Sixty-three** findings are recorded here. The count is re-derivable: it is the
 number of numbered rows in the table below.
 
 | # | Finding | Status |
@@ -747,7 +749,7 @@ number of numbered rows in the table below.
 | 54 | **The doc-citation gate covers `architecture/*.md` and nothing else.** `scripts/check-doc-citations.py` resolves the `file.rs:N` form inside `architecture/` only. `.skills/`, `docs/`, and `README.md` are **ungated**, so a skill or a user-facing document can drift indefinitely with no mechanical signal — and it did, in both places. | **Open — not yet planned.** A citation gate over `.skills/` and `docs/` is the mechanical fix; it is not one, because those files are prose-heavy and their citation forms are inconsistent. Until it exists, re-derive skill and doc claims from source rather than copying them forward. |
 | 55 | **`architecture/07-workspace.md` carried the superseded ADR 007 whole-scope block** in two places — naming a `Preview` mode that does not exist and saying an unresolved manifest "blocks the whole scope", while `architecture/09-cleanup.md` correctly documented the scoped boundary in the same repository. | **Fixed in this pass.** Corrected to the ADR 007 three-way split, with the boundary rule and the regression test named. |
 | 56 | **`architecture/05-discovery.md` asserted that the uncertainty vector "still carries known, path-specific uncertainty into `reconcile_full`"** — while `architecture/06-discovery-state.md` correctly documented that it is always empty. All three uncertainty categories are emitted with `path: None` (`src/discovery.rs:783-797`, `:978-996`), so `filter_map(|d| d.path.clone())` (`src/main.rs:1216-1224`) drops every one of them. | **Fixed in this pass.** |
-| 57 | **The per-platform inline-test census disagreed across three documents and with itself.** `test-evidence/SKILL.md` claimed 320 declared / 318 Linux / 296 Windows / 317 macOS; `architecture/14-testing-and-verification.md` claimed 450 / 448 / 420 Windows; and a figure of 443/415 was in circulation. The truth is **450 declared, 448 Linux, 411 Windows, 445 macOS** — 35 `#[cfg(unix)]` and 4 Linux-only gates. A naive grep for `#[cfg(unix)]` immediately above `#[test]` finds 26, because nine of the 35 have the gate *after* the `#[test]`. | **Fixed in this pass.** All three documents now state the current census — 481/479/441/476 after C040 — and the derivation method (a brace-tracking evaluation against `rustc --print cfg --target <triple>`, cross-checked against `cargo test --lib -- --list`) is recorded so the next reader can re-derive rather than copy. |
+| 57 | **The per-platform inline-test census disagreed across three documents and with itself.** `test-evidence/SKILL.md` claimed 320 declared / 318 Linux / 296 Windows / 317 macOS; `architecture/14-testing-and-verification.md` claimed 450 / 448 / 420 Windows; and a figure of 443/415 was in circulation. The truth is **450 declared, 448 Linux, 411 Windows, 445 macOS** — 35 `#[cfg(unix)]` and 4 Linux-only gates. A naive grep for `#[cfg(unix)]` immediately above `#[test]` finds 26, because nine of the 35 have the gate *after* the `#[test]`. | **Fixed in this pass.** All three documents now state the current census — 493/491/453/488 after M020 — and the derivation method (a brace-tracking evaluation against `rustc --print cfg --target <triple>`, cross-checked against `cargo test --lib -- --list`) is recorded so the next reader can re-derive rather than copy. |
 | 58 | **Thirteen source doc comments still describe the pre-ADR 007 whole-scope block.** `src/cleanup.rs:300`, `:328`, `:1141`, `:2044`, `src/workspace.rs:394`, `:978`, and `src/main.rs:304`, `:366`, `:590`, `:831` say "whole-scope" where the behaviour is boundary-scoped; `src/cleanup.rs:315-316` says "coverage of the selected scope is unproven" for the same reason. `tests/cli_contract.rs:1935-1936` carries the same wording on a test whose *behaviour* is correct (its unresolved manifest is inside the anchor, so it does block). | **Open — not yet planned.** Deliberately **not** fixed in this pass: the diff is documentation-only by design, and editing `src/` shifts line numbers that 2,742 bare citations depend on — which `AGENTS.md` §5 forbids doing casually. The correction needs a corrective that re-derives the affected citations in the same change. Recorded as C036 D27. |
 | 59 | **Several inline tests assert on wall-clock and thread-scheduling observations, so the suite is load-sensitive.** `cleanup::tests::proof_refresh_parallelism_is_bounded_and_results_stay_deterministic` asserts the observed peak proof-refresh concurrency equals the reported counter, and `cleanup::tests::real_temp_project_preview_and_execute_with_redirected_target` asserts a recency-window reason code. Under CPU contention the observations move and the assertions fail. Measured: on the C038 tree, 8 consecutive `cargo test --all-targets --all-features` runs with an idle host all passed, and the same tree run concurrently with a build failed; on the **unmodified baseline** (`426cb72`) under the same contention, three tests failed — the same two plus `workspace::tests::real_conventional_workspace_is_private_bounded`. | **Open — not yet planned.** Pre-existing, and not a C038 regression: the baseline fails under the same load. The lesson is the repository's own — *a green test proves only that its own premises hold*, and here one of the premises is an unloaded host. A fix belongs with the real-Cargo fixtures, not with a corrective that changed no fixture. |
 | 60 | **The `-i` selection surface was a *list*, not a *finder*, and it was built that way on purpose.** The frame was exactly the terminal height (`list_rows()` returned `height - CHROME_LINES`), so the list filled the screen instead of being a window; there was no scroll-position indicator, no paging key (`Key` had no PageUp/PageDown/Home/End), and the absolute path of every row occupied most of the width while the part that distinguishes one workspace from another sat at its far end. Every row repeated the word `private`, whether or not that was news. The surface was **functionally correct** — every defect here is a presentation defect — but the module's own tests asserted the *shape* rather than the *usability*, and one of them (`the_frame_is_exactly_the_terminal_height_and_never_overflows_the_width`) **pinned the defect as the contract**. | **Fixed in C039.** The frame is now a bounded page of at most fifteen rows that never outgrows the terminal; a row is named by the shortest path suffix that identifies it uniquely among the candidates; the reclaimable size is right-aligned; the ownership column is omitted when it would say the same thing on every row; the gutter marks the window edges and the cursor; and the surface renders colour, opt-out via `NO_COLOR`. The NOR/INS model and the published key table are unchanged. The test that pinned the old shape was rewritten to pin the new property, and the evidence is a pty capture of the real binary, not a string comparison — the repository has no pty harness (finding **48**), so the rendered surface had never been observed by a test. |
@@ -757,14 +759,15 @@ number of numbered rows in the table below.
 | 38 | **`plans/output-schema-v1.md` is missing a reason code the code actually emits.** The schema lists 19 `reason_code` values; the code has **20** (`src/cleanup.rs:263-286`). The missing one is `skipped_outside_selection` — the value M014 actually emits for a workspace outside the selected scope (`src/cleanup.rs:1431`). | **Open — not yet planned.** Fits the C036 drift remit, but C036 is `proposed` and not accepted. |
 | 39 | **`plans/output-schema-v1.md` describes a non-UTF-8 path as using "the platform escaped debug form".** `output::path` (`src/output.rs:262-266`) now uses `to_string_lossy()`, so both the human and the machine output render `U+FFFD` and **agree** — the schema's description of a divergence that no longer exists is stale. The schema's own wording ("are UTF-8 strings when representable") is also wrong: a path is always a UTF-8 `String`, representable or not. | **Open — not yet planned.** Note the consequence: `output::path` is lossy and therefore **not injective**, so a JSON path string must not be used as a join key. |
 | 40 | **`plans/registry.md` contradicts itself about the self-update smoke.** The M011C row says the automatic smoke is "demonstrated three times" while the evidence table below it lists **seven** green automatic smokes. | **Open — not yet planned.** A registry is a control surface; a self-contradicting one is worse than a stale one, because a reader cannot tell which number to trust. |
-| 41 | **`progress::set_determinate_total` (`src/progress.rs:326`) is dead *and* internally inconsistent.** It sets the bar's total without zeroing `determinate_done`, unlike `apply_total` (`src/progress.rs:351`). It is the one path that can leave the displayed total and done-count mismatched. It has zero callers. | **Open — not yet planned.** It joins the §10.1 dead-API list if the owner decides to record it there. |
-| 42 | **The progress bar's message template hardcodes `"analyzing {done}/{total} …"` whenever a total exists** (`src/progress.rs:395`), so a `CleanupExecute` bar reads *"analyzing 3/12 …"*. The root cause is the duplicated counter set, not the label. | **Open — not yet planned.** |
+| 41 | **`progress::set_determinate_total` (`src/progress.rs:322`) is dead *and* internally inconsistent.** It sets the bar's total without zeroing `determinate_done`, unlike `apply_total` (`src/progress.rs:335`). It is the one path that can leave the displayed total and done-count mismatched. It has zero callers. | **Recorded in §10.1** — M020 confirmed zero call sites and removed its `set_length` call, so the inconsistency is now state only. The public item is kept deliberately (see §10.1's semver note). |
+| 42 | **The progress bar's message template hardcoded `"analyzing {done}/{total} …"` whenever a total existed**, so a `CleanupExecute` bar read *"analyzing 3/12 …"*. The root cause was the duplicated counter set, not the label. | **Closed by M020.** The renderer now composes the whole line from the phase label (`src/progress.rs:348`) and the fraction (`src/progress.rs:365`), so every phase names itself: *"scanning…"*, *"resolving workspaces…"*, *"analyzing output 3/12…"*, *"cleaning…"*. The phase also moved out of the bar's *prefix* into its message, because indicatif's default spinner template (`{spinner} {msg}`) never renders the prefix — so the transitions had never been visible at all. |
 | 43 | **`--format json` on an attended terminal gets no progress at all.** The format gate at `src/main.rs:1178-1179` suppresses the renderer on anything other than `OutputFormat::Human`, regardless of whether stdout is a pipe. Progress is on **stderr**, so a `jq` consumer is unaffected by it — and the log mode's suppression is independently justified, but the JSON mode's is not. A minutes-long `--format json` scan gives the operator nothing. | **Open — not yet planned.** |
 | 44 | **The contract tests do not cover the whole contract.** `cleanup_reason_codes_have_stable_contract_names` (`src/cleanup.rs:4177-4203`) covers **16 of 20** reason codes — it omits `skipped_ownership_unproven`, `skipped_outside_selection`, `selector_unsupported`, and `selector_invalid`. `policy_dispositions_have_stable_json_names` (`src/cleanup.rs:4157-4174`) covers **5 of 6** dispositions — it omits `selector_estimate_unavailable`. | **Open — not yet planned.** The stable-name tests are the only guard on the published string vocabulary, so the uncovered four and one are unguarded. |
 | 45 | **The positive `allowed_output_roots` path is untested end-to-end.** `config.toml` calls the field "operationally redundant" and the code advertises the remediation at `src/cleanup.rs:963-970`, but no test shows a `PrivateBounded` group outside every clean root becoming `Cleaned` through an allowed root. | **Open — not yet planned.** This is the one path where *authorization* — not proof — is what makes a group cleanable, so it is the path most worth an end-to-end case. |
 | 46 | **Two error paths in `main.rs` report an unmeasured zero.** `src/main.rs:683` and `src/main.rs:708` build a `CleanReport` after the engine returned `Err`, so the out-of-scope count it had computed was discarded and `out_of_scope_unresolved` is set to `0` — an unmeasured zero on a path that *did* traverse. The other two report sites (`src/main.rs:381`, `src/main.rs:406`) are correct. | **Open — not yet planned.** A machine consumer reading `out_of_scope_unresolved: 0` cannot tell "nothing was out of scope" from "we never got to count". |
 | 47 | **The one-JSON-document guard is asserted by a string check, not behaviourally.** `tests/cli_contract.rs:3141-3144` asserts that `src/main.rs` contains the text `"enum EmitReport"`. Renaming the enum breaks the test — good — but keeping the enum while every call site passes `EmitReport::Yes` leaves it green, and the two-JSON-documents bug returns. A source check on the *call site* (`src/main.rs:765`) would be a stronger, equally cheap assertion. | **Open — not yet planned.** AGENTS.md §4's own lesson in miniature. |
 | 62 | **The Full cleanup operation is unreachable for an ordinary user.** `cargo cleanme clean --full` runs a Full reconciliation first (`src/main.rs:765`), and a platform-root walk by a non-root user is **never** complete, so `policy::full_cleanup_roots` (`src/policy.rs:519-543`) refuses the non-zero reconciliation code (`src/policy.rs:523-528`) and the operation exits **2** before it cleans anything. The refusal is unconditional in practice, not merely common: it happens because regions that are irrelevant to the cleanup — `/var`, `/snap`, `/run` — are unreadable, not because anything about the learned roots is unproven. **Verified live** on 2026-10-21 (uid 1000): exit `2`, stdout empty, 128 permission-denied traversal errors under `/`. The gate is unit-tested, but only with a literal `1` (`src/policy.rs:1150`), so the test proved its own premise and never that a real machine produces that code. | **Decided — ADR 008 §5, route 5b-i (accepted 2026-10-21).** The Full cleanup's proof boundary becomes the **learned root**: a root whose traversal completed is proven and cleaned, one whose traversal did not complete is skipped with a typed reason, and the operation proceeds with the roots it can prove. Implementation is planned in **M018** (the gate) and **M019** (the canonical spelling), both *proposed*. The disclosed residual — an unknown participant in an unreadable region outside every learned root cannot be disproven — is the same shape as ADR 007's out-of-boundary residual, and it is disclosed rather than fixed. ADR 007 §1 and *Residuals* are amended accordingly. |
+| 63 | **The cleanup's human surface wrote control characters in a path raw.** `cleanup::escaped_path` returned a valid-UTF-8 path unchanged, so a directory whose name contained a newline or an escape sequence wrote that sequence straight into the terminal — the exact hazard `report::path_text` was written to prevent. The machine surface already escaped, so the two surfaces disagreed about the same path. | **Closed by M020.** Both human surfaces now render paths through `HumanOptions::path` (`src/report.rs:50`), which escapes control characters and degrades non-UTF-8 to U+FFFD; `escaped_path` is gone. |
 
 ### 10.1 Dead public API, recorded not removed
 
@@ -778,6 +781,7 @@ change. These items have no production callers and are kept deliberately:
 | `cli::absolutize_root_for_test` | Zero call sites anywhere, despite the name promising otherwise. |
 | `cli::Cli::scan_root` | Test-only; `main.rs` destructures `Command::Scan` directly. |
 | `traverse::source_activity` | Test-only; production uses `workspace_member_activity`. |
+| `progress::set_determinate_total` | Zero call sites anywhere. It stores the total without zeroing `determinate_done`, unlike the private `apply_total` — the one path that can leave the displayed total and the done-count mismatched. M020 removed its `set_length` call, so the inconsistency is now state only. |
 
 ### 10.2 Corrections verification made to the original findings
 

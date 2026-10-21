@@ -190,7 +190,7 @@ fn end_to_end_reports_only_inactive_artifact_projects() {
         visited_entries: discovered.visited_entries,
         counters,
     };
-    let output = report::render(&mut report);
+    let output = report::render(&mut report, &cargo_cleanme::report::HumanOptions::default());
     // Only the backdated project is an inactive candidate: the freshly built
     // one is protected by the recency guard, through production code.
     assert!(output.contains("old-project"), "{output}");
@@ -269,7 +269,7 @@ fn run_filtered_scope(
         visited_entries: discovered.visited_entries,
         counters,
     };
-    let output = report::render(&mut report);
+    let output = report::render(&mut report, &cargo_cleanme::report::HumanOptions::default());
     (output, discovered.manifests, ownership)
 }
 
@@ -656,7 +656,7 @@ fn a_neighbouring_projects_sources_inside_a_covering_output_root_are_never_clean
          byte-identical afterwards"
     );
 
-    let rendered = report.render();
+    let rendered = report.render(&crate::report::HumanOptions::default());
     assert!(
         !report
             .results
@@ -827,7 +827,7 @@ fn an_unrelated_sibling_workspace_stays_eligible_alongside_a_dangerous_one() {
                 && unit.outcome == CleanOutcome::Simulated
         }),
         "the unrelated sibling must remain an eligible candidate: {}",
-        report.render()
+        report.render(&crate::report::HumanOptions::default())
     );
     assert!(
         !report.results.iter().any(|unit| {
@@ -835,6 +835,6 @@ fn an_unrelated_sibling_workspace_stays_eligible_alongside_a_dangerous_one() {
                 && unit.outcome == CleanOutcome::Simulated
         }),
         "the dangerous region must still be refused: {}",
-        report.render()
+        report.render(&crate::report::HumanOptions::default())
     );
 }

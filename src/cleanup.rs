@@ -498,19 +498,36 @@ fn append_unresolved_listing(out: &mut String, unresolved: &[UnresolvedOwnership
 }
 
 impl CleanReport {
-    pub fn render(&self) -> String {
-        let mut out = String::new();
-        if !self.selected_roots.is_empty() {
-            out.push_str(&format!(
-                "combined scope: {} root(s) [{}], {} manifest(s), {} resolved workspace(s), {} CleanupUnit(s), {} unresolved ownership participant(s)\n",
-                self.selected_roots.len(),
-                self.selected_roots.iter().map(|p| escaped_path(p)).collect::<Vec<_>>().join(", "),
-                self.discovered_manifests,
-                self.resolved_workspaces,
-                self.units_considered,
-                self.unresolved_ownership.len(),
-            ));
+    /// The human cleanup report.
+    ///
+    /// Two shapes (M020):
+    ///
+    /// - **Quiet** — the default — names only what the run acted on: one line
+    ///   per cleaned directory and one tally at the bottom. The workspaces the
+    ///   run *skipped* are counted, not listed: a machine with a thousand
+    ///   Cargo workspaces would otherwise print a thousand lines saying
+    ///   "skipped", which is debugging information, not a result.
+    /// - **Verbose** names everything: every workspace considered, the scope
+    ///   census, the ownership class, the per-unit detail, and the per-unit
+    ///   reason.
+    ///
+    /// Both shapes keep ADR 007's safety disclosures — the scope block, the
+    /// unresolved-participant listing, and the out-of-scope count. Those say
+    /// *what the report means*, not how long it is, and dropping them would
+    /// turn "boundary clean" into "system clean".
+    pub fn render(&self, options: &crate::report::HumanOptions) -> String {
+        if options.verbose {
+            self.render_verbose(options)
+        } else {
+            self.render_quiet(options)
         }
+    }
+
+    /// The safety disclosures, which both shapes carry.
+    ///
+    /// Returns `true` when the caller must stop there: a blocked scope with no
+    /// results has nothing to report beyond the block itself.
+    fn append_disclosures(&self, out: &mut String) -> bool {
         // ADR 007: poison outside the selected scope never blocks, but
         // silence about it would recreate the M012A defect in a new place —
         // "boundary clean" must not read as "system clean". Renders on both
@@ -535,17 +552,198 @@ impl CleanReport {
             if block.reason == ScopeBlockReason::OwnershipUnproven
                 && !self.unresolved_ownership.is_empty()
             {
-                append_unresolved_listing(&mut out, &self.unresolved_ownership);
+                append_unresolved_listing(out, &self.unresolved_ownership);
             }
-            if self.results.is_empty() {
-                return out;
-            }
+            return self.results.is_empty();
         } else if !self.unresolved_ownership.is_empty() {
             // ADR 007: reported-but-never-blocking participants (in-boundary
             // passengers and scope notes) are still named on the clean path,
             // or "boundary clean" would read as "nothing unproven".
             out.push_str("  reported unprovable participant(s), not blocking:\n");
-            append_unresolved_listing(&mut out, &self.unresolved_ownership);
+            append_unresolved_listing(out, &self.unresolved_ownership);
+        }
+        false
+    }
+
+    /// The quiet surface: one line per acted-on directory, one tally.
+    fn render_quiet(&self, options: &crate::report::HumanOptions) -> String {
+        let mut out = String::new();
+        if self.append_disclosures(&mut out) {
+            return out;
+        }
+        // Deterministic size-descending with stable path tie-break.
+        let mut ordered: Vec<&CleanResult> = self.results.iter().collect();
+        ordered.sort_by(|a, b| {
+            b.before_bytes
+                .unwrap_or(0)
+                .cmp(&a.before_bytes.unwrap_or(0))
+                .then_with(|| a.display_path.cmp(&b.display_path))
+        });
+        // Only what the run acted on, plus the failures. A failure is not a
+        // skip: silence about it would be a silent failure.
+        let acted: Vec<&CleanResult> = ordered
+            .into_iter()
+            .filter(|r| {
+                matches!(
+                    r.outcome,
+                    CleanOutcome::Cleaned
+                        | CleanOutcome::Simulated
+                        | CleanOutcome::Previewed
+                        | CleanOutcome::Failed
+                )
+            })
+            .collect();
+        let rows: Vec<(String, String, String)> = acted
+            .iter()
+            .map(|r| {
+                let verb = format!("{:?}", r.outcome);
+                // The physical directory Cargo emptied is what was cleaned.
+                let path = if r.output_roots.is_empty() {
+                    options.path(&r.display_path)
+                } else {
+                    r.output_roots
+                        .iter()
+                        .map(|p| options.path(p))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let size = match r.outcome {
+                    // What was reclaimed is the observed decrease, not the
+                    // pre-clean size: the difference is the answer.
+                    CleanOutcome::Cleaned => r.observed_decrease,
+                    _ => r.before_bytes,
+                }
+                .map(|n| crate::report::format_bytes(n).trim().to_string())
+                .unwrap_or_else(|| "—".to_string());
+                (verb, path, size)
+            })
+            .collect();
+        let verb_width = rows
+            .iter()
+            .map(|(v, _, _)| v.chars().count())
+            .max()
+            .unwrap_or(0);
+        let path_width = rows
+            .iter()
+            .map(|(_, p, _)| p.chars().count())
+            .max()
+            .unwrap_or(0);
+        for (verb, path, size) in &rows {
+            out.push_str(&format!(
+                "{verb:<verb_width$}  {path:<path_width$}  {size}\n"
+            ));
+        }
+        if !rows.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&self.quiet_tally());
+        out.push('\n');
+        out
+    }
+
+    /// The quiet surface's one tally line.
+    ///
+    /// The tally states the space saved in words a person can act on. It is
+    /// the only place the quiet surface counts the workspaces it did not
+    /// touch: a number, never a line each.
+    fn quiet_tally(&self) -> String {
+        let mut acted = 0usize;
+        let mut skipped = 0usize;
+        let mut failed = 0usize;
+        let mut directories = 0usize;
+        let mut before = 0u64;
+        let mut delta = 0u64;
+        for r in &self.results {
+            match r.outcome {
+                CleanOutcome::Cleaned => {
+                    acted += 1;
+                    directories += r.output_roots.len().max(1);
+                    before = before.saturating_add(r.before_bytes.unwrap_or(0));
+                    delta = delta.saturating_add(r.observed_decrease.unwrap_or(0));
+                }
+                CleanOutcome::Simulated | CleanOutcome::Previewed => {
+                    acted += 1;
+                    directories += r.output_roots.len().max(1);
+                    before = before.saturating_add(r.before_bytes.unwrap_or(0));
+                }
+                CleanOutcome::Skipped => skipped += 1,
+                CleanOutcome::Failed => failed += 1,
+            }
+        }
+        let mut notes: Vec<String> = Vec::new();
+        match self.mode {
+            // A simulation and a preview change nothing on disk. The quiet
+            // surface says so on every tally, because "would be reclaimed"
+            // alone could be misread as a result.
+            CleanMode::Simulate => {
+                notes.push("simulation only — no `cargo clean` command was invoked".to_string())
+            }
+            CleanMode::CargoPreview => {
+                notes.push("preview only — no cleanup executed".to_string());
+            }
+            CleanMode::Execute => {}
+        }
+        if failed > 0 {
+            notes.push(format!("{failed} failed"));
+        }
+        if skipped > 0 {
+            notes.push(format!("{skipped} skipped"));
+        }
+        let suffix = if notes.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", notes.join(", "))
+        };
+        if acted == 0 {
+            let nothing = match self.mode {
+                CleanMode::Execute => "Nothing was cleaned",
+                CleanMode::Simulate | CleanMode::CargoPreview => "Nothing would be cleaned",
+            };
+            return format!("{nothing}{suffix}");
+        }
+        if self.mode != CleanMode::Execute && self.selector.is_some() {
+            // The byte figure of a selector run is the *output union*, not the
+            // selector's share: the selector's own reclaimable size is not
+            // measured, and the JSON projection says so too. Claiming the
+            // union as "would be reclaimed" would over-claim by the whole
+            // union.
+            return format!(
+                "{} selected; the selector's reclaimable size is not measured (output union {}){suffix}",
+                directories,
+                crate::report::format_bytes(before).trim(),
+            );
+        }
+        let (bytes, phrase) = match self.mode {
+            CleanMode::Execute => (delta, "reclaimed"),
+            CleanMode::Simulate | CleanMode::CargoPreview => (before, "would be reclaimed"),
+        };
+        format!(
+            "{} {phrase} from {directories} {}{suffix}",
+            crate::report::format_bytes(bytes).trim(),
+            if directories == 1 {
+                "directory"
+            } else {
+                "directories"
+            },
+        )
+    }
+
+    /// The verbose surface: every workspace considered, with its detail.
+    fn render_verbose(&self, options: &crate::report::HumanOptions) -> String {
+        let mut out = String::new();
+        if !self.selected_roots.is_empty() {
+            out.push_str(&format!(
+                "combined scope: {} root(s) [{}], {} manifest(s), {} resolved workspace(s), {} CleanupUnit(s), {} unresolved ownership participant(s)\n",
+                self.selected_roots.len(),
+                self.selected_roots.iter().map(|p| options.path(p)).collect::<Vec<_>>().join(", "),
+                self.discovered_manifests,
+                self.resolved_workspaces,
+                self.units_considered,
+                self.unresolved_ownership.len(),
+            ));
+        }
+        if self.append_disclosures(&mut out) {
+            return out;
         }
         let mut previewed = 0usize;
         let mut simulated = 0usize;
@@ -555,9 +753,8 @@ impl CleanReport {
         let mut before = 0u64;
         let mut after = 0u64;
         let mut delta = 0u64;
-        // Deterministic size-descending with stable path tie-break; progress
-        // rows show at most five transient entries, the final report lists every
-        // workspace CleanupUnit (C003 §7.5).
+        // Deterministic size-descending with stable path tie-break; the final
+        // report lists every workspace CleanupUnit (C003 §7.5).
         let mut ordered: Vec<&CleanResult> = self.results.iter().collect();
         ordered.sort_by(|a, b| {
             b.before_bytes
@@ -599,7 +796,7 @@ impl CleanReport {
             out.push_str(&format!(
                 "{:?}  {}  [{}]",
                 r.outcome,
-                escaped_path(&r.display_path),
+                options.path(&r.display_path),
                 r.ownership.label(),
             ));
             // C003 §7.5: one row per workspace CleanupUnit; every physical
@@ -609,12 +806,12 @@ impl CleanReport {
                     "  outputs {}",
                     r.output_roots
                         .iter()
-                        .map(|p| escaped_path(p))
+                        .map(|p| options.path(p))
                         .collect::<Vec<_>>()
                         .join(", ")
                 ));
             } else if let Some(root) = r.output_roots.first() {
-                out.push_str(&format!("  output {}", escaped_path(root)));
+                out.push_str(&format!("  output {}", options.path(root)));
             }
             if let Some(n) = r.before_bytes {
                 let label = if self.selector.is_some() {
@@ -670,12 +867,6 @@ impl CleanReport {
         }
         out
     }
-}
-
-fn escaped_path(path: &Path) -> String {
-    path.to_str()
-        .map(str::to_owned)
-        .unwrap_or_else(|| format!("{:?}", path.as_os_str()))
 }
 
 // Re-export workspace runner types for test-injectable I/O. Cleanup uses the
@@ -4609,10 +4800,14 @@ mod tests {
         assert!(target.join("artifact.bin").exists());
         assert!(
             report
-                .render()
+                .render(&crate::report::HumanOptions::default())
                 .contains("no `cargo clean` command was invoked")
         );
-        assert!(!report.render().contains("recovered"));
+        assert!(
+            !report
+                .render(&crate::report::HumanOptions::default())
+                .contains("recovered")
+        );
     }
 
     /// ADR 007: an in-boundary scope note never blocks. A nested manifest
@@ -4663,14 +4858,16 @@ mod tests {
             );
             assert!(
                 report
-                    .render()
+                    .render(&crate::report::HumanOptions::default())
                     .contains("reported unprovable participant(s), not blocking"),
                 "the note is named on the human report: {mode:?}"
             );
             assert!(
-                report.render().contains("unresolved [locate]"),
+                report
+                    .render(&crate::report::HumanOptions::default())
+                    .contains("unresolved [locate]"),
                 "the participant row is bounded and staged: {mode:?} {}",
-                report.render()
+                report.render(&crate::report::HumanOptions::default())
             );
             assert_eq!(
                 report.diagnostics, 1,
@@ -4733,7 +4930,7 @@ mod tests {
             selector: None,
             out_of_scope_unresolved: 0,
         };
-        let text = report.render();
+        let text = report.render(&crate::report::HumanOptions::default());
         assert!(
             text.contains("cleanup ownership could not be proven"),
             "block message retained: {text}"
@@ -4789,7 +4986,7 @@ mod tests {
             selector: None,
             out_of_scope_unresolved: 0,
         };
-        let text = report.render();
+        let text = report.render(&crate::report::HumanOptions::default());
         assert_eq!(
             text.matches("unresolved [locate]").count(),
             5,
@@ -5055,7 +5252,7 @@ mod tests {
             .unwrap();
         assert_eq!(noted.len(), 1, "{value}");
         // Human render: rows, no block, no island outcomes.
-        let text = report.render();
+        let text = report.render(&crate::report::HumanOptions::default());
         assert!(
             !text.contains("cleanup ownership could not be proven"),
             "{text}"
@@ -5119,7 +5316,7 @@ mod tests {
         );
         assert_eq!(runner.clean_calls().len(), 1, "{report:?}");
         assert!(!root_a.join("target").join("artifact.bin").exists());
-        let text = report.render();
+        let text = report.render(&crate::report::HumanOptions::default());
         assert!(
             text.contains(
                 "out-of-scope unprovable participant(s) reported in diagnostics, not blocking"
@@ -5435,7 +5632,7 @@ mod tests {
         assert_eq!(runner.clean_calls().len(), 1);
         // The human render carries rows and the block together; there are
         // no island outcomes anymore.
-        let text = report.render();
+        let text = report.render(&crate::report::HumanOptions::default());
         assert!(!text.contains("island outcomes"), "{text}");
         assert!(text.contains("universe changed"), "{text}");
     }
@@ -6099,8 +6296,17 @@ mod tests {
         assert_eq!(report.results[0].outcome, CleanOutcome::Cleaned);
         assert!(report.results[0].before_bytes.unwrap() > report.results[0].after_bytes.unwrap());
         assert!(!target.join("artifact.bin").exists());
-        assert!(report.render().contains("observed decrease"));
-        assert!(!report.render().contains("would-clean"));
+        let text = report.render(&crate::report::HumanOptions::default());
+        // The Execute surface states what was reclaimed, and never borrows the
+        // simulation's wording: "would be reclaimed" must not appear here.
+        assert!(text.contains("reclaimed"), "{text}");
+        assert!(!text.contains("would be reclaimed"), "{text}");
+        // The verbose surface keeps the precise phrase.
+        assert!(
+            report
+                .render(&crate::report::HumanOptions::verbose())
+                .contains("observed decrease")
+        );
     }
 
     #[test]
@@ -6548,10 +6754,10 @@ mod tests {
         );
         assert!(
             report
-                .render()
+                .render(&crate::report::HumanOptions::default())
                 .contains("reported unprovable participant(s), not blocking"),
             "the note is named on the human report: {}",
-            report.render()
+            report.render(&crate::report::HumanOptions::default())
         );
     }
 
@@ -6588,17 +6794,21 @@ mod tests {
                 detail: String::new(),
             });
         }
-        let text = report.render();
+        let text = report.render(&crate::report::HumanOptions::default());
         // Every group printed, not only transient top five.
         for i in 0..7 {
             assert!(text.contains(&format!("/tmp/g{i}")));
         }
-        // Total observed decrease is deduplicated sum (7*80=560).
-        assert!(text.contains("observed decrease"));
+        // Total observed decrease is deduplicated sum (7*80=560), stated once.
+        assert!(text.contains("560.00 B"), "{text}");
+        assert!(text.contains("reclaimed from 7 directories"), "{text}");
         // Execute wording distinct from preview/simulate.
-        assert!(text.contains("cleanup: 7 cleaned"));
-        assert!(!text.contains("would-clean"));
-        assert!(!text.contains("no `cargo clean`"));
+        assert!(!text.contains("would be reclaimed"), "{text}");
+        assert!(!text.contains("no `cargo clean`"), "{text}");
+        // The verbose surface keeps the census and the per-mode summary.
+        let verbose = report.render(&crate::report::HumanOptions::verbose());
+        assert!(verbose.contains("observed decrease"), "{verbose}");
+        assert!(verbose.contains("cleanup: 7 cleaned"), "{verbose}");
     }
 
     #[test]
@@ -6707,7 +6917,11 @@ mod tests {
             preview.results[0].detail
         );
         assert!(external.join("artifact.bin").exists());
-        assert!(preview.render().contains("no cleanup executed"));
+        assert!(
+            preview
+                .render(&crate::report::HumanOptions::default())
+                .contains("no cleanup executed")
+        );
         let profile_preview = clean_with_roots_policy_selector(
             std::slice::from_ref(&root),
             0,
@@ -8367,7 +8581,7 @@ mod tests {
                 usize::from(mode != CleanMode::Simulate),
                 "{mode:?}"
             );
-            let text = report.render();
+            let text = report.render(&crate::report::HumanOptions::default());
             assert!(
                 !text.contains("vanished") && !text.contains("Skipped"),
                 "{mode:?}: no second vanished/skipped sibling row: {text}"
@@ -9122,7 +9336,7 @@ mod tests {
                 report.resolved_workspaces >= 2,
                 "{mode:?}: both workspaces must resolve, got {}: {:?}",
                 report.resolved_workspaces,
-                report.render()
+                report.render(&crate::report::HumanOptions::default())
             );
 
             assert!(
@@ -9494,7 +9708,14 @@ mod tests {
                     "{mode:?} {root:?}"
                 );
             }
-            assert!(report.render().contains("2 root(s)"), "{mode:?}");
+            // The scope census is the verbose surface's; the quiet surface
+            // names only what the run acted on.
+            assert!(
+                report
+                    .render(&crate::report::HumanOptions::verbose())
+                    .contains("2 root(s)"),
+                "{mode:?}"
+            );
             if mode == CleanMode::Simulate {
                 assert!(runner.clean_calls().is_empty(), "{mode:?}");
             } else {
@@ -9901,7 +10122,11 @@ mod tests {
     fn assert_profile_preview_matches_host_premise(report: &CleanReport) {
         if runtime_clean_capabilities().profile_selector {
             assert_eq!(report.results[0].outcome, CleanOutcome::Previewed);
-            assert!(report.render().contains("output-union before"));
+            assert!(
+                report
+                    .render(&crate::report::HumanOptions::default())
+                    .contains("output-union before")
+            );
         } else {
             assert_eq!(report.results[0].outcome, CleanOutcome::Skipped);
             assert_eq!(
@@ -9979,5 +10204,217 @@ mod tests {
             !args.iter().any(|a| a == "--profile"),
             "a package selector must not also name a profile: {args:?}"
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // M020: the quiet human surface.
+    // ---------------------------------------------------------------------
+
+    /// A report over one scope root, with no disclosures and no failures.
+    fn empty_report_over(root: &str) -> CleanReport {
+        CleanReport {
+            results: Vec::new(),
+            diagnostics: 0,
+            failed: 0,
+            mode: CleanMode::Execute,
+            counters: ScanCounters::default(),
+            scope_blocked: None,
+            unresolved_ownership: Vec::new(),
+            selected_roots: vec![PathBuf::from(root)],
+            discovered_manifests: 0,
+            resolved_workspaces: 0,
+            units_considered: 0,
+            effective_policy: None,
+            selector: None,
+            out_of_scope_unresolved: 0,
+        }
+    }
+
+    /// One unit row, with the outcome and the byte figure spelled out.
+    fn unit_row(path: &str, outcome: CleanOutcome, bytes: u64) -> CleanResult {
+        let reason_code = match outcome {
+            CleanOutcome::Cleaned => CleanupReasonCode::Cleaned,
+            CleanOutcome::Simulated => CleanupReasonCode::Simulated,
+            CleanOutcome::Previewed => CleanupReasonCode::Previewed,
+            CleanOutcome::Skipped => CleanupReasonCode::NotIncluded,
+            CleanOutcome::Failed => CleanupReasonCode::CargoFailed,
+        };
+        let cleaned = outcome == CleanOutcome::Cleaned;
+        CleanResult {
+            display_path: PathBuf::from(path),
+            workspace_roots: vec![PathBuf::from(path)],
+            output_roots: vec![PathBuf::from(path)],
+            ownership: OutputOwnershipClass::PrivateBounded,
+            outcome,
+            policy_disposition: Some(PolicyDisposition::Selected),
+            reason_code,
+            before_bytes: Some(bytes),
+            after_bytes: if cleaned { Some(0) } else { None },
+            observed_decrease: if cleaned { Some(bytes) } else { None },
+            detail: String::new(),
+        }
+    }
+
+    /// M020: the quiet cleanup report names only what the run acted on.
+    ///
+    /// The skipped workspaces are counted, not listed. *Fails if:* the quiet
+    /// surface re-admits a skipped row.
+    #[test]
+    fn the_quiet_cleanup_report_lists_only_what_the_run_acted_on() {
+        let mut report = empty_report_over("/work");
+        report
+            .results
+            .push(unit_row("/work/alpha/target", CleanOutcome::Cleaned, 100));
+        for name in ["beta", "gamma", "delta"] {
+            report.results.push(unit_row(
+                &format!("/work/{name}/target"),
+                CleanOutcome::Skipped,
+                50,
+            ));
+        }
+        let text = report.render(&crate::report::HumanOptions::default());
+        assert!(text.contains("/work/alpha/target"), "{text}");
+        for name in ["beta", "gamma", "delta"] {
+            assert!(
+                !text.contains(&format!("/work/{name}")),
+                "a skipped row leaked into the quiet surface: {text}"
+            );
+        }
+        // The count survives as a number, so the run is still honest about
+        // what it did not pick — in one number, not one line each.
+        assert!(text.contains("(3 skipped)"), "{text}");
+    }
+
+    /// M020: the tally states the space saved, in words a person can act on.
+    ///
+    /// *Fails if:* the tally is dropped, or if it regresses to the scope
+    /// census.
+    #[test]
+    fn the_quiet_tally_states_the_space_saved() {
+        let mut report = empty_report_over("/work");
+        report
+            .results
+            .push(unit_row("/work/alpha/target", CleanOutcome::Cleaned, 100));
+        report
+            .results
+            .push(unit_row("/work/beta/target", CleanOutcome::Cleaned, 60));
+        let text = report.render(&crate::report::HumanOptions::default());
+        let last = text.lines().last().unwrap_or_default();
+        assert!(last.contains("reclaimed"), "{text}");
+        assert!(last.contains("160.00 B"), "{text}");
+        assert!(last.contains("2 directories"), "{text}");
+        assert!(
+            !text.contains("CleanupUnit(s)"),
+            "the scope census is the verbose surface's: {text}"
+        );
+    }
+
+    /// M020: Execute and simulation never share a wording.
+    ///
+    /// "reclaimed" is a substring of "would be reclaimed", so the pair is
+    /// only discriminating in the direction it is written: Execute asserts
+    /// the phrase it owns *and* the absence of the simulation's, and the
+    /// simulation asserts its own. *Fails if:* one mode's wording leaks into
+    /// the other.
+    #[test]
+    fn execute_and_simulation_words_their_tallies_differently() {
+        let mut execute = empty_report_over("/work");
+        execute
+            .results
+            .push(unit_row("/work/alpha/target", CleanOutcome::Cleaned, 100));
+        let execute_text = execute.render(&crate::report::HumanOptions::default());
+        assert!(execute_text.contains("reclaimed"), "{execute_text}");
+        assert!(
+            !execute_text.contains("would be reclaimed"),
+            "{execute_text}"
+        );
+        assert!(!execute_text.contains("simulation only"), "{execute_text}");
+
+        let mut simulate = empty_report_over("/work");
+        simulate.mode = CleanMode::Simulate;
+        simulate
+            .results
+            .push(unit_row("/work/alpha/target", CleanOutcome::Simulated, 100));
+        let simulate_text = simulate.render(&crate::report::HumanOptions::default());
+        assert!(
+            simulate_text.contains("would be reclaimed"),
+            "{simulate_text}"
+        );
+        assert!(
+            simulate_text.contains("no `cargo clean` command was invoked"),
+            "a simulation must say that nothing was invoked: {simulate_text}"
+        );
+    }
+
+    /// M020: a failure is never silent.
+    ///
+    /// A failure is not a skip. The quiet surface hides the skipped rows; it
+    /// must not hide the ones that went wrong. *Fails if:* the failure filter
+    /// treats a failure like a skip.
+    #[test]
+    fn a_failed_unit_is_always_listed() {
+        let mut report = empty_report_over("/work");
+        report
+            .results
+            .push(unit_row("/work/alpha/target", CleanOutcome::Cleaned, 100));
+        report
+            .results
+            .push(unit_row("/work/beta/target", CleanOutcome::Failed, 50));
+        report
+            .results
+            .push(unit_row("/work/gamma/target", CleanOutcome::Skipped, 50));
+        let text = report.render(&crate::report::HumanOptions::default());
+        assert!(
+            text.contains("/work/beta/target"),
+            "the failure vanished: {text}"
+        );
+        assert!(text.contains("Failed"), "{text}");
+        assert!(text.contains("1 failed"), "{text}");
+        // The failed unit's bytes are not counted as reclaimed.
+        assert!(text.contains("100.00 B reclaimed"), "{text}");
+        assert!(
+            !text.contains("/work/gamma"),
+            "the skipped row stays hidden: {text}"
+        );
+    }
+
+    /// M020: `--verbose` restores the detail the quiet surface withholds.
+    ///
+    /// *Fails if:* the flag is parsed but not plumbed, or if the quiet surface
+    /// keeps the detail.
+    #[test]
+    fn the_verbose_surface_restores_the_skipped_rows_and_the_census() {
+        let mut report = empty_report_over("/work");
+        report
+            .results
+            .push(unit_row("/work/alpha/target", CleanOutcome::Cleaned, 100));
+        report
+            .results
+            .push(unit_row("/work/beta/target", CleanOutcome::Skipped, 50));
+        let verbose = report.render(&crate::report::HumanOptions::verbose());
+        assert!(verbose.contains("/work/beta/target"), "{verbose}");
+        assert!(verbose.contains("CleanupUnit(s)"), "{verbose}");
+        assert!(verbose.contains("combined scope:"), "{verbose}");
+    }
+
+    /// M020: the safety disclosures survive the quiet surface.
+    ///
+    /// ADR 007: "boundary clean" must not read as "system clean". The
+    /// disclosures say what the report *means*; dropping them because the
+    /// report got shorter would be the M012A defect in a new place. *Fails
+    /// if:* the quiet surface drops a disclosure.
+    #[test]
+    fn the_safety_disclosures_survive_the_quiet_surface() {
+        let mut report = empty_report_over("/work");
+        report.out_of_scope_unresolved = 3;
+        report
+            .results
+            .push(unit_row("/work/alpha/target", CleanOutcome::Cleaned, 100));
+        let text = report.render(&crate::report::HumanOptions::default());
+        assert!(
+            text.contains("out-of-scope unprovable participant(s)"),
+            "{text}"
+        );
+        assert!(text.contains("not blocking"), "{text}");
     }
 }

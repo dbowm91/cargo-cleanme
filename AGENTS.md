@@ -7,7 +7,7 @@ the one architecture deep dive your change touches.
 
 A single Rust crate that finds Cargo build output and cleans it **through
 Cargo**, never by deleting directories. One binary over one library of 16
-modules, 18 source files, 34,438 lines in `src/`. No async runtime of its own.
+modules, 18 source files, 35,190 lines in `src/`. No async runtime of its own.
 `cargo metadata` is the only binary dependency that matters for safety.
 
 The working tree is **0.2.10**, the published version, with post-publication
@@ -68,7 +68,7 @@ a file that is being rewritten rots immediately.
 | 7 | The cleanup pipeline | What happens on `clean`, end to end |
 | 8 | Cross-cutting invariants | The eight rules that span modules — read before changing any of them |
 | 9 | Tooling and verification surfaces | The gates, and what each one actually proves |
-| 10 | Findings from the deep dives | 62 known defects and their dispositions — **check here before adding a new one** |
+| 10 | Findings from the deep dives | 63 known defects and their dispositions — **check here before adding a new one** |
 | 11 | How the code got this way | The plan corpus |
 | 12 | Index of deep dives | The sixteen deep dives |
 | 13 | Reading order | If you read one thing, read this |
@@ -229,8 +229,8 @@ source of truth for module line counts and the inline-test total; verify each
 against `src/`, fix the overview first, then align the deep dives.
 
 The same rule applies to **per-platform test counts**, which have disagreed
-across three documents: they are 481 declared, 479 on Linux, 441 on Windows,
-476 on macOS. Derive them with a brace-tracking parser evaluated against
+across three documents: they are 493 declared, 491 on Linux, 453 on Windows,
+488 on macOS. Derive them with a brace-tracking parser evaluated against
 `rustc --print cfg --target <triple>`, and cross-check against
 `cargo test --lib -- --list`. A grep for `#[cfg(unix)]` immediately above
 `#[test]` finds 26 of the 36, because Rust allows `#[test]` to come first —

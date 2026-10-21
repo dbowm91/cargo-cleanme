@@ -1169,3 +1169,46 @@ without a resolution orphans the documented bounded-root spelling.
 ADR 003 §4 is amended by ADR 008 on 2026-10-21: the spellings
 `clean ROOT`, `clean --known` and `clean --full` remain accepted, and the
 root becomes the canonical front door.
+
+## M020 — a quiet human output surface (active; owner-directed 2026-10-21)
+
+Status: **active** — implemented in the working tree, not yet published, and
+therefore not closed. Plan:
+`plans/implementation/artifact-discovery-cleanup/m020-quiet-human-output-surface.md`.
+Authority: the owner's directive of 2026-10-21 — *"we do NOT want to see
+potentially thousands of lines of lines that were not picked, as this is
+essentially debugging information and is contraindicated for general use. we
+can add a --verbose command for this."*
+
+Three separate problems, one milestone:
+
+1. **The progress frame was six terminal lines.** M005A §7.4 specified "at
+   most five reportable directories/output groups beneath the main bar", and
+   the renderer drew them. On a real run those rows were empty — a spinner
+   glyph and nothing else — for almost the whole traversal, so the progress
+   occupied six lines and said nothing. The renderer now owns **one** bar.
+   The phase also moves from the bar's *prefix* into its *message*: indicatif's
+   default spinner template is `{spinner} {msg}` and never renders the prefix,
+   so the phase transitions were invisible on the terminal.
+2. **The report printed a row per workspace considered.** On a machine with a
+   thousand Cargo workspaces that is a thousand lines, and the overwhelming
+   majority of them say "skipped". The quiet surface lists only what the run
+   acted on; the skipped count survives as a number in the tally.
+3. **The preamble was a scope census.** Roots, manifest counts, workspace
+   counts, CleanupUnit counts — a count of things, not a safety disclosure.
+
+The quiet surface is therefore: **one** progress line (a spinner and the
+phase), **one** line per directory the run actually cleaned — or would clean,
+in a simulation or a Cargo preview — with the path spelled relative to the
+scope root whenever the scope is bounded, and **one** tally line naming the
+space saved. A **failed** unit is always listed; a failure is not a skip.
+
+**The ADR 007 safety disclosures are never withheld.** The scope block, the
+unresolved-participant listing and the out-of-scope count say what the report
+*means*; dropping them because the report got shorter would turn "boundary
+clean" into "system clean".
+
+`--verbose` is a new **global** flag that restores the detailed surface. It
+changes the **human** format only: `--format json` and `--format log` are
+byte-identical with and without it. The flag changes no exit code, no proof,
+no scope, and no cleaned set — what is cleaned is identical either way.

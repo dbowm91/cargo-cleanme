@@ -34,6 +34,7 @@ json\:""
 log\:"One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract\: complete consumers use \`json\`"))' \
 '--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
 '--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'--verbose[Show the detailed human surface\: every workspace considered (including the ones that were skipped), the scope census, the per-phase counters, and the diagnostic detail]' \
 '(--dryrun)--dry-run[Simulate\: run every decision, proof, and reporting step, but invoke no \`cargo clean\` process at all. Honoured wherever it appears, so the \`cargo cleanme --dry-run clean ROOT\` spelling cannot fall back to Execute. Only \`clean\` (and \`update\`'\''s own \`--dry-run\`) honour it\: \`scan\` and \`config\` ignore a global \`--dry-run\` (read-only / local-only, no behaviour change)]' \
 '(--dry-run)--dryrun[Historical spelling of \`--dry-run\`; retained as a hidden alias]' \
 '-i[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
@@ -64,6 +65,7 @@ log\:"One bounded ASCII summary line per report, for unattended schedulers that 
 '--full[Historical spelling of \`--all\`; retained as a hidden alias]' \
 '--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
 '--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'--verbose[Show the detailed human surface\: every workspace considered (including the ones that were skipped), the scope census, the per-phase counters, and the diagnostic detail]' \
 '-i[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '--interactive[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
@@ -79,6 +81,7 @@ json\:""
 log\:"One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract\: complete consumers use \`json\`"))' \
 '--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
 '--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'--verbose[Show the detailed human surface\: every workspace considered (including the ones that were skipped), the scope census, the per-phase counters, and the diagnostic detail]' \
 '-i[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '--interactive[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
@@ -101,6 +104,7 @@ json\:""
 log\:"One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract\: complete consumers use \`json\`"))' \
 '--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
 '--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'--verbose[Show the detailed human surface\: every workspace considered (including the ones that were skipped), the scope census, the per-phase counters, and the diagnostic detail]' \
 '-i[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '--interactive[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
@@ -115,6 +119,7 @@ json\:""
 log\:"One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract\: complete consumers use \`json\`"))' \
 '--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
 '--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'--verbose[Show the detailed human surface\: every workspace considered (including the ones that were skipped), the scope census, the per-phase counters, and the diagnostic detail]' \
 '-i[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '--interactive[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
@@ -129,6 +134,7 @@ json\:""
 log\:"One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract\: complete consumers use \`json\`"))' \
 '--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
 '--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'--verbose[Show the detailed human surface\: every workspace considered (including the ones that were skipped), the scope census, the per-phase counters, and the diagnostic detail]' \
 '-i[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '--interactive[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
@@ -159,6 +165,7 @@ log\:"One bounded ASCII summary line per report, for unattended schedulers that 
 '(--dry-run --cargo-preview --yes)--dryrun[Historical spelling of \`--dry-run\`; retained as a hidden alias]' \
 '--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
 '--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'--verbose[Show the detailed human surface\: every workspace considered (including the ones that were skipped), the scope census, the per-phase counters, and the diagnostic detail]' \
 '-i[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '--interactive[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
@@ -175,6 +182,7 @@ log\:"One bounded ASCII summary line per report, for unattended schedulers that 
 '--dry-run[Resolve the plan and report it without acquiring or replacing bytes]' \
 '--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
 '--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
+'--verbose[Show the detailed human surface\: every workspace considered (including the ones that were skipped), the scope census, the per-phase counters, and the diagnostic detail]' \
 '-i[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '--interactive[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '-h[Print help (see more with '\''--help'\'')]' \

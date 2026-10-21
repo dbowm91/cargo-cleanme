@@ -200,6 +200,28 @@ never point at an operation that refuses.
 See [`planning-and-closure`](../planning-and-closure/SKILL.md) before acting
 on any of it.
 
+## `--verbose` selects a rendering shape; it is not a mode
+
+`--verbose` (`src/cli.rs:58`) is a **global** flag on the root `Cli`, like
+`--config`, `--no-progress`, `--stats` and `--format`. It is global because it
+selects a rendering shape and every report-producing subcommand renders one.
+
+It changes the **human** format only. `--format json` and `--format log` are
+byte-for-byte identical with and without it, and it changes no exit code, no
+proof, no scope, and no cleaned set. That is the property to preserve when you
+touch it: a rendering flag that moves a byte in the versioned machine contract
+is a contract change, and it needs a plan and a version bump.
+
+The **default** human surface names only what the run acted on: one line per
+directory cleaned, one tally, one progress line. The skipped workspaces are
+counted, not listed. The ADR 007 safety disclosures — the scope block, the
+unresolved-participant listing, the out-of-scope count — are **never**
+withheld: they say what the report *means*, not how long it is.
+
+If you add a flag that selects output, ask the same question `--verbose`
+answers: does it change the machine contract? If yes, it is not a rendering
+flag.
+
 ## A flag can be accepted and ignored — and that is a defect shape
 
 A root-level `--dry-run` passed to `scan` is **accepted by clap and then
