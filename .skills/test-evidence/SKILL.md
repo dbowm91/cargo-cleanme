@@ -75,7 +75,7 @@ And one more, which is the sharpest of them:
 6. **A test that pins the defect.** A test can be green *because* it asserts
    the wrong thing — including the thing you are about to fix.
    `the_driver_shows_the_hardware_cursor_only_in_insert_mode`
-   (`src/interactive.rs:2281-2297` before C042) asserted that the terminal
+   (`src/interactive.rs:2409-2425` before C042) asserted that the terminal
    cursor's **last** recorded visibility was `Some(false)`. The interactive
    session never restored the cursor, so that test was green by asserting the
    bug. Fixing the cursor without fixing the test would have left a green test
@@ -95,9 +95,9 @@ range"; the test needed was "the process really was the one under test".
 Generalised: before trusting a test, ask **"what input makes this fail?"** If
 you cannot produce one, the test is decoration. `cleanup.rs` contains several
 tests of exactly that shape — `metadata_failure_blocks_boundary_with_zero_spawns`
-(`src/cleanup.rs:5720`) and
+(`src/cleanup.rs:5735`) and
 `violated_admission_premise_blocks_with_zero_cargo_spawns`
-(`src/cleanup.rs:6762`) — whose comments are worth reading before writing
+(`src/cleanup.rs:6778`) — whose comments are worth reading before writing
 anything in that module.
 
 ## What only a subprocess can prove
@@ -132,7 +132,7 @@ and run on Linux. Two are excluded there: one `#[cfg(windows)]`
 (`src/config.rs:995`) and one `#[cfg(any(target_os = "macos", windows))]`
 (`src/discovery.rs:1698`). A further **40** carry `#[cfg(unix)]` and **4** are
 Linux-only (`src/config.rs:1443`, `src/discovery.rs:1718`, `src/output.rs:280`,
-`src/workspace.rs:5404`), so the three hosted lanes compile **529 of 531 on
+`src/workspace.rs:5553`), so the three hosted lanes compile **529 of 531 on
 Linux**, **487 of 531 on Windows**, and **526 of 531 on macOS** —
 `#[cfg(unix)]` is true *on* macOS, which is the half people get wrong. A green
 local run is not a green run elsewhere — that is what the OS matrix in `ci.yml`
@@ -141,7 +141,7 @@ fixture before a lane disagrees about it.
 
 > **Count the gates, not the greps.** A naive "the `#[cfg(unix)]` immediately
 > above `#[test]`" grep finds 30, not 40, because Rust allows `#[test]` to come
-> *before* the gate (`src/cleanup.rs:7072` does exactly that). Ten of the 40
+> *before* the gate (`src/cleanup.rs:7094` does exactly that). Ten of the 40
 > have the gate after the `#[test]`. Derive these
 > numbers with a brace-tracking parser and check them against
 > `cargo test --lib -- --list` on the host platform; anything else silently

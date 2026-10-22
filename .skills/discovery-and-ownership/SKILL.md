@@ -82,14 +82,14 @@ Do not "optimise" by asserting the comparator. See
 
 A repeat `candidate_index` is measured once and every occurrence reports that
 one measurement. `measure_many_targets` keeps a `seen_indices` set
-(`src/traverse.rs:191`) and `continue`s on a repeat (`:198-200`): the first
+(`src/traverse.rs:195`) and `continue`s on a repeat (`:198-200`): the first
 occurrence wins, later duplicates are dropped rather than measured twice.
 
 This was **not always so**. An earlier version fed two roots under one index
 straight into `dua_core::walk_roots` and tripped its uniqueness assertion into
 a panic. The fix is in, and the regression test is
 `duplicate_candidate_indices_do_not_panic_and_are_measured_once`
-(`src/traverse.rs:529-567`).
+(`src/traverse.rs:533-571`).
 
 Two consequences for you:
 
@@ -209,7 +209,7 @@ Learned roots still expire only on a complete reconciliation.
 "Always overrides the discovered root set" was the old, wrong version of this
 claim. The other half is easy to get wrong too: `scan.root` narrows the
 **scan scope**, but the **working-directory anchor still narrows the
-selection** for a cleanup (`src/cli.rs:608-612` →
+selection** for a cleanup (`src/cli.rs:618-622` →
 `CleanupSelection::WorkingDirectory`). A configured root therefore does *not*
 mean "cleanup targets exactly that root" — running from outside it yields
 zero units.

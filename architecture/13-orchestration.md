@@ -1,7 +1,7 @@
 # Orchestration — argument dispatch and the two pipelines
 
 > Component deep dive · part of the [architecture overview](overview.md)
-> **Status:** re-derived against `src/main.rs` at 2244 lines. The substantive
+> **Status:** re-derived against `src/main.rs` at 2259 lines. The substantive
 > changes since the previous revision of this file are: **ADR 007** made the
 > proof boundary the *selected scope*, so an out-of-boundary unprovable is
 > reported and never blocks; **M014** added the CWD-anchored default, `scan
@@ -16,7 +16,7 @@
 > **M019** made the root the cleanup front door. Every citation below was
 > re-read at the cited line; none was shifted arithmetically.
 
-`src/main.rs`, 2244 lines, nine inline tests. The only module that reaches every
+`src/main.rs`, 2259 lines, nine inline tests. The only module that reaches every
 other one, and the only place the two pipelines are stitched together.
 
 ## 1. Responsibility

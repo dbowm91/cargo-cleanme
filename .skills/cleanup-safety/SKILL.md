@@ -103,7 +103,7 @@ Two details the shorthand hides:
 - The three flags conflict pairwise **on `clean`**. Across the root and the
   `clean` alias they do not: a simulation at *either* level wins over a Cargo
   preview at *either* level, because simulation spawns nothing
-  (`src/cli.rs:621-626`). See
+  (`src/cli.rs:631-636`). See
   [`cli-surface-and-argv`](../cli-surface-and-argv/SKILL.md).
 - There is **no `Preview` mode**. `CargoPreview` maps to the *wire* label
   `"preview"` (`src/cleanup.rs:52`), and `CleanOutcome::Previewed` is an
@@ -139,7 +139,7 @@ anchor, the explicit roots, or the Full set.
 Cleaning a healthy boundary while poison exists elsewhere is the *intended*
 behaviour, precisely so that a boundary clean can never be read as a system
 clean. The regression test is `out_of_anchor_poison_does_not_block_anchor`
-(`src/cleanup.rs:6020`) — it **fails by construction** against the old
+(`src/cleanup.rs:6035`) — it **fails by construction** against the old
 whole-scope rule, which is what makes it worth keeping.
 
 Read-only scans stay partial-result tolerant; cleanup does not. That asymmetry
@@ -153,9 +153,9 @@ is intentional.
 Note the consequence for tests: asserting "zero clean spawns" under a blocked
 boundary is the strongest available assertion, and `cleanup.rs` has several —
 `metadata_failure_blocks_boundary_with_zero_spawns`
-(`src/cleanup.rs:6251`) and
+(`src/cleanup.rs:6266`) and
 `violated_admission_premise_blocks_with_zero_cargo_spawns`
-(`src/cleanup.rs:7302`). Prefer that over asserting an error message.
+(`src/cleanup.rs:7324`). Prefer that over asserting an error message.
 
 ## The Full cleanup gate is per-root, not whole-scope
 

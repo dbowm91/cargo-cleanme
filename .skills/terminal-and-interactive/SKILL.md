@@ -41,9 +41,9 @@ by hand. The **cursor** is the case that was missed. Cursor visibility is a
 C042 fixed this. The lesson is the thing to internalise, not the fix.
 
 ```text
-src/interactive.rs:1498   session_loop hides the cursor on entry
-src/interactive.rs:1369   TerminalGuard::restore issues the mode restore
-src/interactive.rs:1383   …and set_cursor_visible(true), whether or not the first failed
+src/interactive.rs:1540   session_loop hides the cursor on entry
+src/interactive.rs:1411   TerminalGuard::restore issues the mode restore
+src/interactive.rs:1425   …and set_cursor_visible(true), whether or not the first failed
 ```
 
 `set_cursor_visible(true)` is now called from exactly one place — the guard —
@@ -82,8 +82,8 @@ frame's *line count* rather than by the rows it actually occupied — erases
 most of the frame it was meant to keep.
 
 ```text
-src/interactive.rs:1552   frame_bytes — every line starts with a carriage return
-src/interactive.rs:1575   rewind_bytes — column zero first, then up
+src/interactive.rs:1594   frame_bytes — every line starts with a carriage return
+src/interactive.rs:1617   rewind_bytes — column zero first, then up
 ```
 
 The byte stream is a **pure function**, and the tests replay it through a
@@ -104,7 +104,7 @@ puts every line on the row it claims.
 | `cargo cleanme -i clean ROOT` | says "Nothing to clean." | **0** |
 
 The path: `run_interactive` settles an empty candidate list before the terminal
-precondition (`src/interactive.rs:1692-1694`) → the orchestrator maps it to
+precondition (`src/interactive.rs:1734-1736`) → the orchestrator maps it to
 `SelectionOutcome::NothingToClean` (`src/main.rs:644-657`) → one line on
 stdout and `Ok(0)` (`src/main.rs:464-472`).
 
@@ -135,8 +135,8 @@ Do not add a "the user checked it, so skip the proof" shortcut.
 
 ## The TTY precondition is checked before raw mode
 
-`ensure_interactive_terminal` (`src/interactive.rs:1432-1443`) is called by
-`run_interactive` (`src/interactive.rs:1695-1705`) **before** any mode is
+`ensure_interactive_terminal` (`src/interactive.rs:1474-1485`) is called by
+`run_interactive` (`src/interactive.rs:1737-1747`) **before** any mode is
 requested. A redirected invocation fails as a typed usage error rather than
 driving a session whose keystrokes are going somewhere else.
 
@@ -197,14 +197,14 @@ carrying, because each one was a defect before:
   than a list to page through. `PgUp`/`PgDn`/`Home`/`End` move through it.
 - **A row is named, not spelled out.** The workspace column shows the shortest
   suffix of the path that identifies the row uniquely among all candidates
-  (`src/interactive.rs:1157-1181`). Siblings read `project-01`, `project-19`;
+  (`src/interactive.rs:1199-1223`). Siblings read `project-01`, `project-19`;
   a colliding pair reads `a/x` and `b/x`.
 - **The ownership column is omitted when it would say the same thing on every
-  row** (`src/interactive.rs:1035-1038`). A column that reads `private` twenty
+  row** (`src/interactive.rs:1060-1063`). A column that reads `private` twenty
   times carries no information and costs a column's width twenty times.
 
 The surface is also the only place in the crate that renders **colour**
-(`src/interactive.rs:1450-1466`): `NO_COLOR` and `TERM=dumb` turn it off, and
+(`src/interactive.rs:1492-1508`): `NO_COLOR` and `TERM=dumb` turn it off, and
 the decision is made in the driver so `Session` stays pure.
 
 The model was **not** changed. `rip`'s own model has no modes — every printable
@@ -240,7 +240,7 @@ things to know if you build one:
   through a translating pty will hide exactly the defect you are looking for.
 - To backdate a fixture project, backdate the **directories** as well as the
   files. The activity guard keys on directory mtimes too
-  (`src/traverse.rs:461-468`), so backdating only the files leaves the fixture
+  (`src/traverse.rs:465-472`), so backdating only the files leaves the fixture
   looking active.
 
 ## The progress renderer is the other TTY surface
@@ -257,7 +257,7 @@ things to know if you build one:
   terminal lines and said nothing. `coordinated_bar_count()`
   (`src/progress.rs:303`) is **1** visible / 0 hidden, and it must stay 1: a
   second bar is a regression, and `coordinated_renderer_owns_exactly_one_bar_on_one_draw_target`
-  (`src/progress.rs:550`) fails if one appears.
+  (`src/progress.rs:555`) fails if one appears.
 - **The phase goes in the message, never the prefix.** indicatif's default
   spinner template is `{spinner} {msg}` (indicatif 0.18.6,
   `src/style.rs:41`) and does **not** render the prefix, so a phase written
