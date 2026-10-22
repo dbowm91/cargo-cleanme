@@ -132,10 +132,19 @@ pub trait Terminal {
     /// Move the cursor up `lines` and erase from there down.
     fn rewind(&mut self, lines: usize) -> io::Result<()>;
     /// Show or hide the terminal's own cursor.
+    ///
+    /// Cursor visibility is a *separate escape sequence* from the terminal
+    /// mode: restoring raw mode does not restore the cursor. A session that
+    /// hides the cursor owns the obligation to show it again.
     fn set_cursor_visible(&mut self, visible: bool) -> io::Result<()>;
     /// Erase the region this session painted.
     fn clear(&mut self) -> io::Result<()>;
     /// Write one frame's lines.
+    ///
+    /// Each line must start at column zero. In raw mode the terminal's
+    /// output post-processing is off, so a bare newline is a linefeed
+    /// *without* a carriage return and the next line would start where the
+    /// last one ended.
     fn draw(&mut self, lines: &[String]) -> io::Result<()>;
 }
 
@@ -179,6 +188,13 @@ const SIZE_WIDTH: usize = 11;
 
 /// Spaces between two columns.
 const COLUMN_GAP: usize = 2;
+
+/// The hint that tells the operator a second `Esc` will exit.
+///
+/// Its width is reserved on the status line whether or not the exit is armed,
+/// so arming the exit does not resize the filter field under the operator's
+/// eyes.
+const ARMED_HINT: &str = "   (Esc again to exit)";
 
 /// Fixed furniture before the workspace name: gutter, space, checkbox, space.
 const LEAD_WIDTH: usize = GUTTER_WIDTH + 1 + CHECKBOX_WIDTH + 1;
@@ -611,10 +627,22 @@ impl Session {
         if !self.color {
             return pad(&truncated, width);
         }
-        // The head is chrome; the arithmetic is the part worth reading.
-        let styled = match truncated.strip_prefix(head) {
-            Some(rest) => format!("{ANSI_DIM}{head}{ANSI_RESET}{ANSI_BOLD}{rest}{ANSI_RESET}"),
-            None => format!("{ANSI_DIM}{truncated}{ANSI_RESET}"),
+        // The head is chrome; the arithmetic is the part worth reading. The
+        // truncation keeps the *tail*, so the arithmetic survives a narrow
+        // terminal and the head is what goes — and the styling has to follow
+        // it, or the one part worth reading is dimmed exactly when the
+        // terminal is too narrow to spare it.
+        let body_cells = display_width(&body);
+        let truncated_cells = display_width(&truncated);
+        let styled = if truncated_cells >= body_cells {
+            let chrome: String = truncated
+                .chars()
+                .take(truncated_cells - body_cells)
+                .collect();
+            format!("{ANSI_DIM}{chrome}{ANSI_RESET}{ANSI_BOLD}{body}{ANSI_RESET}")
+        } else {
+            // The arithmetic itself was cut: there is nothing to single out.
+            format!("{ANSI_DIM}{truncated}{ANSI_RESET}")
         };
         pad_visible(&styled, width)
     }
@@ -625,11 +653,18 @@ impl Session {
     /// what is narrowing the list without entering INS to check. The position
     /// indicator rides on the right: it is navigation state, and this is the
     /// only line with room for it.
+    ///
+    /// The right-hand side carries two right-anchored fields — the armed-exit
+    /// hint and the position indicator — and the left-hand side carries the
+    /// mode and the filter. The hint's slot is reserved *whether or not the
+    /// exit is armed*, so arming it never resizes the filter field under the
+    /// operator's eyes, and the filter is the only thing on this line that
+    /// gives way: it is the one of them that can be retyped.
     fn status_line(&self, width: usize) -> String {
         let mode = self.mode.as_str();
         let position = self.position_indicator();
         let armed = if self.mode == Mode::Normal && self.exit_armed {
-            "   (Esc again to exit)"
+            ARMED_HINT
         } else {
             ""
         };
@@ -640,13 +675,13 @@ impl Session {
             self.filter.clone()
         };
         let head = format!("{mode}  filter: ");
-        let tail = format!("{filter}{caret}{armed}");
-        // The mode and the position always survive; the filter gives way
-        // first, because it is the one of the three that can be retyped.
-        let room = width.saturating_sub(head.chars().count() + position.chars().count() + 1);
-        let left = format!("{head}{}", truncate_end(&tail, room));
-        let gap = width.saturating_sub(left.chars().count() + position.chars().count());
-        format!("{left}{}{position}", " ".repeat(gap))
+        // The hint's slot is a fixed width: filled when the exit is armed,
+        // blank when it is not.
+        let right = format!("{armed:<hint$}{position}", hint = display_width(ARMED_HINT));
+        let room = width.saturating_sub(display_width(&head) + display_width(&right) + 1);
+        let left = format!("{head}{}{caret}", truncate_end(&filter, room));
+        let gap = width.saturating_sub(display_width(&left) + display_width(&right));
+        format!("{left}{}{right}", " ".repeat(gap))
     }
 
     /// Where the cursor is in the filtered list.
@@ -698,7 +733,7 @@ impl Session {
         let label = format!("[{mark}] all");
         let arithmetic = format!("({selected}/{total} selected)");
         let left = format!("{pointer} {label}");
-        let gap = width.saturating_sub(left.chars().count() + arithmetic.chars().count());
+        let gap = width.saturating_sub(display_width(&left) + display_width(&arithmetic));
         let plain = format!("{left}{}{arithmetic}", " ".repeat(gap));
         if self.cursor == 0 && self.color {
             return format!("{ANSI_REVERSE}{plain}{ANSI_RESET}");
@@ -803,7 +838,7 @@ impl Session {
     fn hint_bar(&self, width: usize) -> String {
         let full = "[↑↓/PgUp/PgDn move • Space select • i filter • Enter clean • Esc quit]";
         let compact = "[↑↓ PgUp/PgDn • Space • i • Enter • Esc]";
-        let hints = if full.chars().count() <= width {
+        let hints = if display_width(full) <= width {
             full
         } else {
             compact
@@ -844,7 +879,7 @@ impl Session {
         let full = self
             .candidates
             .iter()
-            .map(|c| ownership_text(c, true).chars().count())
+            .map(|c| display_width(&ownership_text(c, true)))
             .max()
             .unwrap_or(0);
         if budget.saturating_sub(full) >= MIN_NAME_WIDTH {
@@ -859,7 +894,7 @@ impl Session {
         let class = self
             .candidates
             .iter()
-            .map(|c| c.ownership.label().chars().count())
+            .map(|c| display_width(c.ownership.label()))
             .max()
             .unwrap_or(0);
         let own = class.min(budget.saturating_sub(MIN_NAME_WIDTH));
@@ -951,38 +986,114 @@ fn join_components(components: &[&OsStr]) -> String {
     out.display().to_string()
 }
 
+/// The width of one character in terminal cells.
+///
+/// The frame's geometry is a promise about **cells**, not about characters: a
+/// path with CJK characters in it occupies two cells per character, and a
+/// frame measured in characters would paint past the right edge, wrap, and
+/// break the layout exactly as a missing carriage return does.
+///
+/// This is a small table rather than a dependency. The crate's minimal
+/// dependency set is a stated property (ADR 001), and the ranges below are
+/// the ones that decide the width of a *path*: East Asian wide and fullwidth
+/// forms, the emoji blocks, and the zero-width marks that must not count at
+/// all.
+fn char_width(c: char) -> usize {
+    let cp = c as u32;
+    // Control characters never reach a frame; they occupy no cell.
+    if cp < 0x20 || (0x7f..0xa0).contains(&cp) {
+        return 0;
+    }
+    // Zero-width: combining marks, the joiner, and the variation selectors.
+    if (0x0300..=0x036f).contains(&cp)
+        || (0x200b..=0x200f).contains(&cp)
+        || (0xfe00..=0xfe0f).contains(&cp)
+        || (0xfe20..=0xfe2f).contains(&cp)
+        || cp == 0xfeff
+    {
+        return 0;
+    }
+    let wide = matches!(cp,
+        0x1100..=0x115f            // Hangul Jamo
+        | 0x2e80..=0x303e          // CJK radicals, Kangxi, CJK symbols
+        | 0x3041..=0x33ff          // Hiragana .. CJK compatibility
+        | 0x3400..=0x4dbf          // CJK extension A
+        | 0x4e00..=0x9fff          // CJK unified ideographs
+        | 0xa000..=0xa4cf          // Yi
+        | 0xa960..=0xa97f          // Hangul Jamo extended-A
+        | 0xac00..=0xd7a3          // Hangul syllables
+        | 0xf900..=0xfaff          // CJK compatibility ideographs
+        | 0xfe10..=0xfe19          // vertical forms
+        | 0xfe30..=0xfe6f          // CJK compatibility forms
+        | 0xff00..=0xff60          // fullwidth forms
+        | 0xffe0..=0xffe6          // fullwidth signs
+        | 0x1f300..=0x1f64f        // emoji: symbols and pictographs
+        | 0x1f680..=0x1f6ff        // emoji: transport
+        | 0x1f900..=0x1f9ff        // emoji: supplemental symbols
+        | 0x20000..=0x3fffd        // CJK extensions B and beyond
+    );
+    if wide { 2 } else { 1 }
+}
+
+/// The width of a string in terminal cells.
+fn display_width(text: &str) -> usize {
+    text.chars().map(char_width).sum()
+}
+
 /// Truncate from the *left*: the tail of a path is the part that distinguishes
 /// one project from another.
 fn truncate(text: &str, width: usize) -> String {
-    let len = text.chars().count();
-    if len <= width {
+    if display_width(text) <= width {
         return text.to_string();
     }
     if width == 0 {
         return String::new();
     }
+    // The ellipsis takes the first cell; the tail is kept for as many cells as
+    // are left over.
+    let target = width - 1;
+    let chars: Vec<char> = text.chars().collect();
+    let mut start = chars.len();
+    let mut used = 0usize;
+    while start > 0 {
+        let w = char_width(chars[start - 1]);
+        if used + w > target {
+            break;
+        }
+        used += w;
+        start -= 1;
+    }
     let mut out = String::from("…");
-    out.extend(text.chars().skip(len - (width - 1)));
+    out.extend(&chars[start..]);
     out
 }
 
 /// Truncate from the *right*: the head of a filter query is the part the
 /// operator typed first and is most likely to recognise.
 fn truncate_end(text: &str, width: usize) -> String {
-    let len = text.chars().count();
-    if len <= width {
+    if display_width(text) <= width {
         return text.to_string();
     }
     if width == 0 {
         return String::new();
     }
-    let mut out: String = text.chars().take(width - 1).collect();
+    let target = width - 1;
+    let mut out = String::new();
+    let mut used = 0usize;
+    for c in text.chars() {
+        let w = char_width(c);
+        if used + w > target {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
     out.push('…');
     out
 }
 
 fn pad(text: &str, width: usize) -> String {
-    let len = text.chars().count();
+    let len = display_width(text);
     if len >= width {
         return text.to_string();
     }
@@ -993,7 +1104,7 @@ fn pad(text: &str, width: usize) -> String {
 
 /// Right-align a fragment in its column.
 fn pad_left(text: &str, width: usize) -> String {
-    let len = text.chars().count();
+    let len = display_width(text);
     if len >= width {
         return text.to_string();
     }
@@ -1017,7 +1128,7 @@ fn visible_width(text: &str) -> usize {
             }
             continue;
         }
-        width += 1;
+        width += char_width(c);
     }
     width
 }
@@ -1036,19 +1147,23 @@ fn pad_visible(text: &str, width: usize) -> String {
 /// Restores the terminal on every exit path, including a panic.
 ///
 /// A tool that can leave a terminal in raw mode is not shippable: the operator
-/// loses echo and `Ctrl-C`, and gets a shell they have to reset by hand. This
-/// guard makes restoration a property of the *scope* rather than of every
+/// loses echo and `Ctrl-C`, and gets a shell they must reset by hand. The
+/// **cursor** is the second half of the same obligation, and it is the half
+/// that is easy to miss: cursor visibility is a *separate escape sequence*
+/// from the terminal mode, so restoring raw mode does not restore the cursor.
+///
+/// This guard makes restoration a property of the *scope* rather than of every
 /// `return` and `?` that happens to be remembered at the end of a function.
 ///
 /// It holds a mutable borrow of the terminal, so the guard's lifetime and the
 /// driver's ability to keep using the terminal are the same lifetime —
 /// restoration cannot be skipped by "using the terminal once more".
-struct RawModeGuard<'a> {
+struct TerminalGuard<'a> {
     terminal: &'a mut dyn Terminal,
     restored: bool,
 }
 
-impl RawModeGuard<'_> {
+impl TerminalGuard<'_> {
     fn restore(&mut self) -> io::Result<()> {
         if self.restored {
             return Ok(());
@@ -1057,11 +1172,17 @@ impl RawModeGuard<'_> {
         // error, retrying from `Drop` would issue a second `disable_raw_mode`
         // on a handle that has already reported itself broken.
         self.restored = true;
-        self.terminal.restore()
+        let mode = self.terminal.restore();
+        // The cursor is an independent obligation, not a side effect of the
+        // first: a session that ends in NOR would otherwise leave the
+        // operator's shell with no visible caret. Both are attempted even when
+        // the first fails, because the second does not depend on it.
+        let cursor = self.terminal.set_cursor_visible(true);
+        mode.and(cursor)
     }
 }
 
-impl Drop for RawModeGuard<'_> {
+impl Drop for TerminalGuard<'_> {
     fn drop(&mut self) {
         // Errors during unwind are ignored on purpose: a failing restore must
         // not replace the original failure with a second panic from `Drop`.
@@ -1123,7 +1244,7 @@ pub fn drive(
 ) -> io::Result<SessionResult> {
     let mut session = Session::new(candidates).with_color(color_enabled());
     terminal.enter_raw()?;
-    let mut guard = RawModeGuard {
+    let mut guard = TerminalGuard {
         terminal,
         restored: false,
     };
@@ -1139,35 +1260,98 @@ pub fn drive(
 }
 
 fn session_loop(terminal: &mut dyn Terminal, session: &mut Session) -> io::Result<SessionResult> {
-    // The terminal's own cursor starts hidden: in NOR the highlighted row *is*
-    // the cursor, and a hardware caret blinking inside a `[ ]` checkbox reads
-    // as a second, unrelated selection point.
+    // The terminal's own cursor stays hidden for the session's whole life: in
+    // NOR the highlighted row *is* the cursor, and in INS the status line
+    // draws the caret as an underscore beside the filter text. A hardware
+    // caret would be a third, unrelated cursor, and it cannot be put where the
+    // operator is typing without a cursor-positioning scheme this surface
+    // does not have. It is restored when the session ends.
     terminal.set_cursor_visible(false)?;
     let mut painted = 0usize;
+    let result = paint_frames(terminal, session, &mut painted);
+    // Erase the painted region on every exit path, including a read failure:
+    // a frame left on screen after an error is a frame the operator has to
+    // read past to get back to their prompt. The erase is best-effort — a
+    // terminal that cannot be cleaned up is broken, and reporting that would
+    // cost the operator the selection they just made.
+    let _ = terminal.rewind(painted);
+    let _ = terminal.clear();
+    result
+}
+
+/// Paint frames until the operator decides.
+///
+/// Split out of [`session_loop`] so that the region's erase is a property of
+/// the *caller* — one exit path, not one per `?`.
+fn paint_frames(
+    terminal: &mut dyn Terminal,
+    session: &mut Session,
+    painted: &mut usize,
+) -> io::Result<SessionResult> {
     loop {
         let (width, height) = terminal.size()?;
         session.set_size(width, height);
         let frame = session.frame();
-        if painted > 0 {
-            terminal.rewind(painted)?;
+        if *painted > 0 {
+            terminal.rewind(*painted)?;
         }
         terminal.draw(&frame)?;
-        terminal.set_cursor_visible(session.mode() == Mode::Insert)?;
-        painted = frame.len();
+        *painted = frame.len();
         match session.on_key(terminal.read_key()?) {
             Outcome::Continue => {}
-            Outcome::Commit(roots) => {
-                terminal.rewind(painted)?;
-                terminal.clear()?;
-                return Ok(SessionResult::Selected(roots));
-            }
-            Outcome::Quit => {
-                terminal.rewind(painted)?;
-                terminal.clear()?;
-                return Ok(SessionResult::Cancelled);
-            }
+            Outcome::Commit(roots) => return Ok(SessionResult::Selected(roots)),
+            Outcome::Quit => return Ok(SessionResult::Cancelled),
         }
     }
+}
+
+/// The exact bytes one frame writes to the terminal.
+///
+/// In raw mode the terminal's output post-processing is off — `cfmakeraw`
+/// clears `OPOST` — so a bare `\n` is a linefeed *without* a carriage
+/// return. A frame written with `\n` alone starts every line at the column
+/// the previous one ended in: the frame spills over twice the rows it claims,
+/// every line loses its first character to the row above, and the rewind that
+/// erases the old frame moves up by the frame's *line count* rather than by
+/// the rows it actually occupies — which erases most of the frame it was
+/// meant to keep.
+///
+/// Every line therefore begins with an explicit carriage return.
+///
+/// Pure, so the exact byte stream the real terminal receives can be asserted
+/// — and replayed through a small terminal emulator — without a pty.
+fn frame_bytes(lines: &[String]) -> String {
+    let mut out = String::new();
+    for line in lines {
+        out.push('\r');
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// The bytes that erase from the cursor down.
+fn clear_bytes() -> String {
+    "\u{1b}[J".to_string()
+}
+
+/// The bytes that return the cursor to the first painted line and erase it.
+///
+/// Column zero first, then up: `MoveUp` keeps the column, and the erase
+/// starts at the cursor, so a cursor left at the end of a full-width line
+/// would leave the last cell of the first line standing.
+///
+/// `MoveUp(0)` is never emitted: `CSI 0 A` means "up one line" to a terminal,
+/// so a zero count would move the cursor off the frame.
+fn rewind_bytes(lines: usize) -> String {
+    let mut out = String::new();
+    if lines > 0 {
+        // `ESC[1G` is column one, which is the first: the sequence is 1-based.
+        out.push_str("\u{1b}[1G");
+        out.push_str(&format!("\u{1b}[{lines}A"));
+    }
+    out.push_str(&clear_bytes());
+    out
 }
 
 /// The `crossterm` implementation of [`Terminal`].
@@ -1183,15 +1367,7 @@ impl Terminal for CrosstermTerminal {
     }
 
     fn read_key(&mut self) -> io::Result<Key> {
-        // Resize, focus, mouse, and paste carry no binding, but all of them
-        // mean the next frame should be repainted at the new geometry. The
-        // driver re-measures before every frame, so mapping them to
-        // `Ignored` is both correct and sufficient.
-        match crossterm::event::read() {
-            Ok(crossterm::event::Event::Key(key)) => Ok(normalize(key)),
-            Ok(_) => Ok(Key::Ignored),
-            Err(_) => Ok(Key::Ignored),
-        }
+        normalize_event(crossterm::event::read())
     }
 
     fn size(&mut self) -> io::Result<(u16, u16)> {
@@ -1200,13 +1376,7 @@ impl Terminal for CrosstermTerminal {
 
     fn rewind(&mut self, lines: usize) -> io::Result<()> {
         let mut out = io::stdout();
-        if lines > 0 {
-            crossterm::execute!(out, crossterm::cursor::MoveUp(lines as u16))?;
-        }
-        crossterm::execute!(
-            out,
-            crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
-        )?;
+        out.write_all(rewind_bytes(lines).as_bytes())?;
         out.flush()
     }
 
@@ -1222,19 +1392,31 @@ impl Terminal for CrosstermTerminal {
 
     fn clear(&mut self) -> io::Result<()> {
         let mut out = io::stdout();
-        crossterm::execute!(
-            out,
-            crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
-        )?;
+        out.write_all(clear_bytes().as_bytes())?;
         out.flush()
     }
 
     fn draw(&mut self, lines: &[String]) -> io::Result<()> {
         let mut out = io::stdout();
-        for line in lines {
-            writeln!(out, "{line}")?;
-        }
+        out.write_all(frame_bytes(lines).as_bytes())?;
         out.flush()
+    }
+}
+
+/// Map one terminal event onto the session's normalized vocabulary.
+///
+/// A *read failure* is not an unbound key: it is the terminal going away.
+/// Swallowing it would spin the session in a busy loop, repainting frames at
+/// full speed with nothing left to read.
+fn normalize_event(event: Result<crossterm::event::Event, io::Error>) -> io::Result<Key> {
+    match event {
+        Ok(crossterm::event::Event::Key(key)) => Ok(normalize(key)),
+        // Resize, focus, mouse, and paste carry no binding, but all of them
+        // mean the next frame should be repainted at the new geometry. The
+        // driver re-measures before every frame, so mapping them to
+        // `Ignored` is both correct and sufficient.
+        Ok(_) => Ok(Key::Ignored),
+        Err(e) => Err(e),
     }
 }
 
@@ -1870,7 +2052,14 @@ mod tests {
         raw_before_panic: bool,
         restored: usize,
         cleared: usize,
-        cursor_visible: Option<bool>,
+        /// Every cursor-visibility call, in order.
+        ///
+        /// The whole sequence, not just the last value: "the cursor is hidden
+        /// while the session runs and visible when it ends" is a claim about
+        /// the *sequence*, and a last-value assertion cannot tell the
+        /// difference between a session that hid it once and one that showed
+        /// it on every frame.
+        cursor_visibility: Vec<bool>,
     }
 
     impl FakeTerminal {
@@ -1882,8 +2071,13 @@ mod tests {
                 raw_before_panic: false,
                 restored: 0,
                 cleared: 0,
-                cursor_visible: None,
+                cursor_visibility: Vec::new(),
             }
+        }
+
+        /// Whether the cursor was visible when the session ended.
+        fn cursor_at_exit(&self) -> Option<bool> {
+            self.cursor_visibility.last().copied()
         }
     }
 
@@ -1908,7 +2102,7 @@ mod tests {
             Ok(())
         }
         fn set_cursor_visible(&mut self, visible: bool) -> io::Result<()> {
-            self.cursor_visible = Some(visible);
+            self.cursor_visibility.push(visible);
             Ok(())
         }
         fn clear(&mut self) -> io::Result<()> {
@@ -1955,8 +2149,48 @@ mod tests {
         assert_eq!(term.cleared, 1);
     }
 
+    /// The cursor is visible again when the session ends.
+    ///
+    /// Cursor visibility is a *separate escape sequence* from the terminal
+    /// mode, so restoring raw mode does not restore it: a session that ended
+    /// in NOR left the operator's shell with no visible caret.
+    ///
+    /// This test used to assert that the last recorded visibility was
+    /// `Some(false)`. It pinned the defect instead of catching it, and it was
+    /// green *because* it asserted the bug. The assertion that matters is
+    /// that the cursor is **visible** at the end, on every path.
     #[test]
-    fn the_driver_shows_the_hardware_cursor_only_in_insert_mode() {
+    fn the_cursor_is_visible_again_when_the_session_ends() {
+        let paths: [&[Key]; 3] = [
+            &[Key::Char('q')],
+            &[Key::Down, Key::Space, Key::Enter],
+            &[Key::Char('i'), Key::Char('x'), Key::Esc, Key::Char('q')],
+        ];
+        for keys in paths {
+            let mut term = FakeTerminal::new(keys.to_vec());
+            drive(&mut term, sample()).unwrap();
+            assert_eq!(
+                term.cursor_at_exit(),
+                Some(true),
+                "the cursor must be visible when the session ends: {keys:?}"
+            );
+        }
+    }
+
+    /// The terminal's own cursor stays hidden for the whole session.
+    ///
+    /// In NOR the highlighted row *is* the cursor; in INS the status line
+    /// draws the caret as an underscore beside the filter text. A hardware
+    /// caret is a third, unrelated cursor, and it cannot be put where the
+    /// operator is typing without a cursor-positioning scheme this surface
+    /// does not have — so it is hidden throughout and restored only at the
+    /// end.
+    ///
+    /// The whole sequence is asserted, not just its last value: a
+    /// last-value assertion cannot tell a session that hid the cursor once
+    /// from one that showed it on every frame.
+    #[test]
+    fn the_hardware_cursor_stays_hidden_for_the_whole_session() {
         let mut term = FakeTerminal::new(vec![
             Key::Char('i'),
             Key::Char('x'),
@@ -1964,13 +2198,20 @@ mod tests {
             Key::Char('q'),
         ]);
         drive(&mut term, sample()).unwrap();
-        // Last recorded value is NOR; the INS frame in between must have shown it.
-        assert_eq!(term.cursor_visible, Some(false));
         assert!(
             term.frames.len() >= 3,
             "insert mode should have painted at least one frame: {}",
             term.frames.len()
         );
+        let (during, after) = term
+            .cursor_visibility
+            .split_at(term.cursor_visibility.len().saturating_sub(1));
+        assert!(
+            during.iter().all(|visible| !*visible),
+            "the cursor must be hidden while the session runs: {:?}",
+            term.cursor_visibility
+        );
+        assert_eq!(after, &[true], "and shown again when it ends");
     }
 
     #[test]
@@ -2029,6 +2270,10 @@ mod tests {
         assert!(drive(&mut term, sample()).is_err());
         assert_eq!(term.inner.restored, 1);
         assert!(!term.inner.raw);
+        assert_eq!(
+            term.inner.cleared, 1,
+            "the painted region is erased even when the session fails"
+        );
     }
 
     #[test]
@@ -2040,7 +2285,7 @@ mod tests {
             terminal: FakeTerminal::new(Vec::new()),
         };
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            let guard = RawModeGuard {
+            let guard = TerminalGuard {
                 terminal: &mut harness.terminal,
                 restored: false,
             };
@@ -2063,7 +2308,7 @@ mod tests {
     fn the_guard_restores_exactly_once_even_when_restored_explicitly() {
         let mut term = FakeTerminal::new(Vec::new());
         {
-            let mut guard = RawModeGuard {
+            let mut guard = TerminalGuard {
                 terminal: &mut term,
                 restored: false,
             };
@@ -2110,7 +2355,7 @@ mod tests {
         }
         let mut term = FailingRestore { calls: 0 };
         {
-            let mut guard = RawModeGuard {
+            let mut guard = TerminalGuard {
                 terminal: &mut term,
                 restored: false,
             };
@@ -2119,7 +2364,294 @@ mod tests {
         assert_eq!(term.calls, 1, "an explicit failure must not be retried");
     }
 
-    // --- terminal precondition -------------------------------------------
+    // --- the rendered surface ---------------------------------------------
+
+    /// A minimal terminal emulator: enough of one to see where a frame lands.
+    ///
+    /// The two rules a frame writer has to respect in raw mode are the ones
+    /// this models: a bare newline is a linefeed *without* a carriage return,
+    /// and a character written in the last column leaves the cursor there
+    /// until the next printable character wraps it.
+    struct TinyTerminal {
+        rows: usize,
+        cols: usize,
+        screen: Vec<Vec<char>>,
+        row: usize,
+        col: usize,
+        pending_wrap: bool,
+    }
+
+    impl TinyTerminal {
+        fn new(rows: usize, cols: usize) -> Self {
+            Self {
+                rows,
+                cols,
+                screen: vec![vec![' '; cols]; rows],
+                row: 0,
+                col: 0,
+                pending_wrap: false,
+            }
+        }
+
+        fn feed(&mut self, bytes: &str) {
+            let mut chars = bytes.chars();
+            while let Some(c) = chars.next() {
+                match c {
+                    '\r' => {
+                        self.col = 0;
+                        self.pending_wrap = false;
+                    }
+                    '\n' => {
+                        self.line_feed();
+                        self.pending_wrap = false;
+                    }
+                    '\u{1b}' => {
+                        // A CSI sequence: ESC [ params final.
+                        for c in chars.by_ref() {
+                            if c == '[' {
+                                break;
+                            }
+                        }
+                        let mut params = String::new();
+                        for c in chars.by_ref() {
+                            if !c.is_ascii_alphabetic() {
+                                params.push(c);
+                                continue;
+                            }
+                            match c {
+                                'A' => {
+                                    let n: usize = params.parse().unwrap_or(1);
+                                    self.row = self.row.saturating_sub(n);
+                                }
+                                'G' => {
+                                    let n: usize = params.parse().unwrap_or(1);
+                                    self.col = n.saturating_sub(1).min(self.cols - 1);
+                                }
+                                'J' => self.erase_from_cursor(),
+                                _ => {}
+                            }
+                            break;
+                        }
+                        self.pending_wrap = false;
+                    }
+                    _ => {
+                        if self.pending_wrap {
+                            self.line_feed();
+                            self.col = 0;
+                            self.pending_wrap = false;
+                        }
+                        self.screen[self.row][self.col] = c;
+                        if self.col == self.cols - 1 {
+                            self.pending_wrap = true;
+                        } else {
+                            self.col += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        fn line_feed(&mut self) {
+            self.row += 1;
+            if self.row >= self.rows {
+                self.screen.remove(0);
+                self.screen.push(vec![' '; self.cols]);
+                self.row = self.rows - 1;
+            }
+        }
+
+        fn erase_from_cursor(&mut self) {
+            for c in self.col..self.cols {
+                self.screen[self.row][c] = ' ';
+            }
+            for r in self.row + 1..self.rows {
+                self.screen[r] = vec![' '; self.cols];
+            }
+        }
+
+        /// One row's text, without the trailing blanks.
+        fn row_text(&self, row: usize) -> String {
+            self.screen[row]
+                .iter()
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        }
+    }
+
+    /// The frame lands on the rows it claims.
+    ///
+    /// This is the guard the repository did not have. The rendered surface had
+    /// never been observed by an automated test, and the frame was painted
+    /// with a bare newline — which in raw mode is a linefeed *without* a
+    /// carriage return — so every line started at the column the previous one
+    /// ended in: the frame spilled over twice the rows it claimed, every line
+    /// lost its first character to the row above, and the rewind that erases
+    /// the old frame moved up by the frame's line count rather than by the
+    /// rows it actually occupied, which erased most of the frame it was meant
+    /// to keep.
+    #[test]
+    fn the_frame_lands_on_the_rows_it_claims() {
+        let candidates: Vec<CleanupCandidate> = (0..4)
+            .map(|i| private(&format!("/home/u/projects/p{i:02}")))
+            .collect();
+        let s = Session::new(candidates)
+            .with_color(false)
+            .with_size(100, 20);
+        let frame = s.frame();
+        let mut tiny = TinyTerminal::new(frame.len() + 2, 100);
+        tiny.feed(&frame_bytes(&frame));
+        for (i, line) in frame.iter().enumerate() {
+            assert_eq!(
+                tiny.row_text(i),
+                line.trim_end(),
+                "line {i} did not land on row {i}: {frame:?}"
+            );
+        }
+        for i in frame.len()..tiny.rows {
+            assert_eq!(
+                tiny.row_text(i),
+                "",
+                "row {i} was painted outside the frame: {frame:?}"
+            );
+        }
+    }
+
+    /// A repaint replaces the frame instead of stacking under it.
+    #[test]
+    fn a_repaint_replaces_the_frame_instead_of_stacking_under_it() {
+        let candidates: Vec<CleanupCandidate> = (0..4)
+            .map(|i| private(&format!("/home/u/projects/p{i:02}")))
+            .collect();
+        let mut s = Session::new(candidates)
+            .with_color(false)
+            .with_size(100, 20);
+        let first = s.frame();
+        let mut tiny = TinyTerminal::new(first.len() + 2, 100);
+        tiny.feed(&frame_bytes(&first));
+        // Move the cursor and check a row, so the second frame differs.
+        press(&mut s, &[Key::Down, Key::Space]);
+        let second = s.frame();
+        // Exactly what the driver issues between two frames.
+        tiny.feed(&rewind_bytes(second.len()));
+        tiny.feed(&frame_bytes(&second));
+        for (i, line) in second.iter().enumerate() {
+            assert_eq!(
+                tiny.row_text(i),
+                line.trim_end(),
+                "row {i} is stale: {second:?}"
+            );
+        }
+        for i in second.len()..tiny.rows {
+            assert_eq!(
+                tiny.row_text(i),
+                "",
+                "row {i} was painted outside the frame: {second:?}"
+            );
+        }
+    }
+
+    /// Every line of a frame starts with a carriage return.
+    #[test]
+    fn every_line_of_a_frame_starts_with_a_carriage_return() {
+        let frame = session().frame();
+        let bytes = frame_bytes(&frame);
+        let mut parts: Vec<&str> = bytes.split('\n').collect();
+        // The stream ends with a newline, so the last part is empty.
+        parts.pop();
+        assert_eq!(
+            parts.len(),
+            frame.len(),
+            "one line of bytes per line of the frame"
+        );
+        for (i, part) in parts.iter().enumerate() {
+            assert!(
+                part.starts_with('\r'),
+                "line {i} does not start with a carriage return: {part:?}"
+            );
+        }
+    }
+
+    // --- the status line --------------------------------------------------
+
+    /// The armed-exit hint survives a filter that fills the field.
+    ///
+    /// The hint is the one part of the status line that carries an *action*:
+    /// it says the next `Esc` quits. Truncating it away left the operator
+    /// pressing a key the surface no longer explained.
+    #[test]
+    fn the_armed_exit_hint_survives_a_long_filter() {
+        let mut s = session();
+        filter(&mut s, "a-very-long-filter-that-fills-the-field");
+        press(&mut s, &[Key::Esc]);
+        let frame = render_to_string(&s);
+        assert!(
+            frame.contains("Esc again to exit"),
+            "the armed hint must not be truncated away: {frame}"
+        );
+        assert!(
+            frame.contains("a-very-long-filter"),
+            "the filter must still be readable: {frame}"
+        );
+    }
+
+    /// Arming the exit does not move the filter field.
+    ///
+    /// The hint's slot is reserved whether or not the exit is armed, so the
+    /// text the operator typed does not shift under their eyes at the moment
+    /// they are deciding whether to quit. The whole line is compared, with
+    /// the hint blanked out: arming the exit must change *nothing* but the
+    /// hint itself.
+    #[test]
+    fn arming_the_exit_does_not_resize_the_filter_field() {
+        let mut s = session();
+        filter(
+            &mut s,
+            "a-filter-long-enough-to-be-cut-at-one-width-and-not-the-other",
+        );
+        let before = s.frame()[1].clone();
+        press(&mut s, &[Key::Esc]);
+        let after = s.frame()[1].clone();
+        let blanked = after.replace(ARMED_HINT, &" ".repeat(display_width(ARMED_HINT)));
+        assert_eq!(
+            blanked, before,
+            "arming the exit must change nothing but the hint"
+        );
+    }
+
+    // --- the width is measured in cells ------------------------------------
+
+    /// A wide character is two cells wide.
+    ///
+    /// The frame's geometry is a promise about terminal cells. Measured in
+    /// characters, a path with CJK characters in it paints past the right
+    /// edge, wraps, and breaks the layout exactly as a missing carriage
+    /// return does.
+    #[test]
+    fn a_wide_character_is_two_cells_wide() {
+        assert_eq!(display_width("abc"), 3);
+        assert_eq!(display_width("プロジェクト"), 12);
+        assert_eq!(display_width(&truncate("プロジェクト", 5)), 5);
+        assert_eq!(display_width(&truncate_end("プロジェクト", 5)), 5);
+    }
+
+    /// A wide-character path does not paint past the edge of the frame.
+    #[test]
+    fn a_wide_character_path_does_not_overflow_the_frame() {
+        // Two candidates with the same basename, so the displayed name has to
+        // keep the wide characters in it.
+        let candidates = vec![private("/one/プロジェクト"), private("/two/プロジェクト")];
+        let s = Session::new(candidates).with_size(60, 10);
+        let frame = s.frame();
+        for line in &frame {
+            assert!(
+                visible_width(line) <= 60,
+                "a wide character painted past the edge: {line:?}"
+            );
+        }
+    }
+
+    // --- the terminal precondition -------------------------------------------
 
     #[test]
     fn a_redirected_stream_is_refused_before_raw_mode() {
@@ -2170,6 +2702,33 @@ mod tests {
         );
         assert_eq!(press(KeyCode::F(5), KeyModifiers::NONE), Key::Ignored);
         assert_eq!(press(KeyCode::Tab, KeyModifiers::NONE), Key::Ignored);
+    }
+
+    /// A read failure is not an unbound key.
+    ///
+    /// Swallowing it would spin the session in a busy loop, repainting frames
+    /// at full speed with nothing left to read.
+    #[test]
+    fn a_read_failure_is_not_an_unbound_key() {
+        let failed = normalize_event(Err(io::Error::other("device disappeared")));
+        assert!(
+            failed.is_err(),
+            "a read failure must propagate, not become an unbound key"
+        );
+        assert!(
+            normalize_event(Ok(crossterm::event::Event::FocusGained)).is_ok(),
+            "a focus event carries no binding and is not a failure"
+        );
+        assert_eq!(
+            normalize_event(Ok(crossterm::event::Event::Key(
+                crossterm::event::KeyEvent::new(
+                    crossterm::event::KeyCode::Char('q'),
+                    crossterm::event::KeyModifiers::NONE
+                )
+            )))
+            .unwrap(),
+            Key::Char('q')
+        );
     }
 
     // --- the empty candidate set -------------------------------------------
