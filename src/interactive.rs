@@ -168,8 +168,35 @@ const PAGE_ROWS: usize = 15;
 /// Smallest viewport that can show one candidate row.
 const MIN_LIST_ROWS: usize = 1;
 
-/// Smallest width the layout is willing to render at.
-const MIN_WIDTH: usize = 40;
+/// The narrowest terminal the frame can be drawn in.
+///
+/// The lead — the gutter, a space, the checkbox and a space — is six cells
+/// wide, so a row cannot be drawn at all below it. A terminal this narrow is
+/// refused by the session gate, which is stricter; this is the layout's own
+/// floor, and the one the frame's geometry is measured against.
+const MIN_FRAME_WIDTH: usize = 6;
+
+/// The narrowest terminal the surface is *useful* in.
+///
+/// Below this the status line cannot hold the mode, the filter field and the
+/// position indicator at once, and the filter field is where the operator
+/// looks. The layout still fits a narrower terminal — it degrades rather than
+/// overflows — but the surface refuses to start there, because a list nobody
+/// can read is not a selection.
+const MIN_SESSION_WIDTH: usize = 20;
+
+/// The shortest terminal the surface is *useful* in.
+///
+/// The frame's essential shape is the title, the status line, the all-toggle
+/// row and one candidate row.
+const MIN_SESSION_HEIGHT: usize = 6;
+
+/// The compact form of the armed-exit hint.
+///
+/// A terminal too narrow for the full hint reserves this one instead: the
+/// hint still has to be readable when the exit is armed, because an armed exit
+/// that announces nothing is an exit the operator cannot trust.
+const ARMED_HINT_COMPACT: &str = "(Esc again)";
 
 /// Narrowest workspace-name column the layout will keep.
 const MIN_NAME_WIDTH: usize = 8;
@@ -295,8 +322,14 @@ impl Session {
     /// mid-session re-lays-out instead of painting over itself or leaving rows
     /// stranded below the new bottom edge.
     pub fn set_size(&mut self, width: u16, height: u16) {
-        self.width = (width as usize).max(MIN_WIDTH);
-        self.height = (height as usize).max(CHROME_LINES + MIN_LIST_ROWS);
+        // The frame adopts the terminal's geometry *exactly*. A clamp that
+        // rounded the terminal's width up painted a frame wider than the
+        // terminal it was painted on: every line wrapped, the frame occupied
+        // more rows than it claimed, and the erase that removes the frame
+        // counts its lines rather than the rows it occupies — so the residue
+        // was left standing above the operator's prompt.
+        self.width = (width as usize).max(MIN_FRAME_WIDTH);
+        self.height = (height as usize).max(1);
         let max = self.rows().saturating_sub(1);
         if self.cursor > max {
             self.cursor = max;
@@ -368,9 +401,14 @@ impl Session {
     /// with three hundred paint the same shape, and a long list is a list the
     /// operator pages through rather than a screenful they have to scroll.
     fn list_rows(&self) -> usize {
-        let available = self.height.saturating_sub(CHROME_LINES).max(MIN_LIST_ROWS);
+        let available = self.plan().list;
         let wanted = self.visible.len().max(MIN_LIST_ROWS);
         PAGE_ROWS.min(wanted).min(available)
+    }
+
+    /// The frame's shape for the current geometry.
+    fn plan(&self) -> Plan {
+        Plan::for_size(self.height)
     }
 
     /// Apply one key.
@@ -585,32 +623,45 @@ impl Session {
     /// row — is assertable without a terminal.
     pub fn frame(&self) -> Vec<String> {
         let width = self.width;
+        let plan = self.plan();
         let page = self.list_rows();
         let columns = self.columns();
         let mut out = Vec::with_capacity(CHROME_LINES + page);
 
-        out.push(self.title_line(width));
-        out.push(self.status_line(width));
-        out.push(self.column_header(&columns, width));
-        out.push(self.all_row(width));
+        if plan.title {
+            out.push(self.title_line(width));
+        }
+        if plan.status {
+            out.push(self.status_line(width));
+        }
+        if plan.all {
+            out.push(self.all_row(width));
+        }
+        if plan.header {
+            out.push(self.column_header(&columns, width));
+        }
 
-        if self.visible.is_empty() {
-            out.push(pad("    (no workspace matches the filter)", width));
-            for _ in 1..page {
-                out.push(String::new());
-            }
-        } else {
-            let end = (self.scroll + page).min(self.visible.len());
-            for idx in self.scroll..end {
-                out.push(self.candidate_row(idx, end, &columns, width));
-            }
-            for _ in end..(self.scroll + page) {
-                out.push(String::new());
+        if page > 0 {
+            if self.visible.is_empty() {
+                out.push(pad("    (no workspace matches the filter)", width));
+                for _ in 1..page {
+                    out.push(String::new());
+                }
+            } else {
+                let end = (self.scroll + page).min(self.visible.len());
+                for idx in self.scroll..end {
+                    out.push(self.candidate_row(idx, end, &columns, width));
+                }
+                for _ in end..(self.scroll + page) {
+                    out.push(String::new());
+                }
             }
         }
 
-        out.push(self.hint_bar(width));
-        debug_assert_eq!(out.len(), CHROME_LINES + page);
+        if plan.hint {
+            out.push(self.hint_bar(width));
+        }
+        debug_assert!(out.len() <= self.height.saturating_sub(1).max(1));
         out
     }
 
@@ -675,10 +726,36 @@ impl Session {
             self.filter.clone()
         };
         let head = format!("{mode}  filter: ");
-        // The hint's slot is a fixed width: filled when the exit is armed,
-        // blank when it is not.
-        let right = format!("{armed:<hint$}{position}", hint = display_width(ARMED_HINT));
-        let room = width.saturating_sub(display_width(&head) + display_width(&right) + 1);
+        // The hint's slot is reserved in *every* state: filled when the exit is
+        // armed, blank when it is not, so arming the exit never resizes the
+        // filter field under the operator's eyes. A terminal too narrow for
+        // the full hint reserves the compact one; a terminal too narrow for
+        // that reserves nothing, in both states alike.
+        let fixed = display_width(&head) + display_width(&position) + display_width(caret);
+        let available = width.saturating_sub(fixed + 1);
+        let slot = if available >= display_width(ARMED_HINT) {
+            display_width(ARMED_HINT)
+        } else if available >= display_width(ARMED_HINT_COMPACT) {
+            display_width(ARMED_HINT_COMPACT)
+        } else {
+            0
+        };
+        let armed_text = if armed.is_empty() {
+            String::new()
+        } else if slot >= display_width(ARMED_HINT) {
+            ARMED_HINT.to_string()
+        } else if slot >= display_width(ARMED_HINT_COMPACT) {
+            ARMED_HINT_COMPACT.to_string()
+        } else {
+            String::new()
+        };
+        let right = format!("{armed_text:<slot$}{position}", slot = slot);
+        // The left-hand side gets what the right-hand side did not take, less
+        // the caret and one separating space. The head is truncated only when
+        // it cannot fit at all; the filter is what gives way.
+        let left_budget = width.saturating_sub(display_width(&right) + display_width(caret) + 1);
+        let head = truncate_end(&head, left_budget);
+        let room = left_budget.saturating_sub(display_width(&head));
         let left = format!("{head}{}{caret}", truncate_end(&filter, room));
         let gap = width.saturating_sub(display_width(&left) + display_width(&right));
         format!("{left}{}{right}", " ".repeat(gap))
@@ -703,11 +780,13 @@ impl Session {
         let mut plain = String::new();
         plain.push_str(&" ".repeat(LEAD_WIDTH));
         plain.push_str(&pad(&truncate("WORKSPACE", columns.name), columns.name));
-        plain.push_str(&" ".repeat(COLUMN_GAP));
-        plain.push_str(&pad_left("RECLAIMABLE", SIZE_WIDTH));
+        if columns.size {
+            plain.push_str(&" ".repeat(COLUMN_GAP));
+            plain.push_str(&pad_left("RECLAIMABLE", SIZE_WIDTH));
+        }
         if columns.own > 0 {
             plain.push_str(&" ".repeat(COLUMN_GAP));
-            plain.push_str(&pad(&truncate("OWNERSHIP", columns.own), columns.own));
+            plain.push_str(&pad(&truncate_end("OWNERSHIP", columns.own), columns.own));
         }
         if !self.color {
             return pad(&plain, width);
@@ -732,7 +811,17 @@ impl Session {
         let pointer = if self.cursor == 0 { '>' } else { ' ' };
         let label = format!("[{mark}] all");
         let arithmetic = format!("({selected}/{total} selected)");
-        let left = format!("{pointer} {label}");
+        // The row is truncated rather than wrapped: a line wider than the
+        // frame is the one thing the frame must never do.
+        let left = truncate_end(&format!("{pointer} {label}"), width);
+        // The row's own restatement of the count is the first thing to go: the
+        // title line carries the same arithmetic, and a row wider than the
+        // frame would wrap it.
+        let arithmetic = if display_width(&left) + display_width(&arithmetic) <= width {
+            arithmetic
+        } else {
+            String::new()
+        };
         let gap = width.saturating_sub(display_width(&left) + display_width(&arithmetic));
         let plain = format!("{left}{}{arithmetic}", " ".repeat(gap));
         if self.cursor == 0 && self.color {
@@ -747,7 +836,9 @@ impl Session {
         styled.push(' ');
         styled.push_str(&self.paint(mark_style, &label));
         styled.push_str(&" ".repeat(gap));
-        styled.push_str(&self.paint(ANSI_DIM, &arithmetic));
+        if !arithmetic.is_empty() {
+            styled.push_str(&self.paint(ANSI_DIM, &arithmetic));
+        }
         styled
     }
 
@@ -769,11 +860,17 @@ impl Session {
         plain.push_str(&checkbox);
         plain.push(' ');
         plain.push_str(&pad(&truncate(label, columns.name), columns.name));
-        plain.push_str(&" ".repeat(COLUMN_GAP));
-        plain.push_str(&pad_left(&truncate(&size, SIZE_WIDTH), SIZE_WIDTH));
+        if columns.size {
+            plain.push_str(&" ".repeat(COLUMN_GAP));
+            plain.push_str(&pad_left(&truncate(&size, SIZE_WIDTH), SIZE_WIDTH));
+        }
         if columns.own > 0 {
             plain.push_str(&" ".repeat(COLUMN_GAP));
-            plain.push_str(&pad(&ownership, columns.own));
+            // The head of the annotation is the class — `private`, `shared`,
+            // `external-unproven` — so the column is truncated from the right
+            // and the class survives it. A row that overflowed the frame
+            // wrapped it, which is the one thing the frame must never do.
+            plain.push_str(&pad(&truncate_end(&ownership, columns.own), columns.own));
         }
 
         if self.cursor == idx + 1 {
@@ -796,11 +893,13 @@ impl Session {
         styled.push_str(&self.paint(if checked { ANSI_GREEN } else { "" }, &checkbox));
         styled.push(' ');
         styled.push_str(&pad(&truncate(label, columns.name), columns.name));
-        styled.push_str(&" ".repeat(COLUMN_GAP));
-        styled.push_str(&self.paint(
-            ANSI_CYAN,
-            &pad_left(&truncate(&size, SIZE_WIDTH), SIZE_WIDTH),
-        ));
+        if columns.size {
+            styled.push_str(&" ".repeat(COLUMN_GAP));
+            styled.push_str(&self.paint(
+                ANSI_CYAN,
+                &pad_left(&truncate(&size, SIZE_WIDTH), SIZE_WIDTH),
+            ));
+        }
         if columns.own > 0 {
             styled.push_str(&" ".repeat(COLUMN_GAP));
             let style = if candidate.provably_private() {
@@ -808,7 +907,10 @@ impl Session {
             } else {
                 ANSI_YELLOW
             };
-            styled.push_str(&self.paint(style, &pad(&ownership, columns.own)));
+            styled.push_str(&self.paint(
+                style,
+                &pad(&truncate_end(&ownership, columns.own), columns.own),
+            ));
         }
         pad_visible(&styled, width)
     }
@@ -867,13 +969,25 @@ impl Session {
     /// information and costs a column's width on every row.
     fn columns(&self) -> Columns {
         let present = self.ownership_is_present();
-        let gaps = if present { 2 * COLUMN_GAP } else { COLUMN_GAP };
-        let budget = self.width.saturating_sub(LEAD_WIDTH + gaps + SIZE_WIDTH);
+        // The reclaimable column is the first thing to go. The title line
+        // carries the total, so a row without a size is still a row — and a
+        // row wider than the frame wraps it, which is the one thing the frame
+        // must never do.
+        let size = self.width >= LEAD_WIDTH + COLUMN_GAP + SIZE_WIDTH + MIN_NAME_WIDTH;
+        let size_gap = if size { COLUMN_GAP } else { 0 };
+        let own_gap = if present { COLUMN_GAP } else { 0 };
+        // What is left after the lead and the reclaimable column is the name's
+        // and the ownership column's to share.
+        let available = self
+            .width
+            .saturating_sub(LEAD_WIDTH + size_gap + if size { SIZE_WIDTH } else { 0 });
+        let budget = available.saturating_sub(own_gap);
         if !present {
             return Columns {
-                name: budget.max(MIN_NAME_WIDTH),
+                name: available,
                 own: 0,
                 own_full: false,
+                size,
             };
         }
         let full = self
@@ -887,6 +1001,7 @@ impl Session {
                 name: budget - full,
                 own: full,
                 own_full: true,
+                size,
             };
         }
         // Too narrow for the full wording: the class label is the shortest
@@ -898,10 +1013,19 @@ impl Session {
             .max()
             .unwrap_or(0);
         let own = class.min(budget.saturating_sub(MIN_NAME_WIDTH));
+        // The gap that would have separated the ownership column from the
+        // name is not spent when there is no ownership column: a shared row is
+        // still marked, and a row that is not marked must not look private.
+        let name = if own > 0 {
+            budget.saturating_sub(own).max(MIN_NAME_WIDTH.min(budget))
+        } else {
+            available
+        };
         Columns {
-            name: budget.saturating_sub(own).max(MIN_NAME_WIDTH),
+            name,
             own,
             own_full: false,
+            size,
         }
     }
 
@@ -910,6 +1034,83 @@ impl Session {
     /// It does whenever the candidate set is not uniformly private.
     fn ownership_is_present(&self) -> bool {
         !self.candidates.is_empty() && !self.candidates.iter().all(|c| c.provably_private())
+    }
+}
+
+/// The frame's shape for the current geometry.
+///
+/// The frame must fit the terminal in both axes, and the *rows* it occupies
+/// are one more than the *lines* it has: every line ends with a newline, and
+/// the last one moves the cursor onto the row below. A frame whose lines
+/// equal the terminal's height therefore scrolls it — pushing its own title
+/// off the top and the operator's scrollback up.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Plan {
+    /// Whether the title line is drawn.
+    title: bool,
+    /// Whether the status line is drawn.
+    status: bool,
+    /// Whether the all-toggle row is drawn.
+    all: bool,
+    /// Whether the column header is drawn.
+    header: bool,
+    /// Whether the key-hint bar is drawn.
+    hint: bool,
+    /// How many candidate rows the page holds.
+    list: usize,
+}
+
+impl Plan {
+    /// The plan for a terminal `height` rows tall.
+    ///
+    /// The chrome gives way in the order of what it costs the operator least:
+    /// the key-hint bar teaches, but the operator can read the mode and the
+    /// position indicator without it; the column header names the columns, but
+    /// the title line carries the arithmetic; the all-toggle row and a
+    /// candidate row are the surface's reason to exist and go last.
+    fn for_size(height: usize) -> Self {
+        // The rows the frame may occupy: the terminal's height, less the one
+        // the trailing newline takes.
+        let budget = height.saturating_sub(1);
+        // The title, the status line and the all-toggle row.
+        const ESSENTIAL: usize = 3;
+        let mut plan = Plan {
+            title: true,
+            status: true,
+            all: true,
+            header: true,
+            hint: true,
+            list: 0,
+        };
+        // The chrome gives way in the order of what it costs the operator
+        // least: the key-hint bar teaches, but the mode and the position
+        // indicator are readable without it; the column header names the
+        // columns, but the title line carries the arithmetic. The candidate
+        // rows are the surface's reason to exist and go last.
+        let mut list = budget.saturating_sub(ESSENTIAL + 2);
+        if list < MIN_LIST_ROWS {
+            plan.hint = false;
+            list = budget.saturating_sub(ESSENTIAL + 1);
+        }
+        if list < MIN_LIST_ROWS {
+            plan.header = false;
+            list = budget.saturating_sub(ESSENTIAL);
+        }
+        if list < MIN_LIST_ROWS {
+            // Too short for the essential shape *and* a candidate row: the
+            // all-toggle row goes with the candidate rows. It is the list's
+            // first row, and a list of nothing is not a list.
+            plan.all = false;
+            list = 0;
+        }
+        if budget < 2 {
+            plan.status = false;
+        }
+        if budget < 1 {
+            plan.title = false;
+        }
+        plan.list = list;
+        plan
     }
 }
 
@@ -922,6 +1123,8 @@ struct Columns {
     own: usize,
     /// Whether the ownership column carries the full wording or just the class.
     own_full: bool,
+    /// Whether the reclaimable column is drawn at all.
+    size: bool,
 }
 
 /// The ownership annotation for one candidate.
@@ -1190,7 +1393,33 @@ impl Drop for TerminalGuard<'_> {
     }
 }
 
-/// Refuse to start when there is no terminal to drive.
+/// The size of the terminal the surface paints on.
+///
+/// The frame's geometry comes from the same query the driver uses, so the
+/// precondition and the frame cannot disagree about how big the terminal is.
+pub fn terminal_geometry() -> std::io::Result<(u16, u16)> {
+    crossterm::terminal::size()
+}
+
+/// Whether a terminal of this size can present the interactive selection.
+///
+/// The frame's layout degrades to fit a narrow terminal and a short one — the
+/// reclaimable column goes, then the column header, then the key-hint bar —
+/// so the frame never overflows what it is painted on. But a terminal that
+/// cannot hold the status line *and* a candidate row is not a place a
+/// selection can be made in, and starting a session there would hand the
+/// operator a list they cannot read.
+pub fn ensure_interactive_geometry(width: u16, height: u16) -> Result<(), String> {
+    if (width as usize) < MIN_SESSION_WIDTH || (height as usize) < MIN_SESSION_HEIGHT {
+        return Err(format!(
+            "a terminal of {width}x{height} is too small for the interactive list; \
+             it needs at least {MIN_SESSION_WIDTH}x{MIN_SESSION_HEIGHT}"
+        ));
+    }
+    Ok(())
+}
+
+/// Whether standard input and standard output are both a terminal.
 ///
 /// Checked before raw mode is requested, so a redirected invocation never puts
 /// the terminal into a mode whose events go nowhere — the operator would be
@@ -1880,16 +2109,40 @@ mod tests {
         );
     }
 
+    /// The frame fits the terminal it is painted on — in both axes.
+    ///
+    /// This test used to assert that the frame fitted a *clamped* geometry
+    /// (`max(w, MIN_WIDTH)`), which is how the defect survived: the frame was
+    /// forty cells wide in a thirty-cell terminal, every line wrapped, the
+    /// frame occupied twice the rows it claimed, and the erase that removes
+    /// it moved up by its *line count* rather than by the rows it occupied —
+    /// so the mangled frame was left standing above the operator's prompt.
+    ///
+    /// The height bound is on the rows the frame *occupies*, which are one
+    /// more than the lines it has: every line ends with a newline, and the
+    /// last one moves the cursor onto the row below. A frame whose lines
+    /// equal the terminal's height scrolls it — pushing its own title off the
+    /// top and the operator's scrollback up.
     #[test]
-    fn the_frame_is_bounded_and_never_overflows_the_width() {
-        for (w, h) in [(40u16, 9u16), (80, 24), (200, 60), (30, 4)] {
+    fn the_frame_fits_the_terminal_in_both_axes() {
+        for (w, h) in [
+            (6u16, 1u16),
+            (6, 5),
+            (12, 3),
+            (20, 6),
+            (24, 8),
+            (30, 4),
+            (39, 24),
+            (40, 9),
+            (80, 24),
+            (200, 60),
+        ] {
             let frame = Session::new(sample()).with_size(w, h).frame();
-            let width = (w as usize).max(MIN_WIDTH);
-            let height = (h as usize).max(CHROME_LINES + MIN_LIST_ROWS);
+            // The rows the frame occupies: one more than the lines it has.
+            let occupied = frame.len() + 1;
             assert!(
-                frame.len() <= height,
-                "the frame must never exceed the terminal at {w}x{h}: {} lines",
-                frame.len()
+                occupied <= (h as usize).max(1),
+                "the frame occupies {occupied} rows and must not exceed the terminal's {h} at {w}x{h}"
             );
             assert!(
                 frame.len() <= CHROME_LINES + PAGE_ROWS,
@@ -1898,11 +2151,79 @@ mod tests {
             );
             for line in &frame {
                 assert!(
-                    visible_width(line) <= width,
-                    "line overflows {width} at {w}x{h}: {line:?}"
+                    visible_width(line) <= w as usize,
+                    "line overflows {} at {w}x{h}: {line:?}",
+                    w as usize
                 );
             }
         }
+    }
+
+    /// The erase removes every row the frame occupied.
+    ///
+    /// The erase moves up by the frame's line count. That is the right
+    /// distance only when the frame occupies one row per line — which is the
+    /// whole point of the frame fitting the terminal.
+    #[test]
+    fn the_erase_removes_every_row_the_frame_occupied() {
+        for (w, h) in [(6u16, 5u16), (20, 6), (24, 8), (39, 24), (40, 9), (80, 24)] {
+            let frame = Session::new(sample())
+                .with_color(false)
+                .with_size(w, h)
+                .frame();
+            let mut tiny = TinyTerminal::new(h as usize + 2, w as usize);
+            tiny.feed(&frame_bytes(&frame));
+            tiny.feed(&rewind_bytes(frame.len()));
+            for row in 0..h as usize {
+                assert_eq!(
+                    tiny.row_text(row),
+                    "",
+                    "row {row} survived the erase at {w}x{h}: {frame:?}"
+                );
+            }
+        }
+    }
+
+    /// A terminal too small for the list is refused, not painted into.
+    #[test]
+    fn a_terminal_too_small_for_the_list_is_refused() {
+        assert!(ensure_interactive_geometry(80, 24).is_ok());
+        assert!(ensure_interactive_geometry(20, 6).is_ok());
+        let narrow = ensure_interactive_geometry(19, 24).unwrap_err();
+        assert!(narrow.contains("too small"), "{narrow}");
+        let short = ensure_interactive_geometry(80, 5).unwrap_err();
+        assert!(short.contains("too small"), "{short}");
+    }
+
+    /// A narrow terminal degrades the columns, not the frame.
+    ///
+    /// The reclaimable column goes first — the title line carries the total —
+    /// then the ownership column's wording, and the name keeps what is left.
+    /// The title and the status line survive: they carry the arithmetic and
+    /// the mode, which is what the operator reads before pressing a key.
+    #[test]
+    fn a_narrow_terminal_degrades_the_columns_and_keeps_the_title() {
+        let wide = Session::new(sample())
+            .with_color(false)
+            .with_size(80, 20)
+            .frame();
+        assert!(
+            wide.iter().any(|l| l.contains("RECLAIMABLE")),
+            "the wide frame has the reclaimable column: {wide:?}"
+        );
+
+        let narrow = Session::new(sample())
+            .with_color(false)
+            .with_size(24, 12)
+            .frame();
+        assert!(
+            !narrow.iter().any(|l| l.contains("RECLAIMABLE")),
+            "the narrow frame drops the reclaimable column: {narrow:?}"
+        );
+        let text = narrow.join("\n");
+        assert!(text.contains("reclaimable"), "the title survives: {text}");
+        assert!(text.contains("NOR"), "the mode survives: {text}");
+        assert!(text.contains("alpha"), "the name survives: {text}");
     }
 
     #[test]
@@ -1937,16 +2258,18 @@ mod tests {
     #[test]
     fn the_page_is_capped_by_the_terminal_height() {
         // A terminal too short for the full page shows fewer rows, and the
-        // frame still fits inside it.
+        // frame still fits inside it — with the rows it *occupies*, which are
+        // one more than the lines it has.
         let many: Vec<CleanupCandidate> = (0..300)
             .map(|i| private(&format!("/home/u/projects/p{i:02}")))
             .collect();
         for h in [6u16, 8, 12, 20] {
             let frame = Session::new(many.clone()).with_size(80, h).frame();
+            // The rows the frame occupies: one more than the lines it has.
+            let occupied = frame.len() + 1;
             assert!(
-                frame.len() <= h as usize,
-                "the frame must fit a {h}-row terminal: {} lines",
-                frame.len()
+                occupied <= h as usize,
+                "the frame occupies {occupied} rows and must fit a {h}-row terminal"
             );
         }
     }
@@ -2948,13 +3271,15 @@ mod tests {
             .map(|i| private(&format!("/home/u/projects/p{i:02}")))
             .collect();
         let mut s = Session::new(many).with_size(80, 20);
-        // The page holds 15 rows, so one PageDown lands on the 15th.
+        // The page holds 14 rows: the frame occupies one row more than the
+        // lines it has, so a twenty-row terminal can hold nineteen lines of
+        // frame, and five of them are chrome.
         press(&mut s, &[Key::PageDown]);
-        assert_eq!(s.cursor_candidate(), Some(14));
+        assert_eq!(s.cursor_candidate(), Some(13));
         press(&mut s, &[Key::PageDown]);
-        assert_eq!(s.cursor_candidate(), Some(29));
+        assert_eq!(s.cursor_candidate(), Some(27));
         press(&mut s, &[Key::PageUp]);
-        assert_eq!(s.cursor_candidate(), Some(14));
+        assert_eq!(s.cursor_candidate(), Some(13));
     }
 
     #[test]

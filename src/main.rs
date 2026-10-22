@@ -613,6 +613,21 @@ fn resolve_candidate_selection(
              use `cargo cleanme scan --all` to inspect the same units read-only"
         )));
     }
+    // The geometry is checked here too, for the same reason: the frame is
+    // painted into the terminal, and a terminal too small to hold the list
+    // cannot be made larger by resolving the scope first.
+    let too_small = cargo_cleanme::interactive::terminal_geometry()
+        .ok()
+        .and_then(|(width, height)| {
+            cargo_cleanme::interactive::ensure_interactive_geometry(width, height).err()
+        });
+    if let Some(reason) = too_small {
+        return Err(AppError::Config(format!(
+            "interactive selection requires a usable terminal ({reason}); \
+             drop -i to clean without choosing interactively, or \
+             use `cargo cleanme scan --all` to inspect the same units read-only"
+        )));
+    }
     // Progress bars would fight the repainting list, so the listing runs
     // silent. It is a read-only resolution: `cargo metadata` only.
     let silent = cargo_cleanme::progress::IndicatifRenderer::new(true, options.verbose);
