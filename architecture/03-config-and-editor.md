@@ -71,7 +71,7 @@ the merged list (`src/cleanup.rs:1613-1614`, `compile_policy_globs`,
 A rootless `cargo cleanme scan` is a Full reconciliation and **never** consults
 the configured root: `policy::resolve` returns from its `full` arm before
 `config.root` is read (`src/policy.rs:20-29`), so configuration cannot narrow
-the canonical reconciliation command (`src/main.rs:1373-1376`). `scan --known` and
+the canonical reconciliation command (`src/main.rs:1403-1406`). `scan --known` and
 the Routine cleanup scope both resolve with `full: false` and no CLI root, so
 *there* the configured root *is* the scope — an exclusive Explicit override
 rather than an extra root to add (`src/policy.rs:30`, `src/main.rs:939-950`). A
@@ -270,7 +270,7 @@ migration shim.
 file is missing, then `load`s it. It never overwrites: a malformed file stays
 malformed and stays on disk (`:406-407` — creation is attempted only when the
 file is absent; `malformed_config_is_not_replaced_automatically`,
-`:1238-1249`). Used by `scan` (`src/main.rs:1372`), `clean` (`src/main.rs:338`)
+`:1238-1249`). Used by `scan` (`src/main.rs:1402`), `clean` (`src/main.rs:338`)
 and `config show` (`src/main.rs:257`).
 
 `ensure_exists` (`:422-427`), documented at `:421` as "Ensure a config editor
@@ -552,7 +552,7 @@ What must remain true for this surface to stay safe:
    degraded policy file.
 4. **Creation never overwrites.** `load_or_create` acts only when the file is
    absent (`:406-407`) and `create_initial` publishes via a non-clobbering
-   `hard_link` (`:526`); a malformed config is never replaced (`:1238-1249`).
+   `hard_link` (`:526`); a malformed config is never replaced (`:1268-1279`).
 5. **`allowed_output_roots` is authorization, not ownership proof.** It must
    never be read as a way to make an unproven class actionable (`config.toml:33-36`;
    `src/cleanup.rs:1069-1074`; [overview invariant

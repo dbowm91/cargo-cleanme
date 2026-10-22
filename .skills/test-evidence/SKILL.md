@@ -127,31 +127,31 @@ set is valuable.
 
 ## Coverage shape, honestly
 
-**534** inline `#[test]` functions are **declared** in `src/`; **532** compile
+**555** inline `#[test]` functions are **declared** in `src/`; **553** compile
 and run on Linux. Two are excluded there: one `#[cfg(windows)]`
 (`src/config.rs:995`) and one `#[cfg(any(target_os = "macos", windows))]`
-(`src/discovery.rs:1698`). A further **40** carry `#[cfg(unix)]` and **4** are
+(`src/discovery.rs:1698`). A further **43** carry `#[cfg(unix)]` and **4** are
 Linux-only (`src/config.rs:1443`, `src/discovery.rs:1718`, `src/output.rs:280`,
-`src/workspace.rs:5553`), so the three hosted lanes compile **529 of 531 on
-Linux**, **487 of 531 on Windows**, and **526 of 531 on macOS** —
+`src/workspace.rs:5553`), so the three hosted lanes compile **553 of 555 on
+Linux**, **508 of 555 on Windows**, and **550 of 555 on macOS** —
 `#[cfg(unix)]` is true *on* macOS, which is the half people get wrong. A green
 local run is not a green run elsewhere — that is what the OS matrix in `ci.yml`
 is for, and why `check-fixture-portability.py` exists to catch a *new* ungated
 fixture before a lane disagrees about it.
 
 > **Count the gates, not the greps.** A naive "the `#[cfg(unix)]` immediately
-> above `#[test]`" grep finds 30, not 40, because Rust allows `#[test]` to come
-> *before* the gate (`src/cleanup.rs:7094` does exactly that). Ten of the 40
+> above `#[test]`" grep finds 33, not 43, because Rust allows `#[test]` to come
+> *before* the gate (`src/cleanup.rs:7094` does exactly that). Ten of the 43
 > have the gate after the `#[test]`. Derive these
 > numbers with a brace-tracking parser and check them against
 > `cargo test --lib -- --list` on the host platform; anything else silently
 > disagrees by a few.
 
-State which number you mean. "534 tests" (declared) and "532 passing" (on
+State which number you mean. "555 tests" (declared) and "553 passing" (on
 Linux) are both true, and a record that gives one while meaning the other is
 ambiguous in the direction that matters.
 
-Of the 534, **38.4% live in two modules** (`cleanup.rs` 126, `workspace.rs` 79).
+Of the 555, **37.8% live in two modules** (`cleanup.rs` 127, `workspace.rs` 83).
 That concentration is a direct consequence of the architecture: cleanup and
 workspace resolution are where the invariants are. It is not a balanced suite,
 and a flat count would hide that. A change to a small module can be genuinely

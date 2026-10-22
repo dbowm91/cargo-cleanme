@@ -34,7 +34,7 @@ resolution (`workspace.rs`), activity classification (`traverse.rs`), state
 reconciliation and atomic publish (`discovery_state.rs`), the cleanup root list
 (`main.rs:878-1064`), the per-root coverage *measurement* that feeds the Full
 gate (`discovery.rs:572-622`), and the user-facing scope *label*
-(`main.rs:1351-1357`).
+(`main.rs:1381-1387`).
 
 **Actual dependency set.** A grep for `crate::` in `policy.rs` yields exactly
 five modules:
@@ -128,7 +128,7 @@ precedence therefore matters only for a future programmatic caller.
 
 Note the asymmetry with cleanup, which is decided in `cli.rs` rather than here:
 for `clean`, `--full` wins over a ROOT argument, because the merged scope match
-tests `full` first (`cli.rs:511-529`) — although clap has already refused the
+tests `full` first (`cli.rs:528-546`) — although clap has already refused the
 pair outright.
 
 ### Fields populated on `EffectiveScanPolicy`
@@ -143,7 +143,7 @@ All three paths share one construction site (`policy.rs:53-57`). `recency` is
 scope-independent — it is `Duration::from_secs(config.recency_seconds)` on
 every path (`policy.rs:22`, `:54`). The type is
 `domain::EffectiveScanPolicy` (`domain.rs:27-32`); `recency` is captured at
-`main.rs:1430` and turned into the activity cutoff at `main.rs:1627`, not by
+`main.rs:1460` and turned into the activity cutoff at `main.rs:1665`, not by
 the walker.
 
 ### Errors returned
@@ -190,9 +190,9 @@ only three of them:
 
 Which spelling reaches which scope is decided in `cli.rs` and `main.rs`, not
 here: `scan ROOT` → Explicit, `scan --known` → Routine, `scan --all` → Global
-(`cli.rs:386-407`, `main.rs:1403-1408`); `cargo cleanme ROOT` → Explicit,
+(`cli.rs:386-407`, `main.rs:1433-1438`); `cargo cleanme ROOT` → Explicit,
 `cargo cleanme --full` → Global, and `clean --known` plus the bare front door →
-the maintenance scope (`cli.rs:471-489`, `cli.rs:511-529`), which resolves to
+the maintenance scope (`cli.rs:471-489`, `cli.rs:528-546`), which resolves to
 Routine **or** to Explicit when a `scan.root` is configured (§7.8).
 
 ### `Explicit(root)` — the user named a place
@@ -207,7 +207,7 @@ only branch of `resolve` that can fail. A symlink *to* a directory is rejected.
 ### `Routine(roots)` — the maintenance scope, bounded
 
 The Routine *scan* is `scan --known`
-(`main.rs:1403-1408` → `run_scan(None, false, …)`); the Routine *cleanup* is the
+(`main.rs:1433-1438` → `run_scan(None, false, …)`); the Routine *cleanup* is the
 bare front door and `clean --known`, which resolve their scope through
 `policy::resolve` at `main.rs:967-973`. Roots are existing seed
 directories under `$HOME` plus retained learned roots from the state file (§5).
@@ -226,8 +226,8 @@ example on Linux: roots is `["/"]` and the platform prunes are
 `/proc`, `/sys`, `/dev`, `/run` (`policy.rs:765-768`), so the walk is
 filesystem-root breadth minus pseudo-filesystems. `scan.ignore` / `scan.unignore`
 apply. This is also the only scope that runs
-`discovery_state::reconcile_full` afterwards (`main.rs:1543`, reached only when
-`full` is true — `main.rs:1405`).
+`discovery_state::reconcile_full` afterwards (`main.rs:1581`, reached only when
+`full` is true — `main.rs:1435`).
 
 ### Cost / benefit
 
@@ -242,7 +242,7 @@ than narrow it permanently, and lists "Full scans remain expensive by design" as
 an accepted cost (*Consequences*).
 
 Cross-reference: this module is pipeline step 2 of `run_scan`
-(`main.rs:1386`), described in [the overview's scan pipeline](overview.md) §6 as
+(`main.rs:1416`), described in [the overview's scan pipeline](overview.md) §6 as
 "Resolve scope — `policy::resolve` turns `{cli_root, full}` into concrete roots
 + a recency window".
 
@@ -706,11 +706,11 @@ subtree to be scanned twice.
    Setting `scan.root` is therefore not orthogonal to `--known`: it changes
    what `--known` cleans.
 9. **The JSON `scope` field is derived from the resolved policy, not from the
-   CLI flags** (`main.rs:1351-1357`): `Global` → `"full"`, `Explicit` and
+   CLI flags** (`main.rs:1381-1387`): `Global` → `"full"`, `Explicit` and
    `ExplicitRoots` → `"explicit"`, `Routine` → `"routine"`. The function's own
    doc comment records the earlier defect — deriving it from `root.is_some()`
    reported `"routine"` for a scan that was in fact pinned to one explicit root
-   (`main.rs:1343-1350`). The contract test is
+   (`main.rs:1373-1380`). The contract test is
    `json_scope_label_follows_the_resolved_scope_not_the_cli_flags`
    (`tests/cli_contract.rs:214`), and `known_scan_resolves_routine_without_a_configured_root_and_explicit_with_one`
    (`tests/cli_contract.rs:2464`) pins the same label for `scan --known` with
@@ -736,7 +736,7 @@ subtree to be scanned twice.
     boundary, not a refactor.
 13. **The operator's roots are added to the Routine scope, never substituted
     for it.** ADR 009's working directory joins the maintenance scope through
-    `admit_automatic` (`main.rs:1143-1203`), which classifies the Routine
+    `admit_automatic` (`main.rs:1143-1214`), which classifies the Routine
     candidates first, asks `working_directory_is_unreached` (`main.rs:1122-1129`)
     whether the Routine scope already reaches the operator's directory, and
     only then classifies the operator's candidates and *extends* the admitted
@@ -798,7 +798,7 @@ Integration: `tests/end_to_end.rs:124` is the only *integration* test that
 calls `policy::resolve` end to end, and it uses a **configured** root with
 `cli_root: None` (`end_to_end.rs:120-123`). `tests/cli_contract.rs:197`
 asserts the JSON `scope` field equals `"explicit"`, and per §7.9 that string
-comes from the resolved policy (`main.rs:1325-1331`), so the assertion does
+comes from the resolved policy (`main.rs:1355-1361`), so the assertion does
 exercise the resolved scope rather than the flags.
 
 **Honest gaps** — scope behaviour a reader should not assume is covered:

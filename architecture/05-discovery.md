@@ -26,11 +26,11 @@ Since M018 it also owns the **per-root coverage ledger**
 
 - **Workspace resolution.** `manifests` are raw paths; turning them into
   workspaces, members and physical groups is `workspace::resolve_workspaces`
-  (`main.rs:1514`, see [Workspace](07-workspace.md)). Discovery never parses a
+  (`main.rs:1552`, see [Workspace](07-workspace.md)). Discovery never parses a
   manifest, never calls `cargo metadata`, and never asks Cargo where an output
   directory is.
 - **Sizing or activity.** No `mtime`, no byte counts —
-  `traverse.rs`/`workspace::analyze_groups` (`main.rs:1663`).
+  `traverse.rs`/`workspace::analyze_groups` (`main.rs:1701`).
 - **The inactivity decision.** `Active`/`Inactive`/`Uncertain`
   (`domain.rs:40-44`) is decided after physical grouping, on group ownership
   evidence.
@@ -71,7 +71,7 @@ module for exactly one function.
 `discover_manifests` is a one-line delegation (`:329`); all logic is in
 `discover_manifests_with_attribution`, and `discover_manifests` exists so that
 callers who do not want the per-entry attribution map do not have to pass a
-`false`. Callers: `main.rs:1472-1475` (with `options.stats`),
+`false`. Callers: `main.rs:1510-1513` (with `options.stats`),
 `cleanup.rs:1543`, `cleanup.rs:2039` and `cleanup.rs:3196` (the destructive
 paths, without), `tests/end_to_end.rs:135`,
 `examples/traversal-qualification.rs:35`.
@@ -138,10 +138,10 @@ subtrees hold *real, buildable* `Cargo.toml` files that are not user projects:
 `registry/src/*/*/` (extracted third-party crate sources) and
 `git/checkouts/*/*/` (git-dependency checkouts). Admitting them would (a) inflate
 the candidate set by thousands of entries, each of which becomes a `cargo
-metadata` subprocess in `workspace::resolve_workspaces` (`main.rs:1464-1470`), and
+metadata` subprocess in `workspace::resolve_workspaces` (`main.rs:1502-1508`), and
 (b) let the tool attribute `target/` output built *by* a dependency to a "project"
 it does not own. Test: `manifest_discovery_prunes_cargo_home_registry`
-(`:2032-2057``).
+(`:2070-2095``).
 
 ### Relationship to `policy::global_discovery_policy`
 
@@ -315,9 +315,9 @@ any of them here.
 
 1. **The non-global path keeps only 3 of 8 counters.** `discover_manifests_root`
    maintains per-reason classification logic (`:1079-1092``), but the sequential
-   `ScanCounters` literal (`:441-446``) fills only `directories_visited`,
+   `ScanCounters` literal (`:461-466``) fills only `directories_visited`,
    `directories_pruned` and `manifests_found`. On `scan <dir>` the `--stats` line
-   (`domain.rs:361`) reports `rustup_prunes=0 target_vcs_prunes=0
+   (`domain.rs:381`) reports `rustup_prunes=0 target_vcs_prunes=0
    user_ignore_prunes=0` even when
    directories were pruned: the total is honest, the breakdown is not produced.
 2. **A whole root inside a pruned subtree under-reports — except for a user
@@ -369,7 +369,7 @@ short-circuits the descend predicate (`:1051``) *and* the counter condition repe
 | `pruned_dirs: u64` | the same accumulator as `counters.directories_pruned` (`:835-838`` → `:967``, `:993``) | a duplicate of the counter, kept for the report |
 | `diagnostics: Vec<ScanDiagnostic>` | three shapes, below | see the table below |
 | `counters: ScanCounters` | per-reason accumulation | 8 of the 34 fields are ever set here (`domain.rs:308-315`) |
-| `top_level_entries: BTreeMap<PathBuf,u64>` | per-root, per-first-component counts (`:777-792``, `:979-982``) | `--stats` only; empty otherwise (`:453``) |
+| `top_level_entries: BTreeMap<PathBuf,u64>` | per-root, per-first-component counts (`:777-792``, `:979-982``) | `--stats` only; empty otherwise (`:473``) |
 | `coverage_complete: bool` | `false` on any unusable root or any walk error (`:617`, `:617`, `:617`, `:617`) | the fail-closed coverage flag (C029) |
 | `root_coverage: Vec<RootCoverage>` | one entry per walk root, built **before** the walk (`:644-678`) and corrected by the walk's error events (`:915-927`) | M018: the per-root coverage verdict; see the subsection below |
 
@@ -402,9 +402,9 @@ roots, not by the number of errors: the test
 pins 1001 errors into one record.
 
 Unknown-location loss fails closed. `coverage_complete` is set `false` at the
-moment the error is observed (`:638`, `:912`), so `main.rs:1485-1489` refuses to
+moment the error is observed (`:638`, `:912`), so `main.rs:1523-1527` refuses to
 treat the walk as complete, `discovery_state.rs:220-222` refuses to publish a
-Full generation from it, and `main.rs:1674` with `main.rs:1845` makes
+Full generation from it, and `main.rs:1712` with `main.rs:1883` makes
 `scan --full` exit 1. An incomplete walk is positive inventory only.
 
 **Diagnostic-stream determinism.** Both walkers emit at most one summary per
@@ -471,7 +471,7 @@ a completed platform walk proves every learned root by definition
 ### The `main.rs` contract, and how it can break
 
 ```rust
-// main.rs:1494-1506 — the three-category uncertainty filter
+// main.rs:1532-1544 — the three-category uncertainty filter
 let uncertainty: Vec<PathBuf> = discovered
     .diagnostics
     .iter()
@@ -502,7 +502,7 @@ negative evidence.
 
 > **Two traps live here.** First, the `matches!` filter above covers **three of
 > the seven** `DiagnosticCategory` variants and has **no `_` arm**
-> (`src/main.rs:1497-1504`), so a newly-added category is *silently* excluded.
+> (`src/main.rs:1535-1542`), so a newly-added category is *silently* excluded.
 > Second, the filter itself is correct and should not be "fixed" by adding a
 > catch-all that admits pathless diagnostics — that would make the vector
 > non-empty with values that carry no location, which is worse than empty.
@@ -608,15 +608,15 @@ final component on POSIX and would otherwise hide the symlink (B1).
 A root that vanishes between `root_is_usable` and the walk becomes a `Warning`
 (`:1057-1061``, `:1121-1142``), **not** `Error` + `PlatformRoot`. Because C029 it
 still sets `coverage_complete = false` (`:1058``), so a Full scan neither
-publishes (`main.rs:1506` → `discovery_state.rs:220-222`) nor exits 0
-(`main.rs:1624`, `main.rs:1795-1801`). It never reaches the path-carrying
+publishes (`main.rs:1544` → `discovery_state.rs:220-222`) nor exits 0
+(`main.rs:1662`, `main.rs:1833-1839`). It never reaches the path-carrying
 `uncertainty` vector, because the diagnostic is pathless.
 
 **Root vs deep-tree permission errors: distinguished, and it matters.** An
 unstat-able root is `Error` + `PlatformRoot` — the only thing that makes
 `scan --full` exit 1 through the `PlatformRoot && Error` predicate
-(`main.rs:1436-1439` → `main.rs:1624` → `main.rs:1795-1801`) and `complete` false
-(`main.rs:1506` → `discovery_state.rs:220-222`). An unreadable subtree is
+(`main.rs:1466-1469` → `main.rs:1662` → `main.rs:1833-1839`) and `complete` false
+(`main.rs:1544` → `discovery_state.rs:220-222`). An unreadable subtree is
 `Warning` + `PermissionDenied`/`Vanished`/`Metadata`, pathless, named by root in
 the message. It reaches the scan through the other predicate,
 `coverage_complete`. A platform-level failure and a deep hole both make the scan
@@ -710,8 +710,8 @@ Windows run 33.
 1. **The global path's walk-error branch has no test at all** (`:765-770``,
    `:900-943``): its per-root drain, its `coverage_complete = false`, and its
    `sort_by_key` ordering. The sequential path's equivalent *is* tested
-   (`:1022`). This is the branch `main.rs:1485-1489` depends on. M018's
-   `verification_pass_attributes_coverage_to_the_root_that_failed` (`:1866`)
+   (`:1022`). This is the branch `main.rs:1523-1527` depends on. M018's
+   `verification_pass_attributes_coverage_to_the_root_that_failed` (`:1904`)
    covers the *per-root attribution* of the same failures through the
    verification pass, not the platform walk's own drain.
 2. **`root_is_usable`'s "unavailable" branch is untested** (`:502-515`, the
@@ -753,8 +753,8 @@ Windows run 33.
 ## 10. Review checklist
 
 1. **Does any new `DiagnosticCategory` mean "I could not see here"?** Then it must
-   be added to `main.rs:1494-1506` *and*, if it should block Full reconciliation,
-   to the `PlatformRoot && Error` check (`main.rs:1486-1489`) and to the
+   be added to `main.rs:1532-1544` *and*, if it should block Full reconciliation,
+   to the `PlatformRoot && Error` check (`main.rs:1524-1527`) and to the
    `coverage_complete` flag (`:454`, `:454`). Missing the first silently
    converts a hole in the scan into certainty about learned roots. Before adding
    anything at all, check `cleanup.rs:2661-2674`: under ADR 007 a discovery
@@ -773,8 +773,8 @@ Windows run 33.
    guard is a different shape entirely — `path != root_path` (`:1080``) — and it
    covers the ignore reason as well.
 4. **Is a new prune reachable in both paths?** The sequential `ScanCounters`
-   literal (`:441-446``) fills only 3 fields, the platform prune lists are
-   global-only (`:342-351``, `:365-371``), and the hardcoded `system_prune` is
+   literal (`:461-466``) fills only 3 fields, the platform prune lists are
+   global-only (`:342-351``, `:385-391``), and the hardcoded `system_prune` is
    sequential-only (`:1045``). A reason added to one path only looks implemented
    in `--stats` on `scan <dir>` and reports zeros.
 5. **Is every prune still silent?** Only the two `root_is_usable` outcomes and the

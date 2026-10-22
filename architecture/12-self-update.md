@@ -31,7 +31,7 @@ in this document.
 | Question | Answer | Evidence |
 |---|---|---|
 | Can a Cargo-managed binary ever be replaced? | **No.** A mutating run refuses any provenance but `VerifiableSelfManaged` **before** the registry is contacted, and C018 made local ambiguity fail *closed*: an unreadable, malformed, or oddly-shaped Cargo record is `UnprovableOwnership`, never self-managed. Uncertainty is never read as absence | `src/update.rs:1077-1079`, `src/update.rs:513-529`, `src/update.rs:536-540` |
-| Is the downloaded artifact's integrity verified before replace? | Yes — SHA-256 against the release `.sha256` sidecar, enforced *before* the identity check and before the commit, plus an executed identity check. The trust root is HTTPS to GitHub, **not** a signature | `src/update.rs:1238`, `src/update.rs:1263-1267`, `src/update.rs:1281-1292` |
+| Is the downloaded artifact's integrity verified before replace? | Yes — SHA-256 against the release `.sha256` sidecar, enforced *before* the identity check and before the commit, plus an executed identity check. The trust root is HTTPS to GitHub, **not** a signature | `src/update.rs:1314`, `src/update.rs:1339-1343`, `src/update.rs:1357-1368` |
 | Is version comparison semver-aware or lexicographic? | Numeric (tuple of `u64`). **Not** lexicographic | `src/update.rs:804-817` |
 
 ---
@@ -112,7 +112,7 @@ established as 'not Cargo's'?" — and returns `true` for `Uninterpretable` alon
 `UpdatePlan` (`src/update.rs:247-254`) is the resolved input for one run. Fields:
 `from_version`, `to_version`, `target`, `asset`, `tag`, `provenance`. It is
 `Clone`; `execute` returns a clone of the pre-commit plan
-(`src/update.rs:1339`).
+(`src/update.rs:1415`).
 
 **The JSON surface is not in this module.** The document `update --format json`
 prints is built by `output::update_json` (`src/output.rs:903-931`) and written
@@ -164,7 +164,7 @@ assembles `"{PRODUCT} is {code}; run this instead:\n  {command}"`.
 - `run(&dyn UpdateEnvironment, bool) -> Result<UpdatePlan, UpdateError>`
   (`src/update.rs:1043`) — the whole transaction behind an injected environment,
   and the only reason the module is testable.
-- `update(bool) -> Result<UpdatePlan, UpdateError>` (`src/update.rs:1359`) — CLI
+- `update(bool) -> Result<UpdatePlan, UpdateError>` (`src/update.rs:1435`) — CLI
   wrapper; constructs `HttpEnvironment` and delegates. Called from
   `src/main.rs:102`, dispatched from `src/main.rs:84`.
 - `classify_provenance(&Path) -> Provenance` (`src/update.rs:407`) and
@@ -173,7 +173,7 @@ assembles `"{PRODUCT} is {code}; run this instead:\n  {command}"`.
 
 No `now`-style clock helper exists. The only time reads are the staging-directory
 nonce (`src/update.rs:969-974`) and the test counter
-(`src/update.rs:1631-1643`); neither is policy, so neither is on the seam. Time
+(`src/update.rs:1707-1719`); neither is policy, so neither is on the seam. Time
 influences no decision.
 
 ### `classify_provenance` vs `classify_provenance_in`
@@ -195,8 +195,8 @@ seam for the refusal path specifically (repeated on the trait method,
 (`src/update.rs:1049`), supplied from the same seam via
 `environment.cargo_home()`. `classify_provenance` is called from **production**
 in the two JSON no-op branches (`src/main.rs:116`, `src/main.rs:157`) to fill
-the `provenance` field, and from tests (`src/update.rs:2474`,
-`src/update.rs:2489`).
+the `provenance` field, and from tests (`src/update.rs:2550`,
+`src/update.rs:2565`).
 
 > **Finding — the JSON no-op path bypasses the seam.** `src/main.rs` re-derives
 > provenance by calling `classify_provenance`, which reads `CARGO_HOME`/`HOME`
@@ -367,8 +367,8 @@ The whole document is the authority; `published_stable_version`
 text: not UTF-8 (`src/update.rs:777-780`), not valid JSON
 (`src/update.rs:781-784`), no such string (`src/update.rs:785-791`). Narrowness
 is pinned by `version_authority_reads_exactly_one_field`
-(`src/update.rs:1783`); an outage is a distinct tested outcome, not a guess —
-`a_registry_outage_is_reported_not_guessed` (`src/update.rs:1832`).
+(`src/update.rs:1859`); an outage is a distinct tested outcome, not a guess —
+`a_registry_outage_is_reported_not_guessed` (`src/update.rs:1908`).
 
 ### `is_release_version` (`src/update.rs:820-829`)
 
@@ -397,7 +397,7 @@ Some(parse(left)?.cmp(&parse(right)?))          // src/update.rs:805-816
 Each side parses into a `[u64; 3]`, compared as a tuple. This is
 **semver-aware for the plain `X.Y.Z` subset, not lexicographic** — the comparison
 never sees a string, so the classic `0.1.10 < 0.1.9` bug is impossible.
-`versions_order_numerically_not_lexically` (`src/update.rs:2931`) asserts
+`versions_order_numerically_not_lexically` (`src/update.rs:3048`) asserts
 `0.1.10 > 0.1.9`, `0.10.0 > 0.9.9`, equality, ordering, and `None` for
 `("1.2","1.2.3")`, `("1.2.3-rc.1","1.2.3")`, `("x","1.2.3")`.
 
@@ -426,10 +426,10 @@ it would have offered every 0.1.1 install a 'downgrade' to 0.1.0"
 recorded at `plans/closure/distribution-release-update/c011-status.md:44`. It
 prevents a locally bumped or development build — exactly what a developer has
 after `cargo install --path .` — being replaced by the older published release.
-`a_newer_local_build_is_never_downgraded` (`src/update.rs:2955`) is the guard, and
+`a_newer_local_build_is_never_downgraded` (`src/update.rs:3072`) is the guard, and
 its comment records the defect was found by the live release smoke, "not by a
 fixture." `an_older_published_version_is_not_offered_to_a_matching_build`
-(`src/update.rs:2971`) pins `Equal → AlreadyCurrent`.
+(`src/update.rs:3088`) pins `Equal → AlreadyCurrent`.
 
 ---
 
@@ -443,7 +443,7 @@ fixture." `an_older_published_version_is_not_offered_to_a_matching_build`
 | `cargo_home() -> Option<PathBuf>` | The Cargo home to consult | Exists purely so the refusal path is reachable from a test without mutating process globals (`src/update.rs:840-842`) |
 | `current_version() -> String` | This build's version | `env!("CARGO_PKG_VERSION")` (`src/update.rs:957-959`) — compile-time and infallible, hence untestable-by-design in the fixture |
 | `staging_dir() -> Result<PathBuf, UpdateError>` | Creating a private staging directory | `std::env::temp_dir()` + `cargo-cleanme-update-<pid>-<nanos>`, created with `fs::create_dir` (`src/update.rs:961-982`). `create_dir`, not `create_dir_all`: the latter *succeeds* on an existing path, which is not the invariant the name is supposed to have. |
-| `fetch(url, destination) -> Result<u64, UpdateError>` | Streaming a URL to disk | The return value is load-bearing — the empty-asset check (`src/update.rs:1178-1182`) |
+| `fetch(url, destination) -> Result<u64, UpdateError>` | Streaming a URL to disk | The return value is load-bearing — the empty-asset check (`src/update.rs:1254-1258`) |
 | `fetch_metadata(url, limit) -> Result<Vec<u8>, UpdateError>` | Fetching a bounded document into memory | `limit` threaded into `FetchLimits.max_metadata_bytes` (`src/update.rs:1011-1012`) |
 | `cleanup(&Path) -> Result<(), String>` | Removing **only this run's** directory | `remove_dir_all` (`src/update.rs:1029-1032`). It returns the failure instead of swallowing it: up to `MAX_ARTIFACT_BYTES` (128 MiB) can remain in the temp directory, and a command that says "updated" while leaving them has not described what it did. |
 
@@ -475,7 +475,7 @@ eggup_eggfetch::EggfetchConfig::strict()
 
 ### The testability point, honestly
 
-`FixtureEnvironment` (`src/update.rs:1375-1625`) lets all 47 tests run with no
+`FixtureEnvironment` (`src/update.rs:1451-1701`) lets all 47 tests run with no
 network, no `curl` discovery, no process globals. That is necessary — and it is
 not evidence the feature works. A fixture that always answers successfully cannot
 prove the real transport reaches the authority, which is exactly the C011 lesson:
@@ -487,12 +487,12 @@ suite never talks to the registry" (`src/update.rs:41-42`).
 
 The suite's best defence is partial.
 `the_production_transport_identifies_itself_descriptively`
-(`src/update.rs:2982`) does construct a real `HttpEnvironment`
-(`src/update.rs:2996-2997`) and reads the agent off the real transport's config
-(`src/update.rs:2998`), asserting it equals `USER_AGENT`, names the product, is
+(`src/update.rs:3099`) does construct a real `HttpEnvironment`
+(`src/update.rs:3113-3114`) and reads the agent off the real transport's config
+(`src/update.rs:3115`), asserting it equals `USER_AGENT`, names the product, is
 non-empty, does not start with `curl/`, and contains both `/` and a space. It
 proves the seam is *configured*; it cannot prove the registry *accepts* it, and
-the test comment concedes exactly that (`src/update.rs:2992-2995`): "It does not
+the test comment concedes exactly that (`src/update.rs:3109-3112`): "It does not
 model the registry's policy, which would be a fixture that lies about the thing
 most likely to change."
 
@@ -524,7 +524,7 @@ alone makes mutation impossible, there is nothing the registry can tell us that
 changes the answer." A mutating run on forbidden provenance therefore makes
 **zero** registry requests — asserted by
 `a_mutating_run_on_forbidden_provenance_makes_zero_registry_requests`
-(`src/update.rs:2287`) and by the integration test
+(`src/update.rs:2363`) and by the integration test
 `json_update_refusal_emits_no_document_and_exits_non_zero`
 (`tests/cli_contract.rs:3260`).
 
@@ -535,12 +535,12 @@ description of why a real run would stop"
 (`src/update.rs:1074-1076`). The dry run therefore *reports* the real
 provenance in the plan it returns — asserted by
 `a_dry_run_still_reports_a_candidate_and_names_the_real_provenance`
-(`src/update.rs:2319`).
+(`src/update.rs:2395`).
 
-### `execute` (`src/update.rs:1143-1356`) — the transaction
+### `execute` (`src/update.rs:1219-1432`) — the transaction
 
 1. Re-extract `live_digest` from the plan, refusing anything not
-   `VerifiableSelfManaged` (`src/update.rs:1148-1155`) — **defence in depth,
+   `VerifiableSelfManaged` (`src/update.rs:1224-1231`) — **defence in depth,
    not the gate**. The gate that decides is step 5 of `run`
    (`src/update.rs:1077-1079`); by here `check_only` has already returned and the
    provenance is known to be `VerifiableSelfManaged`, so the `else` arm cannot
@@ -548,43 +548,43 @@ provenance in the plan it returns — asserted by
    step could rebuild, and a commit that trusts it must be able to refuse on
    its own. It does **not** save the user's bandwidth: by this point the
    metadata fetch has already happened.
-2. Create the private staging directory (`src/update.rs:1157`).
-3. All of the following runs inside a closure (`src/update.rs:1158-1303`) so
+2. Create the private staging directory (`src/update.rs:1233`).
+3. All of the following runs inside a closure (`src/update.rs:1234-1379`) so
    `cleanup` is unconditional.
-4. Fetch `<asset>.sha256` into staging (`src/update.rs:1159-1163`); parse with
-   `eggup_core::parse_sha256_sidecar` (`src/update.rs:1169-1174`). *Failure:*
+4. Fetch `<asset>.sha256` into staging (`src/update.rs:1235-1239`); parse with
+   `eggup_core::parse_sha256_sidecar` (`src/update.rs:1245-1250`). *Failure:*
    `ReleaseEvidence`.
-5. Fetch the asset (`src/update.rs:1176-1177`). Zero bytes → `ReleaseEvidence`
-   (`src/update.rs:1178-1182`).
-6. **Sidecar cross-check** (`src/update.rs:1184-1206`): if the sidecar names a
+5. Fetch the asset (`src/update.rs:1252-1253`). Zero bytes → `ReleaseEvidence`
+   (`src/update.rs:1254-1258`).
+6. **Sidecar cross-check** (`src/update.rs:1260-1282`): if the sidecar names a
    file other than `plan.asset`, refuse — "so a sidecar copied from another
    release cannot silently authorize these bytes." A bare hash with no filename
    skips the binding entirely, so it is rejected just like a wrong name.
-7. Build the `InstallPlan` (`src/update.rs:1208-1255`): install root is the
-   executable's parent (`src/update.rs:1208-1213`); the member is declared
-   `.with_permissions(PermissionsIntent::Executable)` (`src/update.rs:1237`) and
+7. Build the `InstallPlan` (`src/update.rs:1284-1331`): install root is the
+   executable's parent (`src/update.rs:1284-1289`); the member is declared
+   `.with_permissions(PermissionsIntent::Executable)` (`src/update.rs:1313`) and
    `.with_integrity(IntegrityRequirement::Sha256(*manifest.digest()))`
-   (`src/update.rs:1238`).
-8. `prepare()` (`src/update.rs:1257-1262`) — Eggup stages and copies.
-   `verify_integrity()` (`src/update.rs:1263-1267`) — **integrity checked here,
+   (`src/update.rs:1314`).
+8. `prepare()` (`src/update.rs:1333-1338`) — Eggup stages and copies.
+   `verify_integrity()` (`src/update.rs:1339-1343`) — **integrity checked here,
    before identity and before commit.**
 9. `ExactIdentityValidator::new(.., expected_identity(&to_version)).args(["--version"])`
-   (`src/update.rs:1281-1283`) — runs the candidate.
+   (`src/update.rs:1357-1359`) — runs the candidate.
 10. Commit with `CommitOwnership::new(&LiveDigestVerifier{..}, AbsentPolicy::DenyCreate)`
-    (`src/update.rs:1294-1302`).
-11. `let cleanup = environment.cleanup(&staging)` (`src/update.rs:1308`) —
+    (`src/update.rs:1370-1378`).
+11. `let cleanup = environment.cleanup(&staging)` (`src/update.rs:1384`) —
     **unconditional**, both paths, and its result is captured rather than
     `?`-propagated so a leftover temp directory cannot mask the transaction's own
     outcome. A cleanup failure is reported as `Transaction` reading "the update
     transaction <what it actually did>, but its staging directory … could not be
-    removed" (`src/update.rs:1315-1330`) — the user is told plainly
+    removed" (`src/update.rs:1391-1406`) — the user is told plainly
     which half failed, because reporting plain success is the lie this replaced.
     The wording follows the receipt's own disposition: a *rolled-back*
     transaction restored the previous executable and did not replace it, and
     saying otherwise would be a false claim about the user's binary. On the *failure* path a cleanup error is written to stderr and
-    the transaction error is still returned (`src/update.rs:1314-1322`).
-12. Receipt (`src/update.rs:1338-1347`): `Committed` → success
-    (`src/update.rs:1339`); `RolledBack` → `Receipt {"rolled_back"}`;
+    the transaction error is still returned (`src/update.rs:1390-1398`).
+12. Receipt (`src/update.rs:1414-1423`): `Committed` → success
+    (`src/update.rs:1415`); `RolledBack` → `Receipt {"rolled_back"}`;
     `RecoveryRequired` → `Receipt {"recovery_required"}`. The receipt carries
     the retained backup's path and the rollback failure when it has them: the
     backup is the only copy of the user's previous working binary, and the path
@@ -595,13 +595,13 @@ provenance in the plan it returns — asserted by
 The expected value is the SHA-256 of the live executable **as observed before the
 transaction began** — `classify_provenance`'s `digest`
 (`src/update.rs:532-533`), captured at step 3 of `run` and threaded into the map
-at `src/update.rs:1294-1296`. `verify` (`src/update.rs:225-240`) maps eight
+at `src/update.rs:1370-1372`. `verify` (`src/update.rs:225-240`) maps eight
 outcomes:
 
 | Condition | `Ownership` | Consequence |
 |---|---|---|
 | Member not in the expected map (`src/update.rs:226-228`) | `Unknown` | refuse |
-| `symlink_metadata` → `NotFound` (`src/update.rs:230`) | `Absent` | refused, via `AbsentPolicy::DenyCreate` (`src/update.rs:1299`) |
+| `symlink_metadata` → `NotFound` (`src/update.rs:230`) | `Absent` | refused, via `AbsentPolicy::DenyCreate` (`src/update.rs:1375`) |
 | Other I/O error (`src/update.rs:231`) | `Unknown` | refuse |
 | **Is a symlink** (`src/update.rs:232`) | `Foreign` | refuse |
 | Not a regular file (`src/update.rs:233`) | `Foreign` | refuse |
@@ -617,7 +617,7 @@ file it can prove it owns and may never create one.
 
 ### The identity check (C016) — fix present
 
-`src/update.rs:1281-1283`:
+`src/update.rs:1357-1359`:
 
 ```rust
 let validator =
@@ -625,21 +625,32 @@ let validator =
         .args(["--version"]);
 ```
 
-**Present**, and the comment at `src/update.rs:1269-1280` documents the defect in
+**Present**, and the comment at `src/update.rs:1345-1356` documents the defect in
 full: with no arguments the binary runs its default routine scan, printing a
 scan report to stdout and filesystem diagnostics to stderr — so an argv-less check
 "compares stdout against a version string that can never match, and it scans the
 whole machine on the way to failing." The same comment names why the suite
 missed it: "the live commit path had never succeeded, and the fixture could not
 see it because its candidate stub ignored argv and printed the identity for any
-invocation" (`src/update.rs:1277-1280`). The release consequence is on the
+invocation" (`src/update.rs:1353-1356`). The release consequence is on the
 record: v0.1.1 and v0.1.2 shipped an updater that could not complete a commit
 (`plans/registry.md:219-220`).
 
 The expected string is `expected_identity(v) = format!("cargo-cleanme {v}\n")`
 (`src/update.rs:109-111`) — trailing newline included, matching `--version`
 output exactly. This is the only check that the thing about to replace this
-process is really us (`src/update.rs:1269-1271`).
+process is really us (`src/update.rs:1345-1347`).
+
+**A busy machine is not a bad candidate.** `ETXTBSY` — "text file busy" — is
+what the kernel returns when the file it is about to execute is open for
+writing at that moment, and the dynamic loader every dynamically linked program
+shares is such a file. On a busy machine, or in a test binary that executes
+candidates from several threads at once, a sound candidate can therefore fail
+its identity check for a reason that says nothing about the candidate.
+`RetryingCandidateValidator` (`src/update.rs:1209-1217`) repeats the check a
+bounded number of times before the failure is reported
+(`retry_while_busy`, `src/update.rs:1181-1197`); every other failure is
+reported at once, because repeating it would only delay the report.
 
 ### Atomicity of the replace
 
@@ -669,7 +680,7 @@ and the previous binary intact inside `.eggup-backup-*`. Recoverable by hand, bu
 not atomic in the strict sense, and nothing in `src/update.rs` narrows or
 documents the window.
 
-Residue: the module's `cleanup` (`src/update.rs:1308`) removes only the temp
+Residue: the module's `cleanup` (`src/update.rs:1384`) removes only the temp
 staging directory it created. `.eggup-stage-*` and `.eggup-backup-*` are
 Eggup's, removed on the success path
 (`eggup-core-0.1.2/src/transaction.rs:521`,
@@ -689,7 +700,7 @@ in the dependency, renaming the backup back over the destination
 (`eggup-core-0.1.2/src/transaction.rs:583` on the restore path) and reporting
 `RolledBack` (`eggup-core-0.1.2/src/transaction.rs:925`) or, if that also fails,
 `RecoveryRequired` (`eggup-core-0.1.2/src/transaction.rs:962`).
-`src/update.rs:1269-1281` only *translates* those dispositions into
+`src/update.rs:1345-1357` only *translates* those dispositions into
 `UpdateError::Receipt`. What this module does own is rollback *policy*: refuse
 rather than force.
 
@@ -706,7 +717,7 @@ it, and it returns before `execute` (`src/update.rs:1140`). Guaranteed: no
 staging directory, nothing downloaded beyond the metadata document, no file
 written, no candidate executed, no lock taken. The plan is fully resolved, so a
 dry run still proves version comparison and target resolution.
-`a_dry_run_downloads_nothing` (`src/update.rs:2867`) asserts no release-asset URL
+`a_dry_run_downloads_nothing` (`src/update.rs:2984`) asserts no release-asset URL
 was requested; `scripts/post-release-smoke.sh:213-221` rehearses it live.
 
 Consequence worth stating: a dry run on a **Cargo-managed** installation
@@ -730,7 +741,7 @@ Declared at `Cargo.toml:92-94`.
 | Crate | Used here for | Reference |
 |---|---|---|
 | `eggup-acquisition` | The transport *seam*: `AcquisitionRequest`, `AcquisitionTransport`, `CancelFlag`, `FetchLimits`, `FetchOutcome`, `AcquisitionError` — all in `HttpEnvironment` | `src/update.rs:57-60`, `src/update.rs:936-943`, `src/update.rs:984-1027` |
-| `eggup-core` | All mechanics: `hash_file`, `parse_sha256_sidecar`, `Sha256Manifest`, `IntegrityRequirement`, `PermissionsIntent`, `InstallPlan::prepare`, `verify_integrity`, `ExactIdentityValidator`, `OwnershipVerifier`, `CommitOwnership`, `AbsentPolicy`, `TransactionReceipt` | `src/update.rs:61-66`, used at `src/update.rs:234`, `src/update.rs:532`, `src/update.rs:1170`, `src/update.rs:1238` |
+| `eggup-core` | All mechanics: `hash_file`, `parse_sha256_sidecar`, `Sha256Manifest`, `IntegrityRequirement`, `PermissionsIntent`, `InstallPlan::prepare`, `verify_integrity`, `ExactIdentityValidator`, `OwnershipVerifier`, `CommitOwnership`, `AbsentPolicy`, `TransactionReceipt` | `src/update.rs:61-66`, used at `src/update.rs:234`, `src/update.rs:532`, `src/update.rs:1246`, `src/update.rs:1314` |
 | `eggup-eggfetch` | The production transport and its `User-Agent` seam | `src/update.rs:917`, `src/update.rs:925-928` |
 
 ### Why `eggup-eggfetch` and not the smaller `eggup-curl`
@@ -816,7 +827,7 @@ Each item is a verified finding, not an assumption.
 **Once classified as such, no — provably not**, via three gates: `run` refuses
 anything but `VerifiableSelfManaged` before the registry is contacted
 (`src/update.rs:1077-1079`); `execute` re-checks
-(`src/update.rs:1148-1155`); and the commit needs `Ownership::Owned`, which a
+(`src/update.rs:1224-1231`); and the commit needs `Ownership::Owned`, which a
 Cargo-managed file still satisfies. So the protection lives entirely in
 classification, which is correctly stated rather than redundantly re-derived.
 
@@ -861,7 +872,7 @@ than closed.
   supported layout, and that is now checkable rather than asserted"
   (`src/update.rs:555-560`; the constant is `src/update.rs:561`). The closure
   evidence is `the_cargo_root_search_cannot_miss_a_supported_layout`
-  (`src/update.rs:2240`), which builds each supported shape and proves the walk
+  (`src/update.rs:2316`), which builds each supported shape and proves the walk
   reaches it. The honest statement of what the bound costs is that it *could*
   miss a root five levels above; the evidence says Cargo does not write one
   (`src/update.rs:551-553`).
@@ -881,11 +892,11 @@ install.
 
 **Yes, three times over.** (1) SHA-256 of the acquired artifact against the
 digest in the release's own `<asset>.sha256` — `IntegrityRequirement::Sha256`
-(`src/update.rs:1238`), enforced by `verify_integrity()`
-(`src/update.rs:1263-1267`). (2) The sidecar must name `plan.asset`
-(`src/update.rs:1184-1206`). (3) The candidate must identify itself as
+(`src/update.rs:1314`), enforced by `verify_integrity()`
+(`src/update.rs:1339-1343`). (2) The sidecar must name `plan.asset`
+(`src/update.rs:1260-1282`). (3) The candidate must identify itself as
 `cargo-cleanme <to_version>\n` (`ExactIdentityValidator`,
-`src/update.rs:1281-1292`).
+`src/update.rs:1357-1368`).
 
 **The trust root is HTTPS to GitHub, not a signature.** The expected digest comes
 from a file served by the same host as the artifact it describes
@@ -894,8 +905,8 @@ independent digest channel. Integrity against corruption, truncation, and a
 mismatched sidecar is solid; integrity against a *compromised release host* is
 delegated entirely to TLS — a bound to state rather than imply. Pinned by
 `a_checksum_mismatch_leaves_the_live_binary_untouched`
-(`src/update.rs:2529`) and `a_verified_candidate_replaces_the_live_binary`
-(`src/update.rs:2517`).
+(`src/update.rs:2646`) and `a_verified_candidate_replaces_the_live_binary`
+(`src/update.rs:2634`).
 
 ### A read-only or unwritable install location
 
@@ -903,13 +914,13 @@ delegated entirely to TLS — a bound to state rather than imply. Pinned by
 the *parent* of the install root
 (`eggup-core-0.1.2/src/stage.rs:196-215`, mode `0700`) and copies bytes into it
 (`eggup-core-0.1.2/src/stage.rs:87`), so for `/usr/bin` an unprivileged process
-fails at `src/update.rs:1257-1262` with `Transaction`. Even if staging
+fails at `src/update.rs:1333-1338` with `Transaction`. Even if staging
 succeeded, the mutation lock is `.eggup-mutation.lock` **in the install root**
 (`eggup-core-0.1.2/src/lock.rs:54`) and `require_ready_parent` re-checks the
 destination's parent
 (`eggup-core-0.1.2/src/transaction.rs:788-806`). A read-only filesystem, full
 disk, or permission-denied target therefore all surface as `Transaction` at the
-staging step, with `cleanup` running unconditionally at `src/update.rs:1308`
+staging step, with `cleanup` running unconditionally at `src/update.rs:1384`
 and the live binary untouched.
 
 ### Symlinks
@@ -925,7 +936,7 @@ a symlinked running executable outright, before the registry is consulted
 (`src/update.rs:448-455`). One residual: `current_exe` uses
 `std::env::current_exe()` (`src/update.rs:947-951`), which on Linux already
 returns a resolved path, so the hazard is handled before it arrives.
-`ownership_is_never_inferred_from_the_file_name` (`src/update.rs:2481`) covers
+`ownership_is_never_inferred_from_the_file_name` (`src/update.rs:2557`) covers
 the classifier's half. **No path here follows a symlink to replace a file the
 user did not intend.**
 
@@ -943,12 +954,12 @@ and I read only the lock path construction, not its implementation.
 ### Temp-file residue on failure
 
 The module's own temp directory is removed unconditionally at
-`src/update.rs:1308` on both paths, because the transaction body is a closure
+`src/update.rs:1384` on both paths, because the transaction body is a closure
 whose result is bound before `cleanup`; a failure to remove it is now reported
 rather than swallowed. Covered by
-`staging_is_cleaned_up_on_success_and_on_failure` (`src/update.rs:2647`) and
+`staging_is_cleaned_up_on_success_and_on_failure` (`src/update.rs:2764`) and
 `a_staging_cleanup_failure_is_reported_not_swallowed`
-(`src/update.rs:2678`), and live, `scripts/post-release-smoke.sh:209`. Eggup's
+(`src/update.rs:2795`), and live, `scripts/post-release-smoke.sh:209`. Eggup's
 `.eggup-stage-*` / `.eggup-backup-*` directories are removed on success and
 after a verified rollback, but a hard crash mid-commit leaves them in the
 install root's parent. Nothing here, and nothing in the smoke script, asserts
@@ -957,11 +968,11 @@ their absence.
 ### Rollback if the new binary is non-functional
 
 **None.** The candidate is executed *before* the commit
-(`src/update.rs:1281-1292`) to prove identity, but that proves only that it
+(`src/update.rs:1357-1368`) to prove identity, but that proves only that it
 prints the right string — not that a scan, config load, or filesystem walk
 still works. Once `fs::rename(staged, destination)` succeeds
 (`eggup-core-0.1.2/src/transaction.rs:432`), the only outcomes are `Committed`
-(`src/update.rs:1339`) or a receipt-derived error. There is no post-commit
+(`src/update.rs:1415`) or a receipt-derived error. There is no post-commit
 validation, no smoke run of the new binary in place, and no
 `commit_with_post_commit` use — the dependency offers that API
 (`eggup-core-0.1.2/src/candidate.rs:465`) with a
@@ -996,7 +1007,7 @@ is slightly looser than the code.
   the binary for that triple — that is `scripts/check-release-contract.py` and
   the Eggpack contract's job.
   `the_published_target_table_matches_the_eggpack_contract`
-  (`src/update.rs:2884`) pins the table, but only if that script runs in CI,
+  (`src/update.rs:3001`) pins the table, but only if that script runs in CI,
   which I did not verify.
 
 ### `HOME` / `CARGO_HOME` unset
@@ -1023,7 +1034,7 @@ Both items the previous revision of this document recorded as drift have been
   *mutating* path only: `--dry-run` deliberately still fetches, because
   reporting a candidate is the point of a dry run. See
   `a_dry_run_still_reports_a_candidate_and_names_the_real_provenance`
-  (`src/update.rs:2319`).
+  (`src/update.rs:2395`).
 - `staging_dir` "never overwrites an existing path, it fails instead" — **now
   true as written.** The implementation is `create_private_dir`
   (`src/update.rs:975`), which creates the directory *fresh* —
@@ -1044,7 +1055,7 @@ target is recomputed independently at `src/update.rs:1051`.
 
 | Metric | Value | Method |
 |---|---|---|
-| Test module starts | line 1290 (`#[cfg(test)]` at `src/update.rs:1364`, `mod tests` at `src/update.rs:1365`) | direct read |
+| Test module starts | line 1290 (`#[cfg(test)]` at `src/update.rs:1440`, `mod tests` at `src/update.rs:1441`) | direct read |
 | Production lines | 1289 (1–1289) | 1290 − 1 |
 | Lines of test code | 1596 (1291–2886) | 2886 − 1291 + 1 |
 | `#[test]` functions | **47** | `grep -cE '^\s*#\[test\]' src/update.rs` |
@@ -1087,14 +1098,14 @@ true when written and is now false; the three cases above are the correction.
 
 20 + 3 + 9 + 5 + 5 + 5 = **47 — every `#[test]` in the file is named above.**
 
-### `FixtureEnvironment` (`src/update.rs:1375-1625`)
+### `FixtureEnvironment` (`src/update.rs:1451-1701`)
 
 **What it fakes:** executable path, Cargo home, current version, the staging
-directory (real on disk, via `unique()` at `src/update.rs:1631`), `fetch` (writes
+directory (real on disk, via `unique()` at `src/update.rs:1707`), `fetch` (writes
 canned bytes to the destination, returns the byte count), and `fetch_metadata`
-(canned bytes). Three response modes — `respond` (`src/update.rs:1436`),
-`fail_transport` (`src/update.rs:1446`), `absent` (`src/update.rs:1531`) — plus
-`requested` (`src/update.rs:1415`), asserted at `src/update.rs:2867`.
+(canned bytes). Three response modes — `respond` (`src/update.rs:1512`),
+`fail_transport` (`src/update.rs:1522`), `absent` (`src/update.rs:1607`) — plus
+`requested` (`src/update.rs:1491`), asserted at `src/update.rs:2984`.
 
 **What it cannot fake:**
 
@@ -1102,12 +1113,12 @@ canned bytes to the destination, returns the byte count), and `fetch_metadata`
    crates.io 403 policy. This is the C011 gap exactly
    (`plans/registry.md:272-284`).
 2. **`env!("CARGO_PKG_VERSION")`.** `current_version` returns whatever the test
-   declares (`src/update.rs:1552-1553`), so a test can claim to be any version
+   declares (`src/update.rs:1628-1629`), so a test can claim to be any version
    without the binary being that version — the no-downgrade tests depend on
-   this (`src/update.rs:2955`).
+   this (`src/update.rs:3072`).
 3. **argv.** The candidate stub ignored argv and printed the identity for *any*
    invocation, which is precisely why C016 survived. The source now records
-   this at `src/update.rs:1276-1280`.
+   this at `src/update.rs:1352-1356`.
 4. **A real filesystem for provenance.** `run` calls `classify_provenance_in`
    with the fixture's own `exe` and `cargo_home` (`src/update.rs:1049`), so
    classification *is* exercised, but against invented paths. Real layouts —
@@ -1126,7 +1137,7 @@ The registry's own evidence: this module shipped two defects no test caught
    (`src/update.rs:926`) fails only if the constant changes too. Setting the
    agent to something the registry *rejects* — a bare token with no `/` or
    space, or a UA blocked by policy — passes everything, because no test models
-   registry policy (`src/update.rs:2992-2995`). This is C011 re-entering
+   registry policy (`src/update.rs:3109-3112`). This is C011 re-entering
    through a different door.
 2. **A provenance hole in the one *open* fail-open class in §8** — the
    `CARGO_ROOT_SEARCH_DEPTH` bound. No test builds an owning root beyond the
@@ -1223,14 +1234,14 @@ Concrete checks, each anchored to a line observed. Priority reflects blast radiu
    this list and are the easiest to lose in a refactor.
 2. **Integrity is checked before replace, against what.** Confirm
    `IntegrityRequirement::Sha256(*manifest.digest())` is attached to the member
-   (`src/update.rs:1238`) and that `verify_integrity()`
-   (`src/update.rs:1263-1267`) runs *before* `validate`
-   (`src/update.rs:1284-1292`) and *before* `commit` (`src/update.rs:1299`).
+   (`src/update.rs:1314`) and that `verify_integrity()`
+   (`src/update.rs:1339-1343`) runs *before* `validate`
+   (`src/update.rs:1361-1368`) and *before* `commit` (`src/update.rs:1375`).
    Then confirm the trust root: the expected digest comes from a sidecar served
    by the same host as the artifact (`src/update.rs:158-160`,
-   `src/update.rs:1159-1163`) — no signature, no pinned key. Any change letting a
+   `src/update.rs:1235-1239`) — no signature, no pinned key. Any change letting a
    digest arrive from anywhere else is a critical regression.
-3. **The sidecar cross-check.** `src/update.rs:1184-1206` must refuse when
+3. **The sidecar cross-check.** `src/update.rs:1260-1282` must refuse when
    `manifest.filename() != plan.asset` — and must also refuse a sidecar that
    names no file at all, which skips the binding entirely. Removing it is how a
    sidecar from another release would authorize arbitrary bytes.
@@ -1248,13 +1259,13 @@ Concrete checks, each anchored to a line observed. Priority reflects blast radiu
    (`eggup-core-0.1.2/src/transaction.rs:583` and
    `eggup-core-0.1.2/src/transaction.rs:432`). Then record honestly
    that this is two renames with an absent-destination window which this module
-   neither narrows nor documents. Check `cleanup` (`src/update.rs:1308`) is
+   neither narrows nor documents. Check `cleanup` (`src/update.rs:1384`) is
    still on the unconditional path via the closure
-   (`src/update.rs:1158-1303`).
-7. **Identity invocation.** `src/update.rs:1283` must keep
+   (`src/update.rs:1234-1379`).
+7. **Identity invocation.** `src/update.rs:1359` must keep
    `.args(["--version"])`. This is the C016 fix; dropping it makes the identity
    check unmatchable *and* triggers a full filesystem scan inside the commit
-   path (`src/update.rs:1269-1280`).
+   path (`src/update.rs:1345-1356`).
 8. **The `User-Agent` seam.** `src/update.rs:925-927` must keep
    `.user_agent(USER_AGENT)`, and `USER_AGENT` (`src/update.rs:908-912`) must
    stay a `concat!` naming the product. This is the C011 defect, and the fixture
@@ -1264,9 +1275,9 @@ Concrete checks, each anchored to a line observed. Priority reflects blast radiu
    fallback reintroduced (`Cargo.toml:90-91`). C010 (`plans/registry.md:119`)
    is upstream-only; a local curl path would be a regression, not a partial fix.
 10. **Fixture-vs-reality.** Classify every new test before writing it: does it
-    exercise `HttpEnvironment`, or only the fixture? `src/update.rs:2982` is the
-    model — real transport construction (`src/update.rs:2996-2997`) plus an
-    explicit statement of what it cannot prove (`src/update.rs:2992-2995`).
+    exercise `HttpEnvironment`, or only the fixture? `src/update.rs:3099` is the
+    model — real transport construction (`src/update.rs:3113-3114`) plus an
+    explicit statement of what it cannot prove (`src/update.rs:3109-3112`).
     Confirm `scripts/post-release-smoke.sh` still rehearses both directions: a
     real update (`scripts/post-release-smoke.sh:184-198`) and a Cargo-managed
     refusal with the exact remediation string

@@ -54,8 +54,8 @@ them; its `log` module builds strings by `write!` and also never serialises.
 (The one exception is the update document, §4, which is hand-assembled as a
 `serde_json::Map`.) Encoding and the trailing newline are owned by `main.rs`:
 `serde_json::to_string` plus `println!` for the two envelope surfaces
-(`main.rs:1659-1667` scan, `main.rs:1186-1195` cleanup), and for log mode a single
-`println!` of the returned line (`main.rs:1668-1672`, `main.rs:1196-1200`).
+(`main.rs:1697-1705` scan, `main.rs:1197-1206` cleanup), and for log mode a single
+`println!` of the returned line (`main.rs:1706-1710`, `main.rs:1207-1211`).
 Keeping encoding out of the DTO module means a caller can serialise the same
 envelope to JSON, or anything else, without touching the contract.
 
@@ -184,13 +184,13 @@ Two constructors:
   every path stays absolute. That is deliberate: the verbose surface is the
   debugging surface, and an absolute path is unambiguous.
 
-The binary builds the value in exactly one place, `main.rs:1235-1244`: `--verbose`
+The binary builds the value in exactly one place, `main.rs:1265-1274`: `--verbose`
 selects `HumanOptions::verbose()`, everything else selects
 `HumanOptions::quiet(roots)`. The roots are a property of the **scope**, not of the
-verbosity — `main.rs:1250-1256` for a cleanup (a Full cleanup is the platform, so it
-has no single root and its list is empty) and `main.rs:1259-1274` for a scan (the
+verbosity — `main.rs:1280-1286` for a cleanup (a Full cleanup is the platform, so it
+has no single root and its list is empty) and `main.rs:1289-1304` for a scan (the
 Full scope is the platform root, so its list is empty too). A scope root is spelled
-absolutely before it is used as a base (`main.rs:1281-1283`), because the report's
+absolutely before it is used as a base (`main.rs:1311-1313`), because the report's
 own paths are absolute and a relative base would never match them.
 
 ### The relative-path rule — `report.rs:65-85`
@@ -285,7 +285,7 @@ for the *other* consumer in a way that is easy to miss:
 `tests/end_to_end.rs:193` calls `report::render(&mut report, &HumanOptions::default())`
 and then serialises **the same report** at `tests/end_to_end.rs:202`, so the human
 renderer's sort determines the JSON group order in that test. In the binary the
-two paths are mutually exclusive (`main.rs:1675`, `main.rs:1659-1667`), so shipped
+two paths are mutually exclusive (`main.rs:1713`, `main.rs:1697-1705`), so shipped
 output is unaffected. A `&[EligibleOutputGroup]` parameter plus a local sorted index
 would fix it at zero cost.
 
@@ -314,20 +314,20 @@ before `bytes` was measured. That is the "deduplicated total" checked at
 `report.rs:281-291`.
 
 **Diagnostics are not rendered at all** — `render` uses only `report.groups`.
-Diagnostics reach the user from `main.rs:1680-1768` on **stderr**. The shape of
+Diagnostics reach the user from `main.rs:1718-1806` on **stderr**. The shape of
 that fan-out has changed twice and is no longer "a count, the first 10, and
 `… N more`": Cargo-resolution failures are now grouped by cause (at most eight
-distinct causes — `main.rs:1733` — each with up to three example paths —
-`main.rs:1698` — then a `… N additional Cargo failure cause(s)` line at
-`main.rs:1745`), and *non-Cargo* diagnostics are capped separately at ten
-(`main.rs:1749`) with a `… N more non-Cargo diagnostic(s)` line
-(`main.rs:1757`). So JSON carries the complete diagnostic list while the
+distinct causes — `main.rs:1771` — each with up to three example paths —
+`main.rs:1736` — then a `… N additional Cargo failure cause(s)` line at
+`main.rs:1783`), and *non-Cargo* diagnostics are capped separately at ten
+(`main.rs:1787`) with a `… N more non-Cargo diagnostic(s)` line
+(`main.rs:1795`). So JSON carries the complete diagnostic list while the
 human stream truncates on two independent axes. The human `stdout` document is
 not the whole human-visible story. That fan-out block is gated on
-`options.format != OutputFormat::Log` (`main.rs:1680`), because log mode carries
+`options.format != OutputFormat::Log` (`main.rs:1718`), because log mode carries
 `diagnostics=N` in its one line instead; see §7. M020 added a second gate: the
 *count* line stays on the default surface, but the diagnostic **detail** is now
-verbose-only (`main.rs:1688`).
+verbose-only (`main.rs:1726`).
 
 **Ownership labels** come from `OutputOwnershipClass::label` (`domain.rs:263-270`):
 `private`, `external-unproven`, `shared`, `uncertain`; pinned at `report.rs:273-275`.
@@ -393,7 +393,7 @@ The tally also carries the mode note: Simulate adds
 `(N failed)` and `(N skipped)` follow (`cleanup.rs:808-813`). The word choice is
 the safety property: a simulation's bytes are *not* reclaimed bytes, and the
 execute tally is pinned never to borrow the simulation's wording
-(`cleanup.rs:6699`).
+(`cleanup.rs:6732`).
 
 **With a selector** (`--profile` / `--package`) in Simulate or CargoPreview mode,
 the byte figure is the **output union**, not the selector's share — the selector's
@@ -498,9 +498,9 @@ changed what those literals are: the `scope` value now names the scope that was
 
 | Call site | Value |
 |---|---|
-| `main.rs:1662-1665` (scan, via `scope_label`) | `"full"`, `"explicit"`, or `"routine"` |
-| `main.rs:1189-1194` (cleanup, empty-roots and blocked paths alike) | whatever `resolve_cleanup_roots` resolved — `"routine"`, `"explicit"`, or `"full"` |
-| `main.rs:1196-1200` (cleanup, log mode) | the same `resolved.scope_label` |
+| `main.rs:1700-1703` (scan, via `scope_label`) | `"full"`, `"explicit"`, or `"routine"` |
+| `main.rs:1200-1205` (cleanup, empty-roots and blocked paths alike) | whatever `resolve_cleanup_roots` resolved — `"routine"`, `"explicit"`, or `"full"` |
+| `main.rs:1207-1211` (cleanup, log mode) | the same `resolved.scope_label` |
 
 The set is **uniform between the two commands** — `full`, `explicit`,
 `routine` — which it was not before M012A, when cleanup emitted a `known` label
@@ -726,7 +726,7 @@ The source type is **`EligibleOutputGroup` (`domain.rs:291-300`)**, not
 `PhysicalOutputGroup`. `PhysicalOutputGroup` (`domain.rs:274-288`) is the
 *measurement-stage* type and never reaches either output module — it is confined
 to `workspace.rs` (1526, 1826, 1862-1863, 1945) plus one `cleanup.rs` test
-fixture (`cleanup.rs:9188`). `main.rs:1626-1644` and `tests/end_to_end.rs:174-192`
+fixture (`cleanup.rs:9221`). `main.rs:1664-1682` and `tests/end_to_end.rs:174-192`
 both perform the narrowing conversion, dropping `covering_roots`, `owners`, and
 `uncertain`, and lowering `owners: Vec<WorkspaceId>` to
 `workspace_roots: Vec<PathBuf>` by taking `.0` of each id. `report.rs` and
@@ -913,9 +913,9 @@ output-union measurement is known in both modes (matching the human
 | Dropped | Where | Why correct |
 |---|---|---|
 | `ScanReport.visited_entries` | `domain.rs:91` | Internal walk accounting; no consumer decision depends on it |
-| `ScanReport.counters` | `domain.rs:92` | Prune tallies and nanosecond timings are `--stats` stderr material (`main.rs:1772-1789`); the schema keeps them off the contract |
+| `ScanReport.counters` | `domain.rs:92` | Prune tallies and nanosecond timings are `--stats` stderr material (`main.rs:1810-1827`); the schema keeps them off the contract |
 | `EligibleOutputGroup.artifact_entries` | `domain.rs:286` | Count of walked entries; diagnostic, not a reclaim-decision input |
-| `PhysicalOutputGroup.covering_roots` / `owners` / `uncertain` | `domain.rs:276`, `236`, `242` | Never reach these modules — dropped upstream at `main.rs:1626-1644` |
+| `PhysicalOutputGroup.covering_roots` / `owners` / `uncertain` | `domain.rs:276`, `236`, `242` | Never reach these modules — dropped upstream at `main.rs:1664-1682` |
 | `CleanReport.counters` | `cleanup.rs:522` | Same as `ScanReport.counters`; cleanup `--stats` is stderr (`main.rs:506-519`) |
 | `CleanReport.failed` | `cleanup.rs:520` | Recomputed from results (`output.rs:200-209`); the domain field remains an exit-code input |
 | `CleanResult.workspace_roots` | `cleanup.rs:291` | Redundant with `workspace_root` + `output_roots` |
@@ -997,7 +997,7 @@ Three semantics are worth stating because they are *narrower* than the JSON:
 1. **`status` is computed, not read** (`output.rs:337`, `371-377`). For a scan
 it is `failed` when the caller says the Full traversal did not complete, and `ok`
 otherwise — the caller computes `full_incomplete` from the typed diagnostic set
-(`main.rs:1624`) and passes it in (`main.rs:1671`), so the line cannot disagree
+(`main.rs:1662`) and passes it in (`main.rs:1709`), so the line cannot disagree
 with the exit code it accompanies. For a cleanup, `blocked` outranks `failed`,
 which outranks `ok`, and cleanup consults both `results[].outcome` and the domain
 `failed` counter. There is no domain field for this; it is derived here, which
@@ -1013,7 +1013,7 @@ decrease.
 3. **`diagnostics` is a count** and nothing else (`output.rs:156-159`), summing
 `report.diagnostics` with the unresolved-ownership participants. It is the
 only record of diagnostics on this surface, which is exactly why `main.rs`
-suppresses the human fan-out in log mode (`main.rs:1680`) rather than merely
+suppresses the human fan-out in log mode (`main.rs:1718`) rather than merely
 adding a line.
 
 ### How `main.rs` selects it
@@ -1022,8 +1022,8 @@ Three dispatch points, all `format == OutputFormat::Log` arms:
 
 | Surface | Emission site |
 |---|---|
-| scan | `main.rs:1668-1672` |
-| cleanup, including the empty-roots and blocked short circuits | `main.rs:1196-1200`, reached from `main.rs:417`, `main.rs:442-448`, and `main.rs:505` |
+| scan | `main.rs:1706-1710` |
+| cleanup, including the empty-roots and blocked short circuits | `main.rs:1207-1211`, reached from `main.rs:417`, `main.rs:442-448`, and `main.rs:505` |
 | fatal error before any report exists | `main.rs:22-30` |
 
 The fatal path is the reason `main()` parses argv itself rather than leaving it
@@ -1036,9 +1036,9 @@ The cost is that clap's own usage errors still bypass this path entirely and exi
 through clap — unchanged from before.
 
 Progress is disabled in log mode for free: both renderers gate on
-`format == OutputFormat::Human` (`main.rs:474-475`, `main.rs:1408-1409`).
+`format == OutputFormat::Human` (`main.rs:474-475`, `main.rs:1438-1439`).
 `--stats` is the explicit exception — it still writes its detailed line to stderr
-in log mode (`main.rs:506-519`, `main.rs:1772-1789`) because the operator asked
+in log mode (`main.rs:506-519`, `main.rs:1810-1827`) because the operator asked
 for it.
 
 ### Honest limits
@@ -1105,7 +1105,7 @@ record, and §8.3 lists what is still open.
 | `units[].outcome` value set | yes | now enumerated in the document |
 | `summary` (6 keys) | yes | `failed` source now described |
 | Policy disposition stable values (6 listed) | yes | |
-| "one UTF-8 JSON document + newline" | yes | `println!` `main.rs:1660`, `1034`; asserted `tests/cli_contract.rs:199,731` |
+| "one UTF-8 JSON document + newline" | yes | `println!` `main.rs:1698`, `1034`; asserted `tests/cli_contract.rs:199,731` |
 | Path encoding rule (line 53) | **no** | the document describes the debug form; the code is lossy → **G1** |
 | "`--stats` is stderr-only" | yes | `main.rs:506`, `1585`; asserted `tests/cli_contract.rs:193` |
 | "Progress is disabled for JSON output" | yes | `main.rs:474-475,1246-1247` gate on `Human` — which also disables it for log |
@@ -1198,7 +1198,7 @@ failure, and 2 for fatal invocation/configuration errors."* Cleanup matches:
 `main.rs:495-499` returns 1 when `report.failed > 0 || report.scope_blocked.is_some()`;
 `main.rs:34` returns 2 for any `AppError`. Two uncovered cases:
 
-- The **scan** path also returns 1, for `full_incomplete` (`main.rs:1797-1802`) —
+- The **scan** path also returns 1, for `full_incomplete` (`main.rs:1835-1840`) —
 a condition unrelated to cleanup scope or unit failure. A `scan` on a machine
 with a `PlatformRoot` error exits 1 with a structurally normal JSON document.
 (An unreconcilable *state* file no longer does this: that exit-code
@@ -1228,7 +1228,7 @@ not mention this case.
 document nor `EnvelopeV1` carries `status`, `success`, or `exit_code`. Failure is
 signalled only by `scope_blocked`/`scope_reason` and `summary.failed` *content*,
 plus the process exit status. Worse, every `Err` return from `run()` — including
-`serde_json::to_string` failures at `main.rs:1662-1666` and `main.rs:1189-1194` —
+`serde_json::to_string` failures at `main.rs:1700-1704` and `main.rs:1200-1205` —
 prints to **stderr** and exits 2 with **stdout empty** (`main.rs:19-35`). A
 consumer reading stdout cannot distinguish "never got that far" from "found
 nothing". Log mode narrows this: `main.rs:22-30` writes one `status=error` line
@@ -1511,7 +1511,7 @@ explicitly. `report.rs:249` pins `u64::MAX → "16.00 EiB"`, representable only 
 integer form. In the machine projection bytes stay `u64` and are never formatted;
 log mode sums them with `saturating_add` (`output.rs:332-335`, `378-380`) and
 prints the raw integer. (The `f64` conversions that do exist —
-`domain.rs:386-390` `timings_line`, `main.rs:517` and `main.rs:1778`
+`domain.rs:406-410` `timings_line`, `main.rs:517` and `main.rs:1816`
 `as_secs_f64` — are all `--stats` stderr output, and `ScanCounters` never reaches
 JSON.)
 
@@ -1546,7 +1546,7 @@ never prints `detail` either.
 One number, two representations; a textual diff will not match them. Log mode
 prints a third representation, the raw `u64` (`output.rs:343`).
 3. **Diagnostic completeness** — JSON has all of them, human stderr groups and
-caps them (`main.rs:1680-1768`); log mode shows neither and carries
+caps them (`main.rs:1718-1806`); log mode shows neither and carries
 `diagnostics=N` only (`output.rs:344`, `401-404`).
 4. **Scope-block identity** — human prints the block's prose message
 (`cleanup.rs:667`), JSON carries that prose in `scope_reason`, and log
@@ -1564,9 +1564,9 @@ membership, same `group_count`, and the human string containing the machine's
 
 **Can `scope` be wrong?** The scan and cleanup branches both pass a value derived
 from the resolved scope rather than the flags: `scope_label(&policy.scope)` for
-scan (`main.rs:1664`, `1486`), whose function maps the resolved `ScanScope` to
-`"full"` / `"explicit"` / `"routine"` (`main.rs:1325-1331`), and
-`resolved.scope_label` for cleanup (`main.rs:1191`, `1038`), where the label comes
+scan (`main.rs:1702`, `1486`), whose function maps the resolved `ScanScope` to
+`"full"` / `"explicit"` / `"routine"` (`main.rs:1355-1361`), and
+`resolved.scope_label` for cleanup (`main.rs:1202`, `1038`), where the label comes
 out of `resolve_cleanup_roots` (`main.rs:880`, `804`, `825`) or out of
 `admit_automatic` (`main.rs:1165`). The empty-roots path cannot mislabel
 either, because an explicit root always yields a non-empty `roots` vector. Two
@@ -1574,7 +1574,7 @@ residual observations. `clean --full` that falls back to zero learned roots
 reports `scope: "full"`, which is accurate. And `scope` is a bare
 caller-supplied `String` with no validation — nothing in `output.rs` would reject
 a wrong value, so the guarantee is entirely the caller's. `scan ROOT` reports
-`"explicit"` (`main.rs:1380`, `1167`). The four scan scope selectors — `root`,
+`"explicit"` (`main.rs:1410`, `1167`). The four scan scope selectors — `root`,
 `known`, `all`, `full` — are mutually exclusive and exactly one is required, by
 a single clap `ArgGroup` (`cli.rs:139`); `scan ROOT --full` is therefore rejected
 rather than resolved, and `--full` is a hidden alias (`cli.rs:155-156`) for the
@@ -1768,8 +1768,8 @@ twentieth value, `skipped_outside_selection` (§8.3, G2): it is pinned by
 `tests/cli_contract.rs:1494` while the document still omits it. The
 twenty-first, `skipped_incomplete_coverage` (M018), is pinned only by
 `cleanup.rs`'s own unit tests — `the_coverage_exclusion_removes_candidates_and_names_the_cause`
-(`cleanup.rs:4984`) and `a_unit_under_an_unproven_root_is_reported_as_incomplete_coverage`
-(`cleanup.rs:4858`) — and by **no** integration test, so the JSON projection of
+(`cleanup.rs:5017`) and `a_unit_under_an_unproven_root_is_reported_as_incomplete_coverage`
+(`cleanup.rs:4891`) — and by **no** integration test, so the JSON projection of
 that code is unverified end to end.
 
 **This is the fragile case**: a versioned schema contract checked only by tests
@@ -1823,7 +1823,7 @@ document and `detail` is `""` rather than absent. The document now says so
 (`plans/output-schema-v1.md:3` and `plans/output-schema-v1.md:46`); any consumer
 written from the older wording will mis-branch.
 9. **No success field, and exit 2 emits no JSON, `main.rs:19-35` and
-`main.rs:1662-1666`** — a consumer reading stdout cannot distinguish "never ran"
+`main.rs:1700-1704`** — a consumer reading stdout cannot distinguish "never ran"
 from "ran and found nothing". Log mode narrows it to a greppable stderr line
 (`main.rs:22-30`) but still writes nothing to stdout. Consider whether a status
 field belongs in a future schema version rather than v1.

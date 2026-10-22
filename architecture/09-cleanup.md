@@ -14,26 +14,26 @@ still holds, and only then acts.
 
 `cleanup.rs` owns the entire destructive path: mode selection semantics
 (`CleanMode` `:36`, mapped by `cli::clean_mode` at `cli.rs:352`), the
-authorization gate (`covering_is_authorized_roots` `:1155`), the unit-wide
-destructive gate (`unit_block_reason_roots` `:1284`), the final ownership proof
+authorization gate (`covering_is_authorized_roots` `:1193`), the unit-wide
+destructive gate (`unit_block_reason_roots` `:1410`), the final ownership proof
 (`final_cleanup_proof_roots` `:3583`), the frozen Cargo invocation
 (`frozen_env` `:4043`, `clean_args` `:4097`), the spawn itself (`:4097-4120`),
 post-clean accounting (`measure_union` `:4233`), and the human report
-(`CleanReport::render` `:682`).
+(`CleanReport::render` `:720`).
 
 It explicitly does **not** own:
 
 - **Activity measurement.** `traverse::workspace_member_activity`
-  `traverse.rs:415`, `traverse::measure_single_target` `traverse.rs:111`. This
+  `traverse.rs:454`, `traverse::measure_single_target` `traverse.rs:135`. This
   module consumes timestamps; it never turns them into eligibility. See
   [Traverse](08-traverse.md).
 - **Grouping and classification.** Every physical-group decision is delegated to
   `workspace.rs`: `resolve_workspaces_with_coverage` `workspace.rs:738`,
-  `build_groups` `workspace.rs:1429`, `analyze_groups_detailed`
-  `workspace.rs:1669`, `build_cleanup_units` `workspace.rs:2141`,
+  `build_groups` `workspace.rs:1466`, `analyze_groups_detailed`
+  `workspace.rs:1710`, `build_cleanup_units` `workspace.rs:2220`,
   `refresh_workspace_from_root_manifest` `workspace.rs:59`,
-  `map_workspace_groups` `workspace.rs:2047`, `outermost` `workspace.rs:1352`,
-  `workspace_member_roots` `workspace.rs:1615`.
+  `map_workspace_groups` `workspace.rs:2126`, `outermost` `workspace.rs:1389`,
+  `workspace_member_roots` `workspace.rs:1656`.
 - **Manifest discovery** — `discovery::discover_manifests`, called at `:1600`,
   `:1935`, and `:3149`.
 - **JSON rendering** — `output::cleanup` `output.rs:161` maps `CleanReport` to
@@ -52,20 +52,20 @@ Line `:1015` re-exports
 `workspace::{ProcessOutput, SystemCargoRunner}` so tests can inject I/O through
 this module's own seam.
 
-**The "one-way edge" is test-only.** `workspace.rs:4460` and `workspace.rs:4624`
+**The "one-way edge" is test-only.** `workspace.rs:4539` and `workspace.rs:4818`
 call `crate::cleanup::covering_is_authorized`, but both lines sit inside
 `workspace.rs`'s own `#[cfg(test)] mod tests`, which begins at
-`workspace.rs:2232`. There is no production edge from `workspace.rs` into
+`workspace.rs:2311`. There is no production edge from `workspace.rs` into
 `cleanup.rs`.
 
 **Test-only back edges.** `cleanup.rs` reaches back into `cli`, `domain`,
 `output`, `policy`, and `progress` — but only from the `#[cfg(test)]` module
-that begins at `cleanup.rs:4184`: `crate::cli::clean_mode` (`:4647`, `:4652`,
-`:4396`, `:4396`), `crate::domain::OutputRootKind` (`:4396`),
-`crate::output::cleanup` (`:6003`, `:6166`),
-`crate::policy::{AutomaticOmission, recheck_admission_premise}` (`:7271`,
-`:7294`, `:7319`), `crate::progress::{ScanPhase, TestObserver}` (`:8680`,
-`:8715`, `:9248`), `crate::progress::NoopObserver` (`:4260`). None of these are
+that begins at `cleanup.rs:4217`: `crate::cli::clean_mode` (`:4680`, `:4685`,
+`:4429`, `:4429`), `crate::domain::OutputRootKind` (`:4429`),
+`crate::output::cleanup` (`:6036`, `:6199`),
+`crate::policy::{AutomaticOmission, recheck_admission_premise}` (`:7304`,
+`:7327`, `:7352`), `crate::progress::{ScanPhase, TestObserver}` (`:8713`,
+`:8748`, `:9281`), `crate::progress::NoopObserver` (`:4293`). None of these are
 production dependencies of the module, and none should be read as an import
 edge.
 
@@ -122,7 +122,7 @@ Every `CleanupReasonCode` variant and wire name (`:348-404`):
 (`:365-388`) asserts 16 of 20 wire names — omitting `SkippedOwnershipUnproven`,
 `SkippedOutsideSelection`, `SelectorUnsupported`, `SelectorInvalid`. None of
 the four is covered anywhere else in the module's own tests.
-`policy_dispositions_have_stable_json_names` (`:4667-4680`) covers 5 of 6
+`policy_dispositions_have_stable_json_names` (`:4700-4713`) covers 5 of 6
 variants, omitting `SelectorEstimateUnavailable` (emitted as
 `"selector_estimate_unavailable"` at `output.rs:257`).
 
@@ -141,9 +141,9 @@ variants, omitting `SelectorEstimateUnavailable` (emitted as
 | `ExecutionProof` | `struct` `:2968` | Frozen pre-spawn state of one unit; 12 fields, §6. |
 | `ProofUniverse` | private `:3285` | One hoisted re-resolution of the complete universe. |
 | `final_cleanup_proof` | `pub fn (unit, universe, clean_root, allowed_output_roots, runner, recency_seconds, counters) -> Result<ExecutionProof, ProofFailure>` `:3547` | Single-root wrapper, `refresh_candidate=false`. **No production caller** — §7. |
-| `execute_pre_spawn_decision` | `pub fn (unit, universe, clean_root, allowed_output_roots, runner, recency_seconds) -> Result<ExecutionProof, ProofFailure>` `:4023` | Same gate set with throwaway counters. **No caller at all** — §7. |
+| `execute_pre_spawn_decision` | `pub fn (unit, universe, clean_root, allowed_output_roots, runner, recency_seconds) -> Result<ExecutionProof, ProofFailure>` `:4056` | Same gate set with throwaway counters. **No caller at all** — §7. |
 | `is_authorized` | `pub fn (group: &workspace::RawGroup, clean_root: &Path, allowed_roots: &[PathBuf]) -> Result<bool, String>` `:1117` | Wrapper. **Test-only callers** (`:1117`, `:1117`, `:1117`). |
-| `covering_is_authorized` | `pub fn (ownership, covering: &[PathBuf], clean_root: &Path, allowed_roots: &[PathBuf]) -> Result<bool, String>` `:786` | Single-root wrapper. **Test-only** (`workspace.rs:4460`, `workspace.rs:4624`). |
+| `covering_is_authorized` | `pub fn (ownership, covering: &[PathBuf], clean_root: &Path, allowed_roots: &[PathBuf]) -> Result<bool, String>` `:786` | Single-root wrapper. **Test-only** (`workspace.rs:4539`, `workspace.rs:4818`). |
 | `covering_is_authorized_roots` | `pub fn (ownership, covering, clean_roots: &[PathBuf], allowed_roots) -> Result<bool, String>` `:1155` | The real gate. Production callers `:1155` and `:1155`. |
 | `ownership_skip_detail` | `pub fn (ownership: OutputOwnershipClass) -> String` `:1248` | The "why wasn't this cleaned" sentence. |
 | `unit_block_reason` | `pub fn (unit: &workspace::CleanupUnit, clean_root: &Path, allowed_output_roots: &[PathBuf]) -> Result<(), String>` `:1272` | Single-root wrapper. **Test-only** (`:1272`, `:1272`, `:1272`). |
@@ -172,7 +172,7 @@ in-crate caller of `clean`, `clean_with`, or `clean_with_roots` other than
 tests — `main.rs` goes through `run_engine_guarded` and supplies
 `SystemCleanupRunner` itself. The unguarded `clean_with_roots_policy_selector`
 delegates with `premise = None` and `selection = CleanupSelection::All`
-(`:1288-1289`) and exists so the public root contract stays strict: every
+(`:1318-1319`) and exists so the public root contract stays strict: every
 selected root is still validated, whatever the caller proved beforehand.
 
 ---
@@ -201,7 +201,7 @@ sequential and cached (`workspace.rs:738`).
 
 **What `SystemCleanupRunner` executes.** `run_with_env` (`:1043-1060`) builds
 `Command::new("cargo").args(args).current_dir(cwd)`, applies each `(k, v)` with
-`cmd.env(k, v)`, calls `.output()`. Args come from `clean_args` (`:4097-4120`):
+`cmd.env(k, v)`, calls `.output()`. Args come from `clean_args` (`:4130-4153`):
 
 ```text
 clean [--dry-run --verbose] --offline --locked
@@ -210,39 +210,39 @@ clean [--dry-run --verbose] --offline --locked
 ```
 
 **`CleanMode::CargoPreview` versus `Execute` is exactly the `--dry-run
---verbose` pair** (`:3910-3913`); everything else is identical. This is ADR 001
+--verbose` pair** (`:3928-3946`); everything else is identical. This is ADR 001
 `:188` ("invokes Cargo rather than recursively deleting output") made literal.
-The target is pinned twice — `--target-dir` (`:3919-3920`) and
+The target is pinned twice — `--target-dir` (`:3952-3953`) and
 `CARGO_TARGET_DIR` (`:523-526`) — with the comment at `:523` calling the two
 forms "equivalent, Cargo-owned".
 
-`frozen_env` (`:4043-4065`) pins the child's world: `CARGO_TARGET_DIR` always to
+`frozen_env` (`:4076-4098`) pins the child's world: `CARGO_TARGET_DIR` always to
 the proven target; `CARGO_BUILD_BUILD_DIR` **always** set — to the resolved
-build dir when Cargo reported one (`:3880-3885`), or to the target when it did
-not (`:3896-3900`), the comment at `:3892-3895` noting that pinning it to the
+build dir when Cargo reported one (`:3898-3903`), or to the target when it did
+not (`:3914-3918`), the comment at `:3910-3913` noting that pinning it to the
 target asserts exactly the measured world and is a no-op if ignored. Two refusal
 branches: a parent `CARGO_BUILD_BUILD_DIR` with an unprovable build dir
-(`:3868-3876`), and a reported separate build dir under
-`Unavailable`/`Unknown` capability (`:4172-4175`).
+(`:3886-3894`), and a reported separate build dir under
+`Unavailable`/`Unknown` capability (`:4205-4208`).
 
 **Why an adapter.** The two traits do not convert. `workspace.rs` needs a
 `&dyn CargoRunner` to resolve; cleanup needs `&dyn CleanupRunner` to run the
 clean *with a frozen env*. `CleanupRunner` is the richer trait, so
-`WorkspaceCleanupAdapter` (`:2934-2945`) is the widening direction: it copies
+`WorkspaceCleanupAdapter` (`:3013-3024`) is the widening direction: it copies
 all four `ProcessOutput` fields (`workspace.rs:22-26`) and drops the env, which
-resolution calls do not need. Constructed at `:2622`, `:3162`, `:3053`.
+resolution calls do not need. Constructed at `:2701`, `:3241`, `:3132`.
 Production therefore makes every Cargo call through one injected seam regardless
 of phase.
 
 **Testability payoff and its risk.** The 114 tests need no real cargo binary for
-decision logic. Eight fakes are defined in-module: `FakeCleanupRunner` `:4423`,
-`ChangingTargetRunner` `:7261`, `PerPathFailRunner` `:7408` (function-local),
-`RaceRunner` `:8112`, `BuildChangingRunner` `:8368` (function-local),
-`StagedCargo` `:8855`, `ParallelProbeRunner` `:9086`, `MetadataMutationRunner`
+decision logic. Eight fakes are defined in-module: `FakeCleanupRunner` `:4456`,
+`ChangingTargetRunner` `:7294`, `PerPathFailRunner` `:7441` (function-local),
+`RaceRunner` `:8145`, `BuildChangingRunner` `:8401` (function-local),
+`StagedCargo` `:8888`, `ParallelProbeRunner` `:9119`, `MetadataMutationRunner`
 `:1051`. Three tests do use `SystemCleanupRunner` against real Cargo:
-`real_temp_project_preview_and_execute_with_redirected_target` `:7580`,
-`real_cargo_package_selector_preserves_sibling_workspace_artifacts` `:7719`, and
-`scan_analysis_total_is_determinate_through_real_path` `:8787`.
+`real_temp_project_preview_and_execute_with_redirected_target` `:7613`,
+`real_cargo_package_selector_preserves_sibling_workspace_artifacts` `:7752`, and
+`scan_analysis_total_is_determinate_through_real_path` `:8820`.
 
 The risk is the false-green class this project has already been bitten by
 ([the overview](overview.md) §11 — "*a green test proves only that its own premises hold*").
@@ -317,7 +317,7 @@ and before every later Cargo spawn (`cleanup.rs:2483-2488`). A violated premise
 returns the completed results plus a whole-scope `IncompleteDiscovery` block
 instead of spawning. Policy-skipped units never reach proof and need no
 guard. `violated_admission_premise_blocks_with_zero_cargo_spawns`
-(`cleanup.rs:7246`) proves the block with zero spawns in both directions.
+(`cleanup.rs:7279`) proves the block with zero spawns in both directions.
 
 ---
 
@@ -370,12 +370,12 @@ This matches three independent sources: `config.toml:35-36` ("authorization
 never manufactures ownership proof and cannot promote ExternalUnproven to
 private (ADR 001, C002)"); the crate-wide invariant in `overview.md`; ADR 001
 `:131-132`. Tests close it from both sides:
-`external_unproven_outside_root_never_authorized_by_allowed_root` (`:6878`)
+`external_unproven_outside_root_never_authorized_by_allowed_root` (`:6911`)
 asserts `!is_authorized` with and without an allowed root, and
-`external_outside_root_allowed_via_configured_root` (`:7860`) runs the *real*
+`external_outside_root_allowed_via_configured_root` (`:7893`) runs the *real*
 Cargo path and asserts `Skipped` in both cases.
 
-**One naming trap.** The test at `:7650` is named
+**One naming trap.** The test at `:7683` is named
 `external_outside_root_allowed_via_configured_root`, which reads as "an allowed
 root makes external output cleanable". Its own assertions say the opposite —
 the unit is skipped *because* authorization cannot promote.
@@ -400,7 +400,7 @@ every group the invocation can affect, ownership must be `PrivateBounded`
 (`:1155-1240`) then `covering_is_authorized_roots` must return `Ok(true)` for that
 group alone (`:1120-1137`); (c) every group must have `measured.is_some()`
 (`:1137-1146`), otherwise the fail-fast verdict and its `GroupSkipReason::detail()`
-(`workspace.rs:1635`) become the reason. The doc comment `:906-916` states the
+(`workspace.rs:1676`) become the reason. The doc comment `:906-916` states the
 C003 invariant — every affected group qualifies independently, and "No Cargo
 process is spawned for any subset of a unit" — which is what stops a
 `PrivateBounded` target smuggling an `ExternalUnproven` sibling build group into
@@ -412,17 +412,17 @@ one invocation.
 `Ok(false)` — private but outside the boundary — stays a per-unit
 `SkippedUnauthorized` row, so authorization still cannot promote. The
 infrastructure path raises `scope_blocked` and exits 1 (`:2573-2583`,
-`:10702-10810`), pinned by `authorization_infrastructure_failure_scope_blocks_instead_of_per_unit_skip`
-(`:10700`).
+`:10735-10843`), pinned by `authorization_infrastructure_failure_scope_blocks_instead_of_per_unit_skip`
+(`:10733`).
 
 **Is `allowed_output_roots` actually redundant?** `config.toml:37-38` claims it
 is "currently operationally redundant because PrivateBounded output is normally
 workspace-contained." **Assessment: consistent with the code, with a caveat.** The
-reason is the classification rule at `workspace.rs:1552-1566`:
+reason is the classification rule at `workspace.rs:1593-1607`:
 `PrivateBounded` means "every covering root **strictly below the workspace
 root**"; `ExternalUnproven` means "output **outside workspace root**."
 Classification depends on the *workspace root*, not on the clean root or allowed
-roots — `build_groups` (`workspace.rs:1429`) takes only `&[ResolvedWorkspace]`. So
+roots — `build_groups` (`workspace.rs:1466`) takes only `&[ResolvedWorkspace]`. So
 a `PrivateBounded` group's covering roots are always beneath the workspace root
 and are already authorized by the `canonical_clean` branch at `:1226-1231` whenever
 the workspace root is inside a clean root. That is the ordinary case.
@@ -433,7 +433,7 @@ root — legal for a member manifest whose workspace root is an ancestor — the
 `allowed_output_roots` becomes the only route to cleanability. The code
 anticipates this: the error at `:1127-1134` tells the user to "add a
 `cleanup.allowed_output_roots` entry or use a clean ROOT that contains it".
-`missing_and_file_allowed_roots_authorize_nothing_but_are_not_fatal` (`:7228`)
+`missing_and_file_allowed_roots_authorize_nothing_but_are_not_fatal` (`:7261`)
 covers the *negative* branches of the allowed-root validation, but I found no
 end-to-end test of the positive path — a `PrivateBounded` group with covering
 roots outside every clean root becoming `Cleaned` once an allowed root is
@@ -442,7 +442,7 @@ configured. An under-verified property, not a defect.
 **A separate divergence.** ADR 001 `:7` defines `PrivateBounded` as "every
 destructive output path is contained by an *authorized cleanup boundary*" — a
 predicate over authorization roots. The code defines it over the *workspace root*
-(`workspace.rs:1552-1558`). Reconciled by the argument above, but not the same
+(`workspace.rs:1593-1599`). Reconciled by the argument above, but not the same
 predicate, and the ADR's phrasing cannot be read literally alongside
 `workspace.rs`.
 
@@ -521,7 +521,7 @@ re-resolve failure — fail-closed. Peak concurrency lands in
 
 This apparatus is an efficiency concern the project tracked explicitly, not a
 safety mechanism: it keeps the *cost* of proving linear. Pinned by
-`final_proof_cost_is_linear_in_the_number_of_workspaces` (`:10237`), which
+`final_proof_cost_is_linear_in_the_number_of_workspaces` (`:10270`), which
 asserts the proof spawn count grows linearly, not quadratically.
 
 ### `ExecutionProof` field by field
@@ -536,7 +536,7 @@ minimizes (but does not eliminate) TOCTOU races and fails closed."
 | --- | --- |
 | `workspace_roots: Vec<PathBuf>` | The unit's workspace roots; set to `vec![unit.root.clone()]` (`:3744`). |
 | `workspace_root: PathBuf` | Workspace root; becomes the spawn `cwd` (`:1045`). |
-| `root_manifest: PathBuf` | The manifest for `--manifest-path` (`:3916-3917`). |
+| `root_manifest: PathBuf` | The manifest for `--manifest-path` (`:3949-3950`). |
 | `canonical_members: Vec<PathBuf>` | Sorted, deduped canonical member roots. |
 | `target: PathBuf` | Proven target; becomes `--target-dir` and `CARGO_TARGET_DIR`. |
 | `build: Option<PathBuf>` | Proven distinct build dir (`:1458-1463`), or `None` when build == target (`:1458-1462`). |
@@ -544,8 +544,8 @@ minimizes (but does not eliminate) TOCTOU races and fails closed."
 | `covering: Vec<PathBuf>` | Complete dedup union of every affected physical covering root. The blast radius. |
 | `pre_bytes: u64` | Pre-clean bytes of *that same union* — not a whole-workspace total. |
 | `newest_activity: Option<SystemTime>` | Newest activity observed during the proof; feeds `min_inactive_seconds`. |
-| `ownership: OutputOwnershipClass` | Hard-coded `PrivateBounded` at `:3971` — a postcondition, not a measurement: the proof only completes for private groups. |
-| `frozen_env: Vec<(OsString, OsString)>` | The exact env for the child; the provisional proof carries an empty vec (`:4043`), `frozen_env` is computed from it (`:4043`) and attached (`:4043`). |
+| `ownership: OutputOwnershipClass` | Hard-coded `PrivateBounded` at `:4004` — a postcondition, not a measurement: the proof only completes for private groups. |
+| `frozen_env: Vec<(OsString, OsString)>` | The exact env for the child; the provisional proof carries an empty vec (`:4076`), `frozen_env` is computed from it (`:4076`) and attached (`:4076`). |
 
 `type RevalidatedContext = ExecutionProof` (`:2776`) is a compatibility alias
 still used by `frozen_env` and `clean_args`.
@@ -553,7 +553,7 @@ still used by `frozen_env` and `clean_args`.
 ### `final_cleanup_proof` — the walkthrough
 
 The doc comment `:2741-2755` enumerates the frozen state. Execution order in
-`final_cleanup_proof_roots` (`:3583-3976`):
+`final_cleanup_proof_roots` (`:3583-4009`):
 
 1. `:1284` — `unit_block_reason_roots` re-run "defensive: the caller gates before
    dispatch, and the final proof must be the single authority consumed by any
@@ -581,18 +581,18 @@ The doc comment `:2741-2755` enumerates the frozen state. Execution order in
    unresolvable roots the physical graph cannot represent, via
    `provable_output_paths` (`:3188`) and `resolve_as_far_as_possible`
    (`workspace.rs`). Fails closed.
-8. `:3648-3650` — every covering root must exist, be a real directory, not be a
+8. `:3727-3729` — every covering root must exist, be a real directory, not be a
    symlink; "preflight changed: disappeared / became symlink / changed type"
-   (`prove_covering_roots` `:3988`).
-9. `:3653-3717` — the recency window (`:3653-3661`), fresh source activity per
-   member (`:3671-3693`), and fresh output activity + sizing per covering root
-   (`:3697-3717`). Both `t >= cutoff` and `t > start` are rejected
-   (`:3707`, refusing at `:3708-3712`) — a future-dated mtime reads as active, not as old.
-10. `:4202` — `require_cargo_markers` (`:4202-4207`): every covering root
+   (`prove_covering_roots` `:4067`).
+9. `:3732-3796` — the recency window (`:3732-3740`), fresh source activity per
+   member (`:3750-3772`), and fresh output activity + sizing per covering root
+   (`:3776-3796`). Both `t >= cutoff` and `t > start` are rejected
+   (`:3786`, refusing at `:3787-3791`) — a future-dated mtime reads as active, not as old.
+10. `:4281` — `require_cargo_markers` (`:4281-4286`): every covering root
     needs a `CACHEDIR.TAG` that is a regular non-symlink file starting with
     Cargo's signature bytes.
 11. `:3725-3742` — target/build resolution and the build==target collapse.
-12. `:4043-4065` — assemble the provisional proof (`:4043-4065`), compute `frozen_env` (`:4043`), attach (`:4043-4065`).
+12. `:4076-4098` — assemble the provisional proof (`:4076-4098`), compute `frozen_env` (`:4076`), attach (`:4076-4098`).
 
 **Why the work is repeated rather than reusing the scan's result: TOCTOU.** The
 initial analysis (`resolve_cleanup_scope:2369`) ran at `scan_start`; the proof
@@ -623,14 +623,14 @@ substring matcher kept as a fallback for pass-through Cargo/discovery strings
 with no typed site. The comment at `:2455-2459` records the L9 correction:
 "changed identity", "vanished", "disappeared" classify as *change*, while a
 genuine Cargo/discovery failure classifies as *unproven*. The test
-`proof_failures_distinguish_a_change_from_an_unproven_ownership` (`:10273-10430`)
+`proof_failures_distinguish_a_change_from_an_unproven_ownership` (`:10306-10463`)
 pins those mappings.
 
 ---
 
 ## 7. The pre-spawn decision
 
-`execute_pre_spawn_decision` (`:4023-4038`) is a thin wrapper: allocate
+`execute_pre_spawn_decision` (`:4056-4071`) is a thin wrapper: allocate
 `ScanCounters::default()`, call `final_cleanup_proof`. Its doc comment
 (`:3807-3814`) says it exposes "the same non-mutating gate set Execute runs
 before spawn so tests can compare candidate dispositions with Simulate on
@@ -640,7 +640,7 @@ identical state without invoking Cargo clean."
 src/` returns exactly one hit — its own definition at `:3815`. Not `main.rs`,
 not `lib.rs`, not the test module. The public `final_cleanup_proof` is likewise
 production-dead: its only references are `execute_pre_spawn_decision:3522`
-(itself dead) and the tests at `:7006` and `:7843`.
+(itself dead) and the tests at `:7039` and `:7876`.
 
 The production pre-spawn authority is the **private**
 `final_cleanup_proof_roots`, called at `:3583` with `refresh_candidate = true`
@@ -654,6 +654,16 @@ process is spawned is `final_cleanup_proof_roots` as invoked at `:3583`, not
 possibly useful to an external consumer, but a reviewer must know it is not what
 protects a real run.
 
+**Two more refusals sit in that gate, and they re-prove shapes the
+classification cannot see.** The classification refuses a group whose covering
+root holds a package directory, or lies inside a workspace's source tree (see
+[07 — Workspace](07-workspace.md)); both shapes are invisible to the resolved
+universe, which is what the classification works from. The proof re-derives them
+from the filesystem at the moment of the spawn: a covered root that lies inside
+a source tree is refused at `:3856-3873`, and a covered root that holds a
+package directory is refused at `:3938-3947`. Both refusals are
+`SkippedSafety` — the unit is withheld, not failed, and the scope continues.
+
 ### Why the zero-spawn property matters
 
 For a blocked or empty cleanup the correct behaviour is to spawn no processes at
@@ -662,21 +672,21 @@ module:
 
 | Test | Lines | Assertion |
 | --- | --- | --- |
-| `unresolved_scope_note_is_reported_without_blocking_any_mode` | `:5577` | All three modes; a reported in-boundary note never blocks and no clean runs. |
-| `initial_shared_overlap_is_decided_conservatively_without_proof` | `:9923` | `proof_workspaces_refreshed == 0` — the gate blocks before any ownership proof. |
-| `fresh_size_policy_rejects_shrunk_output_before_any_cargo_clean` | `:8519` | All three modes; policy rejection precedes any clean. |
-| `fresh_source_and_output_age_policy_rejects_before_any_cargo_clean` | `:8569` | All three modes. |
-| `preview_is_default_and_simulate_invokes_no_clean` | `:5533` | Simulate: no clean call. |
-| `simulation_parity_valid_private_reaches_cleanable_with_zero_clean_calls` | `:8016` | Simulate reaches cleanable with zero clean calls. |
-| `combined_roots_share_one_ownership_proof_and_simulation_never_cleans` | `:10364` | Two roots, one shared universe proof; zero cleans. |
-| `simulation_parity_missing_and_invalid_markers_both_skip` | `:7956` | Marker failures skip identically in Simulate and CargoPreview. |
-| `the_listing_never_spawns_a_clean` | `:5420` | The interactive listing never spawns a clean. |
-| `metadata_failure_blocks_boundary_with_zero_spawns` | `:6266` | A metadata failure inside the boundary blocks with zero spawns. |
-| `nested_outputs_skip_at_unit_gate_with_zero_spawns` | `:6227` | A nested output is rejected at the unit gate with zero spawns. |
+| `unresolved_scope_note_is_reported_without_blocking_any_mode` | `:5610` | All three modes; a reported in-boundary note never blocks and no clean runs. |
+| `initial_shared_overlap_is_decided_conservatively_without_proof` | `:9956` | `proof_workspaces_refreshed == 0` — the gate blocks before any ownership proof. |
+| `fresh_size_policy_rejects_shrunk_output_before_any_cargo_clean` | `:8552` | All three modes; policy rejection precedes any clean. |
+| `fresh_source_and_output_age_policy_rejects_before_any_cargo_clean` | `:8602` | All three modes. |
+| `preview_is_default_and_simulate_invokes_no_clean` | `:5566` | Simulate: no clean call. |
+| `simulation_parity_valid_private_reaches_cleanable_with_zero_clean_calls` | `:8049` | Simulate reaches cleanable with zero clean calls. |
+| `combined_roots_share_one_ownership_proof_and_simulation_never_cleans` | `:10397` | Two roots, one shared universe proof; zero cleans. |
+| `simulation_parity_missing_and_invalid_markers_both_skip` | `:7989` | Marker failures skip identically in Simulate and CargoPreview. |
+| `the_listing_never_spawns_a_clean` | `:5453` | The interactive listing never spawns a clean. |
+| `metadata_failure_blocks_boundary_with_zero_spawns` | `:6299` | A metadata failure inside the boundary blocks with zero spawns. |
+| `nested_outputs_skip_at_unit_gate_with_zero_spawns` | `:6260` | A nested output is rejected at the unit gate with zero spawns. |
 
 **Precision required:** "zero-spawn" here means **zero `clean` invocations**, not
 zero processes. `cargo locate-project` and `cargo metadata` still run during
-discovery and resolution, and `runtime_clean_capabilities` (`:4125`) spawns
+discovery and resolution, and `runtime_clean_capabilities` (`:4158`) spawns
 `cargo --version` when a selector is present. No test in this module asserts
 that *no* subprocess is created.
 
@@ -716,7 +726,7 @@ an `AppError::InvalidRoot` usage error, never a silent fallback to `All`.
 
 `cli.rs` resolves argv but must not perform IO, so the maintenance spellings
 emit the *unresolved* `CleanupSelection::WorkingDirectory` (through
-`selection_for`, `cli.rs:618-623`), and `main.rs` calls
+`selection_for`, `cli.rs:642-647`), and `main.rs` calls
 `CleanupSelection::resolved` before the engine runs. The `CleanupRequest`
 doc comment says so at `cli.rs:303-313`. `clean ROOT` and `clean --full`
 use `CleanupSelection::All` because they already bound their own scope.
@@ -850,15 +860,15 @@ Ownership resolution does complete before the loop, so `config.toml:41` is
 accurate. But selection is *split*: glob and capability filtering plus the first
 size check are pre-proof; the authoritative size check and the age check are
 post-proof. No path lets a selector narrow a proof — a selector only reaches
-`clean_args` (`:4097-4120`) and affects the spawn.
+`clean_args` (`:4130-4153`) and affects the spawn.
 
 ### `CleanupSelector` and globset
 
 `Profile(String)` / `Package(String)` filter what the *invocation* cleans, not
 which units are considered: `--profile <p>` / `--package <q>`. Package specs
 are resolved against the workspace's own package list before any spawn, via
-`resolve_package_spec` (`:4139-4165`): exact name, exact id, `name@version`, and
-`name@1.2`-style partial versions through `semver_spec_matches` (`:4182`, which
+`resolve_package_spec` (`:4172-4198`): exact name, exact id, `name@version`, and
+`name@1.2`-style partial versions through `semver_spec_matches` (`:4215`, which
 accepts a 1- or 2-component numeric prefix). Ambiguity is rejected twice —
 multiple matches, and, even with one match, a duplicate package *name* anywhere
 in the workspace. A spec that fails becomes `SelectorInvalid` (`:387-399`).
@@ -867,10 +877,10 @@ Selectors interact with policy in a way that is easy to miss: a selector plus a
 non-zero `min_reclaimable_bytes` skips the unit with
 `SelectorEstimateUnavailable` (`:461-467`), because `before_bytes` is the whole
 output union, not the selector's share. There is also a runtime capability gate:
-`runtime_clean_capabilities` (`:4125`) parses `cargo --version` and asks
+`runtime_clean_capabilities` (`:4158`) parses `cargo --version` and asks
 `workspace::clean_capabilities_from_version` (`workspace.rs:146`); an
 unsupported runtime yields `SelectorUnsupported` before the unit is considered
-(`:1696-1718`).
+(`:1737-1759`).
 
 Matching uses `globset`. `compile_policy_globs` (`:2586-2588`) builds a
 `GlobSet` per field, mapping a bad pattern to
@@ -896,7 +906,7 @@ flag**; it means "policy made this call."
 | `results` | loop `:560-634` | One `CleanResult` per unit that produced a row. |
 | `diagnostics` | `:1670`, `:1670` | Diagnostic count; also incremented on post-clean measurement failure (`:1670`). |
 | `failed` | `:562`, `:562`, `:562` | Cargo spawn/exit failures. Drives exit code 1. |
-| `mode` | `:1395` | The run's `CleanMode`. |
+| `mode` | `:1420` | The run's `CleanMode`. |
 | `counters` | `:1669`, `:1669`, `:1669` | `ScanCounters` including all `proof_*` fields. |
 | `scope_blocked` | `:2573`, `:2573`, `:2573`, `:2573`, `:2573`, `:2573`, `:2573`, `:2573` | `Some` only for a typed whole-scope block. Renders alone and returns early. |
 | `unresolved_ownership` | `:1720` | `UnresolvedOwnershipParticipant` list — ADR 007: boundary-relevant only. |
@@ -932,7 +942,7 @@ structure backs it: the `CleanResult` literals in the spawn arm copy from
 proof itself (`:3408`) precisely so the proof is self-sufficient.
 
 Two gates sit *between* the proof and the spawn, both re-verifying rather than
-re-proving: `prove_covering_roots` (`:3988-3993`) and `require_cargo_markers`
+re-proving: `prove_covering_roots` (`:4021-4026`) and `require_cargo_markers`
 (`:2032-2036`). Both are the same functions the proof uses, so both refuse the
 same states with the same codes. A failure in either skips the unit instead of
 spawning.
@@ -945,7 +955,7 @@ and `cargo --version` for selector capability. The invariant is about the
 ### Is `Simulate` guaranteed to spawn nothing destructive?
 
 **Structurally, not by convention.** The `match mode` at `:1974` routes
-`CleanMode::Simulate` to an arm (`:4661-4678`) containing no `runner` call at
+`CleanMode::Simulate` to an arm (`:4694-4711`) containing no `runner` call at
 all — it pushes a `CleanResult` and moves on. `clean_args` is reachable only from
 the `CargoPreview | Execute` arm (`:2037`) and adds `--dry-run --verbose` only
 for `CargoPreview` (`:45-47`). So `Simulate` is prevented twice over: it
@@ -965,10 +975,10 @@ aborts.** `boundary_discovery_diagnostics > 0` raises
 `ScopeBlockReason::IncompleteDiscovery` and returns early (`:1755-1766`);
 `blocking_unresolved > 0` raises `ScopeBlockReason::OwnershipUnproven` and
 returns early (`:1532-1549`). Neither proceeds partially. Pinned by
-`scope_note_does_not_block_in_boundary_execute` (`:5937`) and its Simulate /
+`scope_note_does_not_block_in_boundary_execute` (`:5970`) and its Simulate /
 CargoPreview twins, `metadata_failure_blocks_boundary_with_zero_spawns`
-(`:6302`), and `symlinked_output_produces_no_unit_while_sibling_cleans`
-(`:6109`).
+(`:6335`), and `symlinked_output_produces_no_unit_while_sibling_cleans`
+(`:6142`).
 
 **(b) Incomplete *outside* the boundary → reported, never blocking.** This is
 ADR 007's central correction. The three-way split is computed by
@@ -979,7 +989,7 @@ ADR 007's central correction. The three-way split is computed by
 | --- | --- | --- |
 | Out-of-boundary | `!boundary_admits(selection, &participant.manifest)` | Informational `out_of_scope` diagnostic; **never blocks** (`:2753-2756`). |
 | In-boundary `MergeAll` | `workspace::attribute_unknown` returns `UnknownDisposition::MergeAll` (`:2760`) | **Blocks the boundary** (`:2760`). |
-| In-boundary `PassengerOf` / `ScopeNote` | `attribute_unknown` names an owner or a scope note (`:2759-2760`) | Reported, never blocking (`:547`). |
+| In-boundary `PassengerOf` / `ScopeNote` | `attribute_unknown` names an owner or a scope note (`:2838-2839`) | Reported, never blocking (`:547`). |
 
 The counts that drive the decision are: `blocking_unresolved_count` (`:2771-2776`),
 `boundary_discovery_diagnostic_count` (`:2793-2815`), and the out-of-scope
@@ -987,9 +997,9 @@ diagnostic count (`:1424-1429`). The count of out-of-boundary unprovables
 travels to the report as `out_of_scope_unresolved` (`:1679`) and is rendered as
 one bounded human line (`:682-687`) so "the boundary is clean" can never read as
 "the system is clean". The flagship twin is
-`out_of_anchor_poison_does_not_block_anchor` (`:6035`), which fails against the
+`out_of_anchor_poison_does_not_block_anchor` (`:6068`), which fails against the
 old whole-scope rule by construction; the twin
-`scope_note_in_second_root_does_not_block_first_root` (`:10485`) covers the
+`scope_note_in_second_root_does_not_block_first_root` (`:10518`) covers the
 cross-root case.
 
 **(c) Incomplete at *proof* time → the transaction aborts.** The hoisted
@@ -998,7 +1008,7 @@ makes `hoisted.get()` (`:1839`) fail for *every* candidate, and the engine
 raises a typed `ScopeBlock` and returns (`:494-500`) rather than emitting N
 skipped rows. This is the M-2 correction: an unprovable universe is a scope
 block (exit 1), not a run of silent per-unit skips. Pinned by
-`universe_workspace_that_cannot_reresolve_fails_closed` (`:9877`).
+`universe_workspace_that_cannot_reresolve_fails_closed` (`:9910`).
 
 **(d) The zero-unit edge.** A run that proves zero units while anything is
 unproven proves nothing: `units.is_empty() && unselected.is_empty() &&
@@ -1042,7 +1052,7 @@ Mechanically, in `clean_with_roots_policy_selector_guarded` (`:1688`):
    fresh in-boundary `MergeAll` invalidates the refresh. H-2 rediscovery stays
    combined (mid-run change detection is not poison reporting) — see
    `universe_manifests_stable` (`:2469`) and
-   `mid_run_manifest_growth_blocks_remaining_scope` (`:5837`).
+   `mid_run_manifest_growth_blocks_remaining_scope` (`:5870`).
 4. The output environment is re-verified before every unit dispatch
    (`output_env_matches` `:534`, against a snapshot taken at `:534`); any
    mismatch blocks the remaining units before any further spawn, in every mode
@@ -1087,23 +1097,23 @@ The candidate is skipped; the run continues to the next unit.
 | Covering root gone/type/symlink | `:3648-3650` → `:3780-3808` | "preflight changed: …" |
 | Source became active | `:3674-3680` | "…source became active" |
 | Output became active | `:3708-3712` | "…output became active" |
-| Marker invalid | `:3723` → `:4009-4038` | "Cargo CACHEDIR.TAG marker is missing…" |
+| Marker invalid | `:3723` → `:4042-4071` | "Cargo CACHEDIR.TAG marker is missing…" |
 
 Covered by `RaceRunner`-based tests: `race_target_replacement_skips_before_clean`
-`:8464`, `race_covering_root_disappears_skips` `:8464`,
-`race_output_becomes_recent_skips` `:8479`,
-`race_source_becomes_recent_skips` `:8501`,
-`race_marker_disappears_and_changes_skip` `:8695`,
-`race_covering_becomes_symlink_skips_and_changes_classification` `:8725`.
+`:8497`, `race_covering_root_disappears_skips` `:8497`,
+`race_output_becomes_recent_skips` `:8512`,
+`race_source_becomes_recent_skips` `:8534`,
+`race_marker_disappears_and_changes_skip` `:8728`,
+`race_covering_becomes_symlink_skips_and_changes_classification` `:8758`.
 The cross-workspace variants use `StagedCargo` instead:
-`cross_workspace_overlap_race_into_target_skips_candidate` `:9693`,
-`cross_workspace_overlap_race_into_distinct_build_skips_candidate` `:9737`,
-`candidate_target_or_build_change_still_skips` `:9962`.
+`cross_workspace_overlap_race_into_target_skips_candidate` `:9726`,
+`cross_workspace_overlap_race_into_distinct_build_skips_candidate` `:9770`,
+`candidate_target_or_build_change_still_skips` `:9995`.
 `BuildChangingRunner` covers the build-dir capability flip (Equal → Distinct) in
-`simulation_parity_changed_build_dir_and_unsupported_capability_both_skip` `:8356`.
+`simulation_parity_changed_build_dir_and_unsupported_capability_both_skip` `:8389`.
 `MetadataMutationRunner` covers a workspace-root change, a newly added member,
 and malformed metadata JSON from the second metadata call onward, in
-`direct_metadata_refresh_detects_workspace_root_and_member_changes` `:8253`.
+`direct_metadata_refresh_detects_workspace_root_and_member_changes` `:8286`.
 
 ### Are two units sharing physical bytes prevented from racing?
 
@@ -1114,7 +1124,7 @@ and malformed metadata JSON from the second metadata call onward, in
    `unit_block_reason_roots:946` for every unit that touches it.
 2. **Initial-graph decision.** Overlap present in the *initial* complete graph is
    decided conservatively from that graph alone, before any proof work —
-   `initial_shared_overlap_is_decided_conservatively_without_proof` (`:9923`)
+   `initial_shared_overlap_is_decided_conservatively_without_proof` (`:9956`)
    asserts `proof_workspaces_refreshed == 0`, i.e. the gate blocks before the
    proof is even built. A shared pair cannot reach a spawn via either unit.
 3. **Fresh re-check.** Proof step 7 (`:3601-3647`) re-derives the graph and
@@ -1123,16 +1133,16 @@ and malformed metadata JSON from the second metadata call onward, in
    represent. The unit loop at `:1653` is strictly sequential — no unit spawns
    until the previous spawn has returned.
 
-`PerPathFailRunner` (`:7408`) tests a different property: that one unresolvable
+`PerPathFailRunner` (`:7441`) tests a different property: that one unresolvable
 manifest blocks a *sibling* workspace that is perfectly clean — the completeness
 property of the third question, not a byte race. The byte-race property is
-covered by `StagedCargo`'s multi-workspace fixtures (`:8855`, `:8855`, `:8855`).
+covered by `StagedCargo`'s multi-workspace fixtures (`:8888`, `:8888`, `:8888`).
 
 ### Is deletion by `cargo clean`, by `std::fs::remove_dir_all`, or both?
 
 **By `cargo clean` only.** Verified three ways: `grep -n 'remove_dir_all'
-src/cleanup.rs` finds only four hits, all inside the test module (`:8262`,
-`:8525`, `:9822`, `:9843`), and the module's own trailing comment `:4060-4062`
+src/cleanup.rs` finds only four hits, all inside the test module (`:8295`,
+`:8558`, `:9855`, `:9876`), and the module's own trailing comment `:4093-4095`
 says "direct deletion remains prohibited (no `remove_dir_all` in production)";
 the only mutation path is the child process at `:2039-2043`; and ADR 001
 `:188-220` requires "invokes Cargo rather than recursively deleting output…
@@ -1144,7 +1154,7 @@ bookkeeping) stay consistent by construction, and the tool cannot accidentally
 delete a `target/` tree Cargo believes is live. The cost is inheriting Cargo's
 deletion semantics wholesale, including future changes to what `cargo clean`
 removes — the intended trade (ADR 001 `:317`). The module does read the
-filesystem (measures, reads `CACHEDIR.TAG` `:4024`, touches mtimes through
+filesystem (measures, reads `CACHEDIR.TAG` `:4057`, touches mtimes through
 measurement) but never writes.
 
 ### Worst case if the process is killed mid-transaction
@@ -1160,7 +1170,7 @@ the mirror shape: an output root *nested inside* another package's directory
 is refused for the same reason — `cargo clean` removes whatever is under the
 root it is given, so a target directory pointed at another package's tree
 takes that package's checked-in files with it.
-(`workspace.rs:1553-1556`; test `source_tree_as_output_root_is_never_cleaned` `:10181`). Killed after the spawn but before `measure_union` (`:1883`): the
+(`workspace.rs:1594-1597`; test `source_tree_as_output_root_is_never_cleaned` `:10181`). Killed after the spawn but before `measure_union` (`:1924`): the
 cleanup happened but no `after_bytes`/`observed_decrease` is reported —
 under-reporting, never over-reporting.
 
@@ -1179,18 +1189,18 @@ code says so.**
 | --- | --- |
 | `validate_cleanup_root:2627-2645` | A clean ROOT must be absolute (`:2910-2915`) and a real, non-symlink directory (`:2920-2925`). |
 | `covering_is_authorized_roots:836-841` | A symlink allowed root is `Err`. |
-| `workspace.rs:1553-1556` | A symlink output root marks the whole workspace `Uncertain` upstream. |
-| Proof `:3648-3650` → `prove_covering_roots:3478-3506` | Every covering root re-checked with `symlink_metadata`; a symlink is "preflight changed: covering root became symlink". |
-| Proof `:3188-3218` | Symlink/unresolvable *other* roots compared via `provable_output_paths` so they cannot be silently ignored. |
-| `measure_union:3723-3741` | Post-clean measurement refuses a path that changed type or became a symlink (`:4046-4048`). |
-| Pre-spawn `:2024-2028` | The covering-root proof is re-run at the last moment, immediately before the spawn. |
+| `workspace.rs:1594-1597` | A symlink output root marks the whole workspace `Uncertain` upstream. |
+| Proof `:3727-3729` → `prove_covering_roots:3478-3506` | Every covering root re-checked with `symlink_metadata`; a symlink is "preflight changed: covering root became symlink". |
+| Proof `:3267-3297` | Symlink/unresolvable *other* roots compared via `provable_output_paths` so they cannot be silently ignored. |
+| `measure_union:3723-3741` | Post-clean measurement refuses a path that changed type or became a symlink (`:4125-4127`). |
+| Pre-spawn `:2103-2107` | The covering-root proof is re-run at the last moment, immediately before the spawn. |
 
-Tests: `symlink_allowed_root_rejected_and_shared_forbidden` `:6937`,
-`symlink_build_identity_skips_entire_unit` `:9503`,
-`cross_workspace_symlink_into_candidate_output_fails_closed` `:9776`,
-`cross_workspace_symlinked_ancestor_into_candidate_output_fails_closed` `:9850`,
-`race_covering_becomes_symlink_skips_and_changes_classification` `:8725`,
-`prove_covering_roots_refuses_symlink_swap_with_change_code` `:7163`. The
+Tests: `symlink_allowed_root_rejected_and_shared_forbidden` `:6970`,
+`symlink_build_identity_skips_entire_unit` `:9536`,
+`cross_workspace_symlink_into_candidate_output_fails_closed` `:9809`,
+`cross_workspace_symlinked_ancestor_into_candidate_output_fails_closed` `:9883`,
+`race_covering_becomes_symlink_skips_and_changes_classification` `:8758`,
+`prove_covering_roots_refuses_symlink_swap_with_change_code` `:7196`. The
 honest limit is `:1995-1997`: between the symlink check and the child's own
 `open()` there is a window, minimized rather than eliminated. Closing it entirely
 would require `cargo clean` to re-verify, outside this design.
@@ -1199,24 +1209,24 @@ would require `cargo clean` to re-verify, outside this design.
 
 **No, and the code is stricter than the ADR's framing.** ADR 001 `:131-132` defines
 `PrivateBounded` relative to "authorized cleanup boundaries". The implementation
-is narrower: `workspace.rs:1552-1558` requires every covering root to be **strictly
+is narrower: `workspace.rs:1593-1599` requires every covering root to be **strictly
 below the workspace root**, disjoint from every member source root, with every
 universe root represented in the graph. Anything outside the workspace root is
-`ExternalUnproven` (`workspace.rs:1565`) and inventory-only, permanently (§5).
+`ExternalUnproven` (`workspace.rs:1606`) and inventory-only, permanently (§5).
 
 Two secondary facts: the *invocation* is still
 `cargo clean --manifest-path <workspace root>`, so what Cargo removes is whatever
 Cargo believes belongs to that workspace — the module's job is to ensure that
 belief is safe, which it does by proving the union before the spawn and freezing
 the target via two independent mechanisms. And `build` output is a distinct root
-from `target` inside the same unit (`:3965-3982`), covered by the same
+from `target` inside the same unit (`:3998-4015`), covered by the same
 workspace-root rule, with the union deduplicated so an equal build==target counts
-once (`equal_and_nested_target_build_are_one_unit_and_one_invocation` `:9651`).
+once (`equal_and_nested_target_build_are_one_unit_and_one_invocation` `:9684`).
 
 ### Is the exit-code behaviour correct?
 
 `main.rs:489-493` returns `1` if `report.failed > 0 || report.scope_blocked.is_some()`.
-`report.failed` is incremented only at `:2047` (spawn error) and `:2066` (non-zero
+`report.failed` is incremented only at `:2085` (spawn error) and `:2104` (non-zero
 exit). `scope_blocked` is set only at the typed block sites listed in §8 — the
 two scan-time boundary sites, the zero-unit edge, and the mid-run block sites
 (the premise recheck, the universe refresh failure, the H-2 rediscovery, and the
@@ -1243,7 +1253,7 @@ safety hole.
 ## 10. Testing
 
 **Numbers (verified by grep):** 126 `#[test]` functions; the test module opens at
-`cleanup.rs:4257` (`#[cfg(test)]`), so production is lines 1–4241 (4241 lines)
+`cleanup.rs:4290` (`#[cfg(test)]`), so production is lines 1–4241 (4241 lines)
 and the test region is 4242–11163 (6922 lines, 62% of the file). No fixture
 files are needed: workspaces are built on disk and mtimes backdated so recency
 gates run without sleeping.
@@ -1252,20 +1262,20 @@ gates run without sleeping.
 
 | Group | Tests (line) |
 | --- | --- |
-| Authorization cannot promote | `external_unproven_inside_root_remains_inventory_only` `:6695`; `private_bounded_inside_workspace_is_authorized` `:6826`; `external_unproven_outside_root_never_authorized_by_allowed_root` `:6878`; `symlink_allowed_root_rejected_and_shared_forbidden` `:6937`; `external_outside_root_allowed_via_configured_root` `:7860`; `missing_and_file_allowed_roots_authorize_nothing_but_are_not_fatal` `:7228`; `authorization_infrastructure_failure_scope_blocks_instead_of_per_unit_skip` `:10702`; `external_unproven_skip_code_names_ownership_not_authorization` `:7137`; `ownership_degraded_code_matches_scan_time_vocabulary` `:10779`; `covering_inspect_failure_maps_permission_denied_to_uncertain` `:10763` |
-| Ownership gating / unit gate | `gate_blocks_mixed_class_units_in_every_combination` `:9593`; `private_target_with_external_unproven_build_skips_entire_unit` `:9358`; `private_target_with_shared_build_skips_entire_unit` `:9400`; `external_unproven_target_with_private_build_skips_entire_unit` `:9433`; `uncertain_build_identity_skips_entire_unit` `:9462`; `symlink_build_identity_skips_entire_unit` `:9503`; `gate_blocks_unmeasured_and_unmapped_unit_members` `:9624`; `distinct_private_target_and_build_is_one_cleanable_unit` `:9266`; `equal_and_nested_target_build_are_one_unit_and_one_invocation` `:9651` |
-| Proof universe completeness | `universe_workspace_that_cannot_reresolve_fails_closed` `:9877`; `cross_workspace_symlink_into_candidate_output_fails_closed` `:9776`; `cross_workspace_unresolvable_root_into_candidate_output_fails_closed` `:9812`; `cross_workspace_symlinked_ancestor_into_candidate_output_fails_closed` `:9850`; `combined_roots_classify_cross_root_output_as_shared_in_every_mode` `:10438`; `scope_note_in_second_root_does_not_block_first_root` `:10485`; `refused_empty_manifest_is_reported_without_blocking_scope` `:7407`; `proof_fails_closed_when_a_member_source_no_longer_resolves` `:7187` |
-| Pre-spawn / proof refresh | `revalidation_detects_changed_target_and_skips` `:7302`; `direct_metadata_refresh_detects_workspace_root_and_member_changes` `:8253`; `initial_shared_overlap_is_decided_conservatively_without_proof` `:9923`; `candidate_target_or_build_change_still_skips` `:9962`; `missing_marker_skips_instead_of_failing` `:7913`; `race_marker_disappears_and_changes_skip` `:8695`; `race_covering_root_disappears_skips` `:8464`; `race_covering_becomes_symlink_skips_and_changes_classification` `:8725`; `fresh_size_policy_rejects_shrunk_output_before_any_cargo_clean` `:8519`; `fresh_source_and_output_age_policy_rejects_before_any_cargo_clean` `:8569`; `race_output_becomes_recent_skips` `:8479`; `race_source_becomes_recent_skips` `:8501`; `race_target_replacement_skips_before_clean` `:8226`; `new_manifest_after_proof_blocks_remaining_scope` `:10852`; `prove_covering_roots_refuses_symlink_swap_with_change_code` `:7163`; `missing_output_identity_pair_compares_equal_not_unproven` `:4395` |
-| Coverage exclusion (M018) | `a_unit_under_an_unproven_root_is_reported_as_incomplete_coverage` `:5206`; `a_shared_output_with_an_unproven_root_stays_shared_and_is_not_cleaned` `:5281`; `the_coverage_exclusion_removes_candidates_and_names_the_cause` `:5332` |
-| Selection policy | `profile_selector_capability_is_bounded_to_qualified_runtime_versions` `:4716`; `package_specs_require_one_authoritative_workspace_identity` `:4733`; `package_selector_with_valid_workspace_index_evaluates_spec` `:10818`; `excluded_workspace_still_makes_nonexcluded_shared_output_non_cleanable` `:8622`; `simulation_parity_changed_build_dir_and_unsupported_capability_both_skip` `:8356`; `policy_dispositions_have_stable_json_names` `:4667`; `ancestry_selection_matches_in_both_directions` `:4322`; `roots_selection_matches_exactly` `:4362`; `outside_selection_is_reported_rather_than_silently_dropped` `:4375` |
-| Mode semantics / parity | `preview_is_default_and_simulate_invokes_no_clean` `:5533`; `simulation_candidate_set_matches_execute_preflight` `:6683`; `simulation_parity_missing_and_invalid_markers_both_skip` `:7956`; `simulation_parity_valid_private_reaches_cleanable_with_zero_clean_calls` `:8016`; `simulation_parity_recent_source_and_output_both_skip` `:8065`; `combined_private_roots_keep_preview_simulate_execute_parity` `:10398`; `combined_roots_share_one_ownership_proof_and_simulation_never_cleans` `:10364`; `cli_modes_map_to_preview_simulate_execute` `:4636` |
-| Concurrency / cost | `proof_refresh_parallelism_is_bounded_and_results_stay_deterministic` `:10551`; `sequential_and_parallel_refreshes_produce_the_same_workspace_graph_and_disposition` `:10622`; `final_proof_cost_is_linear_in_the_number_of_workspaces` `:10237` |
-| Accounting / reporting | `execution_reports_observed_decrease_deduped` `:7055`; `final_report_lists_all_groups_and_deduped_total` `:7530`; `union_accounting_counts_each_output_root_once` `:9982`; `post_clean_disappearing_sibling_is_measured_normally` `:10020`; `post_clean_measurement_uncertainty_fabricates_no_decrease` `:10041`; `stats_account_for_final_ownership_universe_proof_work` `:10326`; `cleanup_progress_is_determinate_through_observer_path` `:8752`; `scan_analysis_total_is_determinate_through_real_path` `:8787`; `blocked_scope_render_lists_unresolved_participants_with_workspace_hint` `:5658`; `blocked_scope_render_bounds_unresolved_participant_listing` `:5719`; `one_invocation_one_result_progress_total_and_no_sibling_row` `:9317` |
-| Real Cargo integration | `real_temp_project_preview_and_execute_with_redirected_target` `:7580`; `real_cargo_package_selector_preserves_sibling_workspace_artifacts` `:7719`; `multi_member_private_workspace_can_be_cleaned` `:7833` |
-| Selector composition (host-independent) | `a_selector_reaches_the_cargo_command_line` `:10973`; `profile_selector_capability_is_bounded_to_qualified_runtime_versions` `:4716` |
-| Root validation / frozen env | `clean_requires_absolute_root` `:7078`; `frozen_env_sets_target_and_build_dir` `:7014`; `frozen_env_pins_the_build_directory_so_an_inherited_redirect_cannot_apply` `:10302`; `collapse_roots_fails_closed_when_a_root_no_longer_resolves` `:7121`; `violated_admission_premise_blocks_with_zero_cargo_spawns` `:7324`; `cleanup_root_symlink_with_trailing_slash_is_refused` `:7096` (`#[cfg(unix)]`) |
-| Misc | `cleanup_reason_codes_have_stable_contract_names` `:4687`; `source_tree_as_output_root_is_never_cleaned` `:10181`; `another_workspaces_source_tree_inside_the_cleaned_region_is_never_cleaned` `:10077`; `proof_failures_distinguish_a_change_from_an_unproven_ownership` `:10273`; `cross_workspace_overlap_race_into_target_skips_candidate` `:9693`; `cross_workspace_overlap_race_into_distinct_build_skips_candidate` `:9737` |
-| Scoped proof default (M017 / ADR 007) | `scope_note_does_not_block_in_boundary_execute` `:5937`; `simulate_and_preview_predict_without_spawning_or_blocking` `:6090`; `out_of_anchor_poison_does_not_block_anchor` `:6035`; `refused_passenger_rides_along_without_blocking` `:6127`; `redirected_outputs_skip_both_sides_without_blocking` `:6184`; `nested_outputs_skip_at_unit_gate_with_zero_spawns` `:6227`; `metadata_failure_blocks_boundary_with_zero_spawns` `:6266`; `symlinked_output_produces_no_unit_while_sibling_cleans` `:6302`; `mid_run_growth_blocks_remaining_scope_with_reported_note` `:6356`; `proof_refuses_where_stale_universe_would_proceed` `:6404`; `passenger_host_never_cleans_alone_after_redirect` `:6456`; `environment_change_blocks_remaining_units` `:6518` + `environment_change_probe` `:6543`; `listing_offers_rows_with_no_block` `:6631`; `listing_refuses_blocked_boundary` `:6657`; `empty_proof_universe_blocks_listing` `:5454`; `unresolved_scope_note_is_reported_without_blocking_any_mode` `:5577`; `the_candidate_listing_is_the_engines_own_unit_set` `:4838`; `the_listing_never_spawns_a_clean` `:5420`; `a_candidate_row_states_when_it_cannot_be_cleaned` `:5490`; `blocked_listing_detail_names_participants_and_hints_workspace_membership` `:4266`; `mid_run_manifest_growth_blocks_remaining_scope` `:5837`; `universe_stability_predicate_detects_growth_that_naive_stub_misses` `:5808`; `build_dir_move_detected_by_full_env_check_but_missed_by_target_only_naive` `:5767` |
+| Authorization cannot promote | `external_unproven_inside_root_remains_inventory_only` `:6728`; `private_bounded_inside_workspace_is_authorized` `:6859`; `external_unproven_outside_root_never_authorized_by_allowed_root` `:6911`; `symlink_allowed_root_rejected_and_shared_forbidden` `:6970`; `external_outside_root_allowed_via_configured_root` `:7893`; `missing_and_file_allowed_roots_authorize_nothing_but_are_not_fatal` `:7261`; `authorization_infrastructure_failure_scope_blocks_instead_of_per_unit_skip` `:10735`; `external_unproven_skip_code_names_ownership_not_authorization` `:7170`; `ownership_degraded_code_matches_scan_time_vocabulary` `:10812`; `covering_inspect_failure_maps_permission_denied_to_uncertain` `:10796` |
+| Ownership gating / unit gate | `gate_blocks_mixed_class_units_in_every_combination` `:9626`; `private_target_with_external_unproven_build_skips_entire_unit` `:9391`; `private_target_with_shared_build_skips_entire_unit` `:9433`; `external_unproven_target_with_private_build_skips_entire_unit` `:9466`; `uncertain_build_identity_skips_entire_unit` `:9495`; `symlink_build_identity_skips_entire_unit` `:9536`; `gate_blocks_unmeasured_and_unmapped_unit_members` `:9657`; `distinct_private_target_and_build_is_one_cleanable_unit` `:9299`; `equal_and_nested_target_build_are_one_unit_and_one_invocation` `:9684` |
+| Proof universe completeness | `universe_workspace_that_cannot_reresolve_fails_closed` `:9910`; `cross_workspace_symlink_into_candidate_output_fails_closed` `:9809`; `cross_workspace_unresolvable_root_into_candidate_output_fails_closed` `:9845`; `cross_workspace_symlinked_ancestor_into_candidate_output_fails_closed` `:9883`; `combined_roots_classify_cross_root_output_as_shared_in_every_mode` `:10471`; `scope_note_in_second_root_does_not_block_first_root` `:10518`; `refused_empty_manifest_is_reported_without_blocking_scope` `:7440`; `proof_fails_closed_when_a_member_source_no_longer_resolves` `:7220` |
+| Pre-spawn / proof refresh | `revalidation_detects_changed_target_and_skips` `:7335`; `direct_metadata_refresh_detects_workspace_root_and_member_changes` `:8286`; `initial_shared_overlap_is_decided_conservatively_without_proof` `:9956`; `candidate_target_or_build_change_still_skips` `:9995`; `missing_marker_skips_instead_of_failing` `:7946`; `race_marker_disappears_and_changes_skip` `:8728`; `race_covering_root_disappears_skips` `:8497`; `race_covering_becomes_symlink_skips_and_changes_classification` `:8758`; `fresh_size_policy_rejects_shrunk_output_before_any_cargo_clean` `:8552`; `fresh_source_and_output_age_policy_rejects_before_any_cargo_clean` `:8602`; `race_output_becomes_recent_skips` `:8512`; `race_source_becomes_recent_skips` `:8534`; `race_target_replacement_skips_before_clean` `:8259`; `new_manifest_after_proof_blocks_remaining_scope` `:10885`; `prove_covering_roots_refuses_symlink_swap_with_change_code` `:7196`; `missing_output_identity_pair_compares_equal_not_unproven` `:4428` |
+| Coverage exclusion (M018) | `a_unit_under_an_unproven_root_is_reported_as_incomplete_coverage` `:5239`; `a_shared_output_with_an_unproven_root_stays_shared_and_is_not_cleaned` `:5314`; `the_coverage_exclusion_removes_candidates_and_names_the_cause` `:5365` |
+| Selection policy | `profile_selector_capability_is_bounded_to_qualified_runtime_versions` `:4749`; `package_specs_require_one_authoritative_workspace_identity` `:4766`; `package_selector_with_valid_workspace_index_evaluates_spec` `:10851`; `excluded_workspace_still_makes_nonexcluded_shared_output_non_cleanable` `:8655`; `simulation_parity_changed_build_dir_and_unsupported_capability_both_skip` `:8389`; `policy_dispositions_have_stable_json_names` `:4700`; `ancestry_selection_matches_in_both_directions` `:4355`; `roots_selection_matches_exactly` `:4395`; `outside_selection_is_reported_rather_than_silently_dropped` `:4408` |
+| Mode semantics / parity | `preview_is_default_and_simulate_invokes_no_clean` `:5566`; `simulation_candidate_set_matches_execute_preflight` `:6716`; `simulation_parity_missing_and_invalid_markers_both_skip` `:7989`; `simulation_parity_valid_private_reaches_cleanable_with_zero_clean_calls` `:8049`; `simulation_parity_recent_source_and_output_both_skip` `:8098`; `combined_private_roots_keep_preview_simulate_execute_parity` `:10431`; `combined_roots_share_one_ownership_proof_and_simulation_never_cleans` `:10397`; `cli_modes_map_to_preview_simulate_execute` `:4669` |
+| Concurrency / cost | `proof_refresh_parallelism_is_bounded_and_results_stay_deterministic` `:10584`; `sequential_and_parallel_refreshes_produce_the_same_workspace_graph_and_disposition` `:10655`; `final_proof_cost_is_linear_in_the_number_of_workspaces` `:10270` |
+| Accounting / reporting | `execution_reports_observed_decrease_deduped` `:7088`; `final_report_lists_all_groups_and_deduped_total` `:7563`; `union_accounting_counts_each_output_root_once` `:10015`; `post_clean_disappearing_sibling_is_measured_normally` `:10053`; `post_clean_measurement_uncertainty_fabricates_no_decrease` `:10074`; `stats_account_for_final_ownership_universe_proof_work` `:10359`; `cleanup_progress_is_determinate_through_observer_path` `:8785`; `scan_analysis_total_is_determinate_through_real_path` `:8820`; `blocked_scope_render_lists_unresolved_participants_with_workspace_hint` `:5691`; `blocked_scope_render_bounds_unresolved_participant_listing` `:5752`; `one_invocation_one_result_progress_total_and_no_sibling_row` `:9350` |
+| Real Cargo integration | `real_temp_project_preview_and_execute_with_redirected_target` `:7613`; `real_cargo_package_selector_preserves_sibling_workspace_artifacts` `:7752`; `multi_member_private_workspace_can_be_cleaned` `:7866` |
+| Selector composition (host-independent) | `a_selector_reaches_the_cargo_command_line` `:11006`; `profile_selector_capability_is_bounded_to_qualified_runtime_versions` `:4749` |
+| Root validation / frozen env | `clean_requires_absolute_root` `:7111`; `frozen_env_sets_target_and_build_dir` `:7047`; `frozen_env_pins_the_build_directory_so_an_inherited_redirect_cannot_apply` `:10335`; `collapse_roots_fails_closed_when_a_root_no_longer_resolves` `:7154`; `violated_admission_premise_blocks_with_zero_cargo_spawns` `:7357`; `cleanup_root_symlink_with_trailing_slash_is_refused` `:7129` (`#[cfg(unix)]`) |
+| Misc | `cleanup_reason_codes_have_stable_contract_names` `:4720`; `source_tree_as_output_root_is_never_cleaned` `:10214`; `another_workspaces_source_tree_inside_the_cleaned_region_is_never_cleaned` `:10110`; `proof_failures_distinguish_a_change_from_an_unproven_ownership` `:10306`; `cross_workspace_overlap_race_into_target_skips_candidate` `:9726`; `cross_workspace_overlap_race_into_distinct_build_skips_candidate` `:9770` |
+| Scoped proof default (M017 / ADR 007) | `scope_note_does_not_block_in_boundary_execute` `:5970`; `simulate_and_preview_predict_without_spawning_or_blocking` `:6123`; `out_of_anchor_poison_does_not_block_anchor` `:6068`; `refused_passenger_rides_along_without_blocking` `:6160`; `redirected_outputs_skip_both_sides_without_blocking` `:6217`; `nested_outputs_skip_at_unit_gate_with_zero_spawns` `:6260`; `metadata_failure_blocks_boundary_with_zero_spawns` `:6299`; `symlinked_output_produces_no_unit_while_sibling_cleans` `:6335`; `mid_run_growth_blocks_remaining_scope_with_reported_note` `:6389`; `proof_refuses_where_stale_universe_would_proceed` `:6437`; `passenger_host_never_cleans_alone_after_redirect` `:6489`; `environment_change_blocks_remaining_units` `:6551` + `environment_change_probe` `:6576`; `listing_offers_rows_with_no_block` `:6664`; `listing_refuses_blocked_boundary` `:6690`; `empty_proof_universe_blocks_listing` `:5487`; `unresolved_scope_note_is_reported_without_blocking_any_mode` `:5610`; `the_candidate_listing_is_the_engines_own_unit_set` `:4871`; `the_listing_never_spawns_a_clean` `:5453`; `a_candidate_row_states_when_it_cannot_be_cleaned` `:5523`; `blocked_listing_detail_names_participants_and_hints_workspace_membership` `:4299`; `mid_run_manifest_growth_blocks_remaining_scope` `:5870`; `universe_stability_predicate_detects_growth_that_naive_stub_misses` `:5841`; `build_dir_move_detected_by_full_env_check_but_missed_by_target_only_naive` `:5800` |
 
 ### What each fake runner exists to catch
 
@@ -1274,14 +1284,14 @@ counterexample generator.
 
 | Fake | Mechanism | Unique failure mode it catches |
 | --- | --- | --- |
-| `FakeCleanupRunner` `:4423` | Synthetic `locate-project`/`metadata` JSON; deletes `artifact.bin` on non-dry-run cleans; `unresolved_manifest` fails one manifest. | The baseline: that a real clean changes the filesystem and the reported decrease matches. The only fake making post-clean measurement non-trivial. `unresolved_manifest` drives the scope-block path. |
-| `ChangingTargetRunner` `:7261` | First `metadata` returns the base target; **every later** one a different `target_directory`. | A target redirected by Cargo's *own resolution* between scan and proof — the TOCTOU failure at the module's heart, caught by a proof that trusted the scan's cached `OutputSet`. |
-| `RaceRunner` `:8112` | Arbitrary mutation closure on the **second and later** `metadata` calls — precisely the scan→proof window. Optional `second_target`/`second_build`. | Filesystem changes landing *between* two different Cargo invocations. The general race injector: covering-root deletion (`:8119`), mtime bump to now (`:8119`, `:8119`), marker removal or content change (`:8119`), covering root replaced by a symlink (`:8119`), target replacement (`:8119`). |
-| `PerPathFailRunner` `:7408` | `locate-project` fails for any manifest path containing `"bad"`; everything else resolves cleanly. | **Partial resolution** — the dangerous shape is one unresolvable manifest plus one perfectly cleanable workspace, and the temptation to clean the cleanable one. Asserts `unresolved_ownership == 1`, `results.is_empty()`, and a `scope_blocked` render. The direct test of §9's incomplete-universe answer. |
-| `BuildChangingRunner` `:8368` | `build_directory` starts equal to `target_directory`, becomes distinct on later `metadata` calls. Explicitly does *not* consume a metadata call for `clean`. | A build-dir capability flip (`Equal` → `Distinct`) mid-transaction, where the *shape* of the affected output changes rather than its location. Also guards a subtle fake bug: a fake counting a `clean` as a `metadata` call would corrupt the call-index arithmetic. |
-| `StagedCargo` `:8855` | Multi-workspace Cargo; `stage(index, from_call, target, build)` changes output from the Nth `metadata` onward; `fail_metadata_from`; `on_clean` hook mutates the filesystem *during* the clean; `removes_on_clean`; `dry_run_calls()` separates preview from real clean. | The general N-workspace instrument. Cross-workspace contamination (one workspace's change affecting another's proof), per-workspace metadata failure at a chosen call index, and mutation *between* proof and spawn. The `on_clean` hook is what makes the post-spawn window testable at all. |
-| `ParallelProbeRunner` `:9086` | Wraps `StagedCargo` with an active/peak counter and a 4 ms sleep on `metadata`. | **Unbounded parallelism** — if the pool were unbounded or mis-chunked, `peak` would exceed `PROOF_REFRESH_CONCURRENCY_CAP`. Also asserts the peak equals what is reported in `counters`, i.e. that the *meter* is honest, not just bounded. The sleep is what makes `peak >= 2` non-flaky. |
-| `MetadataMutationRunner` `:9134` | Wraps `StagedCargo`; from the **second** `metadata` call onward mutates the returned JSON: change `workspace_root`, append a member to `packages`+`workspace_members` (also writing a real manifest file), or emit non-JSON. | The three ways a workspace's *identity* changes without its paths changing: root moved, membership grew, Cargo's own output unparseable. A proof comparing only paths, or trusting cached JSON, misses all three. |
+| `FakeCleanupRunner` `:4456` | Synthetic `locate-project`/`metadata` JSON; deletes `artifact.bin` on non-dry-run cleans; `unresolved_manifest` fails one manifest. | The baseline: that a real clean changes the filesystem and the reported decrease matches. The only fake making post-clean measurement non-trivial. `unresolved_manifest` drives the scope-block path. |
+| `ChangingTargetRunner` `:7294` | First `metadata` returns the base target; **every later** one a different `target_directory`. | A target redirected by Cargo's *own resolution* between scan and proof — the TOCTOU failure at the module's heart, caught by a proof that trusted the scan's cached `OutputSet`. |
+| `RaceRunner` `:8145` | Arbitrary mutation closure on the **second and later** `metadata` calls — precisely the scan→proof window. Optional `second_target`/`second_build`. | Filesystem changes landing *between* two different Cargo invocations. The general race injector: covering-root deletion (`:8152`), mtime bump to now (`:8152`, `:8152`), marker removal or content change (`:8152`), covering root replaced by a symlink (`:8152`), target replacement (`:8152`). |
+| `PerPathFailRunner` `:7441` | `locate-project` fails for any manifest path containing `"bad"`; everything else resolves cleanly. | **Partial resolution** — the dangerous shape is one unresolvable manifest plus one perfectly cleanable workspace, and the temptation to clean the cleanable one. Asserts `unresolved_ownership == 1`, `results.is_empty()`, and a `scope_blocked` render. The direct test of §9's incomplete-universe answer. |
+| `BuildChangingRunner` `:8401` | `build_directory` starts equal to `target_directory`, becomes distinct on later `metadata` calls. Explicitly does *not* consume a metadata call for `clean`. | A build-dir capability flip (`Equal` → `Distinct`) mid-transaction, where the *shape* of the affected output changes rather than its location. Also guards a subtle fake bug: a fake counting a `clean` as a `metadata` call would corrupt the call-index arithmetic. |
+| `StagedCargo` `:8888` | Multi-workspace Cargo; `stage(index, from_call, target, build)` changes output from the Nth `metadata` onward; `fail_metadata_from`; `on_clean` hook mutates the filesystem *during* the clean; `removes_on_clean`; `dry_run_calls()` separates preview from real clean. | The general N-workspace instrument. Cross-workspace contamination (one workspace's change affecting another's proof), per-workspace metadata failure at a chosen call index, and mutation *between* proof and spawn. The `on_clean` hook is what makes the post-spawn window testable at all. |
+| `ParallelProbeRunner` `:9119` | Wraps `StagedCargo` with an active/peak counter and a 4 ms sleep on `metadata`. | **Unbounded parallelism** — if the pool were unbounded or mis-chunked, `peak` would exceed `PROOF_REFRESH_CONCURRENCY_CAP`. Also asserts the peak equals what is reported in `counters`, i.e. that the *meter* is honest, not just bounded. The sleep is what makes `peak >= 2` non-flaky. |
+| `MetadataMutationRunner` `:9167` | Wraps `StagedCargo`; from the **second** `metadata` call onward mutates the returned JSON: change `workspace_root`, append a member to `packages`+`workspace_members` (also writing a real manifest file), or emit non-JSON. | The three ways a workspace's *identity* changes without its paths changing: root moved, membership grew, Cargo's own output unparseable. A proof comparing only paths, or trusting cached JSON, misses all three. |
 
 Two patterns deserve naming. The **"from the Nth metadata call"** idiom
 (`stage`, `fail_metadata_from`, the `MetadataMutation` threshold) is the module's
@@ -1302,11 +1312,11 @@ anything here: no PATH is built, no shebang is used, no byte-literal file name
 is created, and all fixtures are constructed through `std::fs` in Rust.
 
 Within `cleanup.rs` the platform guards are narrow and correct: `#[cfg(unix)]`
-appears eight times — `:6107`, `:6742`, `:6889`, `:6966`, `:8526`, `:9295`,
-`:9568`, `:9642` — all on symlink-manipulating tests, which is right since
+appears eight times — `:6140`, `:6775`, `:6922`, `:6999`, `:8559`, `:9328`,
+`:9601`, `:9675` — all on symlink-manipulating tests, which is right since
 creating a symlink and asserting `symlink_metadata(...).file_type().is_symlink()`
-are the platform-sensitive operations. The three real-Cargo tests (`:7374`,
-`:7509`, `:8581`) carry **no platform guard** and depend on the host Cargo
+are the platform-sensitive operations. The three real-Cargo tests (`:7407`,
+`:7542`, `:8614`) carry **no platform guard** and depend on the host Cargo
 supporting the flags cleanup passes.
 
 ### Honest gaps
@@ -1314,7 +1324,7 @@ supporting the flags cleanup passes.
 1. **The positive `allowed_output_roots` path is unverified end to end.** The
    only test supplying a non-empty `allowed_output_roots` for a group that passes
    the ownership filter is `external_outside_root_allowed_via_configured_root`
-   (`:7650`) — and it asserts the group is **skipped**. No test shows a
+   (`:7683`) — and it asserts the group is **skipped**. No test shows a
    `PrivateBounded` group with covering roots outside every clean root becoming
    `Cleaned` once an allowed root is configured. Given `config.toml:37-38` calls
    the field "operationally redundant" this is consistent, but it leaves the
@@ -1344,7 +1354,7 @@ recurring lesson — "a green test proves only that its own premises hold" — a
 "a case's pass condition proves the intended branch" are both *not* checked
 statically. Does that risk exist here? **Partly, in a narrower form.**
 
-- The *class* of risk is present in the real-Cargo tests. A test like `:7374`
+- The *class* of risk is present in the real-Cargo tests. A test like `:7407`
   uses `SystemCleanupRunner` against host cargo; if that invocation failed for an
   unrelated reason (lockfile semantics, a network-less index, an unsupported
   flag), the setup assertions could pass while the intended branch went
@@ -1359,7 +1369,7 @@ statically. Does that risk exist here? **Partly, in a narrower form.**
 - What is **not** defended: no test asserts a *premise* about the host cargo
   before relying on it. The closest is
   `profile_selector_capability_is_bounded_to_qualified_runtime_versions`
-  (`:4523`), which tests the version parser in isolation rather than the host
+  (`:4556`), which tests the version parser in isolation rather than the host
   version. Treat the three real-Cargo tests as environment-dependent and confirm
   they are not silently short-circuiting on the CI lanes.
 
@@ -1373,8 +1383,8 @@ statically. Does that risk exist here? **Partly, in a narrower form.**
 2. **`covering_is_authorized_roots:1167-1169` must remain the first thing that
    inspects anything.** Moving the ownership check after path validation would
    let a future edit return `true` for `ExternalUnproven`. Guarded by `:2047`
-   and `:6695`.
-3. **The five `PrivateBounded` gates (`:1167`, `:1301`, `:2393-2394`, `:2667`, `:3971`)
+   and `:6728`.
+3. **The five `PrivateBounded` gates (`:1167`, `:1301`, `:2393-2394`, `:2667`, `:4004`)
    must stay ahead of their `covering_is_authorized_roots` calls** (`:1155` is a
    per-group call that assumes private). This is the C003 unit invariant.
 4. **Error strings feed the machine contract only at the refresh boundary.**
@@ -1385,7 +1395,7 @@ statically. Does that risk exist here? **Partly, in a narrower form.**
    touching the refresh boundary or the "changed identity"/"vanished" cases,
    check `:2455-2459`.
 5. **A new `CleanupReasonCode` or `PolicyDisposition` variant must be added to
-   its contract test** (`:4192`, `:4172`) *and* to `output.rs:176` / `:249-260`.
+   its contract test** (`:4225`, `:4205`) *and* to `output.rs:176` / `:249-260`.
    Four reason codes and one disposition are currently missing from their tests.
 6. **The universe is shared, so a `ProofUniverse` failure is a run-wide scope
    block, not a unit failure.** Touching `hoisted.get()` (`:1839`) or the
@@ -1396,48 +1406,48 @@ statically. Does that risk exist here? **Partly, in a narrower form.**
    `final_cleanup_proof`; `execute_pre_spawn_decision` delegates through it). A
    refactor unifying the call sites must not drop the per-candidate
    re-resolution.
-8. **`cargo --version` is a real spawn at `:4126`, outside the proof**, gated on
+8. **`cargo --version` is a real spawn at `:4159`, outside the proof**, gated on
    `selector.is_some()` (`:1466-1470`). Any new runtime probe should follow the
    same gating so a zero-selector run keeps its spawn count at
    locate+metadata only.
 9. **`min_reclaimable_bytes` is checked twice on different numbers** — scan bytes
    at `:1756`, fresh proof bytes at `:1879`. Removing the second check would let a
    unit that *shrank* between scan and spawn pass a size policy.
-   `fresh_size_policy_rejects_shrunk_output_before_any_cargo_clean` (`:8519`)
+   `fresh_size_policy_rejects_shrunk_output_before_any_cargo_clean` (`:8552`)
    covers exactly this.
-10. **`frozen_env` (`:4043`) is the only thing between an inherited
+10. **`frozen_env` (`:4076`) is the only thing between an inherited
     `CARGO_BUILD_BUILD_DIR` and a silent redirect.** Both refusal branches
-    (`:3868-3876`, `:3886-3895`) are load-bearing; covered by
-    `frozen_env_sets_target_and_build_dir` (`:7014`) and the M5/M9 test
-    (`:10038`). Likewise `--offline --locked` (`:3914-3915`) are unconditional
+    (`:3886-3894`, `:3904-3913`) are load-bearing; covered by
+    `frozen_env_sets_target_and_build_dir` (`:7047`) and the M5/M9 test
+    (`:10071`). Likewise `--offline --locked` (`:3947-3948`) are unconditional
     and must not become conditional; a networked cleanup path is a behaviour
     change, not a fix.
 11. **Post-clean measurement failure must not fabricate bytes.** The `Err` branch
     at `:1670-1704` sets `after_bytes: None`, increments `diagnostics`, and keeps
     `outcome: Cleaned` with `MeasurementFailed`. Guarded by
-    `post_clean_measurement_uncertainty_fabricates_no_decrease` (`:10041`).
+    `post_clean_measurement_uncertainty_fabricates_no_decrease` (`:10074`).
 12. **Adding a filesystem deletion to this module would be a contract-level
-    regression.** There is none in production (`:4060-4062`) and ADR 001
+    regression.** There is none in production (`:4093-4095`) and ADR 001
     `:188-220` forbids it. Any `fs::remove_*` in cleanup.rs production code
     should fail review outright.
 13. **The parallelism cap (`:3012`) and the meter's honesty.** If
     `ProofRefreshMeter` stops counting, `proof_metadata_peak_concurrency` becomes
     a fiction while the refresh still works.
-    `proof_refresh_parallelism_is_bounded_and_results_stay_deterministic` (`:10551`)
+    `proof_refresh_parallelism_is_bounded_and_results_stay_deterministic` (`:10584`)
     asserts meter-equals-reported.
 14. **Determinism under parallel refresh is load-bearing for report ordering.**
     The refresh sorts by root; `render()` re-sorts by size then path.
     `sequential_and_parallel_refreshes_produce_the_same_workspace_graph_and_disposition`
-    (`:10409`) keeps both honest.
+    (`:10442`) keeps both honest.
 15. **`config.toml:37-38`'s "operationally redundant" claim should be revisited.**
     It holds because `PrivateBounded` requires covering roots below the
-    *workspace* root (`workspace.rs:1552-1558`), but the positive
+    *workspace* root (`workspace.rs:1593-1599`), but the positive
     `allowed_output_roots` branch (`:1280-1285`) and its advertised remediation
     (`:1127-1134`) have no end-to-end test. Add one or soften the comment.
 16. **The public wrappers with no production caller are a growing dead-code
-    surface** — `clean` `:1385`, `is_authorized` `:1117`,
+    surface** — `clean` `:1422`, `is_authorized` `:1117`,
     `covering_is_authorized` `:1141`, `unit_block_reason` `:1272`, plus
-    `final_cleanup_proof` `:3547` and `execute_pre_spawn_decision` `:4023`. Each
+    `final_cleanup_proof` `:3626` and `execute_pre_spawn_decision` `:4102`. Each
     is a place where a future edit can diverge from the live path with no compile
     error. Mark them clearly as test/consumer surface or delete them.
 17. **The ADR 007 boundary rule has three homes that must not drift:**

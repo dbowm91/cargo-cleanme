@@ -7,7 +7,7 @@ the one architecture deep dive your change touches.
 
 A single Rust crate that finds Cargo build output and cleans it **through
 Cargo**, never by deleting directories. One binary over one library of 16
-modules, 18 source files, 39,334 lines in `src/`. No async runtime of its own.
+modules, 18 source files, 40,019 lines in `src/`. No async runtime of its own.
 `cargo metadata` is the only binary dependency that matters for safety.
 
 The working tree is **0.2.10**, the published version, with post-publication
@@ -231,8 +231,8 @@ source of truth for module line counts and the inline-test total; verify each
 against `src/`, fix the overview first, then align the deep dives.
 
 The same rule applies to **per-platform test counts**, which have disagreed
-across three documents: they are 534 declared, 532 on Linux, 490 on Windows,
-529 on macOS. Derive them with a brace-tracking parser evaluated against
+across three documents: they are 555 declared, 553 on Linux, 508 on Windows,
+550 on macOS. Derive them with a brace-tracking parser evaluated against
 `rustc --print cfg --target <triple>`, and cross-check against
 `cargo test --lib -- --list`. A grep for `#[cfg(unix)]` immediately above
 `#[test]` finds 30 of the 40, because Rust allows `#[test]` to come first —
