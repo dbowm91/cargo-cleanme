@@ -1332,3 +1332,191 @@ evidence:
 `plans/closure/artifact-discovery-cleanup/c043-status.md`. **Closing** —
 implemented and ladder-green; **not published**, and publication is
 owner-gated.
+
+## C041 — update-path candidate spawn can fail with ETXTBSY (proposed)
+
+Status: **proposed** — found by the v0.2.10 release gate; the mechanism is
+narrowed but not yet proven, and it is **not implemented**. Plan:
+`plans/implementation/artifact-discovery-cleanup/c041-update-candidate-spawn-etxtbsy-corrective.md`.
+Closure receipt: **none due** — the plan is not implemented.
+
+The v0.2.10 release gate failed on its **first** run and passed on its second
+with an identical tree: `update::tests::a_staging_cleanup_failure_is_reported_not_swallowed`
+failed with `spawning bounded candidate: Text file busy (os error 26)` —
+`ETXTBSY`, `execve` refusing a file some process still holds open for writing.
+It is **not a safety defect**: the transaction aborts before the commit, the
+error is reported, and nothing is deleted. It **is** reachable by a user,
+because the same path stages and executes a candidate during a real
+`cargo cleanme update`. The mechanism is narrowed — the staged candidate's
+write descriptor is still open at `execve` time — but **not proven**, so the
+next step is instrumentation rather than more reading. Upstream `eggup-core`
+0.1.3 was diffed against 0.1.2 and does **not** carry the fix
+(`run_bounded` is byte-identical), so "pin upstream until it lands" is not
+available as a mitigation. Deliberately **not fixed inside the release**: a
+change to the update path is safety-adjacent and deserves its own review.
+Recorded in `plans/closure/distribution-release-update/r030-status.md` §11.
+Corresponds to `architecture/overview.md` §10 finding **61**.
+
+## C044 — the post-0.2.10 defect sweep (closing; unpublished)
+
+Status: **closing** — implemented and ladder-green in the working tree on
+`main` at `cf4a6a0` (0.2.10, unpublished; latest published tag `v0.2.10`).
+**Not published**: no tag, no release, no crates.io publication; publication is
+owner-gated. Plan:
+`plans/implementation/artifact-discovery-cleanup/c044-post-0-2-10-defect-sweep-corrective.md`;
+evidence: `plans/closure/artifact-discovery-cleanup/c044-status.md`.
+
+Owner-directed 2026-10-22: an interrogation of the 0.2.10 tree found
+**thirteen defects and one optimisation**, each reproduced before it was fixed
+and each pinned by a test that fails before the fix. The critical one broke
+the repository's own first rule — *nothing is deleted on the strength of a
+timestamp; every candidate must first prove exclusive ownership of its
+physical bytes* — and it broke it **silently**: an output root **inside**
+another package's directory was classified `PrivateBounded` and cleaned, so
+the tool deleted a package's checked-in files and reported the space it had
+reclaimed. The mirror of the structural check was never tested, and the victim
+need not be a workspace the tool could resolve: Cargo refuses a nested package
+that is not a workspace member, so the package inside the output root is
+exactly the one the resolved universe does **not** contain. The structural
+check is now two-sided, and the per-spawn re-proof matches it.
+
+Also fixed: a root `--profile` that silently discarded a `clean --package`
+(exit `0`, and a *different* destructive action than the one asked for); three
+interactive-frame defects (the empty-result row was not truncated, the
+ownership column vanished at 27–30 columns so a `Shared` unit looked
+cleanable, and the coloured all-toggle row overflowed the frame); three updater
+defects (a staging-cleanup failure claimed the executable was replaced
+regardless of the receipt, the receipt error dropped the retained backup's
+path, and the staging directory was `0775` under a common umask while the
+contract calls it private); a scope-conflict message that named a flag the
+operator never typed; the hidden `scan --full` alias, which an `ArgGroup` was
+rendering in the usage line; the false progress tick-semantics claim; and the
+authoritative module-line census, which was wrong by one.
+
+## C045 — the `clean` alias's surface is declared twice, and its compatibility guarantee is guarded in one direction only (closing)
+
+Status: **closing** — implemented and ladder-green; **not published**. The
+behavioural contract was settled (ADR 008 §4b is accepted; M019's resolved
+intent is frozen) and no owner decision was outstanding. Plan:
+`plans/implementation/artifact-discovery-cleanup/c045-clean-alias-single-source-of-truth-corrective.md`.
+Closure receipt: `plans/closure/artifact-discovery-cleanup/c045-status.md`.
+Corrects: **M019** (`m019-*.md`; closure record `m019-status.md`, status
+**closing**, unpublished).
+
+**The premise this corrective corrects.** The hypothesis that motivated the
+line of work was that the `clean` subcommand's duplication existed so that the
+base scan could be run in a target directory simply as `cargo cleanme`. That
+need is **already met, and it is met without the alias**. A bare
+`cargo cleanme` in a target directory *is* the base scan in that directory:
+the working directory joins the maintenance scope (ADR 009, accepted
+2026-10-20; **C040**, shipped in v0.2.10), documented at `docs/USAGE.md:25`,
+`:113-120`, `:226` and `:378`. Verified on 2026-10-22 against the built
+binary: the fixture directory appears in `selected_roots`, and the bare run
+and the `clean` run are **byte-identical** in the JSON envelope.
+
+So the alias's remaining purpose is narrow and specific: **published-spelling
+compatibility**. `clean` and `clean --known` have been published since v0.2.0,
+and ADR 008 §4b settled that they are retained, hidden, and never deleted.
+That distinction is not written down anywhere as a single sentence, and the
+consequence of leaving it unwritten is concrete: an implementer who believes
+the alias is what makes "run in the target directory" work will preserve it
+for the wrong reason, and may one day "simplify" by making the alias the
+canonical path — undoing ADR 008 §4b and deprecating the bare invocation that
+ADR 009 / C040 actually made canonical.
+
+**What it finds.** Two recorded findings, and **no behavioural defect**: the
+two spellings resolve identically today. Finding **68** is a **guard gap** —
+the only guard on the alias's surface
+(`compatibility_aliases_are_hidden_but_accepted`, `src/cli.rs:1854-1896`)
+enumerates the alias's own ids and asserts that the alias *carries* them, but
+asserts nothing about the **converse**: that the alias accepts every cleanup
+flag the root declares. The converse does not even hold structurally today —
+`interactive` reaches the alias solely because it is declared `global = true`,
+so the guard's list is already a hand-maintained approximation rather than a
+derivation. An override added to the root and not mirrored onto the alias
+yields `cargo cleanme clean --new-override` → *"unexpected argument"* → exit
+`2`, and a spelling published since v0.2.0 stops working with the whole suite
+green. M019's acceptance criterion *"No published spelling is removed; `clean`
+still accepts everything it accepts today"* is satisfied today but discharged
+by reading a diff — nothing enumerates "everything it accepts today".
+
+Finding **69** is the **duplication cost**: the root declares twelve cleanup
+flags (`src/cli.rs:71`, `:74`, `:88`, `:94`, `:102`, `:105`, `:108`, `:111`,
+`:114`, `:117`, `:120`, `:124`) and the alias declares the same surface again
+(`src/cli.rs:176`–`:215`); the scope rule is derived twice
+(`root_cleanup_request` `src/cli.rs:469-487` and `merged_cleanup_request`
+`:497-567`); and a bespoke merge layer (`merge_overrides` `:721-745`,
+`merge_one` `:748-755`, `merge_many` `:758-765`) reconciles the two copies.
+One new flag therefore costs **four** edits, and finding 68 is the
+consequence.
+
+**Why previous verification missed it.** Every equivalence test names a
+hand-picked *pair* — a hand-written pair list is green for the pairs it names
+and silent about every pair it does not, and the spelling space is a
+cross-product that cannot be enumerated by construction. The alias-flag guard
+points the wrong way for compatibility. The compatibility criterion was
+discharged by reading, not by checking. And the duplication is invisible at
+runtime: both spellings resolve to the same `Invocation`, so no behavioural
+test can observe it.
+
+**What it will do.** One declaration of the cleanup flag surface, one scope
+rule, a **converse** compatibility guard that reads the root's flag ids from
+the clap command model, and the prose that describes the surface — including
+`CleanupOverrides`'s own doc comment (`src/cli.rs:278-282`), which still
+denies the shipped surface and is finding **65**. No resolved intent changes;
+no published spelling is removed or narrowed; the rendered help and the
+generated artifacts must be byte-identical afterwards.
+
+Also recorded by this line: **C036 D36** (the root's `--config` flag is the
+only root option with no description, and `config path|show|edit` are the only
+subcommands with none — their three man pages have an empty `.SH DESCRIPTION`
+and a `.SH NAME` that is the bare word) and **C036 D37** (a second
+hand-maintained count with D29's exact mechanism — `architecture/overview.md`
+§10 asserted a finding count that was stale by two, in a sentence whose own
+claim was that the count is re-derivable by counting the table).
+
+## C046 — the MSRV lane asserts a rendering the qualified-host case never produces (ready)
+
+Status: **ready** — the defect is reproduced and the variable isolated; the fix
+is one assertion; no owner decision is outstanding. Plan:
+`plans/implementation/artifact-discovery-cleanup/c046-msrv-lane-test-assertion-corrective.md`.
+Closure receipt: **none due** — the plan is not implemented.
+Found by: **C045**, while running the MSRV lane that C045's acceptance criteria
+name. Recorded as `architecture/overview.md` §10 finding **70**.
+
+**What it finds.** The repository's **MSRV lane is red at `main`**, and it is
+red for a reason that has nothing to do with the toolchain's *compiler*.
+`cleanup::tests::real_temp_project_preview_and_execute_with_redirected_target`
+asserts that a profile-scoped preview's report contains `output-union before`
+— the **row** renderer's label (`src/cleanup.rs:982`). A qualified host does
+not render that: with a selector present in a non-Execute mode the **summary**
+renderer takes its own branch (`src/cleanup.rs:868-878`) and prints *the
+selector's reclaimable size is not measured (output union …)*, which is the
+honest statement — the byte figure of a selector run is the output union, not
+the selector's share — and the JSON projection says the same.
+
+The test's *premise* is derived correctly, from the host's own Cargo:
+`runtime_clean_capabilities()` (`src/cleanup.rs:4158`) runs `cargo --version`
+and asks the qualification policy whether that Cargo qualifies the profile
+selector. The policy qualifies Cargo 1.89 — so on the MSRV lane, which runs
+`cargo +1.89 test --locked --all-targets`, the selector **is** qualified, the
+preview runs, and the summary branch is the one that renders.
+
+**The evidence that it is pre-existing.** Three measurements, all taken with
+C045's source changes stashed:
+
+| Run | Result |
+|---|---|
+| current stable toolchain | **passes** |
+| `cargo +1.89 test --locked --lib <the test>` | **fails** |
+| the **1.89 compiler** with a **stable `cargo` first on `PATH`** | **passes** |
+
+The third row is the decisive one: the compiler is 1.89 in rows two and three,
+and only the host Cargo's version differs. The variable is the host Cargo, not
+the toolchain — which is why the failure is invisible on the stable lane, where
+the host Cargo does *not* qualify the selector and the test takes the
+unqualified branch and passes.
+
+**Why C045 did not fix it.** A plan that finds a defect writes a corrective; it
+does not fix it (`AGENTS.md` §5). The production rendering is correct and is
+not changed by this plan: only the assertion is.

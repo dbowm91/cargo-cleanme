@@ -61,7 +61,7 @@ C001–C009 and C010–C017 are all corrective passes. That is the pattern: a
 material defect found after a milestone gets a **new** plan, and the original
 closure record keeps the original verdict.
 
-The corpus is now **40** correctives, `C001`–`C034` plus `C036`–`C041`. **`C035` is
+The corpus is now **45** correctives, `C001`–`C034` plus `C036`–`C046`. **`C035` is
 absent on purpose**: it is superseded, it lives on a separate branch, and it
 must **not** be merged. It stays as the record of the rejected mechanism. Do not
 "fix" the numbering gap — a gap that is invisible to a numbering check is
@@ -75,15 +75,17 @@ not a task.
 
 **An accepted ADR is a decision, not an implementation.** ADR 008 was accepted
 on 2026-10-21, and it authorises **no release** and no code change on its own:
-its implementation plans (M018 for the gate, M019 for the spelling) are
-`proposed`, and they carry the implementation authority, not the ADR. An
-accepted ADR that decides a *sequence* binds the plans under it — ADR 008 makes
-it binding that M019 may not be published before M018 has shipped.
+its implementation plans — M018 for the gate, M019 for the spelling — carry the
+implementation authority, not the ADR. Both are **`closing`** as of
+2026-10-22: implemented and ladder-green, **not published**, so neither is
+closed. An accepted ADR that decides a *sequence* binds the plans under it —
+ADR 008 makes it binding that M019 may not be published before M018 has
+shipped.
 
-One open ADR, an accepted-but-unimplemented ADR with two planned milestones
-under it, and a handful of open correctives is the current state of the
-decision record. Read `plans/registry.md` before assuming anything is
-unclaimed.
+One open ADR (ADR 005, proposed), one accepted ADR whose two milestones are
+implemented-but-unpublished, and a handful of open correctives is the current
+state of the decision record. Read `plans/registry.md` before assuming anything
+is unclaimed.
 
 ## The corrective-pass rule
 
