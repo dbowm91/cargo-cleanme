@@ -41,9 +41,9 @@ by hand. The **cursor** is the case that was missed. Cursor visibility is a
 C042 fixed this. The lesson is the thing to internalise, not the fix.
 
 ```text
-src/interactive.rs:1269   session_loop hides the cursor on entry
-src/interactive.rs:1166   TerminalGuard::restore issues the mode restore
-src/interactive.rs:1180   …and set_cursor_visible(true), whether or not the first failed
+src/interactive.rs:1498   session_loop hides the cursor on entry
+src/interactive.rs:1369   TerminalGuard::restore issues the mode restore
+src/interactive.rs:1383   …and set_cursor_visible(true), whether or not the first failed
 ```
 
 `set_cursor_visible(true)` is now called from exactly one place — the guard —
@@ -82,8 +82,8 @@ frame's *line count* rather than by the rows it actually occupied — erases
 most of the frame it was meant to keep.
 
 ```text
-src/interactive.rs:1323   frame_bytes — every line starts with a carriage return
-src/interactive.rs:1346   rewind_bytes — column zero first, then up
+src/interactive.rs:1552   frame_bytes — every line starts with a carriage return
+src/interactive.rs:1575   rewind_bytes — column zero first, then up
 ```
 
 The byte stream is a **pure function**, and the tests replay it through a
@@ -104,7 +104,7 @@ puts every line on the row it claims.
 | `cargo cleanme -i clean ROOT` | says "Nothing to clean." | **0** |
 
 The path: `run_interactive` settles an empty candidate list before the terminal
-precondition (`src/interactive.rs:1463-1465`) → the orchestrator maps it to
+precondition (`src/interactive.rs:1692-1694`) → the orchestrator maps it to
 `SelectionOutcome::NothingToClean` (`src/main.rs:644-657`) → one line on
 stdout and `Ok(0)` (`src/main.rs:464-472`).
 
@@ -135,8 +135,8 @@ Do not add a "the user checked it, so skip the proof" shortcut.
 
 ## The TTY precondition is checked before raw mode
 
-`ensure_interactive_terminal` (`src/interactive.rs:1203-1214`) is called by
-`run_interactive` (`src/interactive.rs:1466-1476`) **before** any mode is
+`ensure_interactive_terminal` (`src/interactive.rs:1432-1443`) is called by
+`run_interactive` (`src/interactive.rs:1695-1705`) **before** any mode is
 requested. A redirected invocation fails as a typed usage error rather than
 driving a session whose keystrokes are going somewhere else.
 
@@ -156,20 +156,20 @@ operator surface, not a report: a machine consumer has no way to say "row 3".
 
 Each of these was pinned by a test that failed first:
 
-- **Row 0 is an all-toggle that ignores the filter** (`src/interactive.rs:501-509`).
+- **Row 0 is an all-toggle that ignores the filter** (`src/interactive.rs:539-547`).
   A toggle that obeyed the filter would make "all" mean "whatever happens to be
   on screen".
-- **`q` quits from NOR and types in INS** (`src/interactive.rs:392-422`). INS is
+- **`q` quits from NOR and types in INS** (`src/interactive.rs:430-460`). INS is
   a text field; `Ctrl-C` is the only key that quits from inside it.
-- **Space is a filter character in INS** (`src/interactive.rs:433-440`) — a
+- **Space is a filter character in INS** (`src/interactive.rs:471-478`) — a
   workspace path can contain a space.
-- **Enter on an empty selection does not commit** (`src/interactive.rs:567-579`).
+- **Enter on an empty selection does not commit** (`src/interactive.rs:605-617`).
   Closing there would look exactly like a session that cleaned nothing — the
   M012A shape, a run that reports a success it never performed.
 - **Nothing is checked initially**, because a selection UI whose default is
   "delete all of it" is a trap wearing a checkbox.
 - **The filter matches the full path, not the displayed name**
-  (`src/interactive.rs:517-538`). A row is *named* by the shortest suffix that
+  (`src/interactive.rs:555-576`). A row is *named* by the shortest suffix that
   identifies it, but the filter still matches the whole path — a filter that
   only matched the displayed name would silently stop finding workspaces.
 
@@ -178,20 +178,33 @@ Each of these was pinned by a test that failed first:
 C039 rebuilt the surface in the `rip` idiom. Three properties of it are worth
 carrying, because each one was a defect before:
 
+- **The frame fits the terminal, in both axes.** Every line is at most the
+  terminal's width, and the frame occupies at most the terminal's height.
+  The width is the terminal's width *exactly* — a frame clamped **up** to a
+  minimum width is wider than the terminal it is painted on, so every line
+  wraps, and the erase — which moves up by the frame's *line count*, not by
+  the rows it occupies — leaves the residue standing above the operator's
+  prompt. The height bound is on the rows the frame *occupies*, which are one
+  more than the lines it has: every line ends with a newline, and the last one
+  moves the cursor onto the row below. The layout **degrades** rather than
+  overflowing — the reclaimable column goes first, then the ownership
+  column's wording, and the name keeps what is left — and the chrome gives
+  way in a short terminal: the key-hint bar, then the column header, then the
+  all-toggle row.
 - **The page is bounded.** At most fifteen candidate rows, and never more than
-  the terminal has room for (`src/interactive.rs:370-377`). The old frame
+  the terminal has room for (`src/interactive.rs:403-407`). The old frame
   filled the terminal exactly, so a long list was a screenful to scroll rather
   than a list to page through. `PgUp`/`PgDn`/`Home`/`End` move through it.
 - **A row is named, not spelled out.** The workspace column shows the shortest
   suffix of the path that identifies the row uniquely among all candidates
-  (`src/interactive.rs:954-978`). Siblings read `project-01`, `project-19`;
+  (`src/interactive.rs:1157-1181`). Siblings read `project-01`, `project-19`;
   a colliding pair reads `a/x` and `b/x`.
 - **The ownership column is omitted when it would say the same thing on every
-  row** (`src/interactive.rs:911-913`). A column that reads `private` twenty
+  row** (`src/interactive.rs:1035-1038`). A column that reads `private` twenty
   times carries no information and costs a column's width twenty times.
 
 The surface is also the only place in the crate that renders **colour**
-(`src/interactive.rs:1221-1237`): `NO_COLOR` and `TERM=dumb` turn it off, and
+(`src/interactive.rs:1450-1466`): `NO_COLOR` and `TERM=dumb` turn it off, and
 the decision is made in the driver so `Session` stays pure.
 
 The model was **not** changed. `rip`'s own model has no modes — every printable

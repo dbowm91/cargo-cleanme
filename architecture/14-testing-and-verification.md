@@ -8,7 +8,7 @@
 
 The verification apparatus does three distinct jobs. The third is what makes it unusual.
 
-**(a) Product behaviour.** 531 declared inline `#[test]` functions in `src/`, plus two
+**(a) Product behaviour.** 534 declared inline `#[test]` functions in `src/`, plus two
 integration suites: one drives the compiled binary as a subprocess, the other drives the
 library's scan entry point in-process. Between them they cover ownership proof, cleanup
 authorization, the three clean modes, workspace resolution, real Cargo failure presentation,
@@ -41,7 +41,7 @@ were the premises, and is any of them unchecked?*
 
 | Layer | Location | Count | What it can catch | What it cannot catch |
 |---|---|---:|---|---|
-| Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 522 declared `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
+| Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 534 declared `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
 | Integration — CLI contract | `tests/cli_contract.rs` (4,860 lines) | 77 `#[test]` | The subprocess boundary end to end: argv normalization, exit codes, JSON shape, log-line shape, `--stats` stream discipline, selector behaviour, usage conflicts, stale-learned-root admission, repeated-root noise bounds, incomplete-discovery stage counts, real Cargo failure summaries, default Routine execution against real Cargo | Internals of `run()`; anything on a real machine; platform-gated cases are excluded on other lanes |
 | Integration — end to end | `tests/end_to_end.rs` (840 lines) | 4 `#[test]` | Full production-pipeline scans against synthetic trees with real mtimes, under both a filtered Routine scope and an explicit scope | Cleanup, update, config editing |
 | Shared harness | `tests/common/mod.rs` (286 lines) | 0 tests | `set_path_modified` / `backdate_file` (per-platform mtime control), `inactive_project` tree construction, `write_fake_cargo` / `cargo_calls` (unix only) | — |
@@ -100,7 +100,7 @@ from `src/`, never copied between documents.
 |---|---:|---:|---:|---:|
 | `src/cleanup.rs` | 126 | 4242 | 11163 | 6922 |
 | `src/workspace.rs` | 79 | 2161 | 6301 | 4141 |
-| `src/interactive.rs` | 67 | 1494 | 2985 | 1492 |
+| `src/interactive.rs` | 70 | 1724 | 3310 | 1586 |
 | `src/update.rs` | 47 | 1290 | 2886 | 1597 |
 | `src/cli.rs` | 45 | 778 | 1973 | 1196 |
 | `src/discovery.rs` | 41 | 1147 | 2647 | 1501 |
@@ -110,21 +110,21 @@ from `src/`, never copied between documents.
 | `src/discovery_state.rs` | 17 | 635 | 1215 | 581 |
 | `src/progress.rs` | 15 | 519 | 948 | 430 |
 | `src/report.rs` | 11 | 169 | 365 | 197 |
-| `src/main.rs` | 9 | 1865 | 2244 | 380 |
+| `src/main.rs` | 9 | 1881 | 2258 | 380 |
 | `src/traverse.rs` | 6 | 495 | 624 | 130 |
 | `src/editor.rs` | 2 | 156 | 215 | 60 |
 | `src/domain.rs` | 1 | 452 | 480 | 29 |
 | `src/error.rs` | 0 | — | 16 | — |
 | `src/lib.rs` | 0 | — | 16 | — |
-| **Total** | **531** | | | |
+| **Total** | **534** | | | |
 
-**The count is declared, not executed.** 531 `#[test]` functions exist in `src/`; **529
+**The count is declared, not executed.** 534 `#[test]` functions exist in `src/`; **532
 compile on Linux x86_64**, because two are gated to the other platforms
 (`config.rs:995`, `#[cfg(windows)]`, and `discovery.rs:1698`,
 `#[cfg(any(target_os = "macos", windows))]`). Beyond that, 40 more are `#[cfg(unix)]` and four
 are Linux-only (`config.rs:1443`, `discovery.rs:1718`, `output.rs:280`, `workspace.rs:5404`),
 so the other two lanes compile smaller sets. The three hosted lanes therefore compile different
-sets — 529 on Linux x86_64, 526 on macOS, 487 on Windows. Platform-gated tests mean a green local run does not mean a green run
+sets — 532 on Linux x86_64, 529 on macOS, 490 on Windows. Platform-gated tests mean a green local run does not mean a green run
 elsewhere — which is the whole reason the OS matrix exists, and the reason
 `check-fixture-portability.py` exists to catch a *new* ungated fixture before a lane disagrees
 about it.
@@ -165,7 +165,7 @@ lives.
 
 ### The test-double architecture
 
-Two process seams keep almost all of the 531 declared tests from spawning a real `cargo`:
+Two process seams keep almost all of the 534 declared tests from spawning a real `cargo`:
 
 - **`CargoRunner`** — `src/workspace.rs:29`. `fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput>`.
 - **`CleanupRunner`** — declared in `src/cleanup.rs` for the destructive step, so cleanup is exercised while `cargo clean` is a no-op returning recorded bytes.
@@ -313,18 +313,18 @@ file. See R8.
 ### `interactive.rs`
 
 `src/interactive.rs` arrived with M014 and was rebuilt by C039 and C042. It is 2985 lines with
-**67** `#[test]` functions (test module opens at `src/interactive.rs:1495`), which makes it the
+**70** `#[test]` functions (test module opens at `src/interactive.rs:1724`), which makes it the
 third-largest inline test suite in the crate and gives it more tests than `discovery_state.rs`
 and `policy.rs` combined (17 + 24).
 
 The shape is worth recording because it is the one place the project chose a *pure* seam over
-a process seam: `Session` (`src/interactive.rs:220`) is a state machine that owns mode, cursor,
+a process seam: `Session` (`src/interactive.rs:247`) is a state machine that owns mode, cursor,
 filter, and selection and renders itself to a `Vec<String>` with no terminal in scope, while
 everything that touches a real terminal lives behind the `Terminal` trait
 (`src/interactive.rs:120`, whose `restore` is at `src/interactive.rs:127`). The consequence is
 that the failure that actually matters — a session that exits without restoring the terminal —
 is testable at all, and the test suite is where the "restore on unwind" guarantee is pinned
-(`src/interactive.rs:2287` catches the unwind).
+(`src/interactive.rs:2610` catches the unwind).
 
 What the module does **not** change is the reachability of the interactive path from the
 integration suites: `cli_contract.rs` exercises `-i` only through the usage-error and

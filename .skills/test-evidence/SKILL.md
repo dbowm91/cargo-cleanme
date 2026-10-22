@@ -75,7 +75,7 @@ And one more, which is the sharpest of them:
 6. **A test that pins the defect.** A test can be green *because* it asserts
    the wrong thing — including the thing you are about to fix.
    `the_driver_shows_the_hardware_cursor_only_in_insert_mode`
-   (`src/interactive.rs:1958-1974` before C042) asserted that the terminal
+   (`src/interactive.rs:2281-2297` before C042) asserted that the terminal
    cursor's **last** recorded visibility was `Some(false)`. The interactive
    session never restored the cursor, so that test was green by asserting the
    bug. Fixing the cursor without fixing the test would have left a green test
@@ -127,7 +127,7 @@ set is valuable.
 
 ## Coverage shape, honestly
 
-**531** inline `#[test]` functions are **declared** in `src/`; **529** compile
+**534** inline `#[test]` functions are **declared** in `src/`; **532** compile
 and run on Linux. Two are excluded there: one `#[cfg(windows)]`
 (`src/config.rs:995`) and one `#[cfg(any(target_os = "macos", windows))]`
 (`src/discovery.rs:1698`). A further **40** carry `#[cfg(unix)]` and **4** are
@@ -147,11 +147,11 @@ fixture before a lane disagrees about it.
 > `cargo test --lib -- --list` on the host platform; anything else silently
 > disagrees by a few.
 
-State which number you mean. "531 tests" (declared) and "529 passing" (on
+State which number you mean. "534 tests" (declared) and "532 passing" (on
 Linux) are both true, and a record that gives one while meaning the other is
 ambiguous in the direction that matters.
 
-Of the 531, **38.6% live in two modules** (`cleanup.rs` 126, `workspace.rs` 79).
+Of the 534, **38.4% live in two modules** (`cleanup.rs` 126, `workspace.rs` 79).
 That concentration is a direct consequence of the architecture: cleanup and
 workspace resolution are where the invariants are. It is not a balanced suite,
 and a flat count would hide that. A change to a small module can be genuinely
