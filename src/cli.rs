@@ -136,7 +136,7 @@ pub enum Command {
     /// `scan /tmp` still demanded `--all`. The group also makes the selectors
     /// mutually exclusive as a consequence of the same declaration, so the
     /// conflict rules cannot drift from the requiredness rules.
-    #[command(group = clap::ArgGroup::new("scan-scope").required(true).args(["root", "known", "all", "full"]))]
+    #[command(group = clap::ArgGroup::new("scan-scope").required(true).args(["root", "known", "all"]))]
     Scan {
         /// Optional bounded root. Makes the scan Explicit and bypasses
         /// configured ignore/unignore filters.
@@ -149,11 +149,14 @@ pub enum Command {
         /// Required when no ROOT and no `--known` is given: this is the only
         /// operation that may expire learned roots, and it walks the whole
         /// platform, so it is never one keystroke from the front door.
-        #[arg(short = 'a', long)]
+        //
+        // The historical spelling is a hidden alias of this argument rather
+        // than an argument of its own. An `ArgGroup` renders every one of its
+        // members in the usage line, so a separate hidden argument would have
+        // advertised the alias in `scan --help` — which is what "hidden" is
+        // supposed to mean — and in the generated completions.
+        #[arg(short = 'a', long, alias = "full")]
         all: bool,
-        /// Historical spelling of `--all`; retained as a hidden alias.
-        #[arg(long, hide = true)]
-        full: bool,
     },
     Config {
         #[command(subcommand)]
@@ -383,16 +386,11 @@ impl Cli {
                 Ok(request) => Invocation::Cleanup(request),
                 Err(message) => Invocation::UsageError(message),
             },
-            Some(Command::Scan {
-                root,
-                known,
-                all,
-                full,
-            }) => {
+            Some(Command::Scan { root, known, all }) => {
                 if let Some(message) = self.reject_cleanup_flags_for("scan") {
                     return Invocation::UsageError(message);
                 }
-                match (root, *known, *all || *full) {
+                match (root, *known, *all) {
                     (Some(root), _, _) => Invocation::Scan(ScanIntent::Explicit(root.clone())),
                     (None, true, _) => Invocation::Scan(ScanIntent::Maintenance),
                     // clap requires one of ROOT / --known / --all, so reaching the
@@ -514,12 +512,24 @@ impl Cli {
             // different scopes, and `clean --full --known` is already refused
             // by clap.
             if alias.known {
-                return Err(duplicate_override("--known"));
+                // `--known` was given only on `clean`; the flag that collides
+                // with it is the root's own scope selector.
+                return Err(conflicting_scopes(if self.full {
+                    "`--full`"
+                } else {
+                    "`--full` on `clean`"
+                }));
             }
             CleanupScope::Full
         } else if let Some(root) = self.root.clone().or_else(|| alias.root.clone()) {
             if alias.known {
-                return Err(duplicate_override("--known"));
+                // As above: `clean ROOT --known` is refused by clap, so the
+                // ROOT that collides with `--known` is the root-level one.
+                return Err(conflicting_scopes(if self.root.is_some() {
+                    "`ROOT`"
+                } else {
+                    "`ROOT` on `clean`"
+                }));
             }
             CleanupScope::Root(root)
         } else {
@@ -638,6 +648,33 @@ fn duplicate_override(flag: &str) -> String {
     )
 }
 
+/// Two mutually exclusive selectors were given at different levels.
+///
+/// `--profile` and `--package` are one logical override: clap refuses them at
+/// the same level, and they are refused across the root/`clean` boundary for
+/// the same reason. Merging them independently would let the profile win and
+/// the package disappear — the discarded-flag failure mode ADR 008 §3 exists
+/// to prevent, and the consequence here is a *different* destructive action
+/// than the one that was asked for.
+fn conflicting_selectors(root_flag: &str, clean_flag: &str) -> String {
+    format!(
+        "{root_flag} was given at the root and {clean_flag} on `clean`. The two selectors are \
+         mutually exclusive; give one selector at one level only."
+    )
+}
+
+/// Two scope selectors were given at different levels.
+///
+/// A Full scope and `--known` select different scopes, so the root's scope
+/// selector and `clean --known` cannot both stand. The message names the two
+/// flags that actually collide: the root's own flag was never `--known`.
+fn conflicting_scopes(root_flag: &str) -> String {
+    format!(
+        "{root_flag} at the root and `--known` on `clean` select different scopes; \
+         give one scope selector at one level only."
+    )
+}
+
 /// Merge the root's cleanup overrides with `clean`'s.
 ///
 /// M019: a value given at the root wins; a value given on `clean` is used when
@@ -647,6 +684,14 @@ fn merge_overrides(
     root: &CleanupOverrides,
     clean: &CleanupOverrides,
 ) -> Result<CleanupOverrides, String> {
+    // The two selectors are mutually exclusive as a pair, not as two
+    // independent values, so the pair is checked before either is merged.
+    if root.profile.is_some() && clean.package.is_some() {
+        return Err(conflicting_selectors("--profile", "--package"));
+    }
+    if root.package.is_some() && clean.profile.is_some() {
+        return Err(conflicting_selectors("--package", "--profile"));
+    }
     Ok(CleanupOverrides {
         min_reclaimable_bytes: merge_one(
             "--min-reclaimable-bytes",
@@ -1119,7 +1164,86 @@ mod tests {
         }
     }
 
-    /// M019: a root-level flag that the `clean` alias also carries is merged,
+    /// The two selectors are one logical override, and they are mutually
+    /// exclusive across the root/`clean` boundary as well as within a level.
+    ///
+    /// *Fails if:* one of the two is silently preferred — the discarded-flag
+    /// failure mode ADR 008 §3 exists to prevent. Here the consequence is a
+    /// *different destructive action* than the one that was asked for: the
+    /// operator asked for one package and the tool cleaned a profile.
+    #[test]
+    fn a_selector_at_the_root_and_the_other_on_clean_is_a_usage_error() {
+        for args in [
+            vec![
+                "cargo-cleanme",
+                "--profile",
+                "release",
+                "clean",
+                "--package",
+                "demo",
+            ],
+            vec![
+                "cargo-cleanme",
+                "--package",
+                "demo",
+                "clean",
+                "--profile",
+                "release",
+            ],
+        ] {
+            let parsed = Cli::try_parse_from(args.clone())
+                .unwrap_or_else(|error| panic!("{args:?} must parse: {error}"));
+            let Invocation::UsageError(message) = parsed.invocation() else {
+                panic!(
+                    "{args:?} must be a usage error, got {:?}",
+                    parsed.invocation()
+                );
+            };
+            assert!(
+                message.contains("--profile") && message.contains("--package"),
+                "{args:?}: the message must name both selectors: {message}"
+            );
+        }
+    }
+
+    /// A scope selector at the root and `--known` on `clean` select different
+    /// scopes, and the refusal must name the flags that actually collide.
+    ///
+    /// *Fails if:* the message names a flag the operator never typed — the
+    /// original wording said "`--known` was given at the root and on `clean`"
+    /// when `--known` was given only on `clean`.
+    #[test]
+    fn a_scope_conflict_names_the_flags_that_actually_collide() {
+        for (args, expected) in [
+            (
+                vec!["cargo-cleanme", "--full", "clean", "--known"],
+                "`--full` at the root and `--known` on `clean`",
+            ),
+            (
+                vec!["cargo-cleanme", "/tmp/x", "clean", "--known"],
+                "`ROOT` at the root and `--known` on `clean`",
+            ),
+        ] {
+            let parsed = Cli::try_parse_from(args.clone())
+                .unwrap_or_else(|error| panic!("{args:?} must parse: {error}"));
+            let Invocation::UsageError(message) = parsed.invocation() else {
+                panic!(
+                    "{args:?} must be a usage error, got {:?}",
+                    parsed.invocation()
+                );
+            };
+            assert!(
+                message.contains(expected),
+                "{args:?}: the message must name the colliding flags: {message}"
+            );
+            assert!(
+                !message.contains("was given at the root and on `clean`"),
+                "{args:?}: `--known` was not given at the root: {message}"
+            );
+        }
+    }
+
+    /// A root-level flag that the `clean` alias also carries is merged,
     /// not duplicated. The root wins; the alias's value is used when the root
     /// did not supply one.
     #[test]
@@ -1455,16 +1579,32 @@ mod tests {
         // The *scan* subcommand's `--full` is the hidden alias for `--all`, and
         // it must not be advertised there. The root's own `--full` is the
         // canonical Full cleanup flag (M019) and is advertised at the root.
-        let command = Cli::command();
-        let scan = command.find_subcommand("scan").expect("scan subcommand");
-        let full = scan
-            .get_arguments()
-            .find(|arg| arg.get_id() == "full")
-            .expect("the scan --full alias");
+        //
+        // The alias is an alias of the `--all` argument rather than an
+        // argument of its own: an `ArgGroup` renders every one of its members
+        // in the usage line, so a separate hidden argument would have
+        // advertised the alias here.
+        let mut command = Cli::command();
+        let scan = command
+            .find_subcommand_mut("scan")
+            .expect("scan subcommand");
+        let usage = scan.render_usage().to_string();
         assert!(
-            full.is_hide_set(),
-            "the scan's --full alias must stay hidden"
+            !usage.contains("--full"),
+            "the scan's --full alias must not be advertised in the usage line: {usage}"
         );
+        let help = scan.render_long_help().to_string();
+        assert!(
+            !help.contains("--full"),
+            "the scan's --full alias must not appear in the help: {help}"
+        );
+        // The alias still selects the full scope.
+        let parsed = Cli::try_parse_from(["cargo-cleanme", "scan", "--full"])
+            .expect("the historical spelling must still parse");
+        let Some(Command::Scan { all, .. }) = parsed.command else {
+            panic!("scan --full must be a scan");
+        };
+        assert!(all, "the alias must select the full scope");
         let all = scan
             .get_arguments()
             .find(|arg| arg.get_id() == "all")

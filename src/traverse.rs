@@ -16,7 +16,7 @@
 #![allow(clippy::result_unit_err)]
 
 use std::{
-    collections::HashSet,
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -41,26 +41,30 @@ fn contains_vcs_marker(path: &Path) -> bool {
 /// Memo of directories already found to hold a nested-repository marker.
 ///
 /// The descend callback and the entry loop ask the same question about the same
-/// directory, and each answer costs a `read_dir`. Only *positives* are
-/// recorded, so the memo is bounded by the number of nested repositories rather
-/// than by the size of the tree, and a miss costs exactly what it cost before.
-/// Shared across the walk's worker threads, so it is a `Mutex`; the critical
-/// section is one hash lookup and never spans I/O.
+/// directory, and each answer costs a `read_dir`. Both answers are recorded, so
+/// a directory is read once rather than twice: recording only the *positives*
+/// threw away the answer that mattered, because the common answer is "no
+/// marker here", and every source directory was therefore read twice.
+///
+/// The memo is created per walk and dropped with it, so its size is bounded by
+/// the number of directories that walk visited. Shared across the walk's
+/// worker threads, so it is a `Mutex`; the critical section is one hash lookup
+/// and never spans I/O.
 #[derive(Clone, Default)]
-struct NestedRepoMarkers(Arc<Mutex<HashSet<PathBuf>>>);
+struct NestedRepoMarkers(Arc<Mutex<HashMap<PathBuf, bool>>>);
 
 impl NestedRepoMarkers {
     fn probe(&self, path: &Path) -> bool {
-        if self.0.lock().is_ok_and(|known| known.contains(path)) {
-            return true;
+        if let Ok(known) = self.0.lock()
+            && let Some(found) = known.get(path)
+        {
+            return *found;
         }
-        if !contains_vcs_marker(path) {
-            return false;
-        }
+        let found = contains_vcs_marker(path);
         if let Ok(mut known) = self.0.lock() {
-            known.insert(path.to_path_buf());
+            known.insert(path.to_path_buf(), found);
         }
-        true
+        found
     }
 }
 
@@ -605,6 +609,33 @@ mod tests {
         assert!(!stats.uncertain);
         // 12 directories + 1 file beneath the measured root.
         assert_eq!(stats.entries, 13);
+    }
+
+    /// The marker memo records both answers.
+    ///
+    /// *Fails if:* only the positives are recorded. The descend pass asks
+    /// whether a directory holds a nested repository and the entry pass asks
+    /// again; recording only the positives threw away the answer that
+    /// mattered — "no marker here" — so every source directory was read
+    /// twice.
+    #[test]
+    fn the_marker_memo_records_both_answers() {
+        let d = tempfile::tempdir().unwrap();
+        let plain = d.path().join("plain");
+        let nested = d.path().join("nested");
+        fs::create_dir_all(&plain).unwrap();
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join(".git"), b"").unwrap();
+        let markers = NestedRepoMarkers::default();
+        assert!(!markers.probe(&plain), "a plain directory holds no marker");
+        assert!(markers.probe(&nested), "a nested repository holds a marker");
+        let recorded = markers.0.lock().unwrap();
+        assert_eq!(
+            recorded.get(&plain),
+            Some(&false),
+            "a negative answer must be recorded: the miss is the common one"
+        );
+        assert_eq!(recorded.get(&nested), Some(&true));
     }
 
     #[test]

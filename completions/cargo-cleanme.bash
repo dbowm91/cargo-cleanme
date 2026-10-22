@@ -271,7 +271,7 @@ _cargo() {
             return 0
             ;;
         cargo__subcmd__cargo__subcmd__cleanme__subcmd__scan)
-            opts="-a -i -h --known --all --full --config --no-progress --stats --format --verbose --interactive --help"
+            opts="-a -i -h --known --all --config --no-progress --stats --format --verbose --interactive --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

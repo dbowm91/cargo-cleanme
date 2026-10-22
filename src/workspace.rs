@@ -1291,6 +1291,54 @@ fn is_conventional_source_dir(path: &Path) -> bool {
         .is_some_and(|name| matches!(name, "src" | "tests" | "benches" | "examples"))
 }
 
+/// True when `dir` holds a Cargo manifest, i.e. it is a package directory.
+///
+/// Cargo opens a manifest stored as `cargo.toml` exactly as it opens
+/// `Cargo.toml`, so both spellings count.
+fn is_package_directory(dir: &Path) -> bool {
+    dir.join("Cargo.toml").is_file() || dir.join("cargo.toml").is_file()
+}
+
+/// True when a covering root is nested inside a package directory.
+///
+/// This is the mirror of the structural `contains` check: that one refuses an
+/// output root that *contains* a member's source tree, and this one refuses an
+/// output root that *lives inside* one. `cargo clean` removes whatever is under
+/// the root it is given, so a target directory pointed at another package's
+/// tree destroys that package's checked-in files.
+///
+/// The victim does not have to be a workspace the tool could resolve. Cargo
+/// refuses a nested package that is not a workspace member ("current package
+/// believes it's in a workspace when it's not"), so the package sitting inside
+/// the output root is exactly the one the resolved universe does *not* contain:
+/// the resolved-member check cannot see it, and the filesystem can.
+///
+/// The owning workspace's own root is the boundary. `<ws>/target` sits inside
+/// the owner's package directory, and that is the ordinary case; the walk stops
+/// there and never asks whether the workspace root is itself a package.
+pub(crate) fn nested_package_overlap(covering: &[PathBuf], workspace_root: &Path) -> bool {
+    covering.iter().any(|root| {
+        if !strictly_below(workspace_root, root) {
+            return false;
+        }
+        let mut dir = root.parent();
+        while let Some(candidate) = dir {
+            if candidate == workspace_root {
+                break;
+            }
+            // The walk never leaves the owning workspace's tree.
+            if !candidate.starts_with(workspace_root) {
+                break;
+            }
+            if is_package_directory(candidate) {
+                return true;
+            }
+            dir = candidate.parent();
+        }
+        false
+    })
+}
+
 /// Returns true if `maybe_child` is strictly below `parent`.
 ///
 /// `contains` is deliberately inclusive because grouping needs it; an *artifact*
@@ -1369,8 +1417,8 @@ fn group_overlaps_uncertain(covering: &[PathBuf], uncertain_aliases: &[PathBuf])
 /// groups. Classification:
 /// - Uncertain: symlink, unresolvable, or missing physical identity, or an
 ///   output root that is (or contains) any resolved workspace's member source
-///   tree, or one of Cargo's conventional source directories (`src`, `tests`,
-///   `benches`, `examples`).
+///   tree, or one that is nested inside a package directory, or one of Cargo's
+///   conventional source directories (`src`, `tests`, `benches`, `examples`).
 /// - Shared: multiple workspaces own overlapping physical output, or the group's
 ///   covering overlaps an unrepresentable root's known aliases, so exclusivity
 ///   is unprovable for that group.
@@ -1475,6 +1523,7 @@ pub fn build_groups(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup> {
             .unwrap_or_else(|| physicals[0].clone());
         // Classification.
         let mut source_overlap = false;
+        let mut nested_source_overlap = false;
         let ownership = if owners.len() > 1 {
             OutputOwnershipClass::Shared
         } else {
@@ -1494,6 +1543,12 @@ pub fn build_groups(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup> {
                     .any(|w| w.members.iter().any(|m| contains(c, &m.source_root)))
                     || is_conventional_source_dir(c)
             });
+            // The mirror: a covering root that lives *inside* a package
+            // directory. The resolved members cannot see this shape — Cargo
+            // refuses a nested package that is not a workspace member, so the
+            // victim is exactly the package the universe does not contain.
+            nested_source_overlap = nested_package_overlap(&covering, &ws.root);
+            source_overlap |= nested_source_overlap;
             let inside_root = covering.iter().all(|c| strictly_below(&ws.root, c));
             if uncertain_ws.contains(&owners[0]) || source_overlap {
                 // The owning workspace is uncertain, or its own source tree
@@ -1517,6 +1572,7 @@ pub fn build_groups(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup> {
             owners,
             ownership,
             source_overlap,
+            nested_source_overlap,
         });
     }
     // Deterministic order by display path.
@@ -1531,10 +1587,17 @@ pub struct RawGroup {
     pub display: PathBuf,
     pub owners: Vec<usize>,
     pub ownership: OutputOwnershipClass,
-    /// A covering root is (or contains) a workspace member source root, so this
-    /// group is source code rather than an artifact. Surfaced as a diagnostic:
-    /// the group is dropped from the inventory, so silence would be misleading.
+    /// A covering root is (or contains) a workspace member source root, or is
+    /// nested inside a package directory, so this group is source code rather
+    /// than an artifact. Surfaced as a diagnostic: the group is dropped from
+    /// the inventory, so silence would be misleading.
     pub source_overlap: bool,
+    /// A covering root is nested inside a package directory.
+    ///
+    /// The mirror of [`Self::source_overlap`]'s first case: the root does not
+    /// *contain* a source tree, it *lives inside* one. Kept separate so the
+    /// diagnostic can name the shape the operator has to fix.
+    pub nested_source_overlap: bool,
 }
 
 /// Cheap bounded artifact-presence check: true if the directory contains at
@@ -1755,14 +1818,22 @@ pub fn analyze_groups_detailed(
                 // Never silently drop a project whose output root is its own
                 // source tree: the user configured `target-dir` that way and
                 // needs to know why nothing is reported or cleaned.
+                let message = if g.nested_source_overlap {
+                    format!(
+                        "output root {} lies inside a package directory, not a build artifact; it is not sized and not eligible for cleanup",
+                        g.display.display()
+                    )
+                } else {
+                    format!(
+                        "output root {} contains a workspace source tree, not a build artifact; it is not sized and not eligible for cleanup",
+                        g.display.display()
+                    )
+                };
                 diagnostics.push(ScanDiagnostic {
                     severity: DiagnosticSeverity::Warning,
                     category: DiagnosticCategory::CandidateUncertain,
                     path: Some(g.display.clone()),
-                    message: format!(
-                        "output root {} contains a workspace source tree, not a build artifact; it is not sized and not eligible for cleanup",
-                        g.display.display()
-                    ),
+                    message,
                 });
             }
             continue;
@@ -4416,6 +4487,84 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].ownership, OutputOwnershipClass::Uncertain);
         assert!(groups[0].source_overlap);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_output_root_nested_inside_a_package_directory_is_never_private() {
+        // The mirror of the three tests above, and the shape that destroyed a
+        // package's checked-in files: `cargo clean` removes whatever is under
+        // the root it is given, so an output root that *lives inside* another
+        // package's tree takes that package's files with it.
+        //
+        // The victim does not have to be a workspace the tool could resolve.
+        // Cargo refuses a nested package that is not a workspace member
+        // ("current package believes it's in a workspace when it's not"), so
+        // the package sitting inside the output root is exactly the one the
+        // resolved universe does *not* contain — and the member-source check
+        // cannot see it. The filesystem can.
+        let d = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(d.path()).unwrap();
+        let ws_root = base.join("ws");
+        let nested = ws_root.join("lib1");
+        let output = nested.join("assets");
+        std::fs::create_dir_all(&output).unwrap();
+        // The victim's own package directory and a checked-in file in it.
+        std::fs::write(
+            nested.join("Cargo.toml"),
+            b"[package]\nname = \"lib1\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(output.join("logo.txt"), b"LOGO\n").unwrap();
+
+        let ws = workspace_with_output(&ws_root, vec![ws_root.clone()], Some(output), false);
+        let groups = build_groups(std::slice::from_ref(&ws));
+        assert_eq!(groups.len(), 1, "{groups:?}");
+        assert_eq!(
+            groups[0].ownership,
+            OutputOwnershipClass::Uncertain,
+            "an output root inside another package's tree is not an artifact"
+        );
+        assert!(groups[0].source_overlap);
+        assert!(groups[0].nested_source_overlap);
+        assert!(
+            !crate::cleanup::covering_is_authorized(
+                groups[0].ownership,
+                &groups[0].covering,
+                &ws_root,
+                &[],
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn the_ordinary_target_directory_is_not_a_nested_package_overlap() {
+        // The guard must not fire on the ordinary shape: `<ws>/target` is
+        // inside the owning workspace's own package directory, and that is
+        // where every build artifact lives.
+        let d = tempfile::tempdir().unwrap();
+        let ws_root = std::fs::canonicalize(d.path()).unwrap().join("ws");
+        std::fs::create_dir_all(ws_root.join("src")).unwrap();
+        std::fs::write(
+            ws_root.join("Cargo.toml"),
+            b"[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(ws_root.join("src/main.rs"), b"fn main() {}\n").unwrap();
+        let target = ws_root.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+
+        let ws = workspace_with_output(&ws_root, vec![ws_root.clone()], Some(target), false);
+        let groups = build_groups(std::slice::from_ref(&ws));
+        assert_eq!(groups.len(), 1, "{groups:?}");
+        assert_eq!(
+            groups[0].ownership,
+            OutputOwnershipClass::PrivateBounded,
+            "the conventional target directory is a private artifact"
+        );
+        assert!(!groups[0].source_overlap);
+        assert!(!groups[0].nested_source_overlap);
     }
 
     #[cfg(unix)]

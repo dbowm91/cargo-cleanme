@@ -57,7 +57,6 @@ json\t''
 log\t'One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract: complete consumers use `json`'"
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -l known -d 'Routine read-only inventory over the maintenance scope'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -s a -l all -d 'Full machine reconciliation'
-complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -l full -d 'Historical spelling of `--all`; retained as a hidden alias'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -l no-progress -d 'Disable transient progress UI (useful for benchmarks and debugging)'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -l stats -d 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -l verbose -d 'Show the detailed human surface: every workspace considered (including the ones that were skipped), the scope census, the per-phase counters, and the diagnostic detail'

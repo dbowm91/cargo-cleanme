@@ -3838,10 +3838,25 @@ fn final_cleanup_proof_roots(
             }
         }
     }
-    // 9. Covering-root physical proof: every affected covering root must exist,
+    // 9. The cleaned region must not be nested inside a package directory.
+    // The classification refuses such a group, because `cargo clean` removes
+    // whatever is under the root it is given and a root inside another
+    // package's tree destroys that package's checked-in files. This re-proves
+    // it against the filesystem at the moment of the spawn, so a
+    // classification regression cannot delete a source tree.
+    if workspace::nested_package_overlap(&unit.covering, &unit.root) {
+        return Err(ProofFailure::new(
+            CleanupReasonCode::SkippedSafety,
+            format!(
+                "ownership could not be re-proven: the cleaned output of workspace {} lies inside a package directory",
+                unit.root.display()
+            ),
+        ));
+    }
+    // 10. Covering-root physical proof: every affected covering root must exist,
     // be a real directory, and not be a symlink.
     prove_covering_roots(&unit.covering)?;
-    // 10. Fresh source + output activity with fresh timestamps, bounded by the
+    // 11. Fresh source + output activity with fresh timestamps, bounded by the
     // complete fresh universe's output set (same exclusion rule as analysis).
     let start = SystemTime::now();
     let cutoff = start
@@ -3911,10 +3926,10 @@ fn final_cleanup_proof_roots(
     counters.proof_output_sizing_nanos = counters
         .proof_output_sizing_nanos
         .saturating_add(crate::domain::elapsed_nanos(sizing_start.elapsed()));
-    // 11. Marker validation is part of the same non-mutating proof consumed by
+    // 12. Marker validation is part of the same non-mutating proof consumed by
     // Simulate, and covers the complete affected union.
     require_cargo_markers(&unit.covering)?;
-    // 12. Frozen-environment capability validation from the fresh OutputSet.
+    // 13. Frozen-environment capability validation from the fresh OutputSet.
     let target = fresh_ws
         .output
         .target
@@ -6709,6 +6724,7 @@ mod tests {
                 owners: vec![0],
                 ownership,
                 source_overlap: false,
+                nested_source_overlap: false,
             };
             let _ws = ResolvedWorkspace {
                 id: WorkspaceId(canonical_root.clone()),
@@ -6761,6 +6777,7 @@ mod tests {
             owners: vec![0],
             ownership: OutputOwnershipClass::PrivateBounded,
             source_overlap: false,
+            nested_source_overlap: false,
         };
         let private_ws = ResolvedWorkspace {
             id: WorkspaceId(canonical_root.clone()),
@@ -6824,6 +6841,7 @@ mod tests {
             owners: vec![0],
             ownership: OutputOwnershipClass::PrivateBounded,
             source_overlap: false,
+            nested_source_overlap: false,
         };
         let _ws = ResolvedWorkspace {
             id: WorkspaceId(canonical_proj.clone()),
@@ -6873,6 +6891,7 @@ mod tests {
             owners: vec![0],
             ownership: OutputOwnershipClass::ExternalUnproven,
             source_overlap: false,
+            nested_source_overlap: false,
         };
         let ws_root = d.path().join("ws");
         std::fs::create_dir_all(&ws_root).unwrap();
@@ -6932,6 +6951,7 @@ mod tests {
                 owners: vec![0],
                 ownership: OutputOwnershipClass::PrivateBounded,
                 source_overlap: false,
+                nested_source_overlap: false,
             };
             let _ws = ResolvedWorkspace {
                 id: WorkspaceId(d.path().join("ws")),
@@ -6973,6 +6993,7 @@ mod tests {
                 owners: vec![0, 1],
                 ownership: OutputOwnershipClass::Shared,
                 source_overlap: false,
+                nested_source_overlap: false,
             };
             assert!(!is_authorized(&shared_raw, &root, std::slice::from_ref(&real)).unwrap());
             // Uncertain forbidden.
@@ -6983,6 +7004,7 @@ mod tests {
                 owners: vec![0],
                 ownership: OutputOwnershipClass::Uncertain,
                 source_overlap: false,
+                nested_source_overlap: false,
             };
             assert!(!is_authorized(&uncertain_raw, &root, &[d.path().to_path_buf()]).unwrap());
         }
@@ -10091,6 +10113,64 @@ mod tests {
                 inner.join("Cargo.toml"),
                 inner.join("src/main.rs"),
                 inner.join("src"),
+            ] {
+                assert!(path.exists(), "{mode:?}: {} must survive", path.display());
+            }
+        }
+    }
+
+    /// The mirror of the case above, end to end: the cleaned region is
+    /// *inside* a package directory rather than around one.
+    ///
+    /// `cargo clean` removes whatever is under the root it is given, so an
+    /// output root that lives inside another package's tree takes that
+    /// package's checked-in files with it. The neighbour is a resolved
+    /// workspace here, so the refusal cannot be attributed to an unresolved
+    /// manifest blocking the scope.
+    #[test]
+    fn an_output_root_inside_a_package_directory_is_never_cleaned() {
+        for mode in [
+            CleanMode::CargoPreview,
+            CleanMode::Simulate,
+            CleanMode::Execute,
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let outer = ws_root(d.path(), "outer");
+            // A second package nested inside the outer workspace's tree.
+            let nested = ws_root(&outer, "lib1");
+            // The outer workspace's declared output root: inside the nested
+            // package's directory.
+            let out = cargo_output(&outer.join("lib1/assets"), 4096);
+            // The nested package's own output lives elsewhere, so the two
+            // groups are distinct and the refusal is about the shape, not
+            // about shared ownership.
+            let nested_target = cargo_output(&d.path().join("nested-target"), 4096);
+
+            backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+            let mut runner = StagedCargo::new();
+            runner.add(&outer, out.clone(), None);
+            runner.add(&nested, nested_target, None);
+
+            // Premise: the neighbour is discovered and resolved. If it were
+            // not, the case would pass because the dangerous shape never
+            // existed.
+            let report = clean_with(d.path(), 0, &[], mode, &runner, &NoopObserver).unwrap();
+            assert!(
+                report.resolved_workspaces >= 2,
+                "{mode:?}: both workspaces must resolve, got {}: {:?}",
+                report.resolved_workspaces,
+                report.render(&crate::report::HumanOptions::default())
+            );
+
+            assert!(
+                runner.clean_calls().is_empty(),
+                "{mode:?}: no cargo clean may run with a package directory inside the region"
+            );
+            // The bytes a `cargo clean` of that root would have taken.
+            for path in [
+                nested.join("Cargo.toml"),
+                nested.join("src/main.rs"),
+                out.join("artifact.bin"),
             ] {
                 assert!(path.exists(), "{mode:?}: {} must survive", path.display());
             }

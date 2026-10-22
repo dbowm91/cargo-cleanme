@@ -61,7 +61,6 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
             [CompletionResult]::new('--known', '--known', [CompletionResultType]::ParameterName, 'Routine read-only inventory over the maintenance scope')
             [CompletionResult]::new('-a', '-a', [CompletionResultType]::ParameterName, 'Full machine reconciliation')
             [CompletionResult]::new('--all', '--all', [CompletionResultType]::ParameterName, 'Full machine reconciliation')
-            [CompletionResult]::new('--full', '--full', [CompletionResultType]::ParameterName, 'Historical spelling of `--all`; retained as a hidden alias')
             [CompletionResult]::new('--no-progress', '--no-progress', [CompletionResultType]::ParameterName, 'Disable transient progress UI (useful for benchmarks and debugging)')
             [CompletionResult]::new('--stats', '--stats', [CompletionResultType]::ParameterName, 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination')
             [CompletionResult]::new('--verbose', '--verbose', [CompletionResultType]::ParameterName, 'Show the detailed human surface: every workspace considered (including the ones that were skipped), the scope census, the per-phase counters, and the diagnostic detail')

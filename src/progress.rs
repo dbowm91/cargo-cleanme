@@ -404,8 +404,13 @@ impl IndicatifRenderer {
         let msg = self.compose_message();
         if let Some(main) = &self.main {
             main.set_message(msg);
-            // `tick` advances the spinner glyph in both modes: without it the
-            // line froze the moment the total became known.
+            // The spinner advances in both modes, but by different hands.
+            // Production installs a steady ticker (`enable_steady_tick`), and
+            // indicatif's `tick` is a no-op once a ticker is installed — so
+            // there the ticker owns the glyph. The in-memory renderer installs
+            // no ticker, so the same call is what drives its glyph. What the
+            // operator sees is the same moving spinner either way; the two
+            // modes differ in who advances it, not in what they see.
             main.tick();
             let total = self.determinate_total.load(Ordering::Relaxed);
             if total > 0 {

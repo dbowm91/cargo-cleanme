@@ -643,7 +643,15 @@ impl Session {
 
         if page > 0 {
             if self.visible.is_empty() {
-                out.push(pad("    (no workspace matches the filter)", width));
+                // The row is truncated like every other line in the frame: a
+                // line wider than the terminal wraps onto a second physical
+                // row, and the frame then occupies one row more than its line
+                // count — so the erase starts one row too low and leaves the
+                // title standing above the prompt.
+                out.push(pad(
+                    &truncate_end("    (no workspace matches the filter)", width),
+                    width,
+                ));
                 for _ in 1..page {
                     out.push(String::new());
                 }
@@ -831,10 +839,15 @@ impl Session {
             return plain;
         }
         let mark_style = if self.all_checked() { ANSI_GREEN } else { "" };
+        // The coloured row is built from the same truncated pieces as the
+        // plain one. Rebuilding it from the raw label made it two cells wider
+        // than the frame on a narrow terminal, and a wrapped row leaves
+        // residue above the prompt when the frame is erased.
+        let styled_label = truncate_end(&label, width.saturating_sub(2));
         let mut styled = String::new();
         styled.push(pointer);
         styled.push(' ');
-        styled.push_str(&self.paint(mark_style, &label));
+        styled.push_str(&self.paint(mark_style, &styled_label));
         styled.push_str(&" ".repeat(gap));
         if !arithmetic.is_empty() {
             styled.push_str(&self.paint(ANSI_DIM, &arithmetic));
@@ -851,7 +864,7 @@ impl Session {
         let checkbox = format!("[{mark}]");
         let label = &self.labels[candidate_idx];
         let size = format_bytes(candidate.bytes).trim().to_string();
-        let ownership = ownership_text(candidate, columns.own_full);
+        let ownership = ownership_cell(candidate, columns);
         let gutter = self.gutter_char(idx, end);
 
         let mut plain = String::new();
@@ -870,7 +883,7 @@ impl Session {
             // `external-unproven` — so the column is truncated from the right
             // and the class survives it. A row that overflowed the frame
             // wrapped it, which is the one thing the frame must never do.
-            plain.push_str(&pad(&truncate_end(&ownership, columns.own), columns.own));
+            plain.push_str(&pad(&ownership, columns.own));
         }
 
         if self.cursor == idx + 1 {
@@ -907,10 +920,7 @@ impl Session {
             } else {
                 ANSI_YELLOW
             };
-            styled.push_str(&self.paint(
-                style,
-                &pad(&truncate_end(&ownership, columns.own), columns.own),
-            ));
+            styled.push_str(&self.paint(style, &pad(&ownership, columns.own)));
         }
         pad_visible(&styled, width)
     }
@@ -969,11 +979,26 @@ impl Session {
     /// information and costs a column's width on every row.
     fn columns(&self) -> Columns {
         let present = self.ownership_is_present();
+        let size_fits = self.width >= LEAD_WIDTH + COLUMN_GAP + SIZE_WIDTH + MIN_NAME_WIDTH;
         // The reclaimable column is the first thing to go. The title line
         // carries the total, so a row without a size is still a row — and a
         // row wider than the frame wraps it, which is the one thing the frame
         // must never do.
-        let size = self.width >= LEAD_WIDTH + COLUMN_GAP + SIZE_WIDTH + MIN_NAME_WIDTH;
+        let mut size = size_fits;
+        let mut columns = self.columns_with(size, present);
+        if present && columns.own == 0 && size {
+            // The reclaimable column was about to squeeze the ownership
+            // column out of existence, and a row that is not marked must not
+            // look private. The reclaimable size yields instead: it is a
+            // ranking aid, and the ownership column is the safety signal.
+            size = false;
+            columns = self.columns_with(size, present);
+        }
+        columns
+    }
+
+    /// The column widths for one reclaimable-column choice.
+    fn columns_with(&self, size: bool, present: bool) -> Columns {
         let size_gap = if size { COLUMN_GAP } else { 0 };
         let own_gap = if present { COLUMN_GAP } else { 0 };
         // What is left after the lead and the reclaimable column is the name's
@@ -1142,6 +1167,23 @@ fn ownership_text(candidate: &CleanupCandidate, full: bool) -> String {
     } else {
         candidate.ownership.label().to_string()
     }
+}
+
+/// The ownership annotation as it appears in one row.
+///
+/// The class label is the shortest honest description of a candidate's
+/// ownership, and the full wording is used when the column is wide enough.
+/// A one-cell column cannot carry either: truncating them yields an ellipsis,
+/// and an ellipsis marks nothing. The class's first letter does mark it — `p`
+/// for a private unit, `s` for a shared one — so a row that is not marked
+/// never looks like a row that is.
+fn ownership_cell(candidate: &CleanupCandidate, columns: &Columns) -> String {
+    if columns.own == 1 {
+        let mut out = String::new();
+        out.push(candidate.ownership.label().chars().next().unwrap_or('?'));
+        return out;
+    }
+    truncate_end(&ownership_text(candidate, columns.own_full), columns.own)
 }
 
 /// The shortest suffix of each candidate's path that identifies it uniquely.
@@ -2022,6 +2064,92 @@ mod tests {
             "an empty result set must say so, not render blank: {frame:?}"
         );
         assert_eq!(press(&mut s.clone(), &[Key::Enter]), Outcome::Continue);
+    }
+
+    /// The empty-result row is truncated like every other line in the frame.
+    ///
+    /// *Fails if:* the row is wider than the terminal. It then wraps onto a
+    /// second physical row, the frame occupies one row more than its line
+    /// count, and the erase — which moves up by the line count — starts one
+    /// row too low and leaves the title standing above the prompt.
+    #[test]
+    fn the_empty_result_row_is_truncated_to_the_frame_width() {
+        for w in [20u16, 24, 30, 36, 37, 40] {
+            let mut s = Session::new(sample()).with_color(false).with_size(w, 8);
+            filter(&mut s, "zz");
+            let frame = s.frame();
+            for line in &frame {
+                assert!(
+                    visible_width(line) <= w as usize,
+                    "line overflows {w} columns: {line:?}"
+                );
+            }
+            let mut tiny = TinyTerminal::new(10, w as usize);
+            tiny.feed(&frame_bytes(&frame));
+            tiny.feed(&rewind_bytes(frame.len()));
+            for row in 0..8 {
+                assert_eq!(
+                    tiny.row_text(row),
+                    "",
+                    "row {row} survived the erase at {w} columns: {frame:?}"
+                );
+            }
+        }
+    }
+
+    /// The ownership column never vanishes for a mixed candidate set.
+    ///
+    /// *Fails if:* an inventory-only unit renders identically to a cleanable
+    /// one. The operator cannot tell which units a cleanup would touch, and
+    /// the row carries no marking at all — on a colour terminal and on a
+    /// `NO_COLOR` one alike.
+    #[test]
+    fn the_ownership_column_survives_every_legal_terminal_width() {
+        let candidates = sample();
+        let private_candidate = private("/home/u/projects/alpha");
+        let shared_candidate = candidates
+            .iter()
+            .find(|c| !c.provably_private())
+            .expect("the sample set carries a shared candidate");
+        for w in MIN_SESSION_WIDTH as u16..=60 {
+            let s = Session::new(sample()).with_color(false).with_size(w, 12);
+            let columns = s.columns();
+            assert!(
+                columns.own > 0,
+                "the ownership column vanished at {w} columns: {columns:?}"
+            );
+            let private_cell = ownership_cell(&private_candidate, &columns);
+            let shared_cell = ownership_cell(shared_candidate, &columns);
+            assert_ne!(
+                private_cell, shared_cell,
+                "an inventory-only unit must not look cleanable at {w} columns"
+            );
+            assert!(
+                !shared_cell.trim().is_empty(),
+                "the inventory-only unit carries no marking at {w} columns"
+            );
+        }
+    }
+
+    /// The coloured all-toggle row is built from the truncated pieces.
+    ///
+    /// *Fails if:* the coloured path rebuilds the row from the raw label. The
+    /// row is then two cells wider than the frame on a narrow terminal, it
+    /// wraps, and the erase leaves residue above the prompt — the same
+    /// mechanism as an over-wide empty-result row.
+    #[test]
+    fn the_coloured_all_row_fits_the_frame() {
+        for w in MIN_FRAME_WIDTH as u16..=20 {
+            let mut s = Session::new(sample()).with_color(true).with_size(w, 12);
+            // The cursor starts on the all-row, which takes the plain path.
+            press(&mut s, &[Key::Down]);
+            for line in s.frame() {
+                assert!(
+                    visible_width(&line) <= w as usize,
+                    "line overflows {w} columns: {line:?}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -278,10 +278,22 @@ pub enum UpdateError {
     ReleaseEvidence { detail: String },
     /// Eggup refused preparation, integrity, validation, or commit.
     Transaction { detail: String },
-    /// A transaction committed but its receipt is not a clean `Committed`.
+    /// The transaction did not reach a clean `Committed` receipt.
+    ///
+    /// A receipt whose disposition is not `Committed` means the transaction
+    /// did **not** commit: the attempt failed, and either every old member was
+    /// restored and verified (`RolledBack`) or the live state could not be
+    /// restored automatically (`RecoveryRequired`).
+    ///
+    /// `recovery_path` names the retained backup in the `RecoveryRequired`
+    /// case — the only pointer to the only copy of the user's previous
+    /// working binary — and `rollback_failure` carries the distinct
+    /// recovery-phase failure when the restoration itself failed.
     Receipt {
         disposition: &'static str,
         detail: String,
+        recovery_path: Option<PathBuf>,
+        rollback_failure: Option<String>,
     },
     /// This installation may not be updated by this tool.
     Provenance { provenance: Provenance },
@@ -327,11 +339,20 @@ impl std::fmt::Display for UpdateError {
             UpdateError::Receipt {
                 disposition,
                 detail,
+                recovery_path,
+                rollback_failure,
             } => {
                 write!(
                     f,
                     "the update did not commit cleanly ({disposition}): {detail}"
-                )
+                )?;
+                if let Some(path) = recovery_path {
+                    write!(f, "; the retained backup is at {}", path.display())?;
+                }
+                if let Some(rollback) = rollback_failure {
+                    write!(f, "; the rollback itself failed: {rollback}")?;
+                }
+                Ok(())
             }
             UpdateError::Provenance { provenance } => {
                 write!(
@@ -836,6 +857,47 @@ pub trait UpdateEnvironment {
     fn cleanup(&self, staging: &Path) -> Result<(), String>;
 }
 
+/// What a transaction's disposition means, in the operator's words.
+///
+/// A `RolledBack` transaction *restored* the previous executable; it did not
+/// replace it. Saying otherwise would be a false claim about the user's
+/// binary, so the wording follows the receipt rather than assuming the
+/// outcome the update was hoping for.
+fn disposition_claim(disposition: TransactionDisposition) -> &'static str {
+    match disposition {
+        TransactionDisposition::Committed => "committed and the executable was replaced",
+        TransactionDisposition::RolledBack => {
+            "rolled back and the previous executable was restored"
+        }
+        TransactionDisposition::RecoveryRequired => {
+            "left the live state unrestored and needs manual recovery"
+        }
+    }
+}
+
+/// Create a directory that only its owner can read.
+///
+/// The staging directory holds the bytes this run is about to verify and
+/// install, and the contract calls it *private*. `std::fs::create_dir` asks
+/// the platform for `0o777` and lets the process umask take the rest away, so
+/// under the common `0002` umask the directory is `0775` and another user on
+/// the machine can read and replace what is staged in it. The mode is set at
+/// creation instead of afterwards, so there is no window in which the
+/// directory is wider than it should be.
+fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().mode(0o700).create(path)
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows has no mode bits; the per-user temp directory is the
+        // platform's own boundary.
+        std::fs::create_dir(path)
+    }
+}
+
 /// The User-Agent every outbound request identifies itself with.
 ///
 /// The registry rejects anonymous or generic clients outright: an unspecified
@@ -898,18 +960,19 @@ impl UpdateEnvironment for HttpEnvironment {
 
     fn staging_dir(&self) -> Result<PathBuf, UpdateError> {
         // A collision-resistant, invocation-owned directory name: the timestamp
-        // plus pid is enough. `create_dir` — not `create_dir_all`, which
-        // *succeeds* on an existing path — makes the comment literal: this
+        // plus pid is enough. The directory is created *fresh* — `create_dir`,
+        // not `create_dir_all`, which *succeeds* on an existing path — so this
         // never adopts a directory that already exists, it fails instead, so a
         // collision cannot leave one invocation staging bytes into another's
-        // tree. No retry loop is needed because the name is unique per call.
+        // tree. It is created owner-private. No retry loop is needed because
+        // the name is unique per call.
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let unique =
             std::env::temp_dir().join(format!("{PRODUCT}-update-{}-{nanos}", std::process::id()));
-        std::fs::create_dir(&unique).map_err(|error| UpdateError::Transaction {
+        create_private_dir(&unique).map_err(|error| UpdateError::Transaction {
             detail: format!(
                 "could not create a private staging directory at {}: {error}",
                 unique.display()
@@ -1258,15 +1321,21 @@ fn execute(
             return Err(error);
         }
     };
+    let disposition = receipt.disposition();
     if let Err(detail) = cleanup {
+        // The transaction's own outcome is the more important fact, so the
+        // message states what it actually did. A rolled-back transaction
+        // *restored* the previous executable; it did not replace it, and
+        // saying otherwise would be a false claim about the user's binary.
+        let claim = disposition_claim(disposition);
         return Err(UpdateError::Transaction {
             detail: format!(
-                "the executable was replaced, but its staging directory {} could not be removed: {detail}",
+                "the update transaction {claim}, but its staging directory {} could not be removed: {detail}",
                 staging.display()
             ),
         });
     }
-    let disposition = match receipt.disposition() {
+    let disposition = match disposition {
         TransactionDisposition::Committed => return Ok(plan.clone()),
         TransactionDisposition::RolledBack => "rolled_back",
         TransactionDisposition::RecoveryRequired => "recovery_required",
@@ -1278,6 +1347,11 @@ fn execute(
     Err(UpdateError::Receipt {
         disposition,
         detail,
+        // The retained backup is the only copy of the user's previous working
+        // binary. Dropping its location would leave the operator with a
+        // recovery they cannot perform.
+        recovery_path: receipt.recovery_path().map(|p| p.to_path_buf()),
+        rollback_failure: receipt.rollback_failure().map(|f| f.detail().to_owned()),
     })
 }
 
@@ -1479,11 +1553,12 @@ mod tests {
             self.version.clone()
         }
         fn staging_dir(&self) -> Result<PathBuf, UpdateError> {
-            // Mirrors production: `create_dir`, no pre-cleaning. Removing the
-            // directory first would pre-clean the exact hazard the subject is
-            // supposed to refuse, so no test could ever see a collision.
+            // Mirrors production: a fresh, owner-private directory, with no
+            // pre-cleaning. Removing the directory first would pre-clean the
+            // exact hazard the subject is supposed to refuse, so no test could
+            // ever see a collision.
             let path = unique("cargo-cleanme-update-test");
-            std::fs::create_dir(&path).map_err(|e| UpdateError::Transaction {
+            create_private_dir(&path).map_err(|e| UpdateError::Transaction {
                 detail: e.to_string(),
             })?;
             *self.staging.borrow_mut() = Some(path.clone());
@@ -2638,6 +2713,85 @@ mod tests {
         for path in environment.leaked_staging() {
             let _ = std::fs::remove_dir_all(path);
         }
+    }
+
+    /// The message about a failed staging cleanup states what the transaction
+    /// actually did.
+    ///
+    /// *Fails if:* the message claims the executable was replaced regardless of
+    /// the receipt's disposition. A rolled-back transaction *restored* the
+    /// previous executable; telling the operator that it was replaced is a
+    /// false claim about their binary, and the one they would act on.
+    #[test]
+    fn the_staging_cleanup_message_follows_the_receipt_disposition() {
+        let committed = disposition_claim(TransactionDisposition::Committed);
+        assert!(
+            committed.contains("replaced"),
+            "a committed transaction did replace the executable: {committed}"
+        );
+        let rolled_back = disposition_claim(TransactionDisposition::RolledBack);
+        assert!(
+            rolled_back.contains("restored"),
+            "a rolled-back transaction restored the previous executable: {rolled_back}"
+        );
+        assert!(
+            !rolled_back.contains("replaced"),
+            "a rolled-back transaction did not replace the executable: {rolled_back}"
+        );
+        let recovery = disposition_claim(TransactionDisposition::RecoveryRequired);
+        assert!(
+            !recovery.contains("replaced"),
+            "an unrecovered transaction did not replace the executable: {recovery}"
+        );
+    }
+
+    /// A receipt error carries the retained backup and the rollback failure.
+    ///
+    /// *Fails if:* the variant drops either. The retained backup is the only
+    /// copy of the user's previous working binary and the recovery path is
+    /// the only pointer to it; without them the operator has a recovery they
+    /// cannot perform, and the error names a failure it cannot act on.
+    #[test]
+    fn a_receipt_error_carries_the_retained_backup_and_the_rollback_failure() {
+        let error = UpdateError::Receipt {
+            disposition: "recovery_required",
+            detail: "the install failed and the restoration did not complete".to_owned(),
+            recovery_path: Some(PathBuf::from("/tmp/cargo-cleanme-recovery")),
+            rollback_failure: Some("could not restore backup for cargo-cleanme".to_owned()),
+        };
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains("/tmp/cargo-cleanme-recovery"),
+            "the retained backup must be named: {rendered}"
+        );
+        assert!(
+            rendered.contains("could not restore backup"),
+            "the rollback failure must be reported: {rendered}"
+        );
+        assert!(
+            rendered.contains("recovery_required"),
+            "the disposition must be reported: {rendered}"
+        );
+    }
+
+    /// The staging directory is private to its owner.
+    ///
+    /// *Fails if:* the directory is created with the platform's default mode
+    /// and the process umask takes the rest away. Under the common `0002`
+    /// umask that is `0775`, and another user on the machine can read — and
+    /// replace — the bytes this run is about to verify and install.
+    #[cfg(unix)]
+    #[test]
+    fn the_staging_directory_is_private_to_its_owner() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("staging");
+        create_private_dir(&path).expect("a private staging directory");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o700,
+            "the staging directory must be owner-only, got {mode:o}"
+        );
     }
 
     /// The negative control for the corrected check.

@@ -56,7 +56,6 @@ set edit:completion:arg-completer[cargo] = {|@words|
             cand --known 'Routine read-only inventory over the maintenance scope'
             cand -a 'Full machine reconciliation'
             cand --all 'Full machine reconciliation'
-            cand --full 'Historical spelling of `--all`; retained as a hidden alias'
             cand --no-progress 'Disable transient progress UI (useful for benchmarks and debugging)'
             cand --stats 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination'
             cand --verbose 'Show the detailed human surface: every workspace considered (including the ones that were skipped), the scope census, the per-phase counters, and the diagnostic detail'
