@@ -1228,3 +1228,59 @@ clean" into "system clean".
 changes the **human** format only: `--format json` and `--format log` are
 byte-identical with and without it. The flag changes no exit code, no proof,
 no scope, and no cleaned set — what is cleaned is identical either way.
+
+## C042 — the interactive surface's rendering and cursor lifecycle (closing; unpublished)
+
+Owner-directed 2026-10-22: review the `-i` surface for display errors and
+bugs, and fix what needs fixing.
+
+The surface had **never been observed by an automated test**, and it did not
+render what it drew. `crossterm 0.28`'s raw mode calls `cfmakeraw`, which
+clears `OPOST`, so a bare `\n` is a linefeed **without** a carriage return —
+and the frame was written with `writeln!`. Every line therefore started at the
+column the previous one ended in: the frame occupied **twice** the rows it
+claimed, every line lost its first character to the row above, and the rewind
+— which moved up by the frame's *line count* rather than by the rows it
+actually occupied — erased most of the frame it was meant to keep. On a
+30-row terminal with four candidates, the operator saw one candidate and a
+broken key-hint bar.
+
+Seven defects, all rendering or lifecycle, none touching a proof, a scope, or
+a deletion path:
+
+1. the frame was painted with a bare newline (**critical**);
+2. the terminal cursor was never restored — finding **36**, open since C039
+   (**high**);
+3. the hardware cursor was shown in INS at the end of the frame, nowhere near
+   the filter field (**medium**);
+4. a terminal read failure was swallowed as an unbound key, which turns a
+   vanished terminal into a busy repaint loop (**high**);
+5. the painted region was left standing when the session ended in an error
+   (**medium**);
+6. the armed-exit hint was truncated away by the filter, and the filter field
+   was resized when the exit was armed (**low**);
+7. the frame's geometry was measured in `chars()` rather than terminal cells,
+   so a CJK path painted past the right edge (**medium**).
+
+The fix makes the byte stream a **pure function** — `frame_bytes`,
+`rewind_bytes`, `clear_bytes` — so the rendered surface can be asserted at
+all, and the tests replay it through an in-test terminal emulator that models
+xterm's pending-wrap rule. The guard now restores the cursor as well as the
+terminal mode; the hardware cursor is hidden for the session; a read failure
+propagates; the region is erased on every exit path; the status line's hint
+slot is reserved; and the width is measured in cells.
+
+The **test that pinned the cursor defect was rewritten before the fix** — it
+asserted that the cursor's *last* recorded visibility was `Some(false)`, so
+it was green *because* it asserted the bug. All seven mutations of the fix are
+caught by at least one test.
+
+No CLI, configuration, reason-code, exit-code or JSON change; no dependency
+added; the selection contract, the published key table and the three endings
+are unchanged. Closes `architecture/overview.md` §10 findings **36** and
+**66**. Plan:
+`plans/implementation/artifact-discovery-cleanup/c042-interactive-surface-rendering-corrective.md`;
+evidence:
+`plans/closure/artifact-discovery-cleanup/c042-status.md`. **Closing** —
+implemented and ladder-green; **not published**, and publication is
+owner-gated.

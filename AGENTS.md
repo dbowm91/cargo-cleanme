@@ -185,10 +185,12 @@ each:
    assertion (the specific reason code, not "the command failed")
 4. A test that **pins the defect** — it asserts the wrong thing, including the
    thing you are about to fix. `the_driver_shows_the_hardware_cursor_only_in_insert_mode`
-   asserts the terminal cursor's last recorded visibility is `Some(false)`; the
-   interactive session never restores the cursor, so the test is green *because*
-   it asserts the bug. **Before you fix a defect, check whether a test is
-   currently pinning it.**
+   asserted the terminal cursor's last recorded visibility was `Some(false)`; the
+   interactive session never restored the cursor, so the test was green *because*
+   it asserted the bug. **Before you fix a defect, check whether a test is
+   currently pinning it.** C042 closed that one, and the rule is now a worked
+   example rather than a warning: the test was rewritten **first**, so the fix
+   could not leave a green test pinning the *new* bug.
 
 Every **new** guard takes a `--self-test` that feeds it a known-bad sample and
 requires a failure. If you add a guard, the self-test is not optional: a guard

@@ -22,7 +22,7 @@ distinction matters.
   modules, 18 source files, 38,302 lines in `src/` (17,450 of them outside
   every `#[cfg(test)]` scope), no async runtime of its own, and exactly one
   binary dependency that matters for safety (`cargo metadata`).
-- **Version:** 0.2.9 (unpublished; latest published tag `v0.2.8`) ·
+- **Version:** 0.2.10 (published; latest published tag `v0.2.10`) ·
   **Edition:** 2024 · **MSRV:** 1.89
 - **Deep dives:** 16 documents, one per component, linked from §4 and §12.
 
