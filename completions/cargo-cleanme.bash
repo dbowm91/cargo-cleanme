@@ -91,7 +91,7 @@ _cargo() {
             return 0
             ;;
         cargo__subcmd__cargo__subcmd__cleanme)
-            opts="-i -h -V --config --no-progress --stats --format --verbose --dry-run --dryrun --interactive --full --min-reclaimable-bytes --older-than --include --exclude --profile --package --cargo-preview --help --version scan config clean update"
+            opts="-i -h -V --config --no-progress --stats --format --verbose --interactive --dry-run --dryrun --full --min-reclaimable-bytes --older-than --include --exclude --profile --package --cargo-preview --help --version scan config clean update"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -137,7 +137,7 @@ _cargo() {
             return 0
             ;;
         cargo__subcmd__cargo__subcmd__cleanme__subcmd__clean)
-            opts="-i -h --known --full --min-reclaimable-bytes --older-than --include --exclude --profile --package --dry-run --cargo-preview --yes --dryrun --config --no-progress --stats --format --verbose --interactive --help"
+            opts="-i -h --dry-run --dryrun --full --min-reclaimable-bytes --older-than --include --exclude --profile --package --cargo-preview --known --yes --config --no-progress --stats --format --verbose --interactive --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

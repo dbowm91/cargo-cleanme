@@ -197,3 +197,45 @@ fn repository_root() -> Result<std::path::PathBuf, String> {
     // `git` invocation and no current-directory assumption is needed.
     Ok(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// C045 test 9: the generated artifacts are current.
+    ///
+    /// The man pages and the shell completions are derived from the clap
+    /// model, so a change to the model that is not regenerated ships a stale
+    /// artifact. The `--check` mode of this binary is the CI gate; this test
+    /// is the same check inside the test suite, so a stale artifact fails
+    /// `cargo test` and not only the documentation job.
+    ///
+    /// *Fails if:* the rendered help changed and the committed artifacts were
+    /// not regenerated — the input is any edit to the command model.
+    #[test]
+    fn the_generated_artifacts_match_the_clap_model() {
+        let root = repository_root().expect("the repository root");
+        let mut pending: Vec<(String, Vec<u8>)> = Vec::new();
+        for shell in SHELLS {
+            let mut buffer = Vec::new();
+            let mut command = command_model();
+            clap_complete::generate(*shell, &mut command, "cargo", &mut buffer);
+            pending.push((completion_path(shell), buffer));
+        }
+        pending.extend(render_manpages().expect("the manpages render"));
+
+        let mut stale = Vec::new();
+        for (relative, bytes) in &pending {
+            let existing = std::fs::read(root.join(relative)).ok();
+            if existing.as_deref() != Some(bytes.as_slice()) {
+                stale.push(relative.clone());
+            }
+        }
+        assert!(
+            stale.is_empty(),
+            "the generated artifacts are stale: {}. \
+             Run: cargo run --quiet --features dev-tools --bin generate-docs",
+            stale.join(", ")
+        );
+    }
+}

@@ -41,10 +41,10 @@ log\:"One bounded ASCII summary line per report, for unattended schedulers that 
 '--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
 '--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
 '--verbose[Show the detailed human surface\: every workspace considered (including the ones that were skipped), the scope census, the per-phase counters, and the diagnostic detail]' \
-'(--dryrun)--dry-run[Simulate\: run every decision, proof, and reporting step, but invoke no \`cargo clean\` process at all. Honoured wherever it appears, so the \`cargo cleanme --dry-run clean ROOT\` spelling cannot fall back to Execute. Only \`clean\` (and \`update\`'\''s own \`--dry-run\`) honour it\: \`scan\` and \`config\` ignore a global \`--dry-run\` (read-only / local-only, no behaviour change)]' \
-'(--dry-run)--dryrun[Historical spelling of \`--dry-run\`; retained as a hidden alias]' \
 '-i[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '--interactive[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
+'(--dryrun)--dry-run[Simulate\: run every decision, proof, and reporting step, but invoke no \`cargo clean\` process at all. Honoured wherever it appears, so the \`cargo cleanme --dry-run clean ROOT\` spelling cannot fall back to Execute. Only \`clean\` (and \`update\`'\''s own \`--dry-run\`) honour it\: \`scan\` and \`config\` ignore a global \`--dry-run\` (read-only / local-only, no behaviour change)]' \
+'(--dry-run)--dryrun[Historical spelling of \`--dry-run\`; retained as a hidden alias]' \
 '()--full[Complete Full reconciliation before cleaning its learned roots]' \
 '(--dry-run --dryrun)--cargo-preview[Cargo preview\: after the same complete final proof, invoke Cargo'\''s own \`clean --dry-run --verbose\`. Never removes anything]' \
 '-h[Print help (see more with '\''--help'\'')]' \
@@ -165,12 +165,12 @@ _arguments "${_arguments_options[@]}" : \
 '--format=[Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers]:FORMAT:((human\:""
 json\:""
 log\:"One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract\: complete consumers use \`json\`"))' \
+'(--dryrun)--dry-run[Application simulation\: run the full decision/proof/report path but invoke no Cargo clean command. The default mode is Execute]' \
+'(--dry-run)--dryrun[Historical spelling of \`--dry-run\`; retained as a hidden alias]' \
+'()--full[Complete Full reconciliation before cleaning its learned roots]' \
+'(--dry-run --dryrun)--cargo-preview[Cargo preview\: after the same complete final proof, invoke Cargo'\''s own \`clean --dry-run --verbose\`. Never removes anything]' \
 '(--full)--known[Clean bounded roots selected by the current Routine policy]' \
-'(--known)--full[Complete Full reconciliation before cleaning its learned roots]' \
-'(--cargo-preview --yes --dryrun)--dry-run[Application simulation\: run the full decision/proof/report path but invoke no Cargo clean command. The default mode is Execute]' \
-'(--dry-run --yes --dryrun)--cargo-preview[Cargo preview\: after the same complete final proof, invoke Cargo'\''s own \`clean --dry-run --verbose\`. Never removes anything]' \
 '(--dry-run --cargo-preview --dryrun)--yes[Historical spelling of the (now default) Execute mode; retained as a hidden alias]' \
-'(--dry-run --cargo-preview --yes)--dryrun[Historical spelling of \`--dry-run\`; retained as a hidden alias]' \
 '--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
 '--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
 '--verbose[Show the detailed human surface\: every workspace considered (including the ones that were skipped), the scope census, the per-phase counters, and the diagnostic detail]' \
@@ -178,7 +178,7 @@ log\:"One bounded ASCII summary line per report, for unattended schedulers that 
 '--interactive[Choose the workspaces to clean from an inline selection list (NOR/INS)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-'::root -- Optional bounded sandbox root. Omit to use the maintenance scope (identical to bare invocation) or select `--known` / `--full`:_files' \
+'::root -- Optional bounded sandbox root. Omit to use the maintenance scope (identical to bare invocation) or select `--full`:_files' \
 && ret=0
 ;;
 (update)
