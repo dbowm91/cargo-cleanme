@@ -506,6 +506,23 @@ impl Cli {
         if self.cargo_preview && alias.cargo_preview {
             return Err(duplicate_override("--cargo-preview"));
         }
+        // The same simulation at both levels is a usage error too, whichever
+        // spelling carries it: the rule is one override at one level, and
+        // silently preferring one of two values is the discarded-flag failure
+        // mode ADR 008 §3 exists to prevent.
+        if (self.dry_run || self.dryrun_legacy) && (alias.dry_run || alias.dryrun_legacy) {
+            return Err(duplicate_override("--dry-run"));
+        }
+        // A Full scope and a bounded ROOT select different scopes, and they
+        // cannot be merged: one of them would have to be discarded, and the
+        // discarded one here is the *bounded* selector, so a bounded cleanup
+        // would silently become a machine-wide one.
+        if self.full && alias.root.is_some() {
+            return Err(conflicting_scope_selectors("`--full`", "ROOT"));
+        }
+        if self.root.is_some() && alias.full {
+            return Err(conflicting_scope_selectors("ROOT", "`--full`"));
+        }
         let scope = if self.full || alias.full {
             // `clean --known` is the bare invocation, and the bare invocation
             // is the maintenance scope: a Full scope and `--known` select
@@ -568,6 +585,10 @@ impl Cli {
     /// select Cargo targets; neither means anything to `scan`, `config` or
     /// `update`. Discarding them would look exactly like the flag was
     /// honoured.
+    ///
+    /// `--interactive` is a cleanup flag too: it selects which cleanup units
+    /// are cleaned. A read-only subcommand has nothing to select, so the
+    /// flag is refused rather than ignored.
     fn reject_cleanup_flags_for(&self, subcommand: &str) -> Option<String> {
         let mut given: Vec<&str> = Vec::new();
         if self.full {
@@ -575,6 +596,9 @@ impl Cli {
         }
         if self.root.is_some() {
             given.push("ROOT");
+        }
+        if self.interactive {
+            given.push("--interactive");
         }
         if self.min_reclaimable_bytes.is_some() {
             given.push("--min-reclaimable-bytes");
@@ -671,6 +695,20 @@ fn conflicting_selectors(root_flag: &str, clean_flag: &str) -> String {
 fn conflicting_scopes(root_flag: &str) -> String {
     format!(
         "{root_flag} at the root and `--known` on `clean` select different scopes; \
+         give one scope selector at one level only."
+    )
+}
+
+/// Two scope selectors that select different scopes were given at different levels.
+///
+/// A Full scope sweeps the machine; a bounded ROOT confines the cleanup to one
+/// tree. They cannot be merged into one intent, so one of them would have to
+/// be discarded — and the discarded-flag failure mode ADR 008 §3 exists to
+/// prevent is at its worst here, because the discarded selector is the
+/// *bounded* one.
+fn conflicting_scope_selectors(root_flag: &str, clean_flag: &str) -> String {
+    format!(
+        "{root_flag} at the root and {clean_flag} on `clean` select different scopes; \
          give one scope selector at one level only."
     )
 }
@@ -1239,6 +1277,94 @@ mod tests {
             assert!(
                 !message.contains("was given at the root and on `clean`"),
                 "{args:?}: `--known` was not given at the root: {message}"
+            );
+        }
+    }
+
+    /// A Full scope at one level and a bounded ROOT at the other select
+    /// different scopes, and cannot be merged.
+    ///
+    /// *Fails if:* one of them is silently discarded — the discarded-flag
+    /// failure mode ADR 008 §3 exists to prevent. Here the discarded selector
+    /// is the *bounded* one, so a bounded cleanup becomes a machine-wide one.
+    #[test]
+    fn a_full_scope_at_one_level_and_a_root_at_the_other_is_a_usage_error() {
+        for (args, expected) in [
+            (
+                vec!["cargo-cleanme", "--full", "clean", "/tmp/x"],
+                "`--full` at the root and ROOT on `clean`",
+            ),
+            (
+                vec!["cargo-cleanme", "/tmp/x", "clean", "--full"],
+                "ROOT at the root and `--full` on `clean`",
+            ),
+        ] {
+            let parsed = Cli::try_parse_from(args.clone())
+                .unwrap_or_else(|error| panic!("{args:?} must parse: {error}"));
+            let Invocation::UsageError(message) = parsed.invocation() else {
+                panic!(
+                    "{args:?} must be a usage error, got {:?}",
+                    parsed.invocation()
+                );
+            };
+            assert!(
+                message.contains(expected),
+                "{args:?}: the message must name the colliding selectors: {message}"
+            );
+        }
+    }
+
+    /// The same simulation at both levels is a usage error, exactly like the
+    /// same Cargo preview at both levels.
+    ///
+    /// *Fails if:* one of the two is silently preferred — the discarded-flag
+    /// failure mode ADR 008 §3 exists to prevent.
+    #[test]
+    fn a_dry_run_at_both_levels_is_a_usage_error() {
+        for args in [
+            vec!["cargo-cleanme", "--dry-run", "clean", "--dry-run"],
+            vec!["cargo-cleanme", "--dryrun", "clean", "--dryrun"],
+        ] {
+            let parsed = Cli::try_parse_from(args.clone())
+                .unwrap_or_else(|error| panic!("{args:?} must parse: {error}"));
+            let Invocation::UsageError(message) = parsed.invocation() else {
+                panic!(
+                    "{args:?} must be a usage error, got {:?}",
+                    parsed.invocation()
+                );
+            };
+            assert!(
+                message.contains("--dry-run"),
+                "{args:?}: the message must name the repeated override: {message}"
+            );
+        }
+    }
+
+    /// `--interactive` selects which cleanup units are cleaned, so a read-only
+    /// subcommand has nothing for it to select.
+    ///
+    /// *Fails if:* the flag is silently ignored — the operator asked for an
+    /// interactive selection and got a plain scan, which looks exactly like
+    /// the flag was honoured.
+    #[test]
+    fn the_interactive_flag_is_refused_on_the_read_only_subcommands() {
+        for args in [
+            vec!["cargo-cleanme", "scan", "--known", "--interactive"],
+            vec!["cargo-cleanme", "--interactive", "scan", "--known"],
+            vec!["cargo-cleanme", "config", "show", "--interactive"],
+            vec!["cargo-cleanme", "update", "--interactive"],
+        ] {
+            let parsed = Cli::try_parse_from(args.clone())
+                .unwrap_or_else(|error| panic!("{args:?} must parse: {error}"));
+            let Invocation::UsageError(message) = parsed.invocation() else {
+                panic!(
+                    "{args:?} must be a usage error, got {:?}",
+                    parsed.invocation()
+                );
+            };
+            assert!(
+                message.contains("--interactive"),
+                "{args:?}: the message must name the refused flag: {message}"
             );
         }
     }

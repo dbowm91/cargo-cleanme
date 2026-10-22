@@ -2520,6 +2520,89 @@ fn known_scan_resolves_routine_without_a_configured_root_and_explicit_with_one()
     assert_eq!(explicit["scope"], "explicit", "{explicit}");
 }
 
+/// A relative root is folded against the invocation directory *lexically*.
+///
+/// The OS resolves `..` physically — through symlinks — while Cargo resolves a
+/// manifest path lexically. The scan used the raw spelling, so a root that
+/// crossed a symlink made the scan discover a manifest it could then not
+/// resolve and report an empty inventory with exit 0, while the cleanup path
+/// named a different directory entirely.
+///
+/// *Fails if:* two spellings of one operation disagree about the target
+/// directory.
+#[cfg(unix)]
+#[test]
+fn a_relative_root_names_the_same_directory_in_the_scan_and_the_cleanup_path() {
+    let fixture = MaintenanceFixture::new(false);
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path();
+    // `base/x` is a real package, and `real/link` points at `base/place`, so
+    // the *physical* resolution of `real/link/../x` is `base/x` — which
+    // exists — while the lexical one is `real/x`, which does not. That is
+    // the shape the two spellings disagreed about.
+    let project = base.join("x");
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::write(
+        project.join("Cargo.toml"),
+        b"[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(project.join("src/main.rs"), b"fn main() {}\n").unwrap();
+    let place = base.join("place");
+    fs::create_dir_all(&place).unwrap();
+    let real = base.join("real");
+    fs::create_dir_all(&real).unwrap();
+    std::os::unix::fs::symlink(&place, real.join("link")).unwrap();
+
+    let run = |args: &[&str]| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args([
+            "--config",
+            fixture.config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "json",
+        ]);
+        command.args(args);
+        command
+            .env("HOME", base)
+            .env("PATH", path_with(&fixture.bin))
+            .env("FIXTURE_ROOT", &project)
+            .env("FIXTURE_TARGET", project.join("target"))
+            .env("CARGO_LOG", &fixture.log)
+            .env("CARGO_ARGS_LOG", &fixture.args_log)
+            .current_dir(&real)
+            .output()
+            .unwrap()
+    };
+
+    // The lexical spelling of `link/../x` is `<real>/x`, which does not exist:
+    // the OS would have resolved it physically to `<place>/x`.
+    let scan = run(&["scan", "link/../x"]);
+    let cleanup = run(&["--dry-run", "link/../x"]);
+    assert_eq!(
+        scan.status.code(),
+        Some(2),
+        "the scan path must refuse the root the cleanup path refuses: {scan:?}"
+    );
+    assert_eq!(
+        cleanup.status.code(),
+        Some(2),
+        "the cleanup path must refuse the same root: {cleanup:?}"
+    );
+    let lexical = real.join("x").display().to_string();
+    let scan_err = String::from_utf8_lossy(&scan.stderr);
+    let cleanup_err = String::from_utf8_lossy(&cleanup.stderr);
+    assert!(
+        scan_err.contains(&lexical),
+        "the scan must name the lexical root: {scan_err}"
+    );
+    assert!(
+        cleanup_err.contains(&lexical),
+        "the cleanup path must name the same root: {cleanup_err}"
+    );
+}
+
 /// A zero-result scan inside a bounded root: the platform-neutral counterpart
 /// of `bare_cleanup_with_no_known_roots_is_a_successful_no_op`.
 #[test]
@@ -3819,7 +3902,7 @@ fn automatic_file_root_is_omitted_and_symlink_root_blocks_without_traversal() {
     let link = fixture._temp.path().join("symlinked-root");
     std::os::unix::fs::symlink(&target, &link).unwrap();
     assert!(link.is_dir(), "premise: is_dir follows the symlink");
-    fixture.write_state(&[link]);
+    fixture.write_state(std::slice::from_ref(&link));
     let output = fixture.run(&["--dry-run"]);
     assert_eq!(
         output.status.code(),
@@ -3830,6 +3913,18 @@ fn automatic_file_root_is_omitted_and_symlink_root_blocks_without_traversal() {
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["result"]["scope_blocked"], true, "{json}");
+    // The block names the root that caused it and why: a count alone tells
+    // the operator that something is wrong but not what, and these roots are
+    // the only thing they can act on.
+    let reason = json["result"]["scope_reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.contains(&link.display().to_string()),
+        "the block must name the offending root: {reason}"
+    );
+    assert!(
+        reason.contains("symlink"),
+        "the block must name the reason: {reason}"
+    );
     assert_eq!(fixture.clean_calls(), 0);
     assert_eq!(
         fixture.cargo_calls("metadata"),

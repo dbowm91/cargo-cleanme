@@ -3853,6 +3853,24 @@ fn final_cleanup_proof_roots(
             ),
         ));
     }
+    // 9b. The cleaned region must not live inside a workspace's source tree.
+    // `cargo clean` removes whatever is under the root it is given, so an
+    // output root inside a crate's own `src` tree would delete that crate's
+    // sources. The classification refuses such a group; this re-proves it
+    // against the filesystem at the moment of the spawn.
+    if unit
+        .covering
+        .iter()
+        .any(|c| workspace::inside_source_tree(c, &fresh_universe))
+    {
+        return Err(ProofFailure::new(
+            CleanupReasonCode::SkippedSafety,
+            format!(
+                "ownership could not be re-proven: the cleaned output of workspace {} lies inside a source tree",
+                unit.root.display()
+            ),
+        ));
+    }
     // 10. Covering-root physical proof: every affected covering root must exist,
     // be a real directory, and not be a symlink.
     prove_covering_roots(&unit.covering)?;
@@ -3910,6 +3928,21 @@ fn final_cleanup_proof_roots(
             return Err(ProofFailure::new(
                 CleanupReasonCode::SkippedUncertain,
                 "revalidation output measurement uncertain",
+            ));
+        }
+        // The cleaned region must hold build output only. `cargo clean`
+        // removes whatever is under the root it is given, so a package
+        // directory inside the region would take its checked-in sources with
+        // it. The classification refuses such a group; this re-proves it
+        // against the filesystem at the moment of the spawn.
+        if let Some(package_dir) = &stats.package_dir {
+            return Err(ProofFailure::new(
+                CleanupReasonCode::SkippedSafety,
+                format!(
+                    "ownership could not be re-proven: the cleaned output {} holds the package directory {}, not only build output",
+                    covering.display(),
+                    package_dir.display()
+                ),
             ));
         }
         if stats.newest.is_some_and(|t| t >= cutoff || t > start) {

@@ -1183,6 +1183,17 @@ fn roots_are_related(a: &std::path::Path, b: &std::path::Path) -> bool {
 
 /// Admit one automatic (Routine/Full) candidate set: classify by provenance
 /// before collapse, collapse admitted paths only, remember omissions for the
+/// A path rendered for a human-readable report.
+///
+/// Control characters are dropped and the text is bounded, so a path the
+/// operator did not choose cannot rewrite the report's own layout.
+fn sanitize_path_text(path: &str) -> String {
+    path.chars()
+        .filter(|ch| !ch.is_control())
+        .take(200)
+        .collect()
+}
+
 /// late pre-spawn recheck, and convert symlink/uncertain roots into a typed
 /// whole-scope block instead of a fatal error or a silent scope reduction.
 fn admit_automatic(
@@ -1216,17 +1227,36 @@ fn admit_automatic(
     let blocked = if classified.blocked.is_empty() {
         None
     } else {
-        let mut paths: Vec<String> = classified
+        // The block names the roots that caused it and why. A count alone
+        // tells the operator that something is wrong but not what, and these
+        // roots are the only thing they can act on: the sample is bounded so
+        // a machine with many of them still gets a readable report.
+        let mut entries: Vec<(String, String)> = classified
             .blocked
             .iter()
-            .map(|b| b.path.display().to_string())
+            .map(|b| {
+                (
+                    sanitize_path_text(&b.path.display().to_string()),
+                    b.reason.clone(),
+                )
+            })
             .collect();
-        paths.sort();
+        entries.sort();
+        let examples: Vec<String> = entries
+            .iter()
+            .take(3)
+            .map(|(path, reason)| format!("{path} ({reason})"))
+            .collect();
+        let sample = if examples.is_empty() {
+            String::new()
+        } else {
+            format!("; examples: {}", examples.join(", "))
+        };
         Some(cargo_cleanme::cleanup::ScopeBlock::new(
             cargo_cleanme::cleanup::ScopeBlockReason::IncompleteDiscovery,
             format!(
-                "automatic cleanup scope is uncertain for {} root(s); no cleanup commands were run",
-                paths.len(),
+                "automatic cleanup scope is uncertain for {} root(s); no cleanup commands were run{sample}",
+                entries.len(),
             ),
         ))
     };
@@ -1448,7 +1478,15 @@ fn run_scan(
     let is_maintenance = matches!(intent, ScanIntent::Maintenance);
     let (root, full) = match intent {
         ScanIntent::Full => (None, true),
-        ScanIntent::Explicit(root) => (Some(root), false),
+        // The scan root is folded against the invocation directory *lexically*,
+        // exactly as the cleanup path folds it (`cli::absolutize_root`).
+        //
+        // The two spellings of one relative root have to agree. The OS
+        // resolves `..` physically — through symlinks — while Cargo resolves
+        // a manifest path lexically, so a root that crossed a symlink made the
+        // scan discover a manifest it could then not resolve, and report an
+        // empty inventory with exit 0.
+        ScanIntent::Explicit(root) => (Some(cli::absolutize_root(&root)?), false),
         ScanIntent::Maintenance => (None, false),
     };
     let mut policy = cargo_cleanme::policy::resolve(

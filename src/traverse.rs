@@ -92,6 +92,26 @@ pub struct TargetStats {
     pub entries: u64,
     pub newest: Option<SystemTime>,
     pub uncertain: bool,
+    /// A package directory was found under the measured root.
+    ///
+    /// `cargo clean --target-dir <root>` removes the whole root, so a package
+    /// directory inside it means the root holds checked-in sources and not
+    /// only build output. The caller must refuse the candidate.
+    pub package_dir: Option<PathBuf>,
+}
+
+/// The package directory a manifest file belongs to, if `path` names one.
+///
+/// A manifest directly under the measured root makes the root itself the
+/// package directory.
+fn manifest_package_dir(path: &Path) -> Option<PathBuf> {
+    let name = path.file_name()?;
+    if !crate::domain::is_manifest_shaped_name(name) {
+        return None;
+    }
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(Path::to_path_buf)
 }
 
 fn newest_time(current: Option<SystemTime>, next: SystemTime) -> Option<SystemTime> {
@@ -108,6 +128,10 @@ fn is_vcs_name(name: &str) -> bool {
 /// counted, every other entry increments the entry count, regular files add
 /// allocated bytes, and any walk/metadata/sizing failure marks the result
 /// uncertain.
+///
+/// This is the *proof* measurement: it re-stats every entry instead of
+/// trusting the engine's cached metadata, so an entry that vanished between
+/// the walk and the measurement is still observed.
 pub fn measure_single_target(target: &Path) -> TargetStats {
     let mut stats = TargetStats::default();
     match fs::symlink_metadata(target) {
@@ -159,6 +183,9 @@ pub fn measure_single_target(target: &Path) -> TargetStats {
                 break;
             }
         };
+        if stats.package_dir.is_none() {
+            stats.package_dir = manifest_package_dir(&path);
+        }
         if meta.is_file() {
             match filesize::file_real_size_fast(&path, &meta) {
                 Ok(size) => match stats.bytes.checked_add(size) {
@@ -186,6 +213,11 @@ pub fn measure_single_target(target: &Path) -> TargetStats {
 /// reports that measurement. Any per-root failure marks only that root
 /// uncertain; other roots still complete. The pool size is [`worker_threads`],
 /// independent of candidate count.
+///
+/// Every entry is re-stated, exactly as the proof measurement
+/// ([`measure_single_target`]) does: an entry that vanished between the walk
+/// and the measurement has to be observed, because a partial measurement must
+/// never be promoted to a candidate.
 pub fn measure_many_targets(targets: &[(usize, PathBuf)]) -> Vec<(usize, TargetStats)> {
     let mut ordered: Vec<(usize, PathBuf)> = targets.iter().map(|(i, p)| (*i, p.clone())).collect();
     ordered.sort_by_key(|(i, _)| *i);
@@ -215,7 +247,7 @@ pub fn measure_many_targets(targets: &[(usize, PathBuf)]) -> Vec<(usize, TargetS
         }
     }
     if roots.is_empty() {
-        return ordered
+        return targets
             .iter()
             .map(|(i, _)| (*i, stats_by_index.get(i).cloned().unwrap_or_default()))
             .collect();
@@ -245,6 +277,10 @@ pub fn measure_many_targets(targets: &[(usize, PathBuf)]) -> Vec<(usize, TargetS
                 if path == *root {
                     continue;
                 }
+                // The engine collected the metadata for this entry while it was
+                // walking, but its type is platform-specific (macOS and Windows
+                // carry their own `Metadata`), so it cannot be handed to
+                // `filesize`. The re-stat stays.
                 let meta = match fs::symlink_metadata(&path) {
                     Ok(meta) => meta,
                     Err(_) => {
@@ -267,6 +303,9 @@ pub fn measure_many_targets(targets: &[(usize, PathBuf)]) -> Vec<(usize, TargetS
                         continue;
                     }
                 }
+                if stats.package_dir.is_none() {
+                    stats.package_dir = manifest_package_dir(&path);
+                }
                 if meta.is_file() {
                     match filesize::file_real_size_fast(&path, &meta) {
                         Ok(size) => match stats.bytes.checked_add(size) {
@@ -288,7 +327,7 @@ pub fn measure_many_targets(targets: &[(usize, PathBuf)]) -> Vec<(usize, TargetS
     // One result per input, in input order. A repeated `candidate_index` gets
     // the same measurement as its first occurrence: stats are a function of the
     // index, so every occurrence of that index must agree.
-    ordered
+    targets
         .iter()
         .map(|(i, _)| (*i, stats_by_index.get(i).cloned().unwrap_or_default()))
         .collect()
@@ -568,6 +607,78 @@ mod tests {
         // The distinct index is unaffected.
         let nine = measured.iter().find(|(i, _)| *i == 9).unwrap();
         assert_eq!(nine.1.bytes, measure_single_target(&second).bytes);
+    }
+
+    #[test]
+    fn the_batched_measurement_returns_its_results_in_input_order() {
+        // The contract is "one result per input, in input order". A caller
+        // that zipped the results with its own inputs would otherwise
+        // attribute one target's measurement to another target.
+        let dir = tempfile::tempdir().unwrap();
+        let mut targets = Vec::new();
+        for name in ["a", "b", "c"] {
+            let target = dir.path().join(name);
+            fs::create_dir_all(&target).unwrap();
+            fs::write(target.join("artifact.bin"), vec![9u8; 4096]).unwrap();
+            targets.push(target);
+        }
+        // Deliberately not in index order.
+        let indexed = vec![
+            (2usize, targets[0].clone()),
+            (0usize, targets[1].clone()),
+            (1usize, targets[2].clone()),
+        ];
+        let measured = measure_many_targets(&indexed);
+        assert_eq!(measured.len(), 3, "one result per input");
+        assert_eq!(
+            measured.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+            vec![2, 0, 1],
+            "the results come back in the order the inputs were given"
+        );
+        for ((index, batch), (input_index, target)) in measured.iter().zip(indexed.iter()) {
+            assert_eq!(*index, *input_index);
+            let single = measure_single_target(target);
+            assert_eq!(batch.bytes, single.bytes);
+            assert_eq!(batch.entries, single.entries);
+        }
+    }
+
+    #[test]
+    fn a_package_directory_under_the_root_is_reported() {
+        // `cargo clean --target-dir <root>` removes the whole root, so a
+        // package directory inside it means the root holds checked-in
+        // sources and not only build output. The measurement is where the
+        // shape is caught, because the classification works from the resolved
+        // universe and cannot see it.
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        fs::create_dir_all(target.join("nested/src")).unwrap();
+        fs::write(target.join("nested/Cargo.toml"), b"[package]\n").unwrap();
+        fs::write(target.join("artifact.bin"), vec![9u8; 4096]).unwrap();
+        let stats = measure_single_target(&target);
+        assert_eq!(
+            stats.package_dir.as_deref(),
+            Some(target.join("nested").as_path()),
+            "a manifest under the root makes its directory a package directory"
+        );
+
+        // A manifest directly under the root makes the root itself one.
+        let with_manifest = dir.path().join("root-with-manifest");
+        fs::create_dir_all(&with_manifest).unwrap();
+        fs::write(with_manifest.join("Cargo.toml"), b"[package]\n").unwrap();
+        let stats = measure_single_target(&with_manifest);
+        assert_eq!(
+            stats.package_dir.as_deref(),
+            Some(with_manifest.as_path()),
+            "a manifest at the root makes the root the package directory"
+        );
+
+        // The batched measurement reports it too.
+        let batched = measure_many_targets(&[(0usize, target.clone())]);
+        assert_eq!(
+            batched[0].1.package_dir.as_deref(),
+            Some(target.join("nested").as_path())
+        );
     }
 
     #[test]

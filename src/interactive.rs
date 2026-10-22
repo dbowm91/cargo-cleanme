@@ -210,7 +210,9 @@ const CHECKBOX_WIDTH: usize = 3;
 /// Width of the reclaimable column.
 ///
 /// Eleven, because `RECLAIMABLE` is eleven characters and the column header
-/// has to sit over the column it names. `format_bytes` emits at most ten.
+/// has to sit over the column it names. `format_bytes` can emit eleven as
+/// well (`1024.00 EiB`), so the column is exactly as wide as the widest value
+/// it carries — not one character narrower, which would clip it.
 const SIZE_WIDTH: usize = 11;
 
 /// Spaces between two columns.
@@ -793,7 +795,7 @@ impl Session {
             plain.push_str(&pad_left("RECLAIMABLE", SIZE_WIDTH));
         }
         if columns.own > 0 {
-            plain.push_str(&" ".repeat(COLUMN_GAP));
+            plain.push_str(&" ".repeat(columns.own_gap));
             plain.push_str(&pad(&truncate_end("OWNERSHIP", columns.own), columns.own));
         }
         if !self.color {
@@ -878,7 +880,7 @@ impl Session {
             plain.push_str(&pad_left(&truncate(&size, SIZE_WIDTH), SIZE_WIDTH));
         }
         if columns.own > 0 {
-            plain.push_str(&" ".repeat(COLUMN_GAP));
+            plain.push_str(&" ".repeat(columns.own_gap));
             // The head of the annotation is the class — `private`, `shared`,
             // `external-unproven` — so the column is truncated from the right
             // and the class survives it. A row that overflowed the frame
@@ -914,7 +916,7 @@ impl Session {
             ));
         }
         if columns.own > 0 {
-            styled.push_str(&" ".repeat(COLUMN_GAP));
+            styled.push_str(&" ".repeat(columns.own_gap));
             let style = if candidate.provably_private() {
                 ANSI_DIM
             } else {
@@ -1000,19 +1002,18 @@ impl Session {
     /// The column widths for one reclaimable-column choice.
     fn columns_with(&self, size: bool, present: bool) -> Columns {
         let size_gap = if size { COLUMN_GAP } else { 0 };
-        let own_gap = if present { COLUMN_GAP } else { 0 };
         // What is left after the lead and the reclaimable column is the name's
         // and the ownership column's to share.
         let available = self
             .width
             .saturating_sub(LEAD_WIDTH + size_gap + if size { SIZE_WIDTH } else { 0 });
-        let budget = available.saturating_sub(own_gap);
         if !present {
             return Columns {
                 name: available,
                 own: 0,
                 own_full: false,
                 size,
+                own_gap: 0,
             };
         }
         let full = self
@@ -1021,12 +1022,13 @@ impl Session {
             .map(|c| display_width(&ownership_text(c, true)))
             .max()
             .unwrap_or(0);
-        if budget.saturating_sub(full) >= MIN_NAME_WIDTH {
+        if available.saturating_sub(COLUMN_GAP + full) >= MIN_NAME_WIDTH {
             return Columns {
-                name: budget - full,
+                name: available - COLUMN_GAP - full,
                 own: full,
                 own_full: true,
                 size,
+                own_gap: COLUMN_GAP,
             };
         }
         // Too narrow for the full wording: the class label is the shortest
@@ -1037,12 +1039,29 @@ impl Session {
             .map(|c| display_width(c.ownership.label()))
             .max()
             .unwrap_or(0);
-        let own = class.min(budget.saturating_sub(MIN_NAME_WIDTH));
-        // The gap that would have separated the ownership column from the
-        // name is not spent when there is no ownership column: a shared row is
-        // still marked, and a row that is not marked must not look private.
+        let own = class.min(available.saturating_sub(COLUMN_GAP + MIN_NAME_WIDTH));
+        // The ownership marker is the safety signal and the name is only a
+        // label: when the two cannot both fit, the marker wins and the name
+        // gives up the room it was holding. One cell carries the class's
+        // initial, which is enough to tell a marked row from a private one.
+        //
+        // The reclaimable column yields before this happens (see `columns`),
+        // so the size is already gone by the time the marker takes the room.
+        let own = if own == 0 && !size && available >= 1 {
+            1
+        } else {
+            own
+        };
+        // The gap that separates the ownership column from the name is spent
+        // only when there is a name on the far side of it: a gap needs a
+        // column on both sides, and the name may have none left.
+        let own_gap = if own > 0 && available > own + COLUMN_GAP {
+            COLUMN_GAP
+        } else {
+            0
+        };
         let name = if own > 0 {
-            budget.saturating_sub(own).max(MIN_NAME_WIDTH.min(budget))
+            available - own - own_gap
         } else {
             available
         };
@@ -1051,6 +1070,7 @@ impl Session {
             own,
             own_full: false,
             size,
+            own_gap,
         }
     }
 
@@ -1150,6 +1170,11 @@ struct Columns {
     own_full: bool,
     /// Whether the reclaimable column is drawn at all.
     size: bool,
+    /// The gap between the name and the ownership column.
+    ///
+    /// Zero when there is no name to separate it from: a gap needs a column
+    /// on both sides of it.
+    own_gap: usize,
 }
 
 /// The ownership annotation for one candidate.
@@ -2111,23 +2136,49 @@ mod tests {
             .iter()
             .find(|c| !c.provably_private())
             .expect("the sample set carries a shared candidate");
-        for w in MIN_SESSION_WIDTH as u16..=60 {
+        // The frame's own minimum is the lead and nothing else: there is no
+        // column left to mark a row with. Every width above it can carry the
+        // marker, and the marker is the safety signal, so it has to.
+        for w in MIN_FRAME_WIDTH as u16..=60 {
             let s = Session::new(sample()).with_color(false).with_size(w, 12);
             let columns = s.columns();
-            assert!(
-                columns.own > 0,
-                "the ownership column vanished at {w} columns: {columns:?}"
-            );
-            let private_cell = ownership_cell(&private_candidate, &columns);
-            let shared_cell = ownership_cell(shared_candidate, &columns);
-            assert_ne!(
-                private_cell, shared_cell,
-                "an inventory-only unit must not look cleanable at {w} columns"
-            );
-            assert!(
-                !shared_cell.trim().is_empty(),
-                "the inventory-only unit carries no marking at {w} columns"
-            );
+            if (w as usize) > LEAD_WIDTH {
+                assert!(
+                    columns.own > 0,
+                    "the ownership column vanished at {w} columns: {columns:?}"
+                );
+                let private_cell = ownership_cell(&private_candidate, &columns);
+                let shared_cell = ownership_cell(shared_candidate, &columns);
+                assert_ne!(
+                    private_cell, shared_cell,
+                    "an inventory-only unit must not look cleanable at {w} columns"
+                );
+                assert!(
+                    !shared_cell.trim().is_empty(),
+                    "the inventory-only unit carries no marking at {w} columns"
+                );
+            }
+        }
+    }
+
+    /// The rows fit the frame at every width, however narrow.
+    ///
+    /// *Fails if:* the ownership column takes room the row does not have. A
+    /// row wider than the frame wraps it, and the erase that removes the
+    /// frame counts its lines rather than the rows it occupies — so the
+    /// residue is left standing above the operator's prompt.
+    #[test]
+    fn a_narrow_frame_still_fits_its_rows() {
+        for w in MIN_FRAME_WIDTH as u16..=60 {
+            let mut s = Session::new(sample()).with_color(true).with_size(w, 12);
+            // The cursor starts on the all-row, which takes the plain path.
+            press(&mut s, &[Key::Down]);
+            for line in s.frame() {
+                assert!(
+                    visible_width(&line) <= w as usize,
+                    "line overflows {w} columns: {line:?}"
+                );
+            }
         }
     }
 

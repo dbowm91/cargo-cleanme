@@ -59,10 +59,10 @@ use eggup_acquisition::{
     FetchOutcome,
 };
 use eggup_core::{
-    AbsentPolicy, ArtifactMember, ArtifactSet, CommitOwnership, ExactIdentityValidator,
-    InstallPlan, IntegrityRequirement, MemberId, Ownership, OwnershipVerifier, PermissionsIntent,
-    PreparedTransaction, ProductId, ReleaseId, Sha256Manifest, TransactionDisposition,
-    TransactionReceipt,
+    AbsentPolicy, ArtifactMember, ArtifactSet, CandidateValidator, CommitOwnership,
+    ExactIdentityValidator, InstallPlan, IntegrityRequirement, MemberId, Ownership,
+    OwnershipVerifier, PermissionsIntent, PreparedTransaction, ProductId, ReleaseId,
+    Sha256Manifest, TransactionDisposition, TransactionReceipt, VerifiedTransaction,
 };
 
 use crate::error::AppError;
@@ -1140,6 +1140,82 @@ pub fn run(
     execute(environment, &plan, &current_exe)
 }
 
+/// How many times a candidate identity check may be attempted.
+///
+/// The first attempt is the normal one; the rest exist for the one failure
+/// that is a property of the machine rather than of the candidate.
+const CANDIDATE_EXECUTION_ATTEMPTS: usize = 5;
+
+/// The pause before the second attempt, doubled for each further attempt.
+const CANDIDATE_EXECUTION_BACKOFF: Duration = Duration::from_millis(20);
+
+/// `ETXTBSY`: the kernel's "text file busy".
+#[cfg(unix)]
+const ETXTBSY: i32 = 26;
+
+/// Whether the kernel refused the spawn because the file was busy.
+///
+/// The dynamic loader every dynamically linked program shares is such a file,
+/// so a machine that is executing programs at that moment can make an
+/// otherwise sound candidate fail to start. The condition is transient.
+#[cfg(unix)]
+fn is_text_file_busy(error: &eggup_core::Error) -> bool {
+    match error {
+        eggup_core::Error::Io { source, .. } => source.raw_os_error() == Some(ETXTBSY),
+        _ => false,
+    }
+}
+
+/// Windows has no `ETXTBSY`; a busy executable there is a sharing violation,
+/// which the candidate's own identity check reports as a mismatch.
+#[cfg(not(unix))]
+fn is_text_file_busy(_error: &eggup_core::Error) -> bool {
+    false
+}
+
+/// Runs `attempt` until it succeeds, until the failure is not a busy
+/// executable, or until the attempts are exhausted.
+///
+/// The busy-executable case is the only one that is repeated: it says the
+/// machine was busy at that instant, not that the candidate is wrong.
+fn retry_while_busy<T>(
+    mut attempt: impl FnMut() -> eggup_core::Result<T>,
+) -> eggup_core::Result<T> {
+    let mut attempt_number = 1;
+    loop {
+        match attempt() {
+            Ok(value) => return Ok(value),
+            Err(error) => {
+                if attempt_number >= CANDIDATE_EXECUTION_ATTEMPTS || !is_text_file_busy(&error) {
+                    return Err(error);
+                }
+                std::thread::sleep(CANDIDATE_EXECUTION_BACKOFF * attempt_number as u32);
+                attempt_number += 1;
+            }
+        }
+    }
+}
+
+/// A validator that repeats a candidate execution the kernel refused as busy.
+///
+/// `ETXTBSY` says nothing about the candidate: it says the machine was busy at
+/// that instant. Reporting it as "the candidate did not identify itself" would
+/// be a false accusation, and refusing the update over it would be a failure
+/// of the machine's timing rather than of the release. The check is therefore
+/// repeated a bounded number of times before the failure is reported.
+///
+/// The retry lives here rather than in a test, because the condition is a
+/// property of the machine the updater runs on, not of the fixture.
+struct RetryingCandidateValidator<'a> {
+    inner: &'a dyn CandidateValidator,
+}
+
+impl CandidateValidator for RetryingCandidateValidator<'_> {
+    fn validate(&self, transaction: &VerifiedTransaction) -> eggup_core::Result<()> {
+        retry_while_busy(|| self.inner.validate(transaction))
+    }
+}
+
 fn execute(
     environment: &dyn UpdateEnvironment,
     plan: &UpdatePlan,
@@ -1281,15 +1357,15 @@ fn execute(
         let validator =
             ExactIdentityValidator::new(member_id.clone(), expected_identity(&plan.to_version))
                 .args(["--version"]);
-        let validated =
-            verified
-                .validate(&validator)
-                .map_err(|error| UpdateError::Transaction {
-                    detail: format!(
-                        "the candidate did not identify itself as {} {}\n{error}",
-                        PRODUCT, plan.to_version
-                    ),
-                })?;
+        let retrying = RetryingCandidateValidator { inner: &validator };
+        let validated = verified
+            .validate(&retrying)
+            .map_err(|error| UpdateError::Transaction {
+                detail: format!(
+                    "the candidate did not identify itself as {} {}\n{error}",
+                    PRODUCT, plan.to_version
+                ),
+            })?;
 
         let mut expected = HashMap::new();
         expected.insert(member_id, live_digest);
@@ -2512,6 +2588,47 @@ mod tests {
     // Windows commit-path evidence therefore comes from C014's live
     // self-update rehearsal against a real published release, not from a
     // fixture that could not run.
+    #[cfg(unix)]
+    #[test]
+    fn a_busy_executable_is_retried_and_a_real_failure_is_not() {
+        // The kernel's `ETXTBSY` says the machine was busy, not that the
+        // candidate is wrong, so it is repeated. Every other failure is
+        // reported at once: repeating it would only delay the report.
+        let busy = || eggup_core::Error::Io {
+            operation: "spawning bounded candidate",
+            source: std::io::Error::from_raw_os_error(ETXTBSY),
+        };
+
+        let mut calls = 0;
+        let result = retry_while_busy(|| {
+            calls += 1;
+            if calls < 3 { Err(busy()) } else { Ok(42) }
+        });
+        assert_eq!(result.ok(), Some(42));
+        assert_eq!(calls, 3, "the busy execution is retried, not reported");
+
+        let mut calls = 0;
+        let result: eggup_core::Result<()> = retry_while_busy(|| {
+            calls += 1;
+            Err(eggup_core::Error::CandidateExecution(
+                "wrong identity".to_owned(),
+            ))
+        });
+        assert!(result.is_err());
+        assert_eq!(calls, 1, "a real failure is not retried");
+
+        let mut calls = 0;
+        let result: eggup_core::Result<()> = retry_while_busy(|| {
+            calls += 1;
+            Err(busy())
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            calls, CANDIDATE_EXECUTION_ATTEMPTS,
+            "a permanently busy executable is reported, not retried forever"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_verified_candidate_replaces_the_live_binary() {

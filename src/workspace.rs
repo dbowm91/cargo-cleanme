@@ -1293,10 +1293,47 @@ fn is_conventional_source_dir(path: &Path) -> bool {
 
 /// True when `dir` holds a Cargo manifest, i.e. it is a package directory.
 ///
-/// Cargo opens a manifest stored as `cargo.toml` exactly as it opens
-/// `Cargo.toml`, so both spellings count.
+/// The manifest name is the one the whole tool shares
+/// ([`crate::domain::is_manifest_shaped_name`]), so the inventory and the
+/// ownership proof cannot disagree about what a package directory is: a
+/// directory the discovery calls a package directory is always one this guard
+/// refuses to delete. The rule is deliberately broader than the discovery's
+/// own ("would Cargo open this file?"): a cleanup would take a manifest-shaped
+/// file with it whatever Cargo would have made of it.
 fn is_package_directory(dir: &Path) -> bool {
-    dir.join("Cargo.toml").is_file() || dir.join("cargo.toml").is_file()
+    fs::read_dir(dir).ok().is_some_and(|mut children| {
+        children.any(|child| {
+            child
+                .ok()
+                .is_some_and(|child| crate::domain::is_manifest_shaped_name(&child.file_name()))
+        })
+    })
+}
+
+/// Cargo's conventional source directories, relative to a package root.
+const SOURCE_DIR_NAMES: [&str; 4] = ["src", "tests", "benches", "examples"];
+
+/// True when `covering` lies inside a workspace's source tree.
+///
+/// The conventional source directories are where a crate's own files live. An
+/// output root *inside* one of them is that crate's source, not a build
+/// artifact: `cargo clean --target-dir <root>` removes the whole root, so
+/// `target-dir = "src/foo"` would delete the crate's `.rs` files.
+///
+/// [`is_conventional_source_dir`] is the name-based guard and only sees the
+/// covering root's own final component, so `src/foo` slips past it. This is
+/// the containment form of the same guard, and it fails safe - it can only
+/// ever *withhold* a cleanup, never authorize one.
+pub(crate) fn inside_source_tree(covering: &Path, workspaces: &[ResolvedWorkspace]) -> bool {
+    workspaces.iter().any(|w| {
+        w.members.iter().any(|m| {
+            SOURCE_DIR_NAMES
+                .iter()
+                .any(|name| contains(&m.source_root.join(name), covering))
+        }) || SOURCE_DIR_NAMES
+            .iter()
+            .any(|name| contains(&w.root.join(name), covering))
+    })
 }
 
 /// True when a covering root is nested inside a package directory.
@@ -1542,6 +1579,10 @@ pub fn build_groups(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup> {
                     .iter()
                     .any(|w| w.members.iter().any(|m| contains(c, &m.source_root)))
                     || is_conventional_source_dir(c)
+                    // The mirror of the containment above: an output root that
+                    // lives *inside* a crate's source tree is that crate's
+                    // source, not a build artifact.
+                    || inside_source_tree(c, workspaces)
             });
             // The mirror: a covering root that lives *inside* a package
             // directory. The resolved members cannot see this shape — Cargo
@@ -1914,6 +1955,44 @@ pub fn analyze_groups_detailed(
                 group: g.clone(),
                 measured: None,
                 skip: Some(GroupSkipReason::UncertainMeasurement),
+            });
+            continue;
+        }
+        // A covering root that holds a package directory is not a build
+        // artifact. `cargo clean` removes whatever is under the root it is
+        // given, so the package's checked-in sources would go with it, and the
+        // discovery cannot see the package: it does not descend into an
+        // output root, so the victim is exactly the package the resolved
+        // universe does not contain.
+        //
+        // The traversal that sized the root visited every entry under it, so
+        // this costs nothing extra.
+        let package_dir = survivors.iter().find_map(|pos| {
+            bytes_by_survivor
+                .get(pos)
+                .and_then(|stats| stats.package_dir.clone())
+        });
+        if let Some(package_dir) = package_dir {
+            counters.uncertain_skipped += 1;
+            diagnostics.push(ScanDiagnostic {
+                severity: DiagnosticSeverity::Warning,
+                category: DiagnosticCategory::CandidateUncertain,
+                path: Some(g.display.clone()),
+                message: format!(
+                    "output root {} holds the package directory {}, not only build output; it is not sized and not eligible for cleanup",
+                    g.display.display(),
+                    package_dir.display()
+                ),
+            });
+            observer.unit_completed(ScanPhase::Analysis);
+            outcomes.push(GroupOutcome {
+                group: RawGroup {
+                    ownership: OutputOwnershipClass::Uncertain,
+                    source_overlap: true,
+                    ..g.clone()
+                },
+                measured: None,
+                skip: Some(GroupSkipReason::UncertainOwnership),
             });
             continue;
         }
@@ -4565,6 +4644,121 @@ mod tests {
         );
         assert!(!groups[0].source_overlap);
         assert!(!groups[0].nested_source_overlap);
+    }
+
+    #[test]
+    fn an_output_root_inside_a_members_source_tree_is_not_private() {
+        // `target-dir = "src/foo"` puts the output root inside the crate's own
+        // source tree. `cargo clean --target-dir <root>` removes the whole
+        // root, so the crate's own `.rs` files would go with it. The
+        // name-based guard only sees the root's final component (`foo`), so
+        // the containment form of the guard is what has to refuse it.
+        let d = tempfile::tempdir().unwrap();
+        let ws_root = std::fs::canonicalize(d.path()).unwrap().join("ws");
+        std::fs::create_dir_all(ws_root.join("src/foo")).unwrap();
+        std::fs::write(
+            ws_root.join("Cargo.toml"),
+            b"[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(ws_root.join("src/main.rs"), b"fn main() {}\n").unwrap();
+        std::fs::write(ws_root.join("src/foo/mod.rs"), b"pub fn f() {}\n").unwrap();
+        let output = ws_root.join("src/foo");
+
+        let ws = workspace_with_output(&ws_root, vec![ws_root.clone()], Some(output), false);
+        let groups = build_groups(std::slice::from_ref(&ws));
+        assert_eq!(groups.len(), 1, "{groups:?}");
+        assert_eq!(
+            groups[0].ownership,
+            OutputOwnershipClass::Uncertain,
+            "an output root inside the crate's own source tree is not an artifact"
+        );
+        assert!(groups[0].source_overlap);
+        assert!(
+            !crate::cleanup::covering_is_authorized(
+                groups[0].ownership,
+                &groups[0].covering,
+                &ws_root,
+                &[],
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn an_output_root_holding_a_package_directory_is_not_private() {
+        // A package directory *inside* the output root is the shape the
+        // discovery cannot see: it does not descend into an output root, so
+        // the nested package is never resolved and never enters the universe.
+        // `cargo clean` removes whatever is under the root it is given, so the
+        // nested package's checked-in sources would go with it.
+        //
+        // The classification cannot see it either - it works from the resolved
+        // universe - so the measurement is where the shape has to be caught.
+        let d = tempfile::tempdir().unwrap();
+        let ws_root = std::fs::canonicalize(d.path()).unwrap().join("ws");
+        std::fs::create_dir_all(ws_root.join("target/nested/src")).unwrap();
+        std::fs::create_dir_all(ws_root.join("src")).unwrap();
+        std::fs::write(
+            ws_root.join("Cargo.toml"),
+            b"[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(ws_root.join("src/lib.rs"), b"fn main() {}\n").unwrap();
+        std::fs::write(
+            ws_root.join("target/nested/Cargo.toml"),
+            b"[package]\nname = \"nested\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(ws_root.join("target/nested/src/lib.rs"), b"pub fn f() {}\n").unwrap();
+        std::fs::write(ws_root.join("target/artifact.bin"), vec![1u8; 512]).unwrap();
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        backdate_tree(&ws_root, old);
+
+        let ws = workspace_with_output(
+            &ws_root,
+            vec![ws_root.clone()],
+            Some(ws_root.join("target")),
+            false,
+        );
+        let groups = build_groups(std::slice::from_ref(&ws));
+        assert_eq!(groups.len(), 1, "{groups:?}");
+        assert_eq!(
+            groups[0].ownership,
+            OutputOwnershipClass::PrivateBounded,
+            "the classification works from the resolved universe, which cannot contain the nested package"
+        );
+        let start = SystemTime::now() + Duration::from_secs(1);
+        let cutoff = start.checked_sub(Duration::from_secs(300)).unwrap();
+        let mut counters = ScanCounters::default();
+        let mut diags = Vec::new();
+        let noop = NoopObserver;
+        let outcomes = analyze_groups_detailed(
+            std::slice::from_ref(&ws),
+            groups,
+            start,
+            cutoff,
+            Duration::from_secs(300),
+            &mut counters,
+            &mut diags,
+            &noop,
+        );
+        assert_eq!(outcomes.len(), 1);
+        assert!(
+            outcomes[0].measured.is_none(),
+            "an output root holding a package directory is not a measured candidate"
+        );
+        assert_eq!(
+            outcomes[0].skip,
+            Some(GroupSkipReason::UncertainOwnership),
+            "the group is withheld, not measured"
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("holds the package directory")),
+            "the operator has to be told why nothing is cleaned: {diags:?}"
+        );
     }
 
     #[cfg(unix)]

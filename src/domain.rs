@@ -354,6 +354,26 @@ pub fn elapsed_nanos(elapsed: std::time::Duration) -> u64 {
     u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
 }
 
+/// Whether `name` is a manifest-shaped file name.
+///
+/// Cargo opens the manifest of a package directory as `Cargo.toml`. A file
+/// stored as `cargo.toml` is opened by Cargo exactly as `Cargo.toml` on a
+/// case-insensitive volume, and on a case-sensitive volume it is still a
+/// manifest-shaped file that a cleanup would take with it, so the spelling
+/// does not decide the question.
+///
+/// This is deliberately broader than the discovery's own rule
+/// (`discovery::is_manifest_name`), which answers a different question - would
+/// Cargo *open* this file - and therefore follows the platform's resolution
+/// rules. The ownership proof has to answer would a cleanup *lose* this file,
+/// and it may only ever withhold a cleanup, never authorize one. A directory
+/// the discovery calls a package directory is therefore always one this rule
+/// protects.
+pub fn is_manifest_shaped_name(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .is_some_and(|name| name.eq_ignore_ascii_case("Cargo.toml"))
+}
+
 impl ScanCounters {
     /// One-line semantic counters for `--stats` stderr output.
     pub fn stats_line(&self) -> String {
