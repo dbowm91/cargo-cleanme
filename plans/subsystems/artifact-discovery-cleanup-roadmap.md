@@ -1284,3 +1284,51 @@ evidence:
 `plans/closure/artifact-discovery-cleanup/c042-status.md`. **Closing** —
 implemented and ladder-green; **not published**, and publication is
 owner-gated.
+
+## C043 — the interactive frame's geometry (closing; unpublished)
+
+Owner-directed 2026-10-22, in the same pass that reviewed the `-i` surface's
+output discipline: the frame's **bytes** were fixed by C042, but its
+**geometry** was not, and the two are independent. A frame can be byte-perfect
+— every line starting with a carriage return, every character intact — and
+still be the wrong shape for the terminal it lands in.
+
+A live pty capture showed both axes wrong at once.
+
+1. **The width** was `max(40, terminal_width)` — clamped **up**. In a terminal
+   narrower than forty columns every frame line wrapped, the frame occupied
+   twice the rows it claimed, and the erase — which moves up by the frame's
+   *line count*, not by the rows it occupies — left the mangled frame
+   standing above the operator's prompt (**high**);
+2. **The height** was bounded in *lines* against the terminal's height, but
+   the frame *occupies* one row more than its line count, because every line
+   ends with a newline and the last one moves the cursor onto the row below.
+   A frame whose lines equalled the terminal's height therefore scrolled the
+   terminal, pushing its own title line off the top in any terminal shorter
+   than ten rows, and pushing the operator's scrollback up with it
+   (**high**).
+
+The fix makes the frame adopt the terminal's geometry **exactly**, and the
+layout **degrade** so that it fits: the reclaimable column goes first, then
+the ownership column's wording, and the name keeps what is left. The bound
+is on the rows the frame *occupies*, and the chrome gives way in a short
+terminal — the key-hint bar, then the column header, then the all-toggle row
+— so the title, the status line and a candidate row survive in a six-row
+terminal. A terminal too small for the surface to be useful is refused with an
+actionable message, before the listing spawns anything.
+
+The **two tests that pinned the defect were rewritten before the fix**: one
+asserted that the frame fitted a *clamped* geometry, and the other asserted a
+*line count* rather than the rows occupied. The new tests include one that
+replays the byte stream through the terminal emulator and asserts the erase
+leaves nothing standing. All eight mutations of the fix are caught by at least
+one test.
+
+No CLI, configuration, reason-code, exit-code or JSON change; no dependency
+added; the selection contract, the published key table and the three endings
+are unchanged. Closes `architecture/overview.md` §10 finding **67**. Plan:
+`plans/implementation/artifact-discovery-cleanup/c043-interactive-frame-geometry-corrective.md`;
+evidence:
+`plans/closure/artifact-discovery-cleanup/c043-status.md`. **Closing** —
+implemented and ladder-green; **not published**, and publication is
+owner-gated.
