@@ -39,7 +39,7 @@ changed twice. `cargo cleanme scan` with no selector is a **usage error (exit
 It is enforced by one `ArgGroup`:
 
 ```rust
-// src/cli.rs:139
+// src/cli.rs:244
 #[command(group = clap::ArgGroup::new("scan-scope").required(true).args(["root", "known", "all", "full"]))]
 ```
 
@@ -57,7 +57,7 @@ it says so.
 ## `Invocation::UsageError` is not dead code
 
 ```rust
-// src/cli.rs:344
+// src/cli.rs:426
 UsageError(String),
 ```
 
@@ -71,35 +71,34 @@ It was **unreachable** when clap enforced the whole `scan` selector rule. It is
 usage errors, and each lands here —
 
 - a cleanup flag handed to `scan`, `config` or `update`
-  (`src/cli.rs:571-575`);
+  (`src/cli.rs:637-639`);
 - the same override given at both the root and on `clean`
-  (`src/cli.rs:683-706`);
+  (`src/cli.rs:713-717`);
 - the two mutually exclusive selectors given at *different* levels —
   `--profile` at the root and `--package` on `clean`
-  (`src/cli.rs:688-695`). Clap's `conflicts_with` only sees one level, and
+  (`src/cli.rs:728-737`). Clap's `conflicts_with` only sees one level, and
   merging them independently would discard one of the two: the operator would
   ask for a package and get a profile, which is a different destructive
   action;
 - a scope selector given at both levels, which clap's `ArgGroup` cannot see
-  across the root and the subcommand (`src/cli.rs:500-502`).
+  across the root and the subcommand (`src/cli.rs:542-544`).
 
 Do not "simplify" it away, and do not assume clap got there first. If you add
 a selector, add the matching arm and keep the fail-closed fallback.
 
 ## The mode triple, and the two `--dry-run` flags
 
-There are **three** `--dry-run` declarations, and they are not the same flag:
+There are **two** `--dry-run` declarations, and they are not the same flag:
 
 | Declaration | Where | Meaning |
 |---|---|---|
-| `dry_run` | root (`src/cli.rs:70-71`) | honoured wherever it appears, but only `clean` and `update` act on it; `scan` and `config` ignore it |
-| `dry_run` | `clean` (`src/cli.rs:203-204`) | Simulate mode for cleanup |
-| `dry_run` | `update` (`src/cli.rs:104-204`) | resolve the update plan, acquire nothing |
+| `dry_run` | the shared cleanup surface (`src/cli.rs:42-43`), carried by the root and by `clean` | honoured wherever it appears, but only `clean` and `update` act on it; `scan` and `config` ignore it |
+| `dry_run` | `update` (`src/cli.rs:306-308`) | resolve the update plan, acquire nothing |
 
 The canonical mapping is one function:
 
 ```rust
-// src/cli.rs:352
+// src/cli.rs:434
 pub fn clean_mode(dry_run: bool, cargo_preview: bool, dryrun_legacy: bool) -> CleanMode
 ```
 
@@ -109,7 +108,7 @@ mapping runs. If you add a fourth mode, that assertion is what you must update
 *and* what must keep failing when two modes are combined.
 
 **A simulation at either level wins over a Cargo preview at either level.**
-`src/cli.rs:631-636` checks the simulation flags *first*, because `--dry-run`
+`src/cli.rs:676-681` checks the simulation flags *first*, because `--dry-run`
 spawns nothing while `--cargo-preview` spawns a Cargo process. The safe mode
 wins the tie. Clap cannot express this, because the two flags live at
 different levels of the command tree and therefore never conflict with each
@@ -136,7 +135,7 @@ nothing.
 
 ## One cleanup code path, on purpose
 
-`CleanupScope::Maintenance` (`src/cli.rs:246`) covers **both** bare
+`CleanupScope::Maintenance` (`src/cli.rs:326`) covers **both** bare
 invocation and `clean` with no scope selector. The doc comment says why: bare
 maintenance and every advanced cleanup spelling produce the same
 `CleanupRequest`, so there is exactly one cleanup engine and one set of gates
@@ -148,22 +147,26 @@ invocation is a bug, and a change that splits the two is a regression. Keep
 
 Policy overrides (`--min-reclaimable-bytes`, `--older-than`, `--include`,
 `--exclude`, `--profile`, `--package`) are **root-level** now, and `clean`
-keeps its own hidden copies of the same names (`src/cli.rs:103` at the
-root, `src/cli.rs:103` on `clean`). M019 shipped ADR 008 §4b: the root is
+carries the *same* declaration hidden. M019 shipped ADR 008 §4b: the root is
 the single cleanup front door, `clean` survives as a hidden compatibility
-alias, and the overrides exist at both levels.
+alias, and the overrides exist at both levels. C045 collapsed the two
+declarations into one — `CleanupFlags` (`src/cli.rs:35-83`), flattened into
+the root (`src/cli.rs:167-168`) and into `clean` (`src/cli.rs:286-288`) — so a
+new override costs one edit, and
+`the_alias_accepts_every_cleanup_flag_the_root_declares` (`src/cli.rs:1247`)
+fails if the two levels ever diverge.
 
 The two levels **merge**, they do not stack:
 
 - A value given at the **root** wins.
 - A value given on `clean` is used when the root did not supply one.
 - The **same** override at both levels is a **usage error** (exit 2)
-  (`src/cli.rs:683-706`), because silently preferring one of two values is the
+  (`src/cli.rs:728-751`), because silently preferring one of two values is the
   discarded-flag failure mode ADR 008 §3 exists to prevent.
 
 ## The `long_about` lie — resolved, and the drift mechanism that hid it
 
-`src/cli.rs:21` is the root `long_about`. It used to say that
+`src/cli.rs:104` is the root `long_about`. It used to say that
 `cargo cleanme scan` with no ROOT is the full read-only machine
 reconciliation. It is a usage error. Only `cargo cleanme --help` showed that
 text — the man page overwrote the root `long_about` with its own block in
@@ -203,7 +206,7 @@ it. `cargo cleanme --full` is the canonical Full-cleanup spelling;
 `cargo cleanme clean --full` survives as a **hidden** compatibility alias (it
 has been published since 0.2.4), and the policy overrides are root-level too.
 
-The root is the **single cleanup front door** (`src/cli.rs:469-472`):
+The root is the **single cleanup front door** (`src/cli.rs:539-623`):
 
 | Spelling | Scope |
 |---|---|
@@ -212,7 +215,7 @@ The root is the **single cleanup front door** (`src/cli.rs:469-472`):
 | `cargo cleanme --full` | the Full cleanup |
 
 `cargo cleanme clean …` is the same intent reached through the hidden alias
-(`src/cli.rs:171`, `src/cli.rs:428-442`). `clean` is *hidden*, not removed:
+(`src/cli.rs:284`, `src/cli.rs:513-517`). `clean` is *hidden*, not removed:
 `man/cargo-cleanme-clean.1` still ships and still documents a working
 spelling, and it is generated from the same clap model, so it cannot drift.
 `cargo cleanme .` is a bounded cleanup of `.`.
@@ -221,12 +224,12 @@ Two rules make the alias safe, and both are **usage errors (exit 2)**:
 
 - A **cleanup flag handed to a read-only or local-only subcommand** — `scan`,
   `config`, `update` — is refused, never silently discarded
-  (`src/cli.rs:571-575`).
+  (`src/cli.rs:637-639`).
 - The **same** override at both levels is ambiguous, and is refused
-  (`src/cli.rs:683-706`).
+  (`src/cli.rs:713-717`).
 
 A **simulation at either level wins over a Cargo preview at either level**
-(`src/cli.rs:631-636`): `--dry-run` says "invoke no `cargo clean` at all", a
+(`src/cli.rs:676-681`): `--dry-run` says "invoke no `cargo clean` at all", a
 Cargo preview does invoke one, so the safe mode takes the tie.
 
 One collision to know: a directory whose name equals a subcommand name is read
@@ -243,7 +246,7 @@ on any of it.
 
 ## `--verbose` selects a rendering shape; it is not a mode
 
-`--verbose` (`src/cli.rs:63`) is a **global** flag on the root `Cli`, like
+`--verbose` (`src/cli.rs:146`) is a **global** flag on the root `Cli`, like
 `--config`, `--no-progress`, `--stats` and `--format`. It is global because it
 selects a rendering shape and every report-producing subcommand renders one.
 

@@ -8,7 +8,7 @@
 
 The verification apparatus does three distinct jobs. The third is what makes it unusual.
 
-**(a) Product behaviour.** 555 declared inline `#[test]` functions in `src/`, plus two
+**(a) Product behaviour.** 563 declared inline `#[test]` functions in `src/`, plus two
 integration suites: one drives the compiled binary as a subprocess, the other drives the
 library's scan entry point in-process. Between them they cover ownership proof, cleanup
 authorization, the three clean modes, workspace resolution, real Cargo failure presentation,
@@ -41,7 +41,7 @@ were the premises, and is any of them unchecked?*
 
 | Layer | Location | Count | What it can catch | What it cannot catch |
 |---|---|---:|---|---|
-| Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 555 declared `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
+| Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 563 declared `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
 | Integration — CLI contract | `tests/cli_contract.rs` (4,860 lines) | 77 `#[test]` | The subprocess boundary end to end: argv normalization, exit codes, JSON shape, log-line shape, `--stats` stream discipline, selector behaviour, usage conflicts, stale-learned-root admission, repeated-root noise bounds, incomplete-discovery stage counts, real Cargo failure summaries, default Routine execution against real Cargo | Internals of `run()`; anything on a real machine; platform-gated cases are excluded on other lanes |
 | Integration — end to end | `tests/end_to_end.rs` (840 lines) | 4 `#[test]` | Full production-pipeline scans against synthetic trees with real mtimes, under both a filtered Routine scope and an explicit scope | Cleanup, update, config editing |
 | Shared harness | `tests/common/mod.rs` (286 lines) | 0 tests | `set_path_modified` / `backdate_file` (per-platform mtime control), `inactive_project` tree construction, `write_fake_cargo` / `cargo_calls` (unix only) | — |
@@ -102,7 +102,7 @@ from `src/`, never copied between documents.
 | `src/workspace.rs` | 83 | 2311 | 6644 | 4334 |
 | `src/update.rs` | 51 | 1440 | 3157 | 1718 |
 | `src/interactive.rs` | 74 | 1790 | 3489 | 1700 |
-| `src/cli.rs` | 50 | 861 | 2239 | 1379 |
+| `src/cli.rs` | 58 | 907 | 2700 | 1794 |
 | `src/discovery.rs` | 41 | 1147 | 2647 | 1501 |
 | `src/policy.rs` | 24 | 876 | 1660 | 785 |
 | `src/output.rs` | 21 | 273 (`path_tests`), 509 (`mod tests`), 945 (`update_tests`) | 1065 | 793 |
@@ -116,15 +116,19 @@ from `src/`, never copied between documents.
 | `src/domain.rs` | 1 | 472 | 500 | 29 |
 | `src/error.rs` | 0 | — | 16 | — |
 | `src/lib.rs` | 0 | — | 16 | — |
-| **Total** | **555** | | | |
+| **Total** | **563** | | | |
 
-**The count is declared, not executed.** 555 `#[test]` functions exist in `src/`; **553
+**The count is declared, not executed.** 563 `#[test]` functions exist in `src/`; **561
 compile on Linux x86_64**, because two are gated to the other platforms
 (`config.rs:995`, `#[cfg(windows)]`, and `discovery.rs:1698`,
-`#[cfg(any(target_os = "macos", windows))]`). Beyond that, 43 more are `#[cfg(unix)]` and four
-are Linux-only (`config.rs:1443`, `discovery.rs:1718`, `output.rs:280`, `workspace.rs:5747`),
-so the other two lanes compile smaller sets. The three hosted lanes therefore compile different
-sets — 553 on Linux x86_64, 550 on macOS, 508 on Windows. Platform-gated tests mean a green local run does not mean a green run
+`#[cfg(any(target_os = "macos", windows))]`). Beyond that, **60** carry a
+`#[cfg(unix)]` gate and four are Linux-only (`config.rs:1443`,
+`discovery.rs:1718`, `output.rs:280`, `workspace.rs:5747` — the last of which
+is also `#[cfg(unix)]`), so the other two lanes compile smaller sets. The three
+hosted lanes therefore compile different sets — 561 on Linux x86_64, 558 on
+macOS, and **500** on Windows, where **63** of the 563 are excluded: the 60
+unix-gated tests, plus the three Linux-only tests that are not also
+unix-gated. Platform-gated tests mean a green local run does not mean a green run
 elsewhere — which is the whole reason the OS matrix exists, and the reason
 `check-fixture-portability.py` exists to catch a *new* ungated fixture before a lane disagrees
 about it.
@@ -165,7 +169,7 @@ lives.
 
 ### The test-double architecture
 
-Two process seams keep almost all of the 555 declared tests from spawning a real `cargo`:
+Two process seams keep almost all of the 563 declared tests from spawning a real `cargo`:
 
 - **`CargoRunner`** — `src/workspace.rs:29`. `fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput>`.
 - **`CleanupRunner`** — declared in `src/cleanup.rs` for the destructive step, so cleanup is exercised while `cargo clean` is a no-op returning recorded bytes.

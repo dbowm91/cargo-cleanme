@@ -127,31 +127,38 @@ set is valuable.
 
 ## Coverage shape, honestly
 
-**555** inline `#[test]` functions are **declared** in `src/`; **553** compile
+**563** inline `#[test]` functions are **declared** in `src/`; **561** compile
 and run on Linux. Two are excluded there: one `#[cfg(windows)]`
 (`src/config.rs:995`) and one `#[cfg(any(target_os = "macos", windows))]`
-(`src/discovery.rs:1698`). A further **43** carry `#[cfg(unix)]` and **4** are
+(`src/discovery.rs:1698`). A further **60** carry `#[cfg(unix)]` and **4** are
 Linux-only (`src/config.rs:1443`, `src/discovery.rs:1718`, `src/output.rs:280`,
-`src/workspace.rs:5553`), so the three hosted lanes compile **553 of 555 on
-Linux**, **508 of 555 on Windows**, and **550 of 555 on macOS** —
-`#[cfg(unix)]` is true *on* macOS, which is the half people get wrong. A green
+`src/workspace.rs:5747` — the last of which is also `#[cfg(unix)]`), so the
+three hosted lanes compile **561 of 563 on
+Linux**, **500 of 563 on Windows**, and **558 of 563 on macOS** —
+`#[cfg(unix)]` is true *on* macOS, which is the half people get wrong. On
+Windows, 63 of the 563 are excluded: the 60 unix-gated tests plus the three
+Linux-only tests that are not also unix-gated. A green
 local run is not a green run elsewhere — that is what the OS matrix in `ci.yml`
 is for, and why `check-fixture-portability.py` exists to catch a *new* ungated
 fixture before a lane disagrees about it.
 
-> **Count the gates, not the greps.** A naive "the `#[cfg(unix)]` immediately
-> above `#[test]`" grep finds 33, not 43, because Rust allows `#[test]` to come
-> *before* the gate (`src/cleanup.rs:7094` does exactly that). Ten of the 43
-> have the gate after the `#[test]`. Derive these
-> numbers with a brace-tracking parser and check them against
+> **Count the tests a gate excludes, not the gates.** A naive "the `#[cfg(unix)]`
+> immediately above `#[test]`" grep finds 33, because Rust allows `#[test]` to
+> come *before* the gate (`src/cleanup.rs:7127` does exactly that, and nine
+> more do). And that 33 is not the answer either: the 53 `#[cfg(unix)]`
+> attributes in test scope exclude **60** tests, because ten of them gate a
+> helper or a block that holds further tests. Subtract the gate count instead
+> of the test count and the Windows lane comes out 16 high. Derive these
+> numbers with a brace-tracking parser that evaluates each test's *effective*
+> gate set, and check them against
 > `cargo test --lib -- --list` on the host platform; anything else silently
-> disagrees by a few.
+> disagrees.
 
-State which number you mean. "555 tests" (declared) and "553 passing" (on
+State which number you mean. "563 tests" (declared) and "561 passing" (on
 Linux) are both true, and a record that gives one while meaning the other is
 ambiguous in the direction that matters.
 
-Of the 555, **37.8% live in two modules** (`cleanup.rs` 127, `workspace.rs` 83).
+Of the 563, **37.3% live in two modules** (`cleanup.rs` 127, `workspace.rs` 83).
 That concentration is a direct consequence of the architecture: cleanup and
 workspace resolution are where the invariants are. It is not a balanced suite,
 and a flat count would hide that. A change to a small module can be genuinely
