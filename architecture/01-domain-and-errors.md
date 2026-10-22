@@ -446,7 +446,7 @@ everything else qualifies the path inline.
 | `UnknownCapability` | 1 | `output.rs` (test module only, `output.rs:641`) |
 | `UnresolvedOwnershipParticipant` | 1 | `output.rs` (test module only, `output.rs:637`) |
 | `ScanScope`, `ScanDiagnostic`, `EligibleOutputGroup`, `OutputRootKind` | 1 each | `main.rs`, `cleanup.rs` |
-| `OutputOwnershipClass` | 1 | `interactive.rs` (test module only, `interactive.rs:1315`) |
+| `OutputOwnershipClass` | 1 | `interactive.rs` (test module only, `interactive.rs:1497`) |
 | `OutputRoot`, `OutputSet`, `ResolvedWorkspace`, `WorkspaceId`, `WorkspaceMember`, `WorkspacePackage` | 0 (glob) | `workspace.rs`, `cleanup.rs` |
 | `CargoBuildDirCapability`, `CargoCapabilities`, `CargoCleanCapabilities` | 0 (glob) | `workspace.rs`, `cleanup.rs` |
 | `UnresolvedOwnershipParticipant`, `ResolutionCoverage` | 0 (glob, production) | `workspace.rs`, `cleanup.rs` |
@@ -522,11 +522,11 @@ clamping to the epoch is intended (`policy.rs:636`, `policy.rs:683`,
 when output *grew* between proof and verification, the only safe reading), the
 count clamps at `cleanup.rs:611`, `cleanup.rs:2332`,
 `discovery.rs:925`, `discovery.rs:1140` and `main.rs:1741`, and the
-scroll/index clamps in the interactive list (`interactive.rs:284`,
-`interactive.rs:355`, `interactive.rs:441`, `interactive.rs:471`,
-`interactive.rs:539`, `interactive.rs:646`, `interactive.rs:648`,
-`interactive.rs:701`, `interactive.rs:836`, `interactive.rs:850`,
-`interactive.rs:865`, `interactive.rs:867`).
+scroll/index clamps in the interactive list (`interactive.rs:300`,
+`interactive.rs:371`, `interactive.rs:457`, `interactive.rs:487`,
+`interactive.rs:555`, `interactive.rs:681`, `interactive.rs:683`,
+`interactive.rs:736`, `interactive.rs:871`, `interactive.rs:885`,
+`interactive.rs:900`, `interactive.rs:902`).
 `checked_sub` appears 16 times but only **4** in production code (`main.rs:1601`,
 `cleanup.rs:2008`, `cleanup.rs:2755`, `cleanup.rs:3682`); the other 12 are
 `start.checked_sub(…).unwrap()` inside test modules. The production uses are all

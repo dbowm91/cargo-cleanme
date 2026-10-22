@@ -8,7 +8,7 @@
 
 The verification apparatus does three distinct jobs. The third is what makes it unusual.
 
-**(a) Product behaviour.** 522 declared inline `#[test]` functions in `src/`, plus two
+**(a) Product behaviour.** 531 declared inline `#[test]` functions in `src/`, plus two
 integration suites: one drives the compiled binary as a subprocess, the other drives the
 library's scan entry point in-process. Between them they cover ownership proof, cleanup
 authorization, the three clean modes, workspace resolution, real Cargo failure presentation,
@@ -100,7 +100,7 @@ from `src/`, never copied between documents.
 |---|---:|---:|---:|---:|
 | `src/cleanup.rs` | 126 | 4242 | 11163 | 6922 |
 | `src/workspace.rs` | 79 | 2161 | 6301 | 4141 |
-| `src/interactive.rs` | 58 | 1312 | 2426 | 1115 |
+| `src/interactive.rs` | 67 | 1494 | 2985 | 1492 |
 | `src/update.rs` | 47 | 1290 | 2886 | 1597 |
 | `src/cli.rs` | 45 | 778 | 1973 | 1196 |
 | `src/discovery.rs` | 41 | 1147 | 2647 | 1501 |
@@ -116,15 +116,15 @@ from `src/`, never copied between documents.
 | `src/domain.rs` | 1 | 452 | 480 | 29 |
 | `src/error.rs` | 0 | — | 16 | — |
 | `src/lib.rs` | 0 | — | 16 | — |
-| **Total** | **522** | | | |
+| **Total** | **531** | | | |
 
-**The count is declared, not executed.** 522 `#[test]` functions exist in `src/`; **520
+**The count is declared, not executed.** 531 `#[test]` functions exist in `src/`; **529
 compile on Linux x86_64**, because two are gated to the other platforms
 (`config.rs:995`, `#[cfg(windows)]`, and `discovery.rs:1698`,
 `#[cfg(any(target_os = "macos", windows))]`). Beyond that, 40 more are `#[cfg(unix)]` and four
 are Linux-only (`config.rs:1443`, `discovery.rs:1718`, `output.rs:280`, `workspace.rs:5404`),
 so the other two lanes compile smaller sets. The three hosted lanes therefore compile different
-sets — 520 on Linux x86_64, 517 on macOS, 478 on Windows. Platform-gated tests mean a green local run does not mean a green run
+sets — 529 on Linux x86_64, 526 on macOS, 487 on Windows. Platform-gated tests mean a green local run does not mean a green run
 elsewhere — which is the whole reason the OS matrix exists, and the reason
 `check-fixture-portability.py` exists to catch a *new* ungated fixture before a lane disagrees
 about it.
@@ -139,7 +139,7 @@ about it.
 > totals are **source-derived, not build-verified** — the hosted CI matrix is
 > the only thing that proves them.
 
-`cleanup.rs` (126) + `workspace.rs` (79) = 205 of 522 = **39.3%**. The two largest and most
+`cleanup.rs` (126) + `workspace.rs` (79) = 205 of 531 = **38.6%**. The two largest and most
 safety-critical modules — authorization, ownership proof, pre-spawn decision, and the `cargo
 metadata` resolution everything depends on — hold roughly two fifths of the unit tests. That
 allocation is correct, and it is the one place the pyramid is emphatically *not* inverted.
@@ -165,7 +165,7 @@ lives.
 
 ### The test-double architecture
 
-Two process seams keep almost all of the 522 declared tests from spawning a real `cargo`:
+Two process seams keep almost all of the 531 declared tests from spawning a real `cargo`:
 
 - **`CargoRunner`** — `src/workspace.rs:29`. `fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput>`.
 - **`CleanupRunner`** — declared in `src/cleanup.rs` for the destructive step, so cleanup is exercised while `cargo clean` is a no-op returning recorded bytes.
@@ -312,19 +312,19 @@ file. See R8.
 
 ### `interactive.rs`
 
-`src/interactive.rs` arrived with M014. It is 1627 lines with **42** `#[test]` functions
-(test module opens at `src/interactive.rs:1312`), which makes it the fourth-largest inline test
-suite in the crate and gives it more tests than `discovery_state.rs` and `policy.rs` combined
-(17 + 17).
+`src/interactive.rs` arrived with M014 and was rebuilt by C039 and C042. It is 2985 lines with
+**67** `#[test]` functions (test module opens at `src/interactive.rs:1495`), which makes it the
+third-largest inline test suite in the crate and gives it more tests than `discovery_state.rs`
+and `policy.rs` combined (17 + 24).
 
 The shape is worth recording because it is the one place the project chose a *pure* seam over
-a process seam: `Session` (`src/interactive.rs:204`) is a state machine that owns mode, cursor,
+a process seam: `Session` (`src/interactive.rs:220`) is a state machine that owns mode, cursor,
 filter, and selection and renders itself to a `Vec<String>` with no terminal in scope, while
 everything that touches a real terminal lives behind the `Terminal` trait
 (`src/interactive.rs:120`, whose `restore` is at `src/interactive.rs:127`). The consequence is
 that the failure that actually matters — a session that exits without restoring the terminal —
 is testable at all, and the test suite is where the "restore on unwind" guarantee is pinned
-(`src/interactive.rs:2042` catches the unwind).
+(`src/interactive.rs:2287` catches the unwind).
 
 What the module does **not** change is the reachability of the interactive path from the
 integration suites: `cli_contract.rs` exercises `-i` only through the usage-error and
@@ -1066,7 +1066,7 @@ review.
 | `cleanup.rs` | 10403 | 120 | 120 / 3937 | Appropriate. Most safety-critical module has the most tests; the race fakes show the hard cases were found and pinned — and it is also the module that carried the long-standing red, R7, now corrected by C037 |
 | `workspace.rs` | 6301 | 79 | 79 / 2160 | Appropriate, and the fakes are argument-focused rather than result-focused — the right instinct |
 | `update.rs` | 2886 | 47 | 47 / 1289 | Reasonable unit coverage, but this is the module whose defects (C011, C016, C017) escaped to production. Unit tests cannot see a transport that cannot reach its authority. Its transaction-hygiene evidence was briefly a false green too — see R6 |
-| `interactive.rs` | 2426 | 58 | 58 / 1311 | Good for a new module, and the only one that put the terminal behind a pure seam. Its *surface* — a real selection session — is covered nowhere outside the module, because the integration suite has no terminal |
+| `interactive.rs` | 2985 | 67 | 67 / 1493 | Good for a new module, and the only one that put the terminal behind a pure seam. Its *surface* — a real selection session — is covered nowhere outside the module, because the integration suite has no terminal |
 | `discovery.rs` | 2363 | 39 | 39 / 1000 | Permission traversal has a premise-checked Unix fixture; 1,001 synthetic errors prove per-root aggregation stays bounded |
 | `cli.rs` | 1293 | 32 | 32 / 501 | Good |
 | `output.rs` | 1065 | 21 | 21 / 540 | **Split verdict, and the split is the finding.** The in-file tests cover bounded log output and update JSON; the scan/cleanup envelope layer still has **zero** direct in-file tests |

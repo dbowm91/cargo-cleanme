@@ -36,44 +36,65 @@ by hand. The **cursor** is the case that was missed. Cursor visibility is a
 *separate escape sequence* from the terminal mode, so restoring raw mode does
 **not** restore the cursor.
 
-## The cursor is not restored — and a test pins it
+## The cursor is restored — and the test that pinned it
 
-This is the defect to internalise before you touch this module.
+C042 fixed this. The lesson is the thing to internalise, not the fix.
 
 ```text
-src/interactive.rs:1145   session_loop hides the cursor on entry
-src/interactive.rs:1155   each frame sets it to (mode == Insert)
-src/interactive.rs:1159   the commit arm rewinds and clears — no show
-src/interactive.rs:1164   the quit arm rewinds and clears — no show
+src/interactive.rs:1269   session_loop hides the cursor on entry
+src/interactive.rs:1166   TerminalGuard::restore issues the mode restore
+src/interactive.rs:1180   …and set_cursor_visible(true), whether or not the first failed
 ```
 
-`set_cursor_visible(true)` is **never called anywhere in the crate**.
-`RawModeGuard::restore` (`src/interactive.rs:1052-1062`) restores the terminal
-*mode* (`disable_raw_mode`) and nothing else. `main.rs` has no cursor handling
-at all.
+`set_cursor_visible(true)` is now called from exactly one place — the guard —
+so the obligation is a property of the **scope**, not of each `return` and `?`.
+`main.rs` still has no cursor handling, and does not need any: the guard owns
+it.
 
-So a session that ends in NOR — which is the default mode, and the mode you are
-in when you press `q` — leaves the operator's shell **with no visible caret**.
+The defect was found by driving the real binary over a raw pty: the tool
+emitted `ESC[?25l` (Hide) twice and `ESC[?25h` (Show) **zero** times, then
+exited 0 with `cargo-cleanme: interactive selection cancelled; no cleanup
+commands were run`. The capture after the fix contains `ESC[?25l` once and
+`ESC[?25h` once.
 
-**Verified live**: driven over a raw pty, the tool emitted `ESC[?25l` (Hide)
-twice and `ESC[?25h` (Show) **zero** times, then exited 0 with
-`cargo-cleanme: interactive selection cancelled; no cleanup commands were run`.
+**The test that pinned the defect is the lesson worth more than the fix.**
+`the_driver_shows_the_hardware_cursor_only_in_insert_mode` asserted that the
+**last** recorded visibility was `Some(false)` — it was green *because* it
+asserted the bug. Before you "fix" the cursor, fix the test that would fail on
+the fix — otherwise you have swapped one green lie for another. The correct
+assertion is that the cursor is **visible** when the session ends, on both the
+commit and the quit path, and the replacement asserts the whole *sequence*
+(`the_hardware_cursor_stays_hidden_for_the_whole_session`) rather than its
+last value: a last-value assertion cannot tell a session that hid the cursor
+once from one that showed it on every frame.
 
-Two tests stand next to this defect and neither catches it:
+## The frame is bytes, and a fake that records lines cannot see a byte defect
 
-- `the_driver_restores_the_terminal_on_the_quit_path`
-  (`src/interactive.rs:1946-1956`) asserts `!term.raw` — **raw mode only** — and
-  `term.restored == 1`. The name over-promises: it says "terminal", it means
-  "mode".
-- `the_driver_shows_the_hardware_cursor_only_in_insert_mode`
-  (`src/interactive.rs:1958-1974`) asserts the **last** recorded visibility is
-  `Some(false)`. It *pins the defect*.
+This is the defect C042 found first, and the one that hid the cursor defect
+for two milestones.
 
-That second one is the lesson worth more than the fix: **a test can be green
-because it asserts the wrong thing.** Before you "fix" the cursor, fix the test
-that would fail on the fix — otherwise you have swapped one green lie for
-another. The correct assertion is that the cursor is **visible** when the
-session ends, on both the commit and the quit path.
+`crossterm 0.28`'s `enable_raw_mode` calls `cfmakeraw`, which clears `OPOST`.
+In raw mode a bare `\n` is a linefeed **without** a carriage return, so a
+frame written with `writeln!` starts every line at the column the previous one
+ended in. The frame occupies twice the rows it claims, every line loses its
+first character to the row above, and the rewind — which moves up by the
+frame's *line count* rather than by the rows it actually occupied — erases
+most of the frame it was meant to keep.
+
+```text
+src/interactive.rs:1323   frame_bytes — every line starts with a carriage return
+src/interactive.rs:1346   rewind_bytes — column zero first, then up
+```
+
+The byte stream is a **pure function**, and the tests replay it through a
+small in-test terminal emulator that models xterm's pending-wrap rule. That
+is the guard the repository did not have: a fake that records *lines* cannot
+see a byte-level defect, and a frame is bytes.
+
+When you change anything that reaches the terminal, check three things: that
+the bytes still start each line with a carriage return, that the rewind still
+lands on column zero of the first painted line, and that the emulator still
+puts every line on the row it claims.
 
 ## An empty selection is a plain negative result
 
@@ -83,7 +104,7 @@ session ends, on both the commit and the quit path.
 | `cargo cleanme -i clean ROOT` | says "Nothing to clean." | **0** |
 
 The path: `run_interactive` settles an empty candidate list before the terminal
-precondition (`src/interactive.rs:1281-1283`) → the orchestrator maps it to
+precondition (`src/interactive.rs:1463-1465`) → the orchestrator maps it to
 `SelectionOutcome::NothingToClean` (`src/main.rs:644-657`) → one line on
 stdout and `Ok(0)` (`src/main.rs:464-472`).
 
@@ -114,8 +135,8 @@ Do not add a "the user checked it, so skip the proof" shortcut.
 
 ## The TTY precondition is checked before raw mode
 
-`ensure_interactive_terminal` (`src/interactive.rs:1082-1093`) is called by
-`run_interactive` (`src/interactive.rs:1284-1294`) **before** any mode is
+`ensure_interactive_terminal` (`src/interactive.rs:1203-1214`) is called by
+`run_interactive` (`src/interactive.rs:1466-1476`) **before** any mode is
 requested. A redirected invocation fails as a typed usage error rather than
 driving a session whose keystrokes are going somewhere else.
 
@@ -135,20 +156,20 @@ operator surface, not a report: a machine consumer has no way to say "row 3".
 
 Each of these was pinned by a test that failed first:
 
-- **Row 0 is an all-toggle that ignores the filter** (`src/interactive.rs:485-493`).
+- **Row 0 is an all-toggle that ignores the filter** (`src/interactive.rs:501-509`).
   A toggle that obeyed the filter would make "all" mean "whatever happens to be
   on screen".
-- **`q` quits from NOR and types in INS** (`src/interactive.rs:376-406`). INS is
+- **`q` quits from NOR and types in INS** (`src/interactive.rs:392-422`). INS is
   a text field; `Ctrl-C` is the only key that quits from inside it.
-- **Space is a filter character in INS** (`src/interactive.rs:417-424`) — a
+- **Space is a filter character in INS** (`src/interactive.rs:433-440`) — a
   workspace path can contain a space.
-- **Enter on an empty selection does not commit** (`src/interactive.rs:551-563`).
+- **Enter on an empty selection does not commit** (`src/interactive.rs:567-579`).
   Closing there would look exactly like a session that cleaned nothing — the
   M012A shape, a run that reports a success it never performed.
 - **Nothing is checked initially**, because a selection UI whose default is
   "delete all of it" is a trap wearing a checkbox.
 - **The filter matches the full path, not the displayed name**
-  (`src/interactive.rs:501-522`). A row is *named* by the shortest suffix that
+  (`src/interactive.rs:517-538`). A row is *named* by the shortest suffix that
   identifies it, but the filter still matches the whole path — a filter that
   only matched the displayed name would silently stop finding workspaces.
 
@@ -158,19 +179,19 @@ C039 rebuilt the surface in the `rip` idiom. Three properties of it are worth
 carrying, because each one was a defect before:
 
 - **The page is bounded.** At most fifteen candidate rows, and never more than
-  the terminal has room for (`src/interactive.rs:354-361`). The old frame
+  the terminal has room for (`src/interactive.rs:370-377`). The old frame
   filled the terminal exactly, so a long list was a screenful to scroll rather
   than a list to page through. `PgUp`/`PgDn`/`Home`/`End` move through it.
 - **A row is named, not spelled out.** The workspace column shows the shortest
   suffix of the path that identifies the row uniquely among all candidates
-  (`src/interactive.rs:919-944`). Siblings read `project-01`, `project-19`;
+  (`src/interactive.rs:954-978`). Siblings read `project-01`, `project-19`;
   a colliding pair reads `a/x` and `b/x`.
 - **The ownership column is omitted when it would say the same thing on every
-  row** (`src/interactive.rs:876-880`). A column that reads `private` twenty
+  row** (`src/interactive.rs:911-913`). A column that reads `private` twenty
   times carries no information and costs a column's width twenty times.
 
 The surface is also the only place in the crate that renders **colour**
-(`src/interactive.rs:1100-1116`): `NO_COLOR` and `TERM=dumb` turn it off, and
+(`src/interactive.rs:1221-1237`): `NO_COLOR` and `TERM=dumb` turn it off, and
 the decision is made in the driver so `Session` stays pure.
 
 The model was **not** changed. `rip`'s own model has no modes — every printable
@@ -190,11 +211,20 @@ same limit for the progress bar: the ordering of "clear the bar, then run the
 fallible cleanup" is unreachable from the tests, because the bar only draws on
 an attended terminal.
 
-If you need to prove something about a *real* terminal, you need a pty. Two
+C042 narrowed that limit without closing it. The **layout** is now proved
+without a pty, because the byte stream is a pure function and the tests
+replay it through an in-test terminal emulator. What a pty is still needed
+for is the part only a real terminal can answer: that the OS honours the
+calls, and how a specific terminal handles the pending-wrap edge cases.
+
+If you need to prove something about a *real* terminal, you need a pty. Three
 things to know if you build one:
 
 - `script -qec` allocates a pty that translates `\r` into `\n`. Open a **raw**
   pty and clear `ICRNL|INLCR|ONLCR` with `termios` instead.
+- Put the **slave** in raw mode, not just the child: `ONLCR` on the slave is
+  what makes a bare `\n` look like `\r\n` in the capture, and a capture taken
+  through a translating pty will hide exactly the defect you are looking for.
 - To backdate a fixture project, backdate the **directories** as well as the
   files. The activity guard keys on directory mtimes too
   (`src/traverse.rs:461-468`), so backdating only the files leaves the fixture

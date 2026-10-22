@@ -75,10 +75,13 @@ And one more, which is the sharpest of them:
 6. **A test that pins the defect.** A test can be green *because* it asserts
    the wrong thing — including the thing you are about to fix.
    `the_driver_shows_the_hardware_cursor_only_in_insert_mode`
-   (`src/interactive.rs:1958-1974`) asserts that the terminal cursor's **last**
-   recorded visibility is `Some(false)`. The interactive session never restores
-   the cursor, so that test is green by asserting the bug. Fixing the cursor
-   without fixing the test would leave a green test pinning the *new* bug.
+   (`src/interactive.rs:1958-1974` before C042) asserted that the terminal
+   cursor's **last** recorded visibility was `Some(false)`. The interactive
+   session never restored the cursor, so that test was green by asserting the
+   bug. Fixing the cursor without fixing the test would have left a green test
+   pinning the *new* bug. C042 rewrote it first, and the replacement asserts
+   the whole *sequence* — hidden while the session runs, visible when it ends
+   — rather than its last value.
    The general rule: **before you fix a defect, check whether a test is
    currently pinning it.**
 
@@ -124,31 +127,31 @@ set is valuable.
 
 ## Coverage shape, honestly
 
-**522** inline `#[test]` functions are **declared** in `src/`; **520** compile
+**531** inline `#[test]` functions are **declared** in `src/`; **529** compile
 and run on Linux. Two are excluded there: one `#[cfg(windows)]`
 (`src/config.rs:995`) and one `#[cfg(any(target_os = "macos", windows))]`
 (`src/discovery.rs:1698`). A further **40** carry `#[cfg(unix)]` and **4** are
 Linux-only (`src/config.rs:1443`, `src/discovery.rs:1718`, `src/output.rs:280`,
-`src/workspace.rs:5404`), so the three hosted lanes compile **520 of 522 on
-Linux**, **478 of 522 on Windows**, and **517 of 522 on macOS** —
+`src/workspace.rs:5404`), so the three hosted lanes compile **529 of 531 on
+Linux**, **487 of 531 on Windows**, and **526 of 531 on macOS** —
 `#[cfg(unix)]` is true *on* macOS, which is the half people get wrong. A green
 local run is not a green run elsewhere — that is what the OS matrix in `ci.yml`
 is for, and why `check-fixture-portability.py` exists to catch a *new* ungated
 fixture before a lane disagrees about it.
 
 > **Count the gates, not the greps.** A naive "the `#[cfg(unix)]` immediately
-> above `#[test]`" grep finds 26, not 36, because Rust allows `#[test]` to come
-> *before* the gate (`src/cleanup.rs:5945` does exactly that). Ten of the 36
+> above `#[test]`" grep finds 30, not 40, because Rust allows `#[test]` to come
+> *before* the gate (`src/cleanup.rs:7072` does exactly that). Ten of the 40
 > have the gate after the `#[test]`. Derive these
 > numbers with a brace-tracking parser and check them against
 > `cargo test --lib -- --list` on the host platform; anything else silently
 > disagrees by a few.
 
-State which number you mean. "522 tests" (declared) and "520 passing" (on
+State which number you mean. "531 tests" (declared) and "529 passing" (on
 Linux) are both true, and a record that gives one while meaning the other is
 ambiguous in the direction that matters.
 
-Of the 522, **39.3% live in two modules** (`cleanup.rs` 126, `workspace.rs` 79).
+Of the 531, **38.6% live in two modules** (`cleanup.rs` 126, `workspace.rs` 79).
 That concentration is a direct consequence of the architecture: cleanup and
 workspace resolution are where the invariants are. It is not a balanced suite,
 and a flat count would hide that. A change to a small module can be genuinely
