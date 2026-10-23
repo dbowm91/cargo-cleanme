@@ -521,6 +521,78 @@ impl ProgressObserver for IndicatifRenderer {
     }
 }
 
+/// Test-only support for process-global environment mutation.
+///
+/// The environment is process-global: a test that sets a variable changes it
+/// for every other test in the binary. Two rules follow, and both are
+/// enforced here rather than at each call site:
+///
+/// - The restore must survive a **panic**. A failure between the set and the
+///   restore left `TERM=dumb` for every later test in the binary.
+/// - The mutation must be **serialised**. Two tests that set the same
+///   variable at the same time are a race whose outcome depends on the
+///   scheduler.
+#[cfg(test)]
+pub(crate) mod test_env {
+    use std::ffi::OsStr;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    /// The one lock every environment-mutating test holds.
+    fn lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Holds the environment lock, and restores every variable it touched.
+    pub(crate) struct EnvRestore {
+        keys: Vec<(&'static str, Option<std::ffi::OsString>)>,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl EnvRestore {
+        /// Takes the environment lock. Every variable set through this guard
+        /// is restored when it is dropped.
+        pub(crate) fn acquire() -> Self {
+            Self {
+                keys: Vec::new(),
+                _lock: lock(),
+            }
+        }
+
+        /// Sets `key`, remembering its previous value the first time.
+        pub(crate) fn set(&mut self, key: &'static str, value: impl AsRef<OsStr>) {
+            self.remember(key);
+            unsafe { std::env::set_var(key, value) };
+        }
+
+        /// Removes `key`, remembering its previous value the first time.
+        pub(crate) fn remove(&mut self, key: &'static str) {
+            self.remember(key);
+            unsafe { std::env::remove_var(key) };
+        }
+
+        fn remember(&mut self, key: &'static str) {
+            if self.keys.iter().any(|(k, _)| *k == key) {
+                return;
+            }
+            self.keys.push((key, std::env::var_os(key)));
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            for (key, prev) in &self.keys {
+                match prev {
+                    Some(v) => unsafe { std::env::set_var(key, v) },
+                    None => unsafe { std::env::remove_var(key) },
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -719,32 +791,14 @@ mod tests {
         // TERM is process-global, so the restore has to survive a panic: a
         // failure between set and restore left TERM=dumb for every later test
         // in this binary.
-        let _restore = EnvRestore {
-            key: "TERM",
-            prev: std::env::var_os("TERM"),
-        };
-        unsafe { std::env::set_var("TERM", "dumb") };
+        let mut env = crate::progress::test_env::EnvRestore::acquire();
+        env.set("TERM", "dumb");
         // Asserted on the gate, not on `should_show_progress`: stderr is not a
         // terminal under `cargo test`, so the public function returns false
         // either way and this assertion used to hold with the branch deleted.
         assert!(term_is_dumb(), "TERM=dumb must refuse progress");
-        unsafe { std::env::set_var("TERM", "xterm-256color") };
+        env.set("TERM", "xterm-256color");
         assert!(!term_is_dumb(), "only the literal `dumb` refuses progress");
-    }
-
-    /// Restores one environment variable when dropped, panic or not.
-    struct EnvRestore {
-        key: &'static str,
-        prev: Option<std::ffi::OsString>,
-    }
-
-    impl Drop for EnvRestore {
-        fn drop(&mut self) {
-            match &self.prev {
-                Some(v) => unsafe { std::env::set_var(self.key, v) },
-                None => unsafe { std::env::remove_var(self.key) },
-            }
-        }
     }
 
     #[test]

@@ -1,7 +1,7 @@
 # C046 — The MSRV lane asserts a rendering the qualified-host case never produces
 
-Status: **ready** — the defect is reproduced and isolated, the fix is one
-assertion, and no owner decision is outstanding. This plan carries
+Status: **closing** — implemented and verified; the MSRV lane
+(`cargo +1.89 test --locked --all-targets`) exits 0. This plan carried
 **implementation authority** for the work it describes; it authorises **no
 release**.
 Date: 2026-10-22.

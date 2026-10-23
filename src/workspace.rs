@@ -143,6 +143,20 @@ pub fn capability_from_metadata(
 
 /// Selector capabilities are qualified against real Cargo behavior, not the
 /// cargo-cleanme crate MSRV. Unknown/future versions are deliberately false.
+///
+/// The qualification is by **exact release**: a Cargo release is claimed only
+/// where hosted real-Cargo evidence exists for *that* release, and a patch
+/// release of a claimed minor is a different release with no evidence of its
+/// own. The policy and its evidence lifecycle live in
+/// `release/selector-qualification.json`, and
+/// `scripts/check-selector-qualification.py` is the gate that keeps this
+/// function and that file in exact agreement.
+///
+/// The consequence — which the operator is told about — is that a selector is
+/// refused on a Cargo the tool has no qualification for. The refusal is
+/// fail-closed and correct; what is *not* correct is stating it as a fact
+/// about the host's capabilities, which is why the refusal names the
+/// qualification rather than the host.
 pub fn clean_capabilities_from_version(version: &str) -> CargoCleanCapabilities {
     let profile_selector = matches!(
         version,
@@ -166,9 +180,13 @@ pub fn clean_capabilities_from_version(version: &str) -> CargoCleanCapabilities 
 
 /// True for a filesystem root (`/`, `C:\`), which is never a Cargo artifact
 /// directory.
+///
+/// A *relative* path is not a filesystem root: `target` has no parent, but it
+/// is a relative name, not the top of a filesystem. The predicate used to
+/// treat a relative path's empty parent as a root, which would have refused
+/// a relative `target_directory` with a message about a filesystem root.
 fn is_filesystem_root(path: &Path) -> bool {
-    path.parent()
-        .is_none_or(|parent| parent.as_os_str().is_empty())
+    path.parent().is_none()
 }
 
 fn canonical_or_absolute(path: &Path) -> Result<PathBuf, String> {
@@ -373,6 +391,16 @@ fn believed_workspace_manifest(reason: &str) -> Option<PathBuf> {
     if !reason.contains("believes it's in a workspace") {
         return None;
     }
+    named_workspace_manifest(reason)
+}
+
+/// The workspace manifest Cargo names, if it names one.
+///
+/// The parse itself is separate from the sentence that introduces it, so a
+/// caller that only wants the *path* does not have to re-implement it, and a
+/// caller that wants a tolerant reading of the same refusal can ask for the
+/// path without inheriting the strict sentence gate.
+fn named_workspace_manifest(reason: &str) -> Option<PathBuf> {
     let idx = reason.find("workspace:")?;
     let after = &reason[idx + "workspace:".len()..];
     for token in after.split_whitespace() {
@@ -384,6 +412,31 @@ fn believed_workspace_manifest(reason: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Whether a refusal reason is Cargo's "this package believes it is in a
+/// workspace that does not claim it" refusal.
+///
+/// The detection is on Cargo's **structured** output — the `current:` manifest
+/// it examined and the `workspace:` manifest it believes the package belongs
+/// to — with the English sentence accepted as one spelling of the same
+/// condition.
+///
+/// Matching the sentence alone made the *guidance* depend on Cargo's prose:
+/// a Cargo that reworded the sentence, while still naming both manifests,
+/// silently stopped producing the hint that tells an operator what to do
+/// about the refusal. The hint is guidance, so the bias is towards tolerance:
+/// offering it for a refusal that is not this one costs a sentence, while
+/// withholding it costs the operator the whole explanation.
+///
+/// This is deliberately *not* [`believed_workspace_manifest`]: that one gates a
+/// safety decision (a refused manifest rides as a passenger of the workspace
+/// Cargo names), so it stays strict.
+pub(crate) fn refused_nested_workspace(reason: &str) -> bool {
+    if reason.contains("believes it's in a workspace") {
+        return true;
+    }
+    reason.contains("current:") && named_workspace_manifest(reason).is_some()
 }
 
 /// Island assignment for one unresolved manifest (M015 certificate §4.3).
@@ -424,16 +477,23 @@ pub fn attribute_unknown(
         return UnknownDisposition::MergeAll;
     }
     match believed_workspace_manifest(&participant.reason) {
-        Some(named)
-            if workspaces.iter().any(|w| {
-                canonical_manifest_key(&w.root_manifest) == canonical_manifest_key(&named)
-            }) =>
-        {
-            UnknownDisposition::PassengerOf {
-                named_manifest: named,
+        Some(named) => {
+            // The named manifest does not depend on the workspace being
+            // tested, so it is canonicalized once instead of once per
+            // workspace: every canonicalization is a stat and a realpath.
+            let named_key = canonical_manifest_key(&named);
+            if workspaces
+                .iter()
+                .any(|w| canonical_manifest_key(&w.root_manifest) == named_key)
+            {
+                UnknownDisposition::PassengerOf {
+                    named_manifest: named,
+                }
+            } else {
+                UnknownDisposition::ScopeNote
             }
         }
-        _ => UnknownDisposition::ScopeNote,
+        None => UnknownDisposition::ScopeNote,
     }
 }
 
@@ -744,7 +804,6 @@ pub fn resolve_workspaces_with_coverage(
 ) -> ResolutionCoverage {
     let mut cache: HashMap<PathBuf, ResolvedWorkspace> = HashMap::new();
     let mut ordered_keys: Vec<PathBuf> = Vec::new();
-    let mut locate_cache: HashMap<PathBuf, PathBuf> = HashMap::new();
     // Authoritative member -> root mapping seeded from Cargo metadata.
     let mut member_to_root: HashMap<PathBuf, PathBuf> = HashMap::new();
     let mut authoritative_coverage: HashSet<PathBuf> = HashSet::new();
@@ -840,11 +899,10 @@ pub fn resolve_workspaces_with_coverage(
             && cache.contains_key(root_key)
         {
             counters.deduped_workspace_hits += 1;
-            authoritative_coverage.insert(manifest_key);
             continue;
         }
         let outcome = &locate_outcomes[index];
-        let (root_manifest, canonical_key) = match outcome {
+        let canonical_key = match outcome {
             LocateOutcome::Transport { error, .. } => {
                 counters.cargo_failures += 1;
                 observer.cargo_failure();
@@ -897,24 +955,20 @@ pub fn resolve_workspaces_with_coverage(
                 unresolved_stage.insert(manifest.clone(), ("locate", UnknownCapability::Unproven));
                 continue;
             }
-            LocateOutcome::Located {
-                root_manifest,
-                canonical_key,
-                ..
-            } => (root_manifest, canonical_key),
+            LocateOutcome::Located { canonical_key, .. } => canonical_key,
         };
-        if locate_cache.contains_key(canonical_key) {
+        // The memo: this workspace root has already been resolved, so this
+        // manifest is one more member of it and needs no metadata of its own.
+        //
+        // It used to be a *second* map beside the resolved-workspace cache,
+        // whose value was never read and whose key set was always the cache's
+        // own — so the check below always fired first and the second map's
+        // own check was unreachable. One map now, so the two cannot disagree.
+        if cache.contains_key(canonical_key) {
             counters.deduped_workspace_hits += 1;
             // Seed this manifest as a known member for future lookups.
             // `manifest_key` *is* `canonical_manifest_key(manifest)`, already
             // computed above; re-canonicalizing it is a syscall for nothing.
-            authoritative_coverage.insert(manifest_key.clone());
-            member_to_root.insert(manifest_key, canonical_key.clone());
-            continue;
-        }
-        if cache.contains_key(canonical_key) {
-            counters.deduped_workspace_hits += 1;
-            locate_cache.insert(canonical_key.clone(), root_manifest.clone());
             authoritative_coverage.insert(manifest_key.clone());
             member_to_root.insert(manifest_key, canonical_key.clone());
             continue;
@@ -985,7 +1039,6 @@ pub fn resolve_workspaces_with_coverage(
                 .entry(root_key)
                 .or_insert(canonical_key.clone());
             cache.insert(canonical_key.clone(), ws);
-            locate_cache.insert(canonical_key.clone(), root_manifest.clone());
         } else if let Some(template) = failure {
             failed_templates.insert(
                 canonical_key.clone(),
@@ -1325,15 +1378,33 @@ const SOURCE_DIR_NAMES: [&str; 4] = ["src", "tests", "benches", "examples"];
 /// the containment form of the same guard, and it fails safe - it can only
 /// ever *withhold* a cleanup, never authorize one.
 pub(crate) fn inside_source_tree(covering: &Path, workspaces: &[ResolvedWorkspace]) -> bool {
-    workspaces.iter().any(|w| {
-        w.members.iter().any(|m| {
-            SOURCE_DIR_NAMES
-                .iter()
-                .any(|name| contains(&m.source_root.join(name), covering))
-        }) || SOURCE_DIR_NAMES
-            .iter()
-            .any(|name| contains(&w.root.join(name), covering))
-    })
+    inside_source_tree_dirs(covering, &source_tree_dirs(workspaces))
+}
+
+/// The conventional source directories of every resolved workspace.
+///
+/// The set does not depend on the covering root being tested, so it is
+/// computed once per scan rather than once per group: the old form
+/// allocated eight `PathBuf`s per workspace member for every group it
+/// classified.
+fn source_tree_dirs(workspaces: &[ResolvedWorkspace]) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for w in workspaces {
+        for m in &w.members {
+            for name in SOURCE_DIR_NAMES {
+                dirs.push(m.source_root.join(name));
+            }
+        }
+        for name in SOURCE_DIR_NAMES {
+            dirs.push(w.root.join(name));
+        }
+    }
+    dirs
+}
+
+/// [`inside_source_tree`] against an already-computed source-tree set.
+fn inside_source_tree_dirs(covering: &Path, source_dirs: &[PathBuf]) -> bool {
+    source_dirs.iter().any(|dir| contains(dir, covering))
 }
 
 /// True when a covering root is nested inside a package directory.
@@ -1526,13 +1597,33 @@ pub fn build_groups(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup> {
             parent[rb] = ra;
         }
     }
-    for i in 0..nodes.len() {
-        for j in (i + 1)..nodes.len() {
-            if contains(&nodes[i].physical, &nodes[j].physical)
-                || contains(&nodes[j].physical, &nodes[i].physical)
-            {
-                union(&mut parent, i, j);
+    // The overlap relation is "one path contains the other", and containment
+    // runs down a single chain of ancestors: a node that contains another
+    // node is an ancestor of it. So a node reaches its group through the
+    // marked ancestors above it, and unioning each node with its nearest
+    // marked ancestor connects exactly the pairs the all-pairs comparison
+    // connected -- every comparable pair is joined by the chain of marked
+    // ancestors between them -- without comparing every pair.
+    //
+    // The same physical path twice is one identity, and the all-pairs
+    // comparison unioned the two, so the duplicates are unioned here too.
+    let mut marked: HashMap<&Path, usize> = HashMap::new();
+    for (i, node) in nodes.iter().enumerate() {
+        match marked.get(node.physical.as_path()) {
+            Some(first) => union(&mut parent, i, *first),
+            None => {
+                marked.insert(node.physical.as_path(), i);
             }
+        }
+    }
+    for (i, node) in nodes.iter().enumerate() {
+        let mut ancestor = node.physical.parent();
+        while let Some(candidate) = ancestor {
+            if let Some(j) = marked.get(candidate) {
+                union(&mut parent, i, *j);
+                break;
+            }
+            ancestor = candidate.parent();
         }
     }
     let mut groups_map: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -1541,6 +1632,10 @@ pub fn build_groups(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup> {
         groups_map.entry(r).or_default().push(i);
     }
     let mut groups = Vec::new();
+    // The source-tree directories of every resolved workspace. They are the
+    // same for every group, so they are computed once here rather than once
+    // per group and covering root.
+    let source_dirs = source_tree_dirs(workspaces);
     // A root that contributes no node (symlink, no physical identity) is
     // invisible to the union-find above, yet it can still point into a group.
     // Exclusivity is therefore per group (M-1): only a group overlapped by an
@@ -1582,7 +1677,7 @@ pub fn build_groups(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup> {
                     // The mirror of the containment above: an output root that
                     // lives *inside* a crate's source tree is that crate's
                     // source, not a build artifact.
-                    || inside_source_tree(c, workspaces)
+                    || inside_source_tree_dirs(c, &source_dirs)
             });
             // The mirror: a covering root that lives *inside* a package
             // directory. The resolved members cannot see this shape — Cargo
@@ -2008,7 +2103,13 @@ pub fn analyze_groups_detailed(
             continue;
         }
         // Output activity gate: recent output protects group.
-        let is_recent = newest.is_some_and(|t| t >= clock_cutoff || t > clock_start);
+        //
+        // The cutoff is `clock_start - recency` with an *unsigned* recency, so
+        // `clock_cutoff <= clock_start` and "modified since the scan began" is
+        // already inside "modified since the cutoff". This used to carry a
+        // second disjunct for the former; it was subsumed by the first and
+        // could never change the verdict.
+        let is_recent = newest.is_some_and(|t| t >= clock_cutoff);
         if is_recent {
             counters.active_skipped += 1;
             observer.active_skipped();
@@ -2298,14 +2399,42 @@ fn workspace_source_activity(
 ) -> Result<bool, ()> {
     // Returns Ok(true) if recent, Ok(false) if quiet, Err on uncertainty.
     let member_roots = workspace_member_roots(ws);
-    for root in member_roots {
-        match traverse::workspace_member_activity(&root, all_outputs, start, cutoff) {
+    // Only the output roots that can match an entry under this workspace's
+    // member roots are worth testing against; the rest of the universe
+    // matches nothing this walk can see.
+    let relevant = outputs_relevant_to(&member_roots, all_outputs);
+    for root in &member_roots {
+        match traverse::workspace_member_activity(root, &relevant, start, cutoff) {
             Ok(traverse::SourceActivity::Recent(_)) => return Ok(true),
             Ok(traverse::SourceActivity::Quiet(_)) => {}
             Err(()) => return Err(()),
         }
     }
     Ok(false)
+}
+
+/// The output roots that can exclude an entry under `member_roots`.
+///
+/// Every path the walk visits is at or under one of the member roots, so an
+/// output root can only ever match one when the two are prefix-related: the
+/// output root is at or under the member root, or the member root is at or
+/// under it. Every other output root in the universe matches nothing, and
+/// testing every visited entry against all of them is what made the walk
+/// quadratic in the number of workspaces.
+///
+/// The ancestor direction is kept on purpose: an output root above the member
+/// root prunes the whole walk, and dropping it would turn a quiet workspace
+/// into an active one.
+fn outputs_relevant_to(member_roots: &[PathBuf], all_outputs: &[PathBuf]) -> Vec<PathBuf> {
+    all_outputs
+        .iter()
+        .filter(|output| {
+            member_roots
+                .iter()
+                .any(|root| output.starts_with(root) || root.starts_with(output.as_path()))
+        })
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
@@ -2841,6 +2970,102 @@ mod tests {
         m
     }
 
+    /// A filesystem root declared as the target directory is refused, not
+    /// sized.
+    ///
+    /// `cargo metadata` really can declare `/`:
+    /// `CARGO_TARGET_DIR=/ cargo metadata` reports
+    /// `"target_directory":"/"`. The guard that refuses it is the only thing
+    /// keeping `/` out of the group graph — without it the refusal degrades
+    /// to a *false* message ("contains a workspace source tree", which `/`
+    /// does not) while `/` becomes a real group member, and sizing one walks
+    /// the entire machine.
+    ///
+    /// *Fails if:* the guard is deleted or its message changes.
+    #[test]
+    fn a_filesystem_root_target_directory_is_refused_and_never_sized() {
+        struct RootTargetRunner {
+            root_manifest: PathBuf,
+        }
+        impl CargoRunner for RootTargetRunner {
+            fn run(&self, _cwd: &Path, args: &[std::ffi::OsString]) -> io::Result<ProcessOutput> {
+                if args.first().is_some_and(|a| a == "locate-project") {
+                    let json = serde_json::json!({"root": self.root_manifest});
+                    return Ok(ProcessOutput {
+                        success: true,
+                        code: Some(0),
+                        stdout: serde_json::to_vec(&json).unwrap(),
+                        stderr: Vec::new(),
+                    });
+                }
+                let json = serde_json::json!({
+                    "packages": [{"id": "m0", "name": "m0", "manifest_path": self.root_manifest}],
+                    "workspace_members": ["m0"],
+                    "workspace_root": self.root_manifest.parent().unwrap(),
+                    "target_directory": "/",
+                });
+                Ok(ProcessOutput {
+                    success: true,
+                    code: Some(0),
+                    stdout: serde_json::to_vec(&json).unwrap(),
+                    stderr: Vec::new(),
+                })
+            }
+        }
+        let d = tempfile::tempdir().unwrap();
+        let root_manifest = d.path().join("ws/Cargo.toml");
+        std::fs::create_dir_all(root_manifest.parent().unwrap()).unwrap();
+        std::fs::write(&root_manifest, "").unwrap();
+        let runner = RootTargetRunner {
+            root_manifest: root_manifest.clone(),
+        };
+        let mut counters = ScanCounters::default();
+        let mut diagnostics = vec![];
+        let coverage = resolve_workspaces_with_coverage(
+            std::slice::from_ref(&root_manifest),
+            &runner,
+            &mut counters,
+            &mut diagnostics,
+            &NoopObserver,
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("filesystem root")),
+            "the refusal must name the filesystem root: {diagnostics:?}"
+        );
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|d| d.message.contains("contains a workspace source tree")),
+            "the refusal must not be the source-tree one, which `/` would make false: {diagnostics:?}"
+        );
+        // The root is refused, so it never becomes a *measurable* output root:
+        // no physical path, so nothing can size it.
+        assert!(
+            coverage
+                .workspaces
+                .iter()
+                .all(|w| { w.output.target.physical_path.is_none() && !w.output.target.exists }),
+            "a filesystem root must not be a measurable output root: {:?}",
+            coverage.workspaces
+        );
+    }
+
+    /// A relative path is not a filesystem root.
+    ///
+    /// The predicate used to treat a relative path's empty parent as a root,
+    /// so a relative `target_directory` would have been refused with a
+    /// message about a filesystem root — a statement about the path that is
+    /// false.
+    #[test]
+    fn a_relative_path_is_not_a_filesystem_root() {
+        assert!(is_filesystem_root(Path::new("/")));
+        assert!(!is_filesystem_root(Path::new("/var/tmp/target")));
+        assert!(!is_filesystem_root(Path::new("target")));
+        assert!(!is_filesystem_root(Path::new("./target")));
+    }
+
     #[test]
     fn capability_without_build_field_is_unavailable() {
         let c = capability_from_metadata(false, "/t", None, false);
@@ -2926,6 +3151,60 @@ mod tests {
         assert_eq!(
             counters.cargo_locate_calls, 2,
             "every manifest locates once; members share one metadata"
+        );
+        assert_eq!(counters.deduped_workspace_hits, 1);
+    }
+
+    #[test]
+    fn a_repeated_manifest_stays_covered_by_the_workspace_that_claimed_it() {
+        // The fast path reuses an earlier workspace for a manifest it has
+        // already resolved. It does **not** re-record the coverage: the
+        // manifest is covered because the workspace's own member list and
+        // root-manifest registration named it, which is the invariant that
+        // lets the fast path stay a pure lookup.
+        //
+        // *Fails if:* a manifest enters the member map without entering the
+        // coverage set — the repeated manifest would then be reported as
+        // unresolved, and an unresolved manifest blocks the cleanup scope.
+        let d = tempfile::tempdir().unwrap();
+        let ws_root = d.path().join("ws");
+        std::fs::create_dir_all(&ws_root).unwrap();
+        let root_manifest = ws_root.join("Cargo.toml");
+        std::fs::write(&root_manifest, "").unwrap();
+        let member_manifest = ws_root.join("member0/Cargo.toml");
+        std::fs::create_dir_all(member_manifest.parent().unwrap()).unwrap();
+        std::fs::write(&member_manifest, "").unwrap();
+        let target = ws_root.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        let runner = FakeCargo {
+            locate_root: root_manifest.clone(),
+            target,
+            build: None,
+            members: 1,
+            fail_locate: false,
+            fail_metadata: false,
+            malformed: false,
+        };
+        let mut counters = ScanCounters::default();
+        let mut diagnostics = Vec::new();
+        let noop = NoopObserver;
+        let coverage = resolve_workspaces_with_coverage(
+            &[root_manifest.clone(), root_manifest.clone()],
+            &runner,
+            &mut counters,
+            &mut diagnostics,
+            &noop,
+        );
+        assert_eq!(
+            coverage.workspaces.len(),
+            1,
+            "one workspace for one root, however many times it is listed"
+        );
+        assert_eq!(
+            coverage.unresolved.len(),
+            0,
+            "a repeated manifest is covered by the workspace that claimed it: {:?}",
+            coverage.unresolved
         );
         assert_eq!(counters.deduped_workspace_hits, 1);
     }
@@ -3858,6 +4137,34 @@ mod tests {
         assert_eq!(ws.len(), 1);
         assert_eq!(ws[0].root, std::fs::canonicalize(&good).unwrap_or(good));
         assert!(!diags.is_empty());
+    }
+
+    /// The nested-workspace refusal is recognised from Cargo's *structured*
+    /// output, not from one English sentence.
+    ///
+    /// The sentence is accepted, because it is the spelling the host Cargo
+    /// uses today. But the guidance that follows a refusal must not depend on
+    /// Cargo's prose: a Cargo that reworded the sentence while still naming
+    /// both manifests used to silence the hint entirely, leaving an operator
+    /// with a refusal and no explanation of what to do about it.
+    #[test]
+    fn refused_nested_workspace_is_recognised_without_the_english_sentence() {
+        // The sentence Cargo uses today.
+        assert!(refused_nested_workspace(
+            "error: current package believes it's in a workspace when it's not: | current: /a/b/Cargo.toml | workspace: /a/Cargo.toml"
+        ));
+        // The same refusal, reworded: Cargo still names both manifests.
+        assert!(refused_nested_workspace(
+            "error: package is not a member of the workspace it claims: | current: /a/b/Cargo.toml | workspace: /a/Cargo.toml"
+        ));
+        // A different failure class: no hint.
+        assert!(!refused_nested_workspace(
+            "cargo locate-project failed: offline"
+        ));
+        // A mention of a workspace, but no manifest pair: no hint.
+        assert!(!refused_nested_workspace(
+            "error: failed to load manifest for workspace member"
+        ));
     }
 
     #[test]

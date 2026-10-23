@@ -35,10 +35,10 @@ pub enum OutputFormat {
 pub struct CleanupFlags {
     /// Simulate: run every decision, proof, and reporting step, but invoke no
     /// `cargo clean` process at all. Honoured wherever it appears, so the
-    /// `cargo cleanme --dry-run clean ROOT` spelling cannot fall back to
-    /// Execute. Only `clean` (and `update`'s own `--dry-run`) honour it:
-    /// `scan` and `config` ignore a global `--dry-run` (read-only / local-only,
-    /// no behaviour change).
+    /// `cargo cleanme --dry-run ROOT` spelling cannot fall back to
+    /// Execute. Only the cleanup surface (and `update`'s own `--dry-run`)
+    /// honour it: `scan` and `config` ignore a global `--dry-run` (read-only /
+    /// local-only, no behaviour change).
     #[arg(long, conflicts_with = "dryrun_legacy", display_order = 5)]
     pub dry_run: bool,
     /// Historical spelling of `--dry-run`; retained as a hidden alias.
@@ -333,10 +333,10 @@ pub enum CleanupScope {
     /// out-of-scope claimants of a shared target and promote `shared` bytes
     /// to `private`, the only class that authorizes deletion.
     Maintenance,
-    /// One bounded explicit root supplied as `clean ROOT`.
+    /// One bounded explicit root supplied as `cargo cleanme ROOT`.
     Root(PathBuf),
-    /// `clean --full`: complete Full reconciliation first, then cleanup of the
-    /// learned roots it retained.
+    /// `cargo cleanme --full`: complete Full reconciliation first, then cleanup
+    /// of the learned roots it retained.
     Full,
 }
 
@@ -382,9 +382,10 @@ pub struct CleanupRequest {
     pub scope: CleanupScope,
     pub mode: CleanMode,
     pub overrides: CleanupOverrides,
-    /// Which resolved cleanup units are candidates. M014: bare invocation and
-    /// `clean --known` anchor this to the working directory; `clean ROOT` and
-    /// `clean --full` leave it unfiltered because their roots already bound it.
+    /// Which resolved cleanup units are candidates. M014: the bare invocation
+    /// anchors this to the working directory; `cargo cleanme ROOT` and
+    /// `cargo cleanme --full` leave it unfiltered because their roots already
+    /// bound it.
     ///
     /// `WorkingDirectory` here is *unresolved intent*. `main.rs` must call
     /// [`CleanupSelection::resolved`] before the engine runs.
@@ -555,7 +556,12 @@ impl Cli {
         if (self.cleanup.dry_run || self.cleanup.dryrun_legacy)
             && (alias.flags.dry_run || alias.flags.dryrun_legacy)
         {
-            return Err(duplicate_override("--dry-run"));
+            return Err(duplicate_dry_run(&dry_run_spellings(
+                self.cleanup.dry_run,
+                self.cleanup.dryrun_legacy,
+                alias.flags.dry_run,
+                alias.flags.dryrun_legacy,
+            )));
         }
         // A Full scope and a bounded ROOT select different scopes, and they
         // cannot be merged: one of them would have to be discarded, and the
@@ -717,6 +723,37 @@ fn duplicate_override(flag: &str) -> String {
     )
 }
 
+/// The spellings of `--dry-run` the operator actually used.
+///
+/// `--dryrun` is the hidden legacy alias. Naming the canonical spelling when
+/// the operator typed the alias points them at a flag they did not use, and
+/// one `--help` does not show.
+fn dry_run_spellings(
+    cleanup_dry_run: bool,
+    cleanup_dryrun_legacy: bool,
+    alias_dry_run: bool,
+    alias_dryrun_legacy: bool,
+) -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = Vec::new();
+    if cleanup_dry_run || alias_dry_run {
+        names.push("--dry-run");
+    }
+    if cleanup_dryrun_legacy || alias_dryrun_legacy {
+        names.push("--dryrun");
+    }
+    names
+}
+
+/// The same override given at two levels, named by the spelling used.
+fn duplicate_dry_run(spellings: &[&str]) -> String {
+    let named = spellings.join(" and ");
+    let verb = if spellings.len() == 1 { "was" } else { "were" };
+    format!(
+        "{named} {verb} given at the root and on `clean`. The two values are ambiguous; \
+         give it at one level only."
+    )
+}
+
 /// Two mutually exclusive selectors were given at different levels.
 ///
 /// `--profile` and `--package` are one logical override: clap refuses them at
@@ -843,8 +880,8 @@ pub fn normalize_cargo_argv(args: impl IntoIterator<Item = OsString>) -> Vec<OsS
     argv
 }
 
-/// Resolve a user-supplied `clean ROOT` against the invocation directory into
-/// an absolute lexical path.
+/// Resolve a user-supplied `cargo cleanme ROOT` against the invocation
+/// directory into an absolute lexical path.
 ///
 /// The internal cleanup boundary keeps its absolute-root invariant; this only
 /// normalizes CLI ergonomics. Canonicalization is deliberately not required:
@@ -917,7 +954,8 @@ mod tests {
     fn cleanup(scope: CleanupScope, mode: CleanMode) -> CleanupRequest {
         // Mirror `Cli::invocation` exactly: the working-directory anchor belongs
         // to the maintenance spellings, whose Routine scope spans the machine.
-        // `clean ROOT` / `clean --full` are already bounded by their own roots.
+        // `cargo cleanme ROOT` / `cargo cleanme --full` are already bounded by
+        // their own roots.
         let selection = match &scope {
             CleanupScope::Maintenance => CleanupSelection::WorkingDirectory,
             CleanupScope::Root(_) | CleanupScope::Full => CleanupSelection::All,
@@ -1782,9 +1820,15 @@ mod tests {
     /// failure mode ADR 008 §3 exists to prevent.
     #[test]
     fn a_dry_run_at_both_levels_is_a_usage_error() {
-        for args in [
-            vec!["cargo-cleanme", "--dry-run", "clean", "--dry-run"],
-            vec!["cargo-cleanme", "--dryrun", "clean", "--dryrun"],
+        for (args, expected) in [
+            (
+                vec!["cargo-cleanme", "--dry-run", "clean", "--dry-run"],
+                "--dry-run",
+            ),
+            (
+                vec!["cargo-cleanme", "--dryrun", "clean", "--dryrun"],
+                "--dryrun",
+            ),
         ] {
             let parsed = Cli::try_parse_from(args.clone())
                 .unwrap_or_else(|error| panic!("{args:?} must parse: {error}"));
@@ -1794,11 +1838,39 @@ mod tests {
                     parsed.invocation()
                 );
             };
+            // The message names the spelling the operator actually used. It
+            // used to always say `--dry-run`, so an operator who typed the
+            // hidden `--dryrun` alias was pointed at a flag they did not use
+            // and that `--help` does not show.
             assert!(
-                message.contains("--dry-run"),
-                "{args:?}: the message must name the repeated override: {message}"
+                message.contains(expected),
+                "{args:?}: the message must name the spelling that was used: {message}"
             );
+            if expected == "--dryrun" {
+                assert!(
+                    !message.contains("--dry-run"),
+                    "{args:?}: the message must not name a spelling that was not used: {message}"
+                );
+            }
         }
+    }
+
+    /// The two spellings of the same override, given at two levels, are both
+    /// named.
+    ///
+    /// `--dry-run` and `--dryrun` are one logical override. Saying only one of
+    /// them leaves the operator unable to tell which of the two they repeated.
+    #[test]
+    fn a_mixed_dry_run_spelling_names_both_spellings() {
+        let parsed = Cli::try_parse_from(vec!["cargo-cleanme", "--dryrun", "clean", "--dry-run"])
+            .unwrap_or_else(|error| panic!("must parse: {error}"));
+        let Invocation::UsageError(message) = parsed.invocation() else {
+            panic!("must be a usage error, got {:?}", parsed.invocation());
+        };
+        assert!(
+            message.contains("--dryrun") && message.contains("--dry-run"),
+            "both spellings must be named: {message}"
+        );
     }
 
     /// `--interactive` selects which cleanup units are cleaned, so a read-only
@@ -2114,8 +2186,9 @@ mod tests {
                 "{args:?} must anchor its selection to the working directory"
             );
         }
-        // `clean ROOT` and `clean --full` are already bounded by their own root
-        // selection; anchoring them too would silently narrow an explicit scope.
+        // `cargo cleanme ROOT` and `cargo cleanme --full` are already bounded by
+        // their own root selection; anchoring them too would silently narrow an
+        // explicit scope.
         for args in [
             vec!["cargo-cleanme", "clean", "/x"],
             vec!["cargo-cleanme", "clean", "--full"],

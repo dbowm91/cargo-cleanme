@@ -36,7 +36,7 @@ use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 
 use crate::cleanup::CleanupCandidate;
-use crate::report::format_bytes;
+use crate::report::{escape_path_text, format_bytes};
 
 /// Which set of keys is live.
 ///
@@ -193,9 +193,11 @@ const MIN_SESSION_HEIGHT: usize = 6;
 
 /// The compact form of the armed-exit hint.
 ///
-/// A terminal too narrow for the full hint reserves this one instead: the
-/// hint still has to be readable when the exit is armed, because an armed exit
-/// that announces nothing is an exit the operator cannot trust.
+/// A terminal too narrow for the full hint reserves this one instead, and this
+/// is also the **floor** of the reserved slot at every width the surface
+/// admits: the hint still has to be readable when the exit is armed, because
+/// an armed exit that announces nothing is an exit the operator cannot trust.
+/// Below the compact hint's width the *other* fields give way instead.
 const ARMED_HINT_COMPACT: &str = "(Esc again)";
 
 /// Narrowest workspace-name column the layout will keep.
@@ -739,15 +741,30 @@ impl Session {
         // The hint's slot is reserved in *every* state: filled when the exit is
         // armed, blank when it is not, so arming the exit never resizes the
         // filter field under the operator's eyes. A terminal too narrow for
-        // the full hint reserves the compact one; a terminal too narrow for
-        // that reserves nothing, in both states alike.
+        // the full hint reserves the compact one.
+        //
+        // The slot also has a **floor** — the compact hint's width, at every
+        // width the surface admits. A terminal too narrow even for that would
+        // otherwise reserve nothing, in both states alike, and the frame after
+        // arming the exit would be byte-identical to the frame before it: the
+        // operator presses `Esc`, sees nothing change, and presses `Esc`
+        // again. An armed exit that announces nothing is an exit the operator
+        // cannot trust. So below the compact hint's width the *other* fields
+        // give way instead — the head is truncated, and the filter field,
+        // which is the one field on this line the operator can retype, gives
+        // way first.
         let fixed = display_width(&head) + display_width(&position) + display_width(caret);
         let available = width.saturating_sub(fixed + 1);
         let slot = if available >= display_width(ARMED_HINT) {
             display_width(ARMED_HINT)
-        } else if available >= display_width(ARMED_HINT_COMPACT) {
+        } else if width > display_width(ARMED_HINT_COMPACT) + display_width(&position) {
+            // The compact hint is the floor: it fits beside the position
+            // indicator, so the frame still fits and the hint is readable.
             display_width(ARMED_HINT_COMPACT)
         } else {
+            // Too narrow even for the compact hint beside the position
+            // indicator: the frame's own minimum width, below which the
+            // surface does not run at all.
             0
         };
         let armed_text = if armed.is_empty() {
@@ -1221,6 +1238,10 @@ fn ownership_cell(candidate: &CleanupCandidate, columns: &Columns) -> String {
 /// that share a basename are told apart — `a/x` and `b/x` — rather than
 /// silently rendered as the same name. The *filter* still matches the full
 /// path; this only decides what a row is called.
+///
+/// The label is **escaped**: a directory name may contain a newline, and a raw
+/// one would put a second physical row inside a frame line the geometry never
+/// counted (and a raw escape byte would reach the operator's terminal).
 fn unique_labels(candidates: &[CleanupCandidate]) -> Vec<String> {
     let tails: Vec<Vec<&OsStr>> = candidates
         .iter()
@@ -1237,17 +1258,20 @@ fn unique_labels(candidates: &[CleanupCandidate]) -> Vec<String> {
                         && other[other.len() - suffix.len()..] == *suffix
                 });
                 if !clashes {
-                    return join_components(suffix);
+                    return escape_path_text(&join_components(suffix)).into_owned();
                 }
             }
             // No suffix is unique — two candidates share a path. Show the whole
             // of it rather than a name that says nothing.
-            candidates[i].root.display().to_string()
+            escape_path_text(&candidates[i].root.display().to_string()).into_owned()
         })
         .collect()
 }
 
 /// Join path components back into a path, using the platform separator.
+///
+/// The result is **not** escaped: the caller renders it, and escaping belongs
+/// to the surface that renders it, not to the path arithmetic.
 fn join_components(components: &[&OsStr]) -> String {
     let mut out = PathBuf::new();
     for component in components {
@@ -1270,7 +1294,11 @@ fn join_components(components: &[&OsStr]) -> String {
 /// all.
 fn char_width(c: char) -> usize {
     let cp = c as u32;
-    // Control characters never reach a frame; they occupy no cell.
+    // Control characters never reach a frame: every path a frame renders is
+    // escaped first (`escape_path_text`), so this branch is a belt-and-braces
+    // floor rather than the thing that keeps them out. A control character
+    // that did arrive would occupy no cell while still moving the terminal's
+    // cursor — the width table must never be the only guard.
     if cp < 0x20 || (0x7f..0xa0).contains(&cp) {
         return 0;
     }
@@ -2338,6 +2366,60 @@ mod tests {
         }
     }
 
+    /// A control character in a path never reaches the frame raw.
+    ///
+    /// A directory name may contain a newline. Written raw, it puts a second
+    /// physical row inside a frame line the geometry never counted: the frame
+    /// claimed seven lines and painted eight rows, the erase rewound only six,
+    /// and the title survived every repaint. An escape byte was worse — it
+    /// reached the operator's terminal as a command.
+    ///
+    /// The fix is that every path a frame renders is escaped first, so the
+    /// frame's geometry assumption (one line, one row) holds for any name the
+    /// filesystem accepts.
+    #[test]
+    fn a_control_character_in_a_path_is_escaped_and_the_frame_keeps_its_geometry() {
+        let candidates = vec![
+            private("/home/u/projects/we\nird"),
+            private("/home/u/projects/es\x1b[31mc"),
+            private("/home/u/projects/plain"),
+        ];
+        for (w, h) in [(20u16, 6u16), (40, 9), (80, 24)] {
+            let frame = Session::new(candidates.clone())
+                .with_color(false)
+                .with_size(w, h)
+                .frame();
+            for line in &frame {
+                assert!(
+                    !line.chars().any(char::is_control),
+                    "a raw control character reached the frame at {w}x{h}: {line:?}"
+                );
+            }
+            // The geometry: one frame line is one physical row, so the bytes
+            // the frame writes carry exactly one newline per line.
+            let bytes = frame_bytes(&frame);
+            assert_eq!(
+                bytes.matches('\n').count(),
+                frame.len(),
+                "the frame must paint one row per line at {w}x{h}"
+            );
+            assert!(
+                frame.iter().all(|line| visible_width(line) <= w as usize),
+                "a line overflows {w} at {w}x{h}"
+            );
+        }
+        // The escape is visible to the operator, not silently dropped.
+        let frame = Session::new(candidates)
+            .with_color(false)
+            .with_size(80, 24)
+            .frame();
+        let text = frame.join("\n");
+        assert!(
+            text.contains("\\u{a}") && text.contains("\\u{1b}"),
+            "the control characters must be shown escaped: {text:?}"
+        );
+    }
+
     /// The erase removes every row the frame occupied.
     ///
     /// The erase moves up by the frame's line count. That is the right
@@ -3095,6 +3177,41 @@ mod tests {
             frame.contains("a-very-long-filter"),
             "the filter must still be readable: {frame}"
         );
+    }
+
+    /// The armed-exit hint is visible at every width the surface admits.
+    ///
+    /// The reserved slot had a floor of *nothing*: at the widths between
+    /// `MIN_SESSION_WIDTH` and the width the compact hint needs, the slot was
+    /// zero, the hint was empty, and the frame after arming the exit was
+    /// byte-identical to the frame before it. The operator pressed `Esc`, saw
+    /// nothing change, and pressed `Esc` again — an armed exit that announced
+    /// nothing, which is the one thing the hint exists to prevent.
+    ///
+    /// The compact hint is now the floor of the slot: below the width the full
+    /// hint needs, the compact one is shown, and the other fields give way.
+    #[test]
+    fn the_armed_exit_hint_is_visible_at_every_admitted_width() {
+        for w in MIN_SESSION_WIDTH as u16..=40 {
+            let mut s = Session::new(sample()).with_color(false).with_size(w, 12);
+            let before = s.frame()[1].clone();
+            press(&mut s, &[Key::Esc]);
+            let after = s.frame()[1].clone();
+            assert!(
+                after.contains("Esc again"),
+                "the armed hint must be readable at {w} columns: {after:?}"
+            );
+            assert_ne!(
+                before, after,
+                "arming the exit must change the status line at {w} columns"
+            );
+            for line in s.frame() {
+                assert!(
+                    visible_width(&line) <= w as usize,
+                    "line overflows {w} columns: {line:?}"
+                );
+            }
+        }
     }
 
     /// Arming the exit does not move the filter field.

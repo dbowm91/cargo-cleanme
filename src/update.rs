@@ -168,7 +168,18 @@ pub enum Provenance {
     /// root's package metadata. Cargo owns this file and its bookkeeping;
     /// replacing it here would leave `cargo install --list` and uninstall
     /// lying. The correct command is printed instead.
-    CargoManaged { bin_root: PathBuf, version: String },
+    CargoManaged {
+        /// The `bin` directory the running executable lives in.
+        bin_root: PathBuf,
+        /// The `--root` the installation used, when it was not the Cargo home.
+        ///
+        /// A `cargo install --root DIR` puts the binary in `DIR/bin`, and the
+        /// manager command that updates *that* binary carries `--root DIR`.
+        /// Without it the command installs into `$CARGO_HOME/bin` and the
+        /// running executable stays at the old version.
+        install_root: Option<PathBuf>,
+        version: String,
+    },
     /// The running executable is not Cargo-managed and is positively identified
     /// by its exact digest, which is revalidated under Eggup's mutation lock
     /// immediately before replacement.
@@ -194,8 +205,19 @@ impl Provenance {
     /// The exact command the user should run instead, when there is one.
     pub fn remediation(&self) -> Option<String> {
         match self {
-            Provenance::CargoManaged { .. } => {
-                Some(format!("cargo install {PRODUCT} --locked --force"))
+            Provenance::CargoManaged { install_root, .. } => {
+                // The command has to update *this* binary. A Cargo-home
+                // installation is the plain manager command; a `--root DIR`
+                // installation needs the same `--root DIR`, or the new binary
+                // lands in a different directory and the one the operator is
+                // running stays at the old version.
+                Some(match install_root {
+                    Some(root) => format!(
+                        "cargo install {PRODUCT} --locked --force --root {}",
+                        root.display()
+                    ),
+                    None => format!("cargo install {PRODUCT} --locked --force"),
+                })
             }
             Provenance::CargoInstallOnlyHost { .. } => {
                 Some(format!("cargo install {PRODUCT} --locked"))
@@ -261,6 +283,16 @@ pub enum UpdateError {
     TransportUnavailable { detail: String },
     /// crates.io did not report a usable stable version.
     NoPublishedStableVersion { detail: String },
+    /// The **running** build's version is not a plain release, so it cannot be
+    /// ordered against the published one.
+    ///
+    /// A prerelease or a locally bumped build (`0.3.0-alpha.1`,
+    /// `0.2.10+build`) has no place in the release ordering, so the tool
+    /// cannot say whether the published release is newer. This is a property
+    /// of *this* build, not of the registry: the registry reported a perfectly
+    /// good stable version, and reporting the pair as a registry failure
+    /// blamed the wrong party for a version the tool itself carries.
+    RunningVersionNotOrderable { running: String, published: String },
     /// The published stable version is not newer than the running one.
     AlreadyCurrent { current: String, published: String },
     /// The published stable version is *older* than the running one.
@@ -307,6 +339,12 @@ impl std::fmt::Display for UpdateError {
         match self {
             UpdateError::TransportUnavailable { detail } => {
                 write!(f, "the update transport is unavailable: {detail}")
+            }
+            UpdateError::RunningVersionNotOrderable { running, published } => {
+                write!(
+                    f,
+                    "the running build {running:?} is not a plain release version, so it cannot be ordered against the published {published:?}"
+                )
             }
             UpdateError::NoPublishedStableVersion { detail } => {
                 write!(
@@ -463,7 +501,13 @@ pub fn classify_provenance_in(current_exe: &Path, cargo_home: Option<PathBuf>) -
         let bin_root = home.join("bin");
         if current_exe.parent() == Some(bin_root.as_path()) {
             return match read_cargo_record(home, PRODUCT, binary_name(current_exe)) {
-                CargoRecord::Recorded { version } => Provenance::CargoManaged { bin_root, version },
+                CargoRecord::Recorded { version } => Provenance::CargoManaged {
+                    bin_root,
+                    // The Cargo home's own `bin`: the plain manager command
+                    // installs back into it.
+                    install_root: None,
+                    version,
+                },
                 CargoRecord::DoesNotClaim { reason } => Provenance::UnprovableOwnership {
                     detail: format!(
                         "{} is inside the Cargo bin root {} but {reason}",
@@ -513,6 +557,9 @@ pub fn classify_provenance_in(current_exe: &Path, cargo_home: Option<PathBuf>) -
             CargoRecord::Recorded { version } => {
                 return Provenance::CargoManaged {
                     bin_root: root.join("bin"),
+                    // The `--root DIR` this installation used: the manager
+                    // command has to carry it, or it installs somewhere else.
+                    install_root: Some(root.clone()),
                     version,
                 };
             }
@@ -1098,13 +1145,16 @@ pub fn run(
             });
         }
         Some(std::cmp::Ordering::Greater) => {}
-        // An unorderable pair means one side is not a plain release, which
-        // `published_stable_version` already rejects; refuse rather than guess.
+        // An unorderable pair means one side is not a plain release. The
+        // published side already is one — `published_stable_version` rejects
+        // anything else — so the side that cannot be ordered is the
+        // **running** build. That is a property of this build, not of the
+        // registry, so it is reported as its own cause rather than as a
+        // registry failure that blames the wrong party.
         None => {
-            return Err(UpdateError::NoPublishedStableVersion {
-                detail: format!(
-                    "cannot order published {to_version:?} against running {current_version:?}"
-                ),
+            return Err(UpdateError::RunningVersionNotOrderable {
+                running: current_version,
+                published: to_version,
             });
         }
     }
@@ -1249,18 +1299,14 @@ fn execute(
                 }
             })?;
 
-        let acquired = staging.join(&plan.asset);
-        let written = environment.fetch(&release_asset_url(&plan.tag, &plan.asset), &acquired)?;
-        if written == 0 {
-            return Err(UpdateError::ReleaseEvidence {
-                detail: format!("the release asset {} is empty", plan.asset),
-            });
-        }
-
         // The sidecar must name the asset it is evidence for, so a sidecar
         // copied from another release cannot silently authorize these bytes.
         // A bare hash with no filename skips the binding entirely, so it is
         // rejected just like a wrong name.
+        //
+        // The check comes before the asset is fetched: the refusal is the same
+        // either way, but the bytes are not worth downloading when the
+        // evidence does not name them.
         match manifest.filename() {
             Some(name) if name == plan.asset => {}
             Some(name) => {
@@ -1279,6 +1325,14 @@ fn execute(
                     ),
                 });
             }
+        }
+
+        let acquired = staging.join(&plan.asset);
+        let written = environment.fetch(&release_asset_url(&plan.tag, &plan.asset), &acquired)?;
+        if written == 0 {
+            return Err(UpdateError::ReleaseEvidence {
+                detail: format!("the release asset {} is empty", plan.asset),
+            });
         }
 
         let install_root = current_exe
@@ -1904,6 +1958,47 @@ mod tests {
         }
     }
 
+    /// An unorderable *running* version is the running build's problem, not
+    /// the registry's.
+    ///
+    /// The published side is always a plain `X.Y.Z` release —
+    /// `published_stable_version` rejects anything else — so the side that
+    /// cannot be ordered is the version this binary carries. A prerelease or
+    /// a locally bumped build used to be reported as "the registry reported
+    /// no usable stable version", which blamed the registry for a version the
+    /// tool itself carries.
+    #[test]
+    fn an_unorderable_running_version_is_not_reported_as_a_registry_failure() {
+        for running in ["0.3.0-alpha.1", "0.3.0-rc.1", "0.2.10+build"] {
+            let base = FixtureEnvironment::new(PathBuf::from("/nonexistent"), running).respond(
+                &crates_io_metadata_url(),
+                br#"{"crate":{"max_stable_version":"0.2.10"}}"#.to_vec(),
+            );
+            let error = run(&base, true).expect_err("an unorderable pair must not resolve");
+            match error {
+                UpdateError::RunningVersionNotOrderable {
+                    running: got,
+                    published,
+                } => {
+                    assert_eq!(got, running);
+                    assert_eq!(published, "0.2.10");
+                }
+                other => panic!("{running}: expected RunningVersionNotOrderable, got {other:?}"),
+            }
+            // And the message must not blame the registry.
+            let base = FixtureEnvironment::new(PathBuf::from("/nonexistent"), running).respond(
+                &crates_io_metadata_url(),
+                br#"{"crate":{"max_stable_version":"0.2.10"}}"#.to_vec(),
+            );
+            let error = run(&base, true).expect_err("an unorderable pair must not resolve");
+            let text = error.to_string();
+            assert!(
+                !text.contains("registry"),
+                "{running}: the registry reported a usable version: {text}"
+            );
+        }
+    }
+
     #[test]
     fn a_registry_outage_is_reported_not_guessed() {
         let base = FixtureEnvironment::new(PathBuf::from("/nonexistent"), "0.1.0")
@@ -2006,10 +2101,21 @@ mod tests {
             matches!(provenance, Provenance::CargoManaged { .. }),
             "a --root installation was not recognised as Cargo-managed: {provenance:?}"
         );
+        // The manager command is the only correct answer for a Cargo-owned
+        // file — and it has to name the *same* root, or the new binary lands
+        // in `$CARGO_HOME/bin` while the running one stays at the old
+        // version.
+        let root = dir.path().to_path_buf();
         assert_eq!(
             provenance.remediation().as_deref(),
-            Some("cargo install cargo-cleanme --locked --force"),
-            "the manager command is the only correct answer for a Cargo-owned file"
+            Some(
+                format!(
+                    "cargo install cargo-cleanme --locked --force --root {}",
+                    root.display()
+                )
+                .as_str()
+            ),
+            "the manager command must carry the --root this installation used"
         );
     }
 
@@ -2704,6 +2810,40 @@ mod tests {
             "{error:?}"
         );
         assert_eq!(std::fs::read(&fx.live).unwrap(), before);
+    }
+
+    /// The binding check runs before the asset is fetched.
+    ///
+    /// The refusal is the same either way, but a sidecar that names another
+    /// asset must not cost the operator a full asset transfer to reach it. The
+    /// fixture records every requested URL, so the request order is
+    /// observable — and a test that only asserted the error would have passed
+    /// while the download still happened.
+    #[cfg(unix)]
+    #[test]
+    fn a_sidecar_naming_a_different_asset_is_rejected_before_the_asset_is_fetched() {
+        let fx = fixture(&live_stub());
+        let before = std::fs::read(&fx.live).unwrap();
+        let base = FixtureEnvironment::new(fx.live.clone(), "0.1.0");
+        let environment = release(
+            base,
+            "0.2.0",
+            candidate_bytes("0.2.0"),
+            Some("cargo-cleanme-some-other-target"),
+        );
+        let asset = asset_for_target(host_target().unwrap()).unwrap();
+        let asset_url = FixtureEnvironment::asset_url("v0.2.0", asset);
+        let error = run(&environment, false).expect_err("mismatched sidecar must fail");
+        assert!(
+            matches!(error, UpdateError::ReleaseEvidence { .. }),
+            "{error:?}"
+        );
+        assert_eq!(std::fs::read(&fx.live).unwrap(), before);
+        let requested = environment.requested.borrow();
+        assert!(
+            !requested.iter().any(|url| url == &asset_url),
+            "the asset was fetched before the sidecar was bound to it: {requested:?}"
+        );
     }
 
     #[cfg(unix)]

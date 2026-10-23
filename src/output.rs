@@ -398,10 +398,13 @@ pub mod log {
         if report.mode == CleanMode::Execute && (block.is_none() || executed > 0) {
             optional.push(("reclaimed_bytes", reclaimed.to_string()));
         }
-        optional.push((
-            "diagnostics",
-            (report.diagnostics + report.unresolved_ownership.len()).to_string(),
-        ));
+        optional.push(("diagnostics", report.diagnostics.to_string()));
+        // The unresolved ownership participants are counted separately, exactly
+        // as the JSON projection counts them (`result.unresolved_ownership`).
+        // Folding them into `diagnostics` made the log line and the JSON
+        // envelope report two different numbers under the same field name for
+        // one and the same run.
+        optional.push(("unresolved", report.unresolved_ownership.len().to_string()));
 
         line(
             &[
@@ -604,9 +607,53 @@ pub mod log {
             let line = super::cleanup(&report, "routine");
             assert_eq!(
                 line,
-                "cargo-cleanme op=clean status=ok scope=routine mode=execute cleaned=0 skipped=0 failed=0 reclaimed_bytes=0 diagnostics=0"
+                "cargo-cleanme op=clean status=ok scope=routine mode=execute cleaned=0 skipped=0 failed=0 reclaimed_bytes=0 diagnostics=0 unresolved=0"
             );
             assert_ascii_and_bounded(&line);
+        }
+
+        /// The log line and the JSON envelope count the same thing under the
+        /// name `diagnostics`.
+        ///
+        /// The log used to fold the unresolved ownership participants into
+        /// `diagnostics` while the JSON kept them apart and reported them as
+        /// `result.unresolved_ownership`, so one run produced two different
+        /// numbers under one field name. The participants have their own
+        /// field on both surfaces now.
+        #[test]
+        fn the_log_line_and_the_json_agree_on_the_diagnostics_count() {
+            let mut report = empty_report();
+            report.diagnostics = 1;
+            report
+                .unresolved_ownership
+                .push(crate::domain::UnresolvedOwnershipParticipant {
+                    manifest: std::path::PathBuf::from("/w/app/Cargo.toml"),
+                    stage: "locate",
+                    reason: "cargo locate-project failed".into(),
+                    capability: crate::domain::UnknownCapability::RefusedByCargo,
+                });
+            let line = super::cleanup(&report, "explicit");
+            assert!(
+                line.contains("diagnostics=1"),
+                "the log must count the diagnostics: {line}"
+            );
+            assert!(
+                line.contains("unresolved=1"),
+                "the log must count the participants separately: {line}"
+            );
+            // The same report through the JSON projection.
+            let json =
+                serde_json::to_value(crate::output::cleanup(&report, "explicit", None)).unwrap();
+            assert_eq!(
+                json["result"]["summary"]["diagnostics"].as_u64(),
+                Some(1),
+                "{json}"
+            );
+            assert_eq!(
+                json["result"]["unresolved_ownership"].as_u64(),
+                Some(1),
+                "{json}"
+            );
         }
 
         #[test]
@@ -1011,6 +1058,7 @@ mod update_tests {
             (
                 Provenance::CargoManaged {
                     bin_root: PathBuf::from("/cargo/bin"),
+                    install_root: None,
                     version: "0.1.6".into(),
                 },
                 "cargo_managed",

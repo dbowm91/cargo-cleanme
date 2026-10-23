@@ -77,9 +77,9 @@ fn run(cli: Cli) -> Result<i32, AppError> {
         format: cli.format,
         verbose: cli.verbose,
     };
-    // One resolved intent per invocation. Bare maintenance, `clean ROOT`,
-    // `clean --known`, and `clean --full` all arrive as a CleanupRequest, so
-    // they cannot reach different proof, policy, or reporting paths.
+    // One resolved intent per invocation. Bare maintenance, a bounded `ROOT`,
+    // `--full`, and the alias's `clean --known` all arrive as a CleanupRequest,
+    // so they cannot reach different proof, policy, or reporting paths.
     match cli.invocation() {
         Invocation::Update { dry_run } => run_update(dry_run, options.format),
         Invocation::Config(command) => run_config(command, &path, options.format),
@@ -91,11 +91,32 @@ fn run(cli: Cli) -> Result<i32, AppError> {
             cargo_cleanme::discovery_state::ReconciliationMode::IncompleteDiscard,
         )
         .map(|outcome| outcome.code),
-        Invocation::Cleanup(request) => run_cleanup(request, &path, options),
+        Invocation::Cleanup(request) => run_cleanup(
+            request,
+            &path,
+            options,
+            &cargo_cleanme::cleanup::SystemCleanupRunner,
+        ),
         // Unreachable through `clap` (see `Invocation::UsageError`). Reported as
         // a usage error (exit 2) rather than guessing an operation.
         Invocation::UsageError(message) => Err(AppError::Config(message)),
     }
+}
+
+/// The log line for an update that had nothing to do.
+///
+/// The `mode` field is the invocation's own dry-run flag: a run that was asked
+/// to simulate says `simulate`, and a run that was asked to execute says
+/// `execute`. Hardcoding `simulate` here made the log line describe a
+/// different run than the JSON document printed beside it — one machine
+/// surface saying "simulation", the other saying `dry_run: false`.
+fn update_nothing_to_do_log_line(current: &str, published: &str, dry_run: bool) -> String {
+    cargo_cleanme::output::log::update(
+        current,
+        published,
+        cargo_cleanme::update::host_target().unwrap_or("unknown"),
+        dry_run,
+    )
 }
 
 fn run_update(dry_run: bool, format: OutputFormat) -> Result<i32, AppError> {
@@ -134,12 +155,7 @@ fn run_update(dry_run: bool, format: OutputFormat) -> Result<i32, AppError> {
             } else if format == OutputFormat::Log {
                 println!(
                     "{}",
-                    cargo_cleanme::output::log::update(
-                        &current,
-                        &published,
-                        cargo_cleanme::update::host_target().unwrap_or("unknown"),
-                        true,
-                    )
+                    update_nothing_to_do_log_line(&current, &published, dry_run)
                 );
             } else {
                 println!(
@@ -175,12 +191,7 @@ fn run_update(dry_run: bool, format: OutputFormat) -> Result<i32, AppError> {
             } else if format == OutputFormat::Log {
                 println!(
                     "{}",
-                    cargo_cleanme::output::log::update(
-                        &current,
-                        &published,
-                        cargo_cleanme::update::host_target().unwrap_or("unknown"),
-                        true,
-                    )
+                    update_nothing_to_do_log_line(&current, &published, dry_run)
                 );
             } else {
                 println!(
@@ -273,10 +284,22 @@ fn run_config(
                     AppError::Config(format!("cannot launch editor {}: {e}", program.display()))
                 })?;
             if !status.success() {
-                eprintln!(
-                    "cargo-cleanme: editor exited with {status}; config was not reverted: {}",
-                    path.display()
-                );
+                if log {
+                    // The log format promises exactly one ASCII key=value line
+                    // and no paths or config text. The editor's own exit status
+                    // and the config's path are both things this format
+                    // refuses: a path in a retained history pane is a small
+                    // disclosure, and prose where a monitor expects
+                    // `key=value` is not machine-readable. The failure is
+                    // reported the way every other failure is — a typed code
+                    // and nothing else.
+                    eprintln!("{}", cargo_cleanme::output::log::fatal("config", "config"));
+                } else {
+                    eprintln!(
+                        "cargo-cleanme: editor exited with {status}; config was not reverted: {}",
+                        path.display()
+                    );
+                }
                 // The exit contract is 0/1/2: an editor's arbitrary status
                 // is reported in prose above, never propagated as our code.
                 return Ok(1);
@@ -336,20 +359,84 @@ struct ResolvedCleanup {
     automatic: bool,
 }
 
+/// The **static** preconditions of an interactive run.
+///
+/// Every check here is a property of the *invocation* — the requested output
+/// format, whether the standard streams are a terminal, and the terminal's
+/// geometry — and none of them needs the scope to be resolved first.
+///
+/// That is why they run before the scope resolution: resolving a scope spawns
+/// Cargo (`cargo locate-project` for the working-directory join, and
+/// `cargo metadata` for every resolved root), and a run that is going to be
+/// refused must not spawn a single process. Under `--full` the scope
+/// resolution is a whole platform reconciliation, so the refusal used to
+/// arrive thousands of Cargo spawns later.
+fn check_interactive_preconditions(
+    request: &CleanupRequest,
+    options: &RunOptions,
+) -> Result<(), AppError> {
+    if !request.interactive {
+        return Ok(());
+    }
+    // The machine formats are refused first because that conflict is a static
+    // property of the invocation: it is knowable without touching a single
+    // stream, and clap makes the same kind of call by rejecting conflicting
+    // argv before anything runs. The terminal precondition is reported next,
+    // for the same reason in the opposite direction — both are checked before
+    // the listing, which is the first thing that would spawn `cargo metadata`.
+    if options.format != OutputFormat::Human {
+        return Err(AppError::Config(
+            "interactive selection requires human output; --format json and --format log are \
+             automation contracts and cannot carry a terminal session"
+                .into(),
+        ));
+    }
+    // The terminal precondition is checked *before* the listing, not after.
+    // The listing is a full read-only resolution that spawns `cargo metadata`
+    // across every resolved root; doing that only to then refuse for lack of a
+    // terminal would spend the operator's time and spawn processes for a run
+    // that was never going to happen.
+    if let Err(reason) = cargo_cleanme::interactive::ensure_interactive_terminal(
+        std::io::IsTerminal::is_terminal(&std::io::stdin()),
+        std::io::IsTerminal::is_terminal(&std::io::stdout()),
+    ) {
+        return Err(AppError::Config(format!(
+            "interactive selection requires a terminal ({reason}); \
+             drop -i to clean without choosing interactively, or \
+             use `cargo cleanme scan --all` to inspect the same units read-only"
+        )));
+    }
+    // The geometry is checked here too, for the same reason: the frame is
+    // painted into the terminal, and a terminal too small to hold the list
+    // cannot be made larger by resolving the scope first.
+    let too_small = cargo_cleanme::interactive::terminal_geometry()
+        .ok()
+        .and_then(|(width, height)| {
+            cargo_cleanme::interactive::ensure_interactive_geometry(width, height).err()
+        });
+    if let Some(reason) = too_small {
+        return Err(AppError::Config(format!(
+            "interactive selection requires a usable terminal ({reason}); \
+             drop -i to clean without choosing interactively, or \
+             use `cargo cleanme scan --all` to inspect the same units read-only"
+        )));
+    }
+    Ok(())
+}
+
 fn run_cleanup(
     request: CleanupRequest,
     config_path: &std::path::Path,
     options: RunOptions,
+    runner: &dyn cargo_cleanme::workspace::CargoRunner,
 ) -> Result<i32, AppError> {
+    // The static preconditions come first, before the scope resolution: the
+    // scope resolution spawns Cargo, and a refused run must not spawn a
+    // single process to reach the refusal.
+    check_interactive_preconditions(&request, &options)?;
     let config = config::load_or_create(config_path)?;
     let mode = request.mode;
-    let resolved = resolve_cleanup_roots(
-        &request.scope,
-        config_path,
-        &config,
-        options,
-        &cargo_cleanme::cleanup::SystemCleanupRunner,
-    )?;
+    let resolved = resolve_cleanup_roots(&request.scope, config_path, &config, options, runner)?;
     let configured = &config.cleanup.policy;
     let overrides = &request.overrides;
     let policy = cargo_cleanme::cleanup::CleanupPolicy {
@@ -406,7 +493,11 @@ fn run_cleanup(
         // whole-scope block (exit 1), never a fatal usage error.
         let report = cargo_cleanme::cleanup::CleanReport {
             results: Vec::new(),
-            diagnostics: resolved.omitted.len(),
+            // `diagnostics` counts *filesystem diagnostic notices* on every
+            // path. Here nothing was traversed, so the only notices are the
+            // omission ones — counted the way the stderr counts them, one per
+            // (reason, noun) group, so the JSON agrees with the stderr lines.
+            diagnostics: resolved.omitted_diagnostics.len(),
             failed: 0,
             mode,
             counters: Default::default(),
@@ -427,11 +518,13 @@ fn run_cleanup(
         // A successful no-op, not an error: there was simply nothing bounded
         // to clean. The report still states the resolved operation, scope, and
         // mode, so a machine consumer reads the same shape either way.
-        // `diagnostics` counts safely omitted automatic roots, consistent with
-        // the blocked scope above, so JSON agrees with stderr omissions.
+        // `diagnostics` counts filesystem diagnostic notices, consistent with
+        // the blocked scope above and with the engine path: the omission
+        // notices, counted the way the stderr counts them (one per group), so
+        // the JSON agrees with the stderr lines.
         let empty = cargo_cleanme::cleanup::CleanReport {
             results: Vec::new(),
-            diagnostics: resolved.omitted.len(),
+            diagnostics: resolved.omitted_diagnostics.len(),
             failed: 0,
             mode,
             counters: Default::default(),
@@ -566,8 +659,8 @@ enum SelectionOutcome {
 /// uses, so the offered rows are the engine's own units, and the result is a
 /// strictly narrower `Roots` selection — never a way to add, reclassify, or
 /// unblock one. For maintenance scopes the listing is already anchored to the
-/// working directory, so `-i` is bounded by where it runs; `clean ROOT` and
-/// `clean --full` stay unfiltered because their roots already bound them.
+/// working directory, so `-i` is bounded by where it runs; a bounded `ROOT`
+/// and `--full` stay unfiltered because their roots already bound them.
 fn resolve_candidate_selection(
     request: &CleanupRequest,
     resolved: &ResolvedCleanup,
@@ -585,49 +678,11 @@ fn resolve_candidate_selection(
             declared.excluding(resolved.unproven_roots.clone()),
         ));
     }
-    // The machine formats are refused first because that conflict is a static
-    // property of the invocation: it is knowable without touching a single
-    // stream, and clap makes the same kind of call by rejecting conflicting
-    // argv before anything runs. The terminal precondition is reported next,
-    //    for the same reason in the opposite direction — both are checked before
-    // the listing, which is the first thing that would spawn `cargo metadata`.
-    if options.format != OutputFormat::Human {
-        return Err(AppError::Config(
-            "interactive selection requires human output; --format json and --format log are \
-             automation contracts and cannot carry a terminal session"
-                .into(),
-        ));
-    }
-    // The terminal precondition is checked *before* the listing, not after.
-    // The listing is a full read-only resolution that spawns `cargo metadata`
-    // across every resolved root; doing that only to then refuse for lack of a
-    // terminal would spend the operator's time and spawn processes for a run
-    // that was never going to happen.
-    if let Err(reason) = cargo_cleanme::interactive::ensure_interactive_terminal(
-        std::io::IsTerminal::is_terminal(&std::io::stdin()),
-        std::io::IsTerminal::is_terminal(&std::io::stdout()),
-    ) {
-        return Err(AppError::Config(format!(
-            "interactive selection requires a terminal ({reason}); \
-             drop -i to clean without choosing interactively, or \
-             use `cargo cleanme scan --all` to inspect the same units read-only"
-        )));
-    }
-    // The geometry is checked here too, for the same reason: the frame is
-    // painted into the terminal, and a terminal too small to hold the list
-    // cannot be made larger by resolving the scope first.
-    let too_small = cargo_cleanme::interactive::terminal_geometry()
-        .ok()
-        .and_then(|(width, height)| {
-            cargo_cleanme::interactive::ensure_interactive_geometry(width, height).err()
-        });
-    if let Some(reason) = too_small {
-        return Err(AppError::Config(format!(
-            "interactive selection requires a usable terminal ({reason}); \
-             drop -i to clean without choosing interactively, or \
-             use `cargo cleanme scan --all` to inspect the same units read-only"
-        )));
-    }
+    // The static preconditions are re-checked here, for the same reason the
+    // listing itself is: this function must stay safe on its own. `run_cleanup`
+    // already ran them *before* the scope resolution, so the refusal costs no
+    // Cargo spawn.
+    check_interactive_preconditions(request, &options)?;
     // Progress bars would fight the repainting list, so the listing runs
     // silent. It is a read-only resolution: `cargo metadata` only.
     let silent = cargo_cleanme::progress::IndicatifRenderer::new(true, options.verbose);
@@ -635,7 +690,7 @@ fn resolve_candidate_selection(
     // Resolve the declared selection first so `-i` on a maintenance scope
     // offers only anchor-matching units. The proof universe stays wide —
     // `resolved.roots` still carry the full Routine set — so shared output
-    // stays `Shared`. `clean ROOT`/`--full` resolve to `All` and stay
+    // stays `Shared`. A bounded `ROOT`/`--full` resolve to `All` and stay
     // unfiltered because their roots already bound them.
     let anchor = request
         .selection
@@ -738,9 +793,10 @@ fn run_engine_guarded(
                             .any(|p| p == std::path::Path::new(&path)) =>
                 {
                     let omitted = reclassified.omitted.clone();
+                    let omission_notices = reclassified.omission_diagnostics().len();
                     let admitted = collapse_roots(reclassified.admitted);
                     if admitted.is_empty() {
-                        let diagnostics = omitted.len();
+                        let diagnostics = omission_notices;
                         return Ok(cargo_cleanme::cleanup::CleanReport {
                             results: Vec::new(),
                             diagnostics,
@@ -763,7 +819,7 @@ fn run_engine_guarded(
                 }
                 _ => Ok(cargo_cleanme::cleanup::CleanReport {
                     results: Vec::new(),
-                    diagnostics: resolved.omitted.len(),
+                    diagnostics: resolved.omitted_diagnostics.len(),
                     failed: 0,
                     mode,
                     counters: Default::default(),
@@ -1158,7 +1214,7 @@ fn working_directory_entries(
 ///   six-second bounded sweep to a sixty-five-second sweep of 264,183
 ///   directories that ended blocked on 1,357 unresolvable manifests.
 ///
-/// `clean ROOT` is the spelling for that wider sweep, and it has always
+/// A bounded `ROOT` is the spelling for that wider sweep, and it has always
 /// carried the same hazard.
 ///
 /// The comparison is canonical-or-raw on both sides, so a symlinked prefix
@@ -1181,8 +1237,24 @@ fn roots_are_related(a: &std::path::Path, b: &std::path::Path) -> bool {
     a.starts_with(&b) || b.starts_with(&a)
 }
 
-/// Admit one automatic (Routine/Full) candidate set: classify by provenance
-/// before collapse, collapse admitted paths only, remember omissions for the
+/// Canonicalize a path, remembering the answer.
+///
+/// The Full reconciliation asks for the same manifest twice — once through the
+/// resolved workspace member and once through the discovered manifest — and
+/// every canonicalization walks the path component by component. The answer
+/// depends only on the path, so it is asked for once.
+fn canonicalize_cached(
+    cache: &mut std::collections::HashMap<std::path::PathBuf, std::path::PathBuf>,
+    path: &std::path::Path,
+) -> std::path::PathBuf {
+    if let Some(cached) = cache.get(path) {
+        return cached.clone();
+    }
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    cache.insert(path.to_path_buf(), canonical.clone());
+    canonical
+}
+
 /// A path rendered for a human-readable report.
 ///
 /// Control characters are dropped and the text is bounded, so a path the
@@ -1194,6 +1266,8 @@ fn sanitize_path_text(path: &str) -> String {
         .collect()
 }
 
+/// Admit one automatic (Routine/Full) candidate set: classify by provenance
+/// before collapse, collapse admitted paths only, remember omissions for the
 /// late pre-spawn recheck, and convert symlink/uncertain roots into a typed
 /// whole-scope block instead of a fatal error or a silent scope reduction.
 fn admit_automatic(
@@ -1379,8 +1453,17 @@ fn human_scan_roots(scope: &cargo_cleanme::domain::ScanScope) -> Vec<std::path::
 /// The scope keeps the root as the operator spelled it (`scan .`), while the
 /// report's paths are absolute. The base has to be absolute too, or the two
 /// never match and every path stays absolute.
+///
+/// It has to be **canonical** as well. The report's paths are canonical
+/// (`workspace::canonical_or_absolute`), and the relative-path rule is a
+/// component-wise `strip_prefix`: a lexical base and a canonical path never
+/// match, so under a symlinked root every path stayed absolute — while the
+/// cleanup surface, whose roots go through `collapse_roots` (which
+/// canonicalizes), rendered the *same* root relatively. The two surfaces of
+/// one tool disagreed about one root; this is the scan side catching up.
 fn absolutize_for_display(root: &std::path::Path) -> std::path::PathBuf {
-    cargo_cleanme::cli::absolutize_root(root).unwrap_or_else(|_| root.to_path_buf())
+    let absolute = cargo_cleanme::cli::absolutize_root(root).unwrap_or_else(|_| root.to_path_buf());
+    std::fs::canonicalize(&absolute).unwrap_or(absolute)
 }
 
 /// Whether a cleanup report carries nothing beyond the empty case.
@@ -1400,19 +1483,14 @@ fn report_has_nothing_to_report(report: &cargo_cleanme::cleanup::CleanReport) ->
 }
 
 fn collapse_roots(roots: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
-    let mut roots: Vec<_> = roots
+    // The collapse itself is the shared one (`traverse::collapse_outermost`):
+    // canonicalise, dedup, drop nested roots. The scan and display surfaces
+    // keep a root's own spelling when it does not resolve, where the cleanup
+    // surface fails closed.
+    cargo_cleanme::traverse::collapse_outermost(roots)
         .into_iter()
-        .map(|p| std::fs::canonicalize(&p).unwrap_or(p))
-        .collect();
-    roots.sort();
-    roots.dedup();
-    let mut collapsed: Vec<std::path::PathBuf> = Vec::new();
-    for path in roots {
-        if !collapsed.iter().any(|parent| path.starts_with(parent)) {
-            collapsed.push(path);
-        }
-    }
-    collapsed
+        .map(|root| root.spelling)
+        .collect()
 }
 
 /// The JSON `scope` label must describe the scope that was actually resolved,
@@ -1434,7 +1512,7 @@ fn scope_label(scope: &ScanScope) -> &'static str {
 /// Whether a scan writes its report to stdout.
 ///
 /// Not a formatting choice: an *internal* scan — the Full reconciliation
-/// `clean --full` runs to refresh learned state — must not write anything to
+/// `--full` runs to refresh learned state — must not write anything to
 /// stdout, because the caller is about to write the report the user asked for.
 /// Emitting both would put an unrelated document ahead of the cleanup report
 /// and, in JSON mode, would emit two JSON documents in one invocation.
@@ -1447,7 +1525,7 @@ enum EmitReport {
 /// The outcome of one scan: the process exit code plus, for a Full scan,
 /// the in-memory reconciled generation and whether its publication survived.
 ///
-/// C028: `clean --full` consumes the generation reconciled by the traversal
+/// C028: `--full` consumes the generation reconciled by the traversal
 /// it just ran — never a disk reload that could be an older generation when
 /// publication failed, was unsupported, or was unavailable. A failed save
 /// stays a stderr warning for a read-only scan, but a Full cleanup without a
@@ -1593,11 +1671,11 @@ fn run_scan(
         if let Some((prior, replacing_invalid)) = selected {
             let now = cargo_cleanme::discovery_state::now_seconds();
             let mut resolved_by_manifest = std::collections::HashMap::new();
+            let mut canonical_cache = std::collections::HashMap::new();
             for ws in &workspaces {
                 for member in &ws.members {
                     resolved_by_manifest.insert(
-                        std::fs::canonicalize(&member.manifest_path)
-                            .unwrap_or_else(|_| member.manifest_path.clone()),
+                        canonicalize_cached(&mut canonical_cache, &member.manifest_path),
                         ws.root.clone(),
                     );
                 }
@@ -1605,7 +1683,7 @@ fn run_scan(
             let observations: Vec<_> = manifests
                 .iter()
                 .map(|manifest| {
-                    let key = std::fs::canonicalize(manifest).unwrap_or_else(|_| manifest.clone());
+                    let key = canonicalize_cached(&mut canonical_cache, manifest);
                     cargo_cleanme::discovery_state::ProjectObservation {
                         manifest: key.clone(),
                         workspace: resolved_by_manifest.get(&key).cloned(),
@@ -2226,6 +2304,131 @@ mod tests {
         assert!(
             matches!(refused, Err(AppError::Config(_))),
             "a refusal to present the surface is a usage error: {refused:?}"
+        );
+    }
+
+    /// A runner that records every call, so a test can prove that a refusal
+    /// reached the operator **without** spawning Cargo.
+    struct CountingRunner {
+        calls: std::sync::Mutex<Vec<Vec<std::ffi::OsString>>>,
+    }
+
+    impl CountingRunner {
+        fn new() -> Self {
+            Self {
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn count(&self) -> usize {
+            self.calls.lock().unwrap().len()
+        }
+    }
+
+    impl cargo_cleanme::workspace::CargoRunner for CountingRunner {
+        fn run(
+            &self,
+            _cwd: &std::path::Path,
+            args: &[std::ffi::OsString],
+        ) -> std::io::Result<cargo_cleanme::workspace::ProcessOutput> {
+            self.calls.lock().unwrap().push(args.to_vec());
+            Err(std::io::Error::other("the runner must not be reached"))
+        }
+    }
+
+    /// The log line for an update that had nothing to do says the mode the
+    /// run was actually asked for.
+    ///
+    /// The two "nothing to do" branches used to hardcode `simulate`, so
+    /// `cargo cleanme update --format log` claimed a simulation while the
+    /// JSON document printed beside it said `dry_run: false`. The two machine
+    /// surfaces described one run differently.
+    #[test]
+    fn the_update_log_line_says_the_mode_the_run_was_asked_for() {
+        let execute = update_nothing_to_do_log_line("0.2.10", "0.2.10", false);
+        assert!(
+            execute.contains("mode=execute"),
+            "an execute-mode run must say so: {execute}"
+        );
+        let simulate = update_nothing_to_do_log_line("0.2.10", "0.2.10", true);
+        assert!(
+            simulate.contains("mode=simulate"),
+            "a dry run must say so: {simulate}"
+        );
+    }
+
+    /// A usage error that is knowable from the invocation alone is refused
+    /// **before** the scope is resolved, and the scope resolution is what
+    /// spawns Cargo.
+    ///
+    /// The refusal used to arrive after the resolution had already spawned
+    /// `cargo locate-project` — and under `--full`, after a whole platform
+    /// reconciliation had spawned thousands of `cargo metadata` processes.
+    #[test]
+    fn a_static_usage_error_is_refused_before_the_scope_spawns_cargo() {
+        let d = tempfile::tempdir().unwrap();
+        let request = CleanupRequest {
+            scope: CleanupScope::Full,
+            mode: CleanMode::Execute,
+            overrides: cargo_cleanme::cli::CleanupOverrides::default(),
+            selection: cargo_cleanme::cleanup::CleanupSelection::All,
+            interactive: true,
+        };
+        let options = RunOptions {
+            no_progress: true,
+            stats: false,
+            format: OutputFormat::Json,
+            verbose: false,
+        };
+        let runner = CountingRunner::new();
+        let refused = run_cleanup(request, &d.path().join("config.toml"), options, &runner);
+        assert!(
+            matches!(refused, Err(AppError::Config(_))),
+            "a machine format with -i is a usage error: {refused:?}"
+        );
+        assert_eq!(
+            runner.count(),
+            0,
+            "a refused run must not spawn Cargo at all"
+        );
+    }
+
+    /// The scan surface spells its paths relative to the scope root, under a
+    /// symlinked root exactly as it does under a plain one.
+    ///
+    /// The report's paths are canonical; the relative-path rule is a
+    /// component-wise `strip_prefix`. A lexical base and a canonical path never
+    /// match, so under a symlinked root the scan printed absolute paths while
+    /// the cleanup surface — whose roots are canonicalized — printed relative
+    /// ones, for the *same* root. On macOS this is the default for any root
+    /// under `/tmp` (`/tmp` → `/private/tmp`).
+    #[cfg(unix)]
+    #[test]
+    fn the_scan_surface_names_its_paths_relative_under_a_symlinked_root() {
+        use std::os::unix::fs::symlink;
+
+        let d = tempfile::tempdir().unwrap();
+        let real = d.path().join("real/app");
+        std::fs::create_dir_all(real.join("target")).unwrap();
+        let link = d.path().join("lnk/app");
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        symlink(&real, &link).unwrap();
+
+        let base = absolutize_for_display(&link);
+        assert_eq!(
+            base,
+            std::fs::canonicalize(&real).unwrap(),
+            "the relative-path base must be canonical, like the cleanup surface's"
+        );
+
+        // The group's own path is canonical (`workspace::canonical_or_absolute`),
+        // and the base must match it component-wise.
+        let display = std::fs::canonicalize(real.join("target")).unwrap();
+        let options = cargo_cleanme::report::HumanOptions::quiet(vec![base]);
+        assert_eq!(
+            options.relativized(&display),
+            std::path::PathBuf::from("app/target"),
+            "the scan surface must name the path relative to the scope root"
         );
     }
 

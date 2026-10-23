@@ -7,7 +7,7 @@ the one architecture deep dive your change touches.
 
 A single Rust crate that finds Cargo build output and cleans it **through
 Cargo**, never by deleting directories. One binary over one library of 16
-modules, 18 source files, 40,480 lines in `src/`. No async runtime of its own.
+modules, 18 source files, 42,269 lines in `src/`. No async runtime of its own.
 `cargo metadata` is the only binary dependency that matters for safety.
 
 The working tree is **0.2.10**, the published version, with post-publication
@@ -231,16 +231,25 @@ source of truth for module line counts and the inline-test total; verify each
 against `src/`, fix the overview first, then align the deep dives.
 
 The same rule applies to **per-platform test counts**, which have disagreed
-across three documents: they are 563 declared, 561 on Linux, 500 on Windows,
-558 on macOS. Derive them with a brace-tracking parser that evaluates each
+across three documents: they are 585 declared, 583 on Linux, 536 on Windows,
+580 on macOS. Derive them with a brace-tracking parser that evaluates each
 test's *effective* gate set against `rustc --print cfg --target <triple>`, and
 cross-check against `cargo test --lib -- --list`. **Count the tests a gate
-excludes, not the gates.** Of the 53 `#[cfg(unix)]` attributes in test scope,
-33 sit immediately above a `#[test]`, 10 follow the `#[test]` attribute on the
-same item, and 10 gate a helper or a block — but between them they exclude
-**60** tests, because a gated block holds further tests. A derivation that
-subtracts gate counts instead of test counts lands 16 high on Windows, which
-is exactly how the census was wrong for so long.
+excludes, not the gates.** A naive "the `#[cfg(unix)]` immediately above a
+`#[test]`" grep finds 35 of the **45** tests a `#[cfg(unix)]` gate actually
+excludes, because Rust allows `#[test]` to precede the gate — ten of the 45
+have it that way. The remaining gates in test scope sit on helpers and on
+blocks *inside* a test function, which exclude no test at all: a block inside
+a test is removed on Windows, and the test still compiles and still runs. A
+derivation that subtracts gate counts instead of test counts lands 16 high on
+Windows, which is exactly how the census was wrong for so long — and the
+figure it produced, 500, was **also** wrong, by 16 the other way.
+
+The Windows figure can be checked without a Windows host: cross-compile the
+test binary for `x86_64-pc-windows-gnu` (the `windows-gnu` std is
+installable, and `mingw-w64` supplies the C toolchain `ring` needs) and
+confirm it carries exactly the derived set of tests and no others. That check
+is what settled the figure at 536.
 
 ## 7. Planning and decision records
 

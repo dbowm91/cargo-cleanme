@@ -58,7 +58,7 @@ Show the detailed human surface: every workspace considered (including the ones 
 The default surface names only what the run acted on. This flag changes the *human* format only — the JSON document and the log line are identical with and without it.
 .TP
 \fB\-\-dry\-run\fR
-Simulate: run every decision, proof, and reporting step, but invoke no `cargo clean` process at all. Honoured wherever it appears, so the `cargo cleanme \-\-dry\-run clean ROOT` spelling cannot fall back to Execute. Only `clean` (and `update`\*(Aqs own `\-\-dry\-run`) honour it: `scan` and `config` ignore a global `\-\-dry\-run` (read\-only / local\-only, no behaviour change)
+Simulate: run every decision, proof, and reporting step, but invoke no `cargo clean` process at all. Honoured wherever it appears, so the `cargo cleanme \-\-dry\-run ROOT` spelling cannot fall back to Execute. Only the cleanup surface (and `update`\*(Aqs own `\-\-dry\-run`) honour it: `scan` and `config` ignore a global `\-\-dry\-run` (read\-only / local\-only, no behaviour change)
 .TP
 \fB\-i\fR, \fB\-\-interactive\fR
 Choose the workspaces to clean from an inline selection list (NOR/INS).

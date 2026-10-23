@@ -16,7 +16,7 @@ use crate::{
     domain::*,
     error::AppError,
     progress::{ProgressObserver, ScanPhase},
-    traverse,
+    traverse::{self, path_is_symlink, resolve_as_far_as_possible},
     workspace::{self, CargoRunner},
 };
 use std::{
@@ -83,8 +83,9 @@ impl CleanMode {
 /// accepts is disclosed, not hidden.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CleanupSelection {
-    /// Every resolved unit is a candidate. `clean ROOT` and `clean --full`,
-    /// which are already bounded by their own root selection.
+    /// Every resolved unit is a candidate. `cargo cleanme ROOT` and
+    /// `cargo cleanme --full`, which are already bounded by their own root
+    /// selection.
     All,
     /// An **unresolved** anchor on the process working directory.
     ///
@@ -137,6 +138,12 @@ impl CleanupSelection {
     /// enclosing workspace, and an operator standing above several projects must
     /// be able to select one of them. A descendant-only rule would make the
     /// common virtual-workspace layout a silent no-op.
+    ///
+    /// `Roots` matches by **exact equality** — it compares a workspace root
+    /// against the roots the operator named. The proof boundary's predicate
+    /// ([`boundary_admits`]) compares a *manifest* against the same roots with
+    /// containment in both directions, so the two are deliberately not the
+    /// same question.
     pub fn admits(&self, workspace_root: &Path) -> bool {
         match self {
             Self::All => true,
@@ -371,7 +378,7 @@ pub enum CleanupReasonCode {
     /// This is deliberately *not* an ownership or safety code: the unit was
     /// eligible and was left untouched on purpose. It exists so that a
     /// selection can never produce a silent no-op the way a configured
-    /// `scan.root` once made `clean --known` (M012A defect).
+    /// `scan.root` once made the `--known` spelling (M012A defect).
     SkippedOutsideSelection,
     /// The unit's learned root could not be proven: that root's own traversal
     /// did not complete, so the ownership inside it could not be established
@@ -391,6 +398,14 @@ pub enum CleanupReasonCode {
 pub struct ProofFailure {
     pub code: CleanupReasonCode,
     pub detail: String,
+    /// True when the failure is an **authorization-infrastructure** failure: a
+    /// misconfigured, unreadable or unresolvable root.
+    ///
+    /// Such a failure blocks the whole scope (exit `1`) rather than skipping
+    /// one unit (exit `0`). The verdict is typed, not parsed out of `detail`:
+    /// a directory whose *name* contains the words an authorization template
+    /// uses must never decide the run's exit code.
+    pub authorization_infrastructure: bool,
 }
 
 impl ProofFailure {
@@ -402,6 +417,17 @@ impl ProofFailure {
         Self {
             code,
             detail: detail.into(),
+            authorization_infrastructure: false,
+        }
+    }
+
+    /// An authorization-infrastructure failure: the scope cannot be proven and
+    /// the run is blocked as a whole.
+    pub fn authorization_infrastructure(detail: impl Into<String>) -> Self {
+        Self {
+            code: CleanupReasonCode::SkippedSafety,
+            detail: detail.into(),
+            authorization_infrastructure: true,
         }
     }
 }
@@ -413,7 +439,11 @@ impl From<String> for ProofFailure {
     // Proof gates with a known site must use `ProofFailure::new` instead.
     fn from(detail: String) -> Self {
         let code = proof_skip_code(&detail);
-        Self { code, detail }
+        Self {
+            code,
+            detail,
+            authorization_infrastructure: false,
+        }
     }
 }
 impl From<&str> for ProofFailure {
@@ -612,6 +642,19 @@ pub struct CleanupPolicy {
     pub exclude: Vec<String>,
 }
 
+/// The hint for a refused nested crate.
+///
+/// **One copy, one spelling.** The blocked path and the unblocked path both
+/// print it, and they used to disagree about the command they recommended:
+/// one said `cargo cleanme ROOT` and the other said `cargo cleanme clean
+/// ROOT`. The canonical bounded-root spelling is `cargo cleanme ROOT`; the
+/// `clean ROOT` form is accepted and **hidden** (ADR 008 §4), so a hint that
+/// recommends the hidden spelling teaches an operator a command they cannot
+/// find in `--help`.
+const NESTED_WORKSPACE_HINT: &str = "a nested crate that believes it is in a workspace needs an \
+     empty `[workspace]` table or a parent `workspace.exclude` entry; otherwise clean a healthy \
+     workspace explicitly, e.g. `cargo cleanme ROOT`";
+
 /// Bounded human listing of retained ownership participants, shared by the
 /// blocked path (under the block message) and the unblocked path (under a
 /// "reported, not blocking" header). Same bound, same overflow line, same
@@ -643,10 +686,7 @@ fn append_unresolved_listing(out: &mut String, unresolved: &[UnresolvedOwnership
             participant.stage, manifest, reason
         ));
         listed += 1;
-        if participant
-            .reason
-            .contains("believes it's in a workspace when it's not")
-        {
+        if workspace::refused_nested_workspace(&participant.reason) {
             workspace_hint = true;
         }
     }
@@ -655,9 +695,7 @@ fn append_unresolved_listing(out: &mut String, unresolved: &[UnresolvedOwnership
         out.push_str(&format!("  … {remaining} more unresolved participant(s)\n"));
     }
     if workspace_hint {
-        out.push_str(
-            "  hint: a nested crate that believes it is in a workspace needs an empty `[workspace]` table or a parent `workspace.exclude` entry; otherwise clean a healthy workspace explicitly, e.g. `cargo cleanme ROOT`\n",
-        );
+        out.push_str(&format!("  hint: {NESTED_WORKSPACE_HINT}\n"));
     }
 }
 
@@ -1105,7 +1143,8 @@ fn output_text(output: &ProcessOutput) -> String {
 ///   under any authorization-root configuration; authorization never
 ///   manufactures ownership proof.
 /// - Symlink roots are never cleanable (grouped as `Uncertain` upstream).
-/// - The explicit `clean ROOT` sandbox authorizes private output inside ROOT.
+/// - The explicit `cargo cleanme ROOT` sandbox authorizes private output
+///   inside ROOT.
 /// - Private output outside ROOT must be inside one configured absolute
 ///   allowed root.
 /// - Symlink authorization roots are invalid.
@@ -1158,15 +1197,105 @@ pub fn covering_is_authorized_roots(
     clean_roots: &[PathBuf],
     allowed_roots: &[PathBuf],
 ) -> Result<bool, String> {
-    // Precondition (see `covering_is_authorized`): covering and roots are
-    // canonicalized. `starts_with` below is component-lexical and unsound on
-    // non-canonical paths containing `..`.
-    // C002-F1: ownership class is authoritative and checked first.
-    // ExternalUnproven is inventory-only even inside clean ROOT or a
-    // configured allowed root.
-    if ownership != OutputOwnershipClass::PrivateBounded {
-        return Ok(false);
+    let context = AuthorizationContext::new(clean_roots, allowed_roots);
+    context.admits(ownership, covering)
+}
+
+/// The resolved authorization roots of one run.
+///
+/// Both lists are **loop-invariant**: the engine asks the same question for
+/// every physical group of every unit. Resolving them once removed a stat
+/// and a realpath per root, per group, per unit; the verdict is identical
+/// either way.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthorizationRoots {
+    /// The configured `cleanup.allowed_output_roots`, validated and canonical.
+    allowed: Vec<PathBuf>,
+    /// The scope's cleanup roots, canonical.
+    clean: Vec<PathBuf>,
+}
+
+/// The authorization roots of one run, resolved at most once.
+///
+/// It is resolved **lazily**, on the first group that is actually asked
+/// about. Ownership is authoritative and checked first, so a run whose groups
+/// are all non-private never resolves the roots at all — and a misconfigured
+/// root must not become a scope block for a group that was never going to be
+/// authorized anyway.
+pub struct AuthorizationContext<'a> {
+    clean_roots: &'a [PathBuf],
+    allowed_roots: &'a [PathBuf],
+    resolved: std::cell::OnceCell<Result<AuthorizationRoots, String>>,
+}
+
+impl<'a> AuthorizationContext<'a> {
+    /// A context over the run's clean roots and configured allowed roots.
+    pub fn new(clean_roots: &'a [PathBuf], allowed_roots: &'a [PathBuf]) -> Self {
+        Self {
+            clean_roots,
+            allowed_roots,
+            resolved: std::cell::OnceCell::new(),
+        }
     }
+
+    /// The resolved roots, or the reason they could not be resolved.
+    fn roots(&self) -> Result<&AuthorizationRoots, String> {
+        let resolved = self
+            .resolved
+            .get_or_init(|| resolve_authorization_roots(self.clean_roots, self.allowed_roots));
+        match resolved {
+            Ok(roots) => Ok(roots),
+            Err(message) => Err(message.clone()),
+        }
+    }
+
+    /// Whether this group is inside an authorized boundary.
+    ///
+    /// C002-F1: ownership class is authoritative and checked first.
+    /// ExternalUnproven is inventory-only even inside a bounded cleanup root
+    /// or a configured allowed root.
+    pub fn admits(
+        &self,
+        ownership: OutputOwnershipClass,
+        covering: &[PathBuf],
+    ) -> Result<bool, String> {
+        if ownership != OutputOwnershipClass::PrivateBounded {
+            return Ok(false);
+        }
+        let roots = self.roots()?;
+        // Every covering root must be inside an authorized boundary.
+        for covering_root in covering {
+            // Covering roots are already canonical (from build_groups).
+            if roots
+                .clean
+                .iter()
+                .any(|root| covering_root == root || covering_root.starts_with(root))
+            {
+                continue;
+            }
+            if roots
+                .allowed
+                .iter()
+                .any(|a| covering_root == a || covering_root.starts_with(a))
+            {
+                continue;
+            }
+            return Ok(false);
+        }
+        // Only PrivateBounded reaches here; path authorization passed.
+        Ok(true)
+    }
+}
+
+/// Validate and canonicalize the authorization roots of one run.
+///
+/// Precondition (see `covering_is_authorized`): covering and roots are
+/// canonicalized. `starts_with` below is component-lexical and unsound on
+/// non-canonical paths containing `..`.
+fn resolve_authorization_roots(
+    clean_roots: &[PathBuf],
+    allowed_roots: &[PathBuf],
+) -> Result<AuthorizationRoots, String> {
     // Validate allowed roots: absolute, not symlink.
     let mut canonical_allowed: Vec<PathBuf> = Vec::new();
     for root in allowed_roots {
@@ -1220,25 +1349,10 @@ pub fn covering_is_authorized_roots(
                 .map_err(|e| format!("cannot resolve cleanup root {}: {e}", root.display()))
         })
         .collect::<Result<_, _>>()?;
-    // Every covering root must be inside an authorized boundary.
-    for covering_root in covering {
-        // Covering roots are already canonical (from build_groups).
-        if canonical_clean
-            .iter()
-            .any(|root| covering_root == root || covering_root.starts_with(root))
-        {
-            continue;
-        }
-        if canonical_allowed
-            .iter()
-            .any(|a| covering_root == a || covering_root.starts_with(a))
-        {
-            continue;
-        }
-        return Ok(false);
-    }
-    // Only PrivateBounded reaches here; path authorization passed.
-    Ok(true)
+    Ok(AuthorizationRoots {
+        allowed: canonical_allowed,
+        clean: canonical_clean,
+    })
 }
 
 /// Skip detail for non-private ownership classes.
@@ -1258,6 +1372,41 @@ pub fn ownership_skip_detail(ownership: OutputOwnershipClass) -> String {
     }
 }
 
+/// The verdict of a unit-wide cleanup block.
+///
+/// The two arms are the machine contract, and they are **typed** rather than
+/// recovered from the message text: an authorization-infrastructure failure
+/// (a misconfigured, unreadable or unresolvable root) blocks the whole scope
+/// with exit `1`, while every other verdict is a per-unit skip with exit `0`.
+///
+/// Parsing the prose instead would let a *directory name* decide the exit
+/// code — the per-unit skip detail embeds the physical output path, so a
+/// shared output directory literally called `cleanup authorization root`
+/// turned a skip into a scope block.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BlockReason {
+    /// Authorization infrastructure failure: a misconfigured, unreadable or
+    /// unresolvable root. Scope-level block (exit `1`).
+    AuthorizationInfrastructure(String),
+    /// Any other per-unit block (shared, uncertain, unauthorized, inactive,
+    /// unmeasured…). Per-unit skip (exit `0`).
+    Unit(String),
+}
+
+impl BlockReason {
+    /// The human-readable detail, whatever the verdict.
+    pub fn detail(&self) -> &str {
+        match self {
+            Self::AuthorizationInfrastructure(detail) | Self::Unit(detail) => detail,
+        }
+    }
+
+    /// Whether this verdict blocks the whole scope rather than one unit.
+    pub fn is_authorization_infrastructure(&self) -> bool {
+        matches!(self, Self::AuthorizationInfrastructure(_))
+    }
+}
+
 /// First blocking reason for a whole CleanupUnit, or `Ok(())` (C003 §7.2).
 ///
 /// Core C003 invariant: a workspace is destructively cleanable only if *every*
@@ -1273,7 +1422,7 @@ pub fn unit_block_reason(
     unit: &workspace::CleanupUnit,
     clean_root: &Path,
     allowed_output_roots: &[PathBuf],
-) -> Result<(), String> {
+) -> Result<(), BlockReason> {
     unit_block_reason_roots(
         unit,
         std::slice::from_ref(&clean_root.to_path_buf()),
@@ -1285,70 +1434,66 @@ fn unit_block_reason_roots(
     unit: &workspace::CleanupUnit,
     clean_roots: &[PathBuf],
     allowed_output_roots: &[PathBuf],
-) -> Result<(), String> {
+) -> Result<(), BlockReason> {
+    unit_block_reason_roots_with(
+        unit,
+        &AuthorizationContext::new(clean_roots, allowed_output_roots),
+    )
+}
+
+/// The per-unit gate, against the run's already-resolved authorization roots.
+fn unit_block_reason_roots_with(
+    unit: &workspace::CleanupUnit,
+    authorization: &AuthorizationContext<'_>,
+) -> Result<(), BlockReason> {
     if let Some(root) = unit.unmapped.first() {
-        return Err(format!(
+        return Err(BlockReason::Unit(format!(
             "{} output {} has unproven physical identity; cleanup deferred",
             match root.kind {
                 OutputRootKind::Target => "target",
                 OutputRootKind::Build => "build",
             },
             root.logical_path.display()
-        ));
+        )));
     }
     for group in &unit.groups {
         // 1. Ownership class is authoritative; authorization never promotes.
         if group.ownership != OutputOwnershipClass::PrivateBounded {
-            return Err(format!(
+            return Err(BlockReason::Unit(format!(
                 "{} output {} is {}; {}",
                 group.kind_label(),
                 group.display.display(),
                 group.ownership.label(),
                 ownership_skip_detail(group.ownership)
-            ));
+            )));
         }
         // 2. Location authorization for this group only.
-        match covering_is_authorized_roots(
-            group.ownership,
-            &group.covering,
-            clean_roots,
-            allowed_output_roots,
-        ) {
+        match authorization.admits(group.ownership, &group.covering) {
             Ok(true) => {}
             Ok(false) => {
-                return Err(format!(
+                return Err(BlockReason::Unit(format!(
                     "{} output {} is private but outside the authorized cleanup boundary; \
                      add a `cleanup.allowed_output_roots` entry or use a bounded root that contains it",
                     group.kind_label(),
                     group.display.display()
-                ));
+                )));
             }
-            Err(msg) => return Err(msg),
+            // The `Err` arm is, by construction, an authorization-infrastructure
+            // failure: the roots themselves are misconfigured or unresolvable.
+            Err(msg) => return Err(BlockReason::AuthorizationInfrastructure(msg)),
         }
         // 3. The group must be a measured, real, non-symlink, inactive,
         // marker-qualified output directory (fail-fast analysis verdict).
         if group.measured.is_none() {
             let reason = group.skip.map_or("output is not eligible", |r| r.detail());
-            return Err(format!(
+            return Err(BlockReason::Unit(format!(
                 "{} output {} is not cleanable: {reason}",
                 group.kind_label(),
                 group.display.display()
-            ));
+            )));
         }
     }
     Ok(())
-}
-
-/// True when a `unit_block_reason_roots` error reports authorization
-/// infrastructure failure (misconfigured/unreadable roots), not a plain
-/// "outside authorized boundary" verdict.
-///
-/// Ownership-first ordering is unchanged: `covering_is_authorized_roots`
-/// still returns `Ok(false)` for non-private classes before inspecting any
-/// path; only `Err` strings with these prefixes take the scope-block path,
-/// so authorization still cannot promote an ownership class.
-fn is_authorization_infrastructure_error(detail: &str) -> bool {
-    detail.contains("cleanup authorization root") || detail.contains("cannot resolve cleanup root")
 }
 
 /// Machine code for a fresh group whose ownership degraded during the proof.
@@ -1699,10 +1844,10 @@ pub fn clean_with_roots_policy_selector_guarded(
 ) -> Result<CleanReport, AppError> {
     let includes = compile_policy_globs(&policy.include)?;
     let excludes = compile_policy_globs(&policy.exclude)?;
-    let selector_capabilities = if selector.is_some() {
-        runtime_clean_capabilities()
+    let (host_cargo, selector_capabilities) = if selector.is_some() {
+        runtime_cargo_release(runner)
     } else {
-        CargoCleanCapabilities::default()
+        (None, CargoCleanCapabilities::default())
     };
     let universe =
         discover_and_resolve_universe(roots, recency_seconds, mode, runner, observer, selection)?;
@@ -1854,6 +1999,10 @@ pub fn clean_with_roots_policy_selector_guarded(
     // mismatch blocks the remaining units in the fail-closed direction,
     // before any further spawn. Simulate rehearses the same check so it
     // predicts Execute instead of diverging from it.
+    // The authorization roots are resolved once for the whole run and reused
+    // by every unit's gate: they are loop-invariant, and resolving them per
+    // unit repeated the same filesystem work for every unit.
+    let authorization = AuthorizationContext::new(&roots, allowed_output_roots);
     for unit in units.iter() {
         let skipped = |report: &mut CleanReport,
                        detail: String,
@@ -1898,7 +2047,7 @@ pub fn clean_with_roots_policy_selector_guarded(
         {
             skipped(
                 &mut report,
-                "runtime Cargo package-clean capability is unknown or unsupported; no Cargo clean was invoked".into(),
+                unqualified_selector_detail("clean --package", host_cargo.as_deref()),
                 None,
                 CleanupReasonCode::SelectorUnsupported,
             );
@@ -1910,7 +2059,7 @@ pub fn clean_with_roots_policy_selector_guarded(
         {
             skipped(
                 &mut report,
-                "runtime Cargo profile-clean capability is unknown or unsupported; no Cargo clean was invoked".into(),
+                unqualified_selector_detail("clean --profile", host_cargo.as_deref()),
                 None,
                 CleanupReasonCode::SelectorUnsupported,
             );
@@ -1974,18 +2123,24 @@ pub fn clean_with_roots_policy_selector_guarded(
         // `SkippedUnauthorized` rows (exit 0). Only `Err` takes this path;
         // `Ok(false)` (private but outside the boundary) stays a per-unit
         // skip, so authorization still cannot promote.
-        if let Err(msg) = unit_block_reason_roots(unit, &roots, allowed_output_roots) {
-            if is_authorization_infrastructure_error(&msg) {
+        if let Err(reason) = unit_block_reason_roots_with(unit, &authorization) {
+            if reason.is_authorization_infrastructure() {
                 report.scope_blocked = Some(ScopeBlock::new(
                     ScopeBlockReason::OwnershipUnproven,
                     format!(
-                        "cleanup authorization could not be proven: {msg}; no cleanup commands were run"
+                        "cleanup authorization could not be proven: {}; no cleanup commands were run",
+                        reason.detail()
                     ),
                 ));
                 report.counters = counters.clone();
                 return Ok(report);
             }
-            skipped(&mut report, msg, None, unit_skip_code(unit));
+            skipped(
+                &mut report,
+                reason.detail().to_owned(),
+                None,
+                unit_skip_code(unit),
+            );
             observer.unit_completed(cleanup_phase);
             continue;
         }
@@ -2050,8 +2205,10 @@ pub fn clean_with_roots_policy_selector_guarded(
             Err(failure) => {
                 // H-3 via the proof's defensive gate 1: an infrastructure
                 // error surfacing here (TOCTOU between the gate above and the
-                // proof) is still a scope block, not a per-unit skip.
-                if is_authorization_infrastructure_error(&failure.detail) {
+                // proof) is still a scope block, not a per-unit skip. The
+                // verdict is typed (`ProofFailure::authorization_infrastructure`),
+                // not read back out of the message text.
+                if failure.authorization_infrastructure {
                     report.scope_blocked = Some(ScopeBlock::new(
                         ScopeBlockReason::OwnershipUnproven,
                         format!(
@@ -2109,14 +2266,21 @@ pub fn clean_with_roots_policy_selector_guarded(
         }
 
         // H-2 residual window, narrowed fail-closed for all modes (parity):
-        // the hoisted universe is a snapshot, and the per-candidate refresh
-        // only re-resolves *self*, so a manifest created under an admitted
-        // root after hoisting is invisible to the overlap check. The premise
-        // recheck covers omitted/admitted roots only, not new manifests.
-        // Rediscover (manifest walk, no Cargo) after the proof; any growth,
-        // shrinkage, or diagnostic blocks the remaining scope instead of
-        // proceeding against a stale claimant set. Simulate runs it too so
-        // simulation predicts the spawn path instead of diverging from it.
+        // the hoisted universe is a snapshot, and the premise recheck covers
+        // omitted/admitted roots only, not new manifests — so a manifest
+        // created under an admitted root after hoisting is invisible to the
+        // overlap check.
+        //
+        // Rediscover after the proof: a manifest walk over *every* root, with
+        // no Cargo spawn. Any growth, shrinkage, or diagnostic blocks the
+        // remaining scope instead of proceeding against a stale claimant set.
+        //
+        // The walk is whole-scope, not per-candidate, and it runs once per
+        // unit — the claimant set is global, so a manifest appearing under
+        // *any* root after this unit's proof must block the units that
+        // follow, including the ones whose own roots did not change.
+        // Simulate runs it too so simulation predicts the spawn path instead
+        // of diverging from it.
         {
             // M018: the re-discovery walks per root, for the same reason the
             // initial discovery does — a traversal error carries no path, so
@@ -2138,6 +2302,7 @@ pub fn clean_with_roots_policy_selector_guarded(
                     &crate::progress::NoopObserver,
                 ) {
                     Ok(fresh) => {
+                        merge_walk_counters(&mut counters, &fresh.counters);
                         let root_already_judged = selection.excludes_coverage_root(root);
                         for diagnostic in &fresh.diagnostics {
                             let in_boundary = match &diagnostic.path {
@@ -2433,10 +2598,7 @@ pub fn blocked_listing_detail(
             participant.stage, manifest, reason
         ));
         listed += 1;
-        if participant
-            .reason
-            .contains("believes it's in a workspace when it's not")
-        {
+        if workspace::refused_nested_workspace(&participant.reason) {
             workspace_hint = true;
         }
     }
@@ -2445,9 +2607,7 @@ pub fn blocked_listing_detail(
         detail.push_str(&format!("\n  … {remaining} more unresolved participant(s)"));
     }
     if workspace_hint {
-        detail.push_str(
-            "\n  hint: a nested crate that believes it is in a workspace needs an empty `[workspace]` table or a parent `workspace.exclude` entry; otherwise clean a healthy workspace explicitly, e.g. `cargo cleanme clean ROOT`",
-        );
+        detail.push_str(&format!("\n  hint: {NESTED_WORKSPACE_HINT}"));
     }
     detail
 }
@@ -2687,11 +2847,23 @@ fn observe_unit_groups(observer: &dyn ProgressObserver, unit: &workspace::Cleanu
 ///
 /// `All` selects everything (explicit roots and `--full` keep today's
 /// behavior exactly). `Ancestry`/`Roots` admit the anchor/roots; matching is
-/// bidirectional like [`CleanupSelection::admits`] (an unresolvable parent
-/// manifest above the anchor could own the anchor's output) and therefore
-/// fail-closed. Comparison is canonical-or-raw on both sides so a symlinked
-/// prefix (macOS `/var` vs `/private/var`) cannot fail open. An unresolved
-/// selection never reaches the engine and is treated as blocking everything.
+/// bidirectional — an unresolvable parent manifest above the anchor could own
+/// the anchor's output — and therefore fail-closed. Comparison is
+/// canonical-or-raw on both sides so a symlinked prefix (macOS `/var` vs
+/// `/private/var`) cannot fail open. An unresolved selection never reaches the
+/// engine and is treated as blocking everything.
+///
+/// It is **not** the same predicate as [`CleanupSelection::admits`], and the
+/// difference is deliberate: the two answer different questions. `admits` asks
+/// *which units are candidates*, and compares a **workspace root** against the
+/// anchor — so its `Roots` arm is exact equality, and an unresolved
+/// `WorkingDirectory` anchor selects nothing. This asks *which manifests are
+/// inside the proof boundary*, and compares a **manifest** against the roots
+/// with containment in both directions; an unresolved selection never gets
+/// here, so `WorkingDirectory` admits everything.
+///
+/// Where the two differ, this one admits **more**, so an unresolved
+/// participant inside the boundary blocks rather than slipping through.
 fn boundary_admits(selection: &CleanupSelection, manifest: &Path) -> bool {
     fn under(path: &Path, root: &Path) -> bool {
         let canon_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -2832,8 +3004,8 @@ struct CleanupScope {
     ///
     /// They are reported with `SkippedOutsideSelection` rather than dropped:
     /// a selection that silently discarded units would recreate the M012A
-    /// silent-no-op defect, where a configured `scan.root` made `clean --known`
-    /// report a successful run it never performed.
+    /// silent-no-op defect, where a configured `scan.root` made the `--known`
+    /// spelling report a successful run it never performed.
     unselected: Vec<workspace::CleanupUnit>,
     unresolved: Vec<UnresolvedOwnershipParticipant>,
 }
@@ -2957,7 +3129,7 @@ impl CargoRunner for WorkspaceCleanupAdapter<'_> {
 /// pre-clean union bytes, ownership class, authorization decision, cache-marker
 /// validity, fresh source activity, fresh output activity, and frozen
 /// environment/arguments — all re-proven against the complete bounded
-/// ownership universe discovered under clean ROOT.
+/// ownership universe discovered under the bounded root.
 ///
 /// Generated by [`final_cleanup_proof`] immediately before spawn and consumed
 /// with no intervening mutation window beyond the spawn itself. This
@@ -3068,34 +3240,6 @@ fn output_identity_pair(
     Ok((old_canon, new_canon))
 }
 
-/// `symlink_metadata("link/")` follows the final component on POSIX, so a
-/// trailing slash hides a symlink from the `is_symlink` check. Judge the
-/// path with its trailing separators stripped as well; either spelling
-/// proving a symlink refuses the root. A trailing `/.` spells the same
-/// bypass (`symlink_metadata("link/.")` stats through the link), so dot
-/// components are stripped too before the probe.
-fn path_is_symlink(path: &Path) -> bool {
-    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
-        return true;
-    }
-    let mut spelling = path.as_os_str().to_string_lossy().into_owned();
-    loop {
-        let trimmed = spelling.trim_end_matches(['/', '\\']).to_owned();
-        if trimmed.ends_with("/.") || trimmed.ends_with("\\.") {
-            spelling = trimmed[..trimmed.len() - 1].to_owned();
-            continue;
-        }
-        spelling = trimmed;
-        break;
-    }
-    if !spelling.is_empty()
-        && fs::symlink_metadata(&spelling).is_ok_and(|m| m.file_type().is_symlink())
-    {
-        return true;
-    }
-    false
-}
-
 /// One bounded cleanup root must be an existing, real (non-symlink) directory.
 fn validate_cleanup_root(root: &Path) -> Result<(), AppError> {
     if !root.is_absolute() {
@@ -3118,64 +3262,24 @@ fn validate_cleanup_root(root: &Path) -> Result<(), AppError> {
 }
 
 fn collapse_roots(roots: Vec<PathBuf>) -> Result<Vec<PathBuf>, AppError> {
-    let mut canonical = Vec::with_capacity(roots.len());
-    for p in roots {
-        // A root that passed validation but no longer resolves fails closed
-        // here instead of silently degrading to a lexical compare, which
-        // could duplicate one physical root or equate a stale one.
-        match fs::canonicalize(&p) {
-            Ok(c) => canonical.push(c),
-            Err(e) => {
-                return Err(AppError::InvalidRoot {
-                    path: p.display().to_string(),
-                    reason: format!("cleanup root changed before collapse: {e}"),
-                });
-            }
+    // A root that passed validation but no longer resolves fails closed
+    // here instead of silently degrading to a lexical compare, which
+    // could duplicate one physical root or equate a stale one. The check
+    // runs over the *input* order, so the root named in the refusal is the
+    // first one that failed rather than the first one that survived the
+    // collapse.
+    for p in &roots {
+        if let Err(e) = fs::canonicalize(p) {
+            return Err(AppError::InvalidRoot {
+                path: p.display().to_string(),
+                reason: format!("cleanup root changed before collapse: {e}"),
+            });
         }
     }
-    let mut roots = canonical;
-    roots.sort();
-    roots.dedup();
-    let mut out: Vec<PathBuf> = Vec::new();
-    for root in roots {
-        if !out.iter().any(|parent| root.starts_with(parent)) {
-            out.push(root);
-        }
-    }
-    Ok(out)
-}
-
-/// Resolve a path as far as the filesystem allows.
-///
-/// Canonicalizes the deepest existing ancestor and re-appends the remaining
-/// components, so a path that does not exist yet is still compared in its
-/// physical location instead of lexically. This keeps the cross-workspace
-/// overlap check sound when a path component (for example macOS `/var`, or a
-/// symlinked ancestor of a configured output directory) is not canonical.
-fn resolve_as_far_as_possible(path: &Path) -> PathBuf {
-    if let Ok(canonical) = fs::canonicalize(path) {
-        return canonical;
-    }
-    let mut current = path;
-    let mut tail: Vec<OsString> = Vec::new();
-    while let Some(name) = current.file_name() {
-        tail.push(name.to_os_string());
-        let Some(parent) = current.parent() else {
-            break;
-        };
-        if let Ok(canonical) = fs::canonicalize(parent) {
-            let mut resolved = canonical;
-            for part in tail.iter().rev() {
-                resolved.push(part);
-            }
-            return resolved;
-        }
-        if parent.as_os_str().is_empty() {
-            break;
-        }
-        current = parent;
-    }
-    path.to_path_buf()
+    Ok(crate::traverse::collapse_outermost(roots)
+        .into_iter()
+        .map(|root| root.spelling)
+        .collect())
 }
 
 /// Physical regions an output root can touch, as far as it can be proven.
@@ -3355,6 +3459,7 @@ fn refresh_combined_universe(
                     ),
                 )
             })?;
+        merge_walk_counters(counters, &discovered.counters);
         let root_already_judged = selection.excludes_coverage_root(root);
         for diagnostic in &discovered.diagnostics {
             let in_boundary = match &diagnostic.path {
@@ -3525,7 +3630,8 @@ fn refresh_proof_universe_with_limit(
 /// clean spawn, over the complete bounded ownership universe:
 ///
 /// 1. unit-wide ownership/authorization/measurement gate;
-/// 2. fresh re-resolution of every workspace discovered under clean ROOT;
+/// 2. fresh re-resolution of every workspace discovered under the bounded
+///    root;
 /// 3. rebuild of the complete fresh physical output graph;
 /// 4. candidate workspace identity and member-set stability;
 /// 5. target/build logical+physical identity stability;
@@ -3597,14 +3703,15 @@ fn final_cleanup_proof_roots(
     // from the message text: parsing the detail would let a prose edit
     // silently change the machine contract. H-3: infrastructure errors stay
     // distinguishable here (`SkippedSafety`, never `SkippedUnauthorized`);
-    // the engine maps them to a scope block via `is_authorization_…`.
-    if let Err(detail) = unit_block_reason_roots(unit, clean_roots, allowed_output_roots) {
-        let code = if is_authorization_infrastructure_error(&detail) {
-            CleanupReasonCode::SkippedSafety
-        } else {
-            unit_skip_code(unit)
-        };
-        return Err(ProofFailure::new(code, detail));
+    // the engine maps them to a scope block via the typed
+    // `authorization_infrastructure` flag.
+    if let Err(reason) = unit_block_reason_roots(unit, clean_roots, allowed_output_roots) {
+        return Err(match reason {
+            BlockReason::AuthorizationInfrastructure(detail) => {
+                ProofFailure::authorization_infrastructure(detail)
+            }
+            BlockReason::Unit(detail) => ProofFailure::new(unit_skip_code(unit), detail),
+        });
     }
     // 2. Fresh Cargo resolution for the complete bounded ownership universe,
     // re-proven once per run (see `ProofUniverse`) rather than once per
@@ -4155,18 +4262,97 @@ fn clean_args(
     args
 }
 
-fn runtime_clean_capabilities() -> CargoCleanCapabilities {
-    let Ok(output) = Command::new("cargo").arg("--version").output() else {
-        return CargoCleanCapabilities::default();
-    };
-    if !output.status.success() {
-        return CargoCleanCapabilities::default();
+/// Why a selector was refused, stated in terms of the **qualification**.
+///
+/// The refusal is the policy's, not a statement about what the host's Cargo
+/// can do: only the exact Cargo releases in the selector qualification policy
+/// are claimed, and every other release is refused. Saying "the host has no
+/// support" would be false on a Cargo that has the feature but was never
+/// qualified — and a false claim about the host is the kind of thing an
+/// operator cannot act on.
+fn unqualified_selector_detail(selector: &str, host_cargo: Option<&str>) -> String {
+    match host_cargo {
+        Some(version) => format!(
+            "cargo {version} is not qualified for `{selector}` support: only the Cargo \
+             releases in the selector qualification policy are claimed, so no Cargo clean \
+             was invoked"
+        ),
+        None => format!(
+            "the host Cargo's version could not be read, so `{selector}` support is not \
+             qualified: only the Cargo releases in the selector qualification policy are \
+             claimed, so no Cargo clean was invoked"
+        ),
+    }
+}
+
+/// Merge one walk's directory counters into the run's totals.
+///
+/// Every walk is real work: the initial discovery, the H-2 re-discovery, and
+/// the hoisted proof refresh. The re-walks' counters used to be discarded, so
+/// the reported `visited_directories` covered the *first* walk only while the
+/// run had actually walked the scope once more per unit — the figure
+/// under-stated the work by roughly a factor of (units + 1).
+///
+/// `manifests_found` is deliberately **not** merged: it counts the manifests
+/// the run knows about, and a re-walk rediscovers the same manifests rather
+/// than finding new ones.
+fn merge_walk_counters(
+    totals: &mut crate::domain::ScanCounters,
+    walk: &crate::domain::ScanCounters,
+) {
+    totals.directories_visited = totals
+        .directories_visited
+        .saturating_add(walk.directories_visited);
+    totals.directories_pruned = totals
+        .directories_pruned
+        .saturating_add(walk.directories_pruned);
+}
+
+/// The host Cargo's version, as `cargo --version` reports it.
+///
+/// Asked through the runner, like every other Cargo invocation (`AGENTS.md`
+/// §4: one spawn boundary). A bare `Command::new("cargo")` here would read
+/// the premise from the *ambient* Cargo while the rest of the run used the
+/// injected one — so a test's premise and the run's premise could be two
+/// different Cargo versions, which is how a host-dependent case becomes green
+/// on one machine and red on another.
+///
+/// `None` when Cargo could not be asked, or answered something that is not a
+/// version. Both are "unknown", never "unsupported".
+fn runtime_cargo_version(runner: &dyn CleanupRunner) -> Option<String> {
+    let cwd = std::env::current_dir().ok()?;
+    let output = runner.run(&cwd, &[OsString::from("--version")]).ok()?;
+    if !output.success {
+        return None;
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    let Some(version) = text.split_whitespace().nth(1) else {
-        return CargoCleanCapabilities::default();
-    };
-    workspace::clean_capabilities_from_version(version)
+    let version = text.split_whitespace().nth(1)?;
+    if version.is_empty() {
+        return None;
+    }
+    Some(version.to_owned())
+}
+
+/// The host Cargo's release, and the selector capabilities it is qualified for.
+///
+/// The qualification is the policy's, not the host's: only the exact Cargo
+/// releases in `release/selector-qualification.json` are claimed, and every
+/// other release — including a patch release of a claimed minor — is refused.
+/// The refusal is fail-closed; the report says so in terms of the
+/// qualification, never as a claim about what the host can do.
+fn runtime_cargo_release(runner: &dyn CleanupRunner) -> (Option<String>, CargoCleanCapabilities) {
+    let version = runtime_cargo_version(runner);
+    let capabilities = version
+        .as_deref()
+        .map(workspace::clean_capabilities_from_version)
+        .unwrap_or_default();
+    (version, capabilities)
+}
+
+/// The selector capabilities the host Cargo is qualified for.
+#[cfg(test)]
+fn runtime_clean_capabilities(runner: &dyn CleanupRunner) -> CargoCleanCapabilities {
+    runtime_cargo_release(runner).1
 }
 
 fn resolve_package_spec<'a>(
@@ -4295,6 +4481,42 @@ mod tests {
     use std::sync::Mutex;
     use tempfile::TempDir;
 
+    /// Both surfaces print the **same** hint, recommending the same command.
+    ///
+    /// The two surfaces are the blocked path (under the block message) and the
+    /// unblocked path (under a "reported, not blocking" header). They used to
+    /// carry two copies of one hint, and the copies had drifted: one
+    /// recommended `cargo cleanme ROOT` and the other `cargo cleanme clean
+    /// ROOT`, which is the **hidden** alias. An operator who followed the
+    /// second one was told to type a command `--help` does not show.
+    #[test]
+    fn both_listing_surfaces_print_the_same_nested_workspace_hint() {
+        let unresolved = vec![UnresolvedOwnershipParticipant {
+            manifest: PathBuf::from("/work/a/fuzz/Cargo.toml"),
+            stage: "locate",
+            reason: "cargo locate-project failed: error: current package believes it's in a workspace when it's not".into(),
+            capability: UnknownCapability::RefusedByCargo,
+        }];
+        let mut unblocked = String::new();
+        append_unresolved_listing(&mut unblocked, &unresolved);
+        let block = ScopeBlock::new(
+            ScopeBlockReason::OwnershipUnproven,
+            "cleanup ownership could not be proven: 1 discovered Cargo manifest did not resolve; nothing can be selected".into(),
+        );
+        let blocked = blocked_listing_detail(&block, &unresolved);
+
+        for (surface, text) in [("unblocked", &unblocked), ("blocked", &blocked)] {
+            assert!(
+                text.contains(NESTED_WORKSPACE_HINT),
+                "the {surface} surface must print the shared hint: {text}"
+            );
+            assert!(
+                !text.contains("cargo cleanme clean ROOT"),
+                "the {surface} surface must not recommend the hidden alias: {text}"
+            );
+        }
+    }
+
     #[test]
     fn blocked_listing_detail_names_participants_and_hints_workspace_membership() {
         // The `-i` block used to carry only a count ("1 ... did not resolve"),
@@ -4322,6 +4544,18 @@ mod tests {
         assert!(
             detail.contains("empty `[workspace]` table"),
             "the workspace-membership hint must be present for this reason: {detail}"
+        );
+        // The hint recommends a command the operator can actually type. The
+        // canonical bounded-root spelling is `cargo cleanme ROOT`; the
+        // `cargo cleanme clean ROOT` form is accepted and **hidden** (ADR
+        // 008 §4), so recommending it teaches a command `--help` never shows.
+        assert!(
+            detail.contains("e.g. `cargo cleanme ROOT`"),
+            "the hint must recommend the canonical spelling: {detail}"
+        );
+        assert!(
+            !detail.contains("cargo cleanme clean ROOT"),
+            "the hint must not recommend the hidden alias: {detail}"
         );
         // A generic failure must not carry that hint.
         let generic = vec![UnresolvedOwnershipParticipant {
@@ -5961,6 +6195,111 @@ mod tests {
         .unwrap()
     }
 
+    /// A `cargo clean` that cannot even start is a **failure**, not a skip.
+    ///
+    /// The engine had already proven the unit private, bounded, authorized and
+    /// measurable, and it asked Cargo to clean. If the spawn itself fails,
+    /// the row is a failure with the `CargoFailed` reason code: the operator
+    /// asked for a cleanup and none happened, and a *skip* would say the
+    /// opposite.
+    ///
+    /// *Fails if:* the engine ever reports a spawn failure as a skip.
+    #[test]
+    fn a_cargo_clean_that_cannot_start_is_reported_as_a_failure() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().canonicalize().unwrap();
+        let root = ws_root(&base, "ws");
+        cargo_output(&root.join("target"), 4096);
+        backdate(&base, SystemTime::now() - Duration::from_secs(3600));
+        let mut runner = StagedCargo::new();
+        runner.add(&root, root.join("target"), None);
+        runner.fail_clean_to_start("exec format error");
+        let report = clean_default(d.path(), CleanMode::Execute, &runner);
+        assert_eq!(report.failed, 1, "{report:?}");
+        let row = row_for(&report, &root);
+        assert_eq!(row.outcome, CleanOutcome::Failed, "{row:?}");
+        assert_eq!(row.reason_code, CleanupReasonCode::CargoFailed, "{row:?}");
+        assert!(
+            row.detail.contains("could not start Cargo"),
+            "the detail must say the clean never started: {row:?}"
+        );
+        assert_eq!(row.after_bytes, None, "{row:?}");
+        assert_eq!(row.observed_decrease, None, "{row:?}");
+    }
+
+    /// A `cargo clean` that exits non-zero is a **failure**, not a skip, and
+    /// its stderr reaches the row.
+    ///
+    /// *Fails if:* the engine reports a non-zero clean as a skip, or drops the
+    /// reason Cargo gave.
+    #[test]
+    fn a_cargo_clean_that_exits_non_zero_is_reported_as_a_failure() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().canonicalize().unwrap();
+        let root = ws_root(&base, "ws");
+        cargo_output(&root.join("target"), 4096);
+        backdate(&base, SystemTime::now() - Duration::from_secs(3600));
+        let mut runner = StagedCargo::new();
+        runner.add(&root, root.join("target"), None);
+        runner.fail_clean_with_exit(101, "error: failed to remove target artifact");
+        let report = clean_default(d.path(), CleanMode::Execute, &runner);
+        assert_eq!(report.failed, 1, "{report:?}");
+        let row = row_for(&report, &root);
+        assert_eq!(row.outcome, CleanOutcome::Failed, "{row:?}");
+        assert_eq!(row.reason_code, CleanupReasonCode::CargoFailed, "{row:?}");
+        assert!(
+            row.detail.contains("failed to remove target artifact"),
+            "Cargo's own reason must reach the row: {row:?}"
+        );
+        assert_eq!(row.after_bytes, None, "{row:?}");
+        assert_eq!(row.observed_decrease, None, "{row:?}");
+    }
+
+    /// A successful clean whose post-clean measurement fails is a *diagnostic*,
+    /// never a fabricated byte count.
+    ///
+    /// Cargo succeeded, so the outcome is `Cleaned`; but the measurement could
+    /// not be taken, so the row carries the `MeasurementFailed` reason code
+    /// and **no** after figure and **no** observed decrease. A recovered-bytes
+    /// number that was never measured is a number the operator would trust.
+    ///
+    /// *Fails if:* the engine reports an after figure it did not measure.
+    #[test]
+    fn a_failed_post_clean_measurement_reports_no_recovered_bytes() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().canonicalize().unwrap();
+        let root = ws_root(&base, "ws");
+        let target = cargo_output(&root.join("target"), 4096);
+        backdate(&base, SystemTime::now() - Duration::from_secs(3600));
+        let mut runner = StagedCargo::new();
+        runner.add(&root, target.clone(), None);
+        // The output root changes type while Cargo runs: the post-clean
+        // measurement then cannot take a size.
+        runner.on_clean(move || {
+            let _ = fs::remove_dir_all(&target);
+            let _ = fs::write(&target, b"no longer a directory");
+        });
+        let report = clean_default(d.path(), CleanMode::Execute, &runner);
+        let row = row_for(&report, &root);
+        assert_eq!(row.outcome, CleanOutcome::Cleaned, "{row:?}");
+        assert_eq!(
+            row.reason_code,
+            CleanupReasonCode::MeasurementFailed,
+            "{row:?}"
+        );
+        assert_eq!(row.after_bytes, None, "{row:?}");
+        assert_eq!(row.observed_decrease, None, "{row:?}");
+        assert!(
+            row.before_bytes.is_some(),
+            "the pre-clean figure was measured: {row:?}"
+        );
+        assert!(
+            row.detail.contains("post-clean measurement failed"),
+            "the detail must say the measurement failed: {row:?}"
+        );
+        assert_eq!(report.diagnostics, 1, "{report:?}");
+    }
+
     /// M017/ADR 007: an in-boundary scope note never blocked the boundary —
     /// the defect fix. Two output-disjoint workspaces plus a refused orphan:
     /// both clean with real spawns, the note is reported in
@@ -6726,7 +7065,8 @@ mod tests {
 
     #[test]
     fn external_unproven_inside_root_remains_inventory_only() {
-        // C002-F1: ExternalUnproven is inventory-only even inside clean ROOT.
+        // C002-F1: ExternalUnproven is inventory-only even inside a bounded
+        // cleanup root.
         // Authorization never manufactures ownership proof (ADR 001).
         let d = tempfile::tempdir().unwrap();
         let root = d.path().join("root");
@@ -6787,7 +7127,7 @@ mod tests {
                     env_build_dir_set: false,
                 },
             };
-            // Inside clean ROOT but non-private → still skipped.
+            // Inside the bounded root but non-private → still skipped.
             assert!(
                 !is_authorized(&raw, &root, &[]).unwrap(),
                 "{ownership:?} inside ROOT must remain inventory-only"
@@ -7559,6 +7899,197 @@ mod tests {
         );
     }
 
+    /// A runner that reports one fixed Cargo version and resolves one
+    /// healthy workspace.
+    ///
+    /// The version it reports is the *premise* the selector gate reads, so a
+    /// case can name the Cargo it is testing against instead of inheriting
+    /// whatever the ambient Cargo happens to be.
+    struct VersionedRunner {
+        version: &'static str,
+        root: PathBuf,
+        target: PathBuf,
+        calls: std::sync::Mutex<Vec<Vec<OsString>>>,
+    }
+    impl CargoRunner for VersionedRunner {
+        fn run(&self, _cwd: &Path, args: &[OsString]) -> std::io::Result<ProcessOutput> {
+            self.calls.lock().unwrap().push(args.to_vec());
+            if args.first().is_some_and(|a| a == "--version") {
+                return Ok(ProcessOutput {
+                    success: true,
+                    code: Some(0),
+                    stdout: format!("cargo {}\n", self.version).into_bytes(),
+                    stderr: Vec::new(),
+                });
+            }
+            if args.first().is_some_and(|a| a == "locate-project") {
+                let json = serde_json::json!({"root": self.root.join("Cargo.toml")});
+                return Ok(ProcessOutput {
+                    success: true,
+                    code: Some(0),
+                    stdout: serde_json::to_vec(&json).unwrap(),
+                    stderr: Vec::new(),
+                });
+            }
+            if args.first().is_some_and(|a| a == "metadata") {
+                let json = serde_json::json!({
+                    "packages": [{"id": "m0", "name": "m0", "manifest_path": self.root.join("Cargo.toml")}],
+                    "workspace_members": ["m0"],
+                    "workspace_root": self.root,
+                    "target_directory": self.target,
+                });
+                return Ok(ProcessOutput {
+                    success: true,
+                    code: Some(0),
+                    stdout: serde_json::to_vec(&json).unwrap(),
+                    stderr: Vec::new(),
+                });
+            }
+            Ok(ProcessOutput {
+                success: true,
+                code: Some(0),
+                stdout: b"ok".to_vec(),
+                stderr: Vec::new(),
+            })
+        }
+    }
+    impl CleanupRunner for VersionedRunner {
+        fn run(&self, cwd: &Path, args: &[OsString]) -> std::io::Result<ProcessOutput> {
+            CargoRunner::run(self, cwd, args)
+        }
+        fn run_with_env(
+            &self,
+            cwd: &Path,
+            args: &[OsString],
+            _env: &[(OsString, OsString)],
+        ) -> std::io::Result<ProcessOutput> {
+            CargoRunner::run(self, cwd, args)
+        }
+    }
+
+    /// A workspace with one package and a healthy, inactive output root.
+    fn versioned_runner_fixture(version: &'static str) -> (tempfile::TempDir, VersionedRunner) {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("ws");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname='ws'\nversion='0.1.0'\nedition='2021'\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        let target = root.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(
+            target.join("CACHEDIR.TAG"),
+            b"Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .unwrap();
+        std::fs::write(target.join("a.bin"), vec![1u8; 256]).unwrap();
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        let runner = VersionedRunner {
+            version,
+            root: root.clone(),
+            target: target.clone(),
+            calls: std::sync::Mutex::new(Vec::new()),
+        };
+        (d, runner)
+    }
+
+    /// An unqualified Cargo refuses the package selector, and says why.
+    ///
+    /// The real-Cargo case
+    /// (`real_cargo_package_selector_preserves_sibling_workspace_artifacts`)
+    /// can only run on a Cargo the qualification policy claims, so on every
+    /// other host it records a skip and proves nothing about the package
+    /// path. This case runs **everywhere**: the runner reports an unqualified
+    /// Cargo, and the tool must refuse the selector — naming the
+    /// qualification, not claiming the host lacks the feature — rather than
+    /// quietly cleaning nothing and reporting success.
+    ///
+    /// *Fails if:* the refusal disappears, or the reason code changes.
+    #[test]
+    fn an_unqualified_cargo_refuses_the_package_selector() {
+        let (d, runner) = versioned_runner_fixture("0.1.0");
+        let root = d.path().join("ws");
+        let report = clean_with_roots_policy_selector(
+            std::slice::from_ref(&root),
+            0,
+            &[],
+            CleanMode::Execute,
+            &runner,
+            &NoopObserver,
+            &CleanupPolicy::default(),
+            Some(CleanupSelector::Package("ws@0.1.0".into())),
+        )
+        .unwrap();
+        assert!(
+            report
+                .results
+                .iter()
+                .any(|r| r.reason_code == CleanupReasonCode::SelectorUnsupported),
+            "an unqualified Cargo must refuse the selector: {report:?}"
+        );
+        let row = report
+            .results
+            .iter()
+            .find(|r| r.reason_code == CleanupReasonCode::SelectorUnsupported)
+            .unwrap();
+        assert!(
+            row.detail.contains("not qualified"),
+            "the refusal must name the qualification: {row:?}"
+        );
+        assert!(
+            !row.detail.contains("has no"),
+            "the refusal must not claim the host lacks the feature: {row:?}"
+        );
+    }
+
+    /// The selector premise is read through the runner, not from the ambient
+    /// Cargo.
+    ///
+    /// `AGENTS.md` §4: every external Cargo invocation goes through the
+    /// `CargoRunner` / `CleanupRunner` seam. The capability probe used to
+    /// spawn `cargo --version` directly, so the premise came from the
+    /// *ambient* Cargo while the rest of the run used the injected runner —
+    /// two different Cargo versions in one run, which is how a host-dependent
+    /// case could be green on one machine and red on another.
+    #[test]
+    fn the_selector_premise_is_read_through_the_runner() {
+        // A Cargo the qualification policy claims. The ambient Cargo on this
+        // host is *not* claimed, so a probe that read the ambient Cargo would
+        // have refused the selector and this case would fail.
+        let (d, runner) = versioned_runner_fixture("1.99.0");
+        let root = d.path().join("ws");
+        let report = clean_with_roots_policy_selector(
+            std::slice::from_ref(&root),
+            0,
+            &[],
+            CleanMode::Simulate,
+            &runner,
+            &NoopObserver,
+            &CleanupPolicy::default(),
+            Some(CleanupSelector::Profile("dev".into())),
+        )
+        .unwrap();
+        assert!(
+            runner
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|args| args.first().is_some_and(|a| a == "--version")),
+            "the capability probe must go through the runner"
+        );
+        assert!(
+            !report
+                .results
+                .iter()
+                .any(|r| r.reason_code == CleanupReasonCode::SelectorUnsupported),
+            "a runner that reports a qualified Cargo must have its selector offered: {report:?}"
+        );
+    }
+
     #[test]
     fn final_report_lists_all_groups_and_deduped_total() {
         let mut report = CleanReport {
@@ -7612,7 +8143,7 @@ mod tests {
     #[test]
     fn real_temp_project_preview_and_execute_with_redirected_target() {
         // Real Cargo integration: private redirected output inside workspace
-        // (hence PrivateBounded) and inside clean ROOT. C002 keeps this
+        // (hence PrivateBounded) and inside the bounded root. C002 keeps this
         // eligible; external-unproven output outside the workspace remains
         // inventory-only even inside ROOT.
         let d = tempfile::tempdir().unwrap();
@@ -7732,7 +8263,7 @@ mod tests {
         )
         .unwrap();
         // The expected outcome is derived from the product's own host premise.
-        assert_profile_preview_matches_host_premise(&profile_preview);
+        assert_profile_preview_matches_host_premise(&profile_preview, &runner);
         assert!(external.join("artifact.bin").exists());
         // Simulate must not invoke clean and must match preview candidate set.
         let sim = clean_with(&root, 0, &[], CleanMode::Simulate, &runner, &noop).unwrap();
@@ -7769,12 +8300,15 @@ mod tests {
         let supported = workspace::clean_capabilities_from_version(reported).package_selector;
         if !supported {
             // An honest capability gate, stated out loud. `cargo clean
-            // --package` predates this toolchain, so on an old Cargo the case
-            // cannot run; saying so is the difference between recorded
-            // coverage and implied coverage.
+            // --package` is only claimed for the exact Cargo releases in the
+            // qualification policy, so on a Cargo outside it the case cannot
+            // run; saying so is the difference between recorded coverage and
+            // implied coverage. The wording must not claim the *host* lacks
+            // the feature: a Cargo that was never qualified is unknown here,
+            // not proven to lack the feature.
             eprintln!(
                 "skipping real_cargo_package_selector_preserves_sibling_workspace_artifacts: \
-                 cargo {reported} has no `clean --package` support"
+                 cargo {reported} is not qualified for `clean --package` support"
             );
             return;
         }
@@ -8885,12 +9419,22 @@ mod tests {
 
     /// Multi-workspace Cargo fixture with per-workspace output staging,
     /// metadata failure injection, and observable `cargo clean` effects.
+    /// How the fake's `cargo clean` fails.
+    #[derive(Clone, Debug)]
+    enum CleanFailure {
+        /// The clean could not be started at all.
+        Spawn(String),
+        /// The clean started and exited non-zero.
+        Exit { code: i32, stderr: String },
+    }
+
     struct StagedCargo {
         ws: Vec<FakeWs>,
         calls: Mutex<Vec<RecordedCall>>,
         metadata_calls: Mutex<Vec<usize>>,
         clean_removes: Mutex<Vec<PathBuf>>,
         clean_hook: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+        clean_failure: Mutex<Option<CleanFailure>>,
         refusals: Vec<LocateRefusal>,
     }
 
@@ -8920,6 +9464,7 @@ mod tests {
                 metadata_calls: Mutex::new(Vec::new()),
                 clean_removes: Mutex::new(Vec::new()),
                 clean_hook: Mutex::new(None),
+                clean_failure: Mutex::new(None),
                 refusals: Vec::new(),
             }
         }
@@ -8960,6 +9505,21 @@ mod tests {
             self.refusals.push(LocateRefusal {
                 manifest: key,
                 reason: reason.to_string(),
+            });
+            self
+        }
+
+        /// The clean cannot be started at all.
+        fn fail_clean_to_start(&mut self, message: &str) -> &mut Self {
+            *self.clean_failure.lock().unwrap() = Some(CleanFailure::Spawn(message.to_owned()));
+            self
+        }
+
+        /// The clean starts and exits non-zero.
+        fn fail_clean_with_exit(&mut self, code: i32, stderr: &str) -> &mut Self {
+            *self.clean_failure.lock().unwrap() = Some(CleanFailure::Exit {
+                code,
+                stderr: stderr.to_owned(),
             });
             self
         }
@@ -9081,6 +9641,17 @@ mod tests {
                 return Ok(cargo_ok(json));
             }
             // `cargo clean` (Cargo preview dry-run or real cleanup).
+            if let Some(failure) = self.clean_failure.lock().unwrap().clone() {
+                return match failure {
+                    CleanFailure::Spawn(message) => Err(std::io::Error::other(message)),
+                    CleanFailure::Exit { code, stderr } => Ok(ProcessOutput {
+                        success: false,
+                        code: Some(code),
+                        stdout: Vec::new(),
+                        stderr: stderr.into_bytes(),
+                    }),
+                };
+            }
             if !args.iter().any(|a| a == "--dry-run") {
                 for path in self.clean_removes.lock().unwrap().iter() {
                     let _ = fs::remove_file(path);
@@ -9116,30 +9687,28 @@ mod tests {
         }
     }
 
+    /// A runner that records which **threads** ran the metadata calls.
+    ///
+    /// It deliberately does not sample a *peak concurrency*: how many of the
+    /// calls overlap at once is a property of the scheduler, not of the code,
+    /// and a case that asserted on it failed under load. Which threads ran
+    /// the calls is a property of the code — the engine spawns them — and it
+    /// holds however the scheduler happens to run them.
     struct ParallelProbeRunner {
         inner: StagedCargo,
-        active: std::sync::atomic::AtomicUsize,
-        peak: std::sync::atomic::AtomicUsize,
+        metadata_threads: std::sync::Mutex<std::collections::HashSet<std::thread::ThreadId>>,
     }
 
     impl CargoRunner for ParallelProbeRunner {
         fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput> {
             let metadata = args.first().is_some_and(|arg| arg == "metadata");
             if metadata {
-                let active = self
-                    .active
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-                    + 1;
-                self.peak
-                    .fetch_max(active, std::sync::atomic::Ordering::SeqCst);
-                std::thread::sleep(Duration::from_millis(4));
+                self.metadata_threads
+                    .lock()
+                    .unwrap()
+                    .insert(std::thread::current().id());
             }
-            let output = CargoRunner::run(&self.inner, cwd, args);
-            if metadata {
-                self.active
-                    .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-            }
-            output
+            CargoRunner::run(&self.inner, cwd, args)
         }
     }
 
@@ -9391,7 +9960,7 @@ mod tests {
     fn private_target_with_external_unproven_build_skips_entire_unit() {
         // C003-F1: a private target group cannot carry an ExternalUnproven
         // build directory into the same Cargo clean invocation, even when the
-        // build directory is inside clean ROOT and would pass location
+        // build directory is inside the bounded root and would pass location
         // authorization.
         for mode in [
             CleanMode::CargoPreview,
@@ -9639,11 +10208,17 @@ mod tests {
             let unit =
                 synthetic_mixed_unit(&base, OutputOwnershipClass::PrivateBounded, build_class);
             let err = unit_block_reason(&unit, &base, &[]).unwrap_err();
-            assert!(err.contains("build output"), "{build_class:?}: {err}");
+            assert!(
+                err.detail().contains("build output"),
+                "{build_class:?}: {err:?}"
+            );
             let unit =
                 synthetic_mixed_unit(&base, build_class, OutputOwnershipClass::PrivateBounded);
             let err = unit_block_reason(&unit, &base, &[]).unwrap_err();
-            assert!(err.contains("target output"), "{build_class:?}: {err}");
+            assert!(
+                err.detail().contains("target output"),
+                "{build_class:?}: {err:?}"
+            );
         }
         let unit = synthetic_mixed_unit(
             &base,
@@ -9667,8 +10242,8 @@ mod tests {
         unit.groups[1].measured = None;
         unit.groups[1].skip = Some(workspace::GroupSkipReason::ActiveOutput);
         let err = unit_block_reason(&unit, &base, &[]).unwrap_err();
-        assert!(err.contains("build output"), "{err}");
-        assert!(err.contains("recent"), "{err}");
+        assert!(err.detail().contains("build output"), "{err:?}");
+        assert!(err.detail().contains("recent"), "{err:?}");
         // ... and so does an existing output root with unprovable identity.
         let mut unit = synthetic_mixed_unit(
             &base,
@@ -9677,7 +10252,10 @@ mod tests {
         );
         unit.unmapped.push(unit.output.build.clone());
         let err = unit_block_reason(&unit, &base, &[]).unwrap_err();
-        assert!(err.contains("unproven physical identity"), "{err}");
+        assert!(
+            err.detail().contains("unproven physical identity"),
+            "{err:?}"
+        );
     }
 
     #[test]
@@ -10594,8 +11172,7 @@ mod tests {
         backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
         let runner = ParallelProbeRunner {
             inner: runner,
-            active: std::sync::atomic::AtomicUsize::new(0),
-            peak: std::sync::atomic::AtomicUsize::new(0),
+            metadata_threads: std::sync::Mutex::new(std::collections::HashSet::new()),
         };
         let report = clean_with(
             d.path(),
@@ -10606,14 +11183,30 @@ mod tests {
             &NoopObserver,
         )
         .unwrap();
-        let peak = runner.peak.load(std::sync::atomic::Ordering::SeqCst);
-        let available = std::thread::available_parallelism().map_or(1, usize::from);
-        assert!(peak >= available.clamp(1, 4).min(2), "peak={peak}");
-        assert!(peak <= PROOF_REFRESH_CONCURRENCY_CAP, "peak={peak}");
-        assert_eq!(
-            report.counters.proof_metadata_peak_concurrency as usize,
-            peak
+        // The metadata calls run on more than one thread: the engine spawns
+        // them, and it does so however the scheduler happens to run them.
+        // That is a property of the *code*.
+        let threads = runner.metadata_threads.lock().unwrap().len();
+        assert!(
+            threads >= 2,
+            "the metadata calls must run on more than one thread: {threads}"
         );
+        // The refresh's own concurrency counter stays within the cap: the
+        // bound is the code's promise.
+        let refresh_peak = report.counters.proof_metadata_peak_concurrency as usize;
+        assert!(refresh_peak >= 1, "the refresh must have measured itself");
+        assert!(
+            refresh_peak <= PROOF_REFRESH_CONCURRENCY_CAP,
+            "the refresh must stay within its concurrency cap: {refresh_peak}"
+        );
+        //
+        // What this case deliberately does **not** assert any more: that the
+        // observed peak equals the counter, and that the peak is at least two.
+        // Both were observations of the *scheduler*. The counter measures the
+        // proof refresh alone; the probe measured every metadata call in the
+        // run, including the universe resolution, which is a different
+        // population with a different bound. Comparing the two asserted a
+        // coincidence, and the case failed under load for that reason.
         // 8 workspaces: 8 locate + 8 metadata to resolve the universe, 8
         // metadata to refresh it, and 1 metadata per candidate. Linear in the
         // workspace count, not quadratic in the candidate count (H3/O1).
@@ -10735,27 +11328,9 @@ mod tests {
     fn authorization_infrastructure_failure_scope_blocks_instead_of_per_unit_skip() {
         // H-3: a misconfigured/unreadable authorization root is a scope-level
         // config error (exit 1 via `scope_blocked`), not N per-unit
-        // `SkippedUnauthorized` rows (exit 0). Only `Err` takes this path;
-        // `Ok(false)` stays a per-unit skip.
-        assert!(is_authorization_infrastructure_error(
-            "cleanup authorization root must be absolute: relative/path"
-        ));
-        assert!(is_authorization_infrastructure_error(
-            "cannot inspect cleanup authorization root /x: permission denied"
-        ));
-        assert!(is_authorization_infrastructure_error(
-            "cleanup authorization root must not be a symlink: /x"
-        ));
-        assert!(is_authorization_infrastructure_error(
-            "cannot resolve cleanup authorization root /x: foo"
-        ));
-        assert!(is_authorization_infrastructure_error(
-            "cannot resolve cleanup root /x: foo"
-        ));
-        assert!(!is_authorization_infrastructure_error(
-            "target output /x is private but outside the authorized cleanup boundary; add a `cleanup.allowed_output_roots` entry or use a clean ROOT that contains it"
-        ));
-
+        // `SkippedUnauthorized` rows (exit 0). Only the typed
+        // `AuthorizationInfrastructure` verdict takes this path; `Unit` stays
+        // a per-unit skip.
         let (_d, root, target) = valid_fixture(1);
         let runner = FakeCleanupRunner::new(&root, &target, 1);
         // Non-absolute allowed root is an infrastructure `Err`, never `Ok(false)`.
@@ -10790,6 +11365,58 @@ mod tests {
             "blocked scope reports no per-unit rows: {report:?}"
         );
         assert!(runner.clean_calls().is_empty());
+    }
+
+    #[test]
+    fn a_directory_named_like_an_authorization_template_is_not_an_authorization_failure() {
+        // The per-unit skip detail embeds the *physical output path*, so the
+        // name of a directory on disk used to decide the run's exit code: a
+        // shared output directory called `cleanup authorization root` turned a
+        // per-unit skip (exit 0) into a scope block (exit 1). The verdict is
+        // typed now, so no path can move it.
+        let d = tempfile::tempdir().unwrap();
+        let base = fs::canonicalize(d.path()).unwrap();
+        let decoy = base.join("cleanup authorization root");
+        fs::create_dir_all(&decoy).unwrap();
+        let mut unit = synthetic_mixed_unit(
+            &base,
+            OutputOwnershipClass::Shared,
+            OutputOwnershipClass::Shared,
+        );
+        // Point the shared group at the decoy path so the skip detail embeds it.
+        unit.groups[0].display = decoy.clone();
+        let reason = unit_block_reason(&unit, &base, &[]).unwrap_err();
+        assert!(
+            !reason.is_authorization_infrastructure(),
+            "a path is not an authorization failure: {reason:?}"
+        );
+        assert!(
+            matches!(reason, BlockReason::Unit(_)),
+            "a shared output is a per-unit skip: {reason:?}"
+        );
+        assert!(
+            reason.detail().contains("cleanup authorization root"),
+            "the detail still names the path: {reason:?}"
+        );
+    }
+
+    #[test]
+    fn an_unresolvable_cleanup_root_is_an_authorization_infrastructure_failure() {
+        // The other half of the typed verdict: a root that cannot be resolved
+        // really is an infrastructure failure, and it blocks the scope.
+        let d = tempfile::tempdir().unwrap();
+        let base = fs::canonicalize(d.path()).unwrap();
+        let unit = synthetic_mixed_unit(
+            &base,
+            OutputOwnershipClass::PrivateBounded,
+            OutputOwnershipClass::PrivateBounded,
+        );
+        let missing = base.join("does/not/exist");
+        let reason = unit_block_reason(&unit, &missing, &[]).unwrap_err();
+        assert!(
+            reason.is_authorization_infrastructure(),
+            "an unresolvable root is infrastructure: {reason:?}"
+        );
     }
 
     #[test]
@@ -10966,22 +11593,32 @@ mod tests {
     /// `runtime_clean_capabilities` is the product's own premise: the profile
     /// selector is offered only for the exact Cargo releases the qualification
     /// policy claims (`release/selector-qualification.json`), and every other
-    /// Cargo — including a patch release of a claimed one — is refused by
-    /// design. Deriving the expectation from that same function keeps the
-    /// assertion tight in both directions: a qualified host must preview, and
-    /// an unqualified one must refuse *without* invoking a Cargo clean.
+    /// Cargo is refused by design. Deriving the expectation from that same
+    /// function keeps the assertion tight in both directions: a qualified host
+    /// must preview, and an unqualified one must refuse *without* invoking a
+    /// Cargo clean.
     ///
     /// It is deliberately not a disjunction. Accepting either outcome would
     /// leave the case green on a host where the selector was wrongly refused
     /// and on a host where it was wrongly offered, which is the "green that
     /// proves nothing" shape this repository keeps finding.
-    fn assert_profile_preview_matches_host_premise(report: &CleanReport) {
-        if runtime_clean_capabilities().profile_selector {
+    fn assert_profile_preview_matches_host_premise(
+        report: &CleanReport,
+        runner: &dyn CleanupRunner,
+    ) {
+        if runtime_clean_capabilities(runner).profile_selector {
             assert_eq!(report.results[0].outcome, CleanOutcome::Previewed);
+            // The **summary** is what the quiet surface renders, and it takes
+            // the branch a selector run takes: the byte figure is the output
+            // union, not the selector's share, so it says so in prose. The
+            // row renderer's `output-union before` label belongs to the
+            // *verbose* surface, and asserting it against the quiet render
+            // asked for a string the quiet render never contains — so the case
+            // failed on every qualified host, including the MSRV lane's.
+            let rendered = report.render(&crate::report::HumanOptions::default());
             assert!(
-                report
-                    .render(&crate::report::HumanOptions::default())
-                    .contains("output-union before")
+                rendered.contains("the selector's reclaimable size is not measured (output union"),
+                "a qualified host must say the figure is the output union: {rendered}"
             );
         } else {
             assert_eq!(report.results[0].outcome, CleanOutcome::Skipped);
@@ -10990,6 +11627,31 @@ mod tests {
                 CleanupReasonCode::SelectorUnsupported
             );
         }
+    }
+
+    /// The row surface still names the selector's figure.
+    ///
+    /// `output-union before` is the **row** renderer's label for a selector
+    /// run's byte figure. Correcting the qualified-host assertion to the
+    /// summary's wording (the quiet surface) would have left the label with
+    /// no assertion at all, and a label nothing asserts is a label nothing
+    /// keeps.
+    #[test]
+    fn the_row_surface_names_a_selector_runs_figure_as_the_output_union() {
+        let mut report = empty_report_over("/work");
+        report.mode = CleanMode::CargoPreview;
+        report.selector = Some(CleanupSelector::Profile("dev".into()));
+        report
+            .results
+            .push(unit_row("/work/app", CleanOutcome::Previewed, 4096));
+        let rendered = report.render(&crate::report::HumanOptions {
+            verbose: true,
+            ..Default::default()
+        });
+        assert!(
+            rendered.contains("output-union before"),
+            "the row surface must name the figure: {rendered}"
+        );
     }
 
     /// A selector reaches Cargo's command line.

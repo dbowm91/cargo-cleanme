@@ -1102,6 +1102,77 @@ esac
     assert!(cargo_args.lines().any(|line| line == "fixture@0.1.0"));
 }
 
+/// The log format keeps its promise on the `config edit` failure path.
+///
+/// `--format log` promises exactly one ASCII key=value line and no paths or
+/// config text. The editor-failure path printed prose **and the config's
+/// path**, byte-identical to the human output — so a consumer scraping
+/// `key=value` lines received a filesystem path in the one place the format
+/// exists to keep it out of.
+///
+/// The exit code is unchanged (1): the editor's arbitrary status is still
+/// never propagated as the tool's.
+#[cfg(unix)]
+#[test]
+fn the_log_format_reports_a_failed_config_edit_without_a_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    let editor = dir.path().join("failing editor.sh");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::write(&editor, "#!/bin/sh\nexit 17\n").unwrap();
+        let mut mode = fs::metadata(&editor).unwrap().permissions();
+        mode.set_mode(0o755);
+        fs::set_permissions(&editor, mode).unwrap();
+    }
+    let visual = format!("\"{}\" --wait", editor.display());
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--format",
+            "log",
+            "config",
+            "edit",
+        ])
+        .env("VISUAL", &visual)
+        .env("EDITOR", "editor-that-must-not-win")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains(config.to_str().unwrap()),
+        "the log format must not carry the config path: {stderr}"
+    );
+    assert!(
+        stderr.contains("op=config") && stderr.contains("status=error"),
+        "the failure must be reported as one typed line: {stderr}"
+    );
+    assert!(
+        stderr.is_ascii(),
+        "the log format is ASCII by contract: {stderr}"
+    );
+    assert!(
+        stderr.lines().count() <= 1,
+        "the log format is one line: {stderr}"
+    );
+    // The human surface keeps the prose and the path: it is the surface that
+    // is allowed to carry them.
+    let human = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
+        .args(["--config", config.to_str().unwrap(), "config", "edit"])
+        .env("VISUAL", &visual)
+        .env("EDITOR", "editor-that-must-not-win")
+        .output()
+        .unwrap();
+    assert_eq!(human.status.code(), Some(1));
+    let human_stderr = String::from_utf8_lossy(&human.stderr);
+    assert!(
+        human_stderr.contains(config.to_str().unwrap()),
+        "the human surface still names the config: {human_stderr}"
+    );
+}
+
 #[test]
 fn config_edit_uses_fake_editor_process_and_keeps_invalid_edits() {
     let dir = tempfile::tempdir().unwrap();

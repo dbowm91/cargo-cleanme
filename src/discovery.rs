@@ -1,5 +1,10 @@
 #![allow(clippy::collapsible_if)]
-use crate::{domain::*, error::AppError, progress::ProgressObserver, traverse};
+use crate::{
+    domain::*,
+    error::AppError,
+    progress::ProgressObserver,
+    traverse::{self, path_is_symlink},
+};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use std::{
     collections::HashMap,
@@ -466,32 +471,6 @@ fn canonical_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
     roots.sort();
     roots.dedup();
     roots
-}
-
-/// `symlink_metadata("link/")` follows the final component on POSIX, so a
-/// trailing slash hides a symlink from the `is_symlink` check. Judge the
-/// path with its trailing separators stripped as well. A trailing `/.`
-/// spells the same bypass, so dot components are stripped too.
-fn path_is_symlink(path: &Path) -> bool {
-    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
-        return true;
-    }
-    let mut spelling = path.as_os_str().to_string_lossy().into_owned();
-    loop {
-        let trimmed = spelling.trim_end_matches(['/', '\\']).to_owned();
-        if trimmed.ends_with("/.") || trimmed.ends_with("\\.") {
-            spelling = trimmed[..trimmed.len() - 1].to_owned();
-            continue;
-        }
-        spelling = trimmed;
-        break;
-    }
-    if !spelling.is_empty()
-        && fs::symlink_metadata(&spelling).is_ok_and(|m| m.file_type().is_symlink())
-    {
-        return true;
-    }
-    false
 }
 
 /// A scan root must be an existing, real directory.
@@ -2037,9 +2016,12 @@ mod tests {
         let proj = d.path().join("proj");
         fs::create_dir_all(&proj).unwrap();
         fs::write(proj.join("Cargo.toml"), "").unwrap();
-        // Point CARGO_HOME at the temp home for this test.
-        let prev = std::env::var_os("CARGO_HOME");
-        unsafe { std::env::set_var("CARGO_HOME", &cargo_home) };
+        // Point CARGO_HOME at the temp home for this test. The guard holds
+        // the one environment lock and restores `CARGO_HOME` panic or not: a
+        // failure between the set and the restore used to leave the whole
+        // binary pointed at a temporary Cargo home.
+        let mut env = crate::progress::test_env::EnvRestore::acquire();
+        env.set("CARGO_HOME", &cargo_home);
         let policy = EffectiveScanPolicy {
             recency: std::time::Duration::from_secs(300),
             scope: ScanScope::Explicit(d.path().to_path_buf()),
@@ -2047,11 +2029,7 @@ mod tests {
         };
         let noop = NoopObserver;
         let found = discover_manifests(&policy, &noop).unwrap();
-        if let Some(v) = prev {
-            unsafe { std::env::set_var("CARGO_HOME", v) };
-        } else {
-            unsafe { std::env::remove_var("CARGO_HOME") };
-        }
+        drop(env);
         assert_eq!(found.manifests.len(), 1);
         assert_eq!(found.manifests[0], proj.join("Cargo.toml"));
     }

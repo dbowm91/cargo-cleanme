@@ -2,8 +2,8 @@
 
 > Component deep dive · part of the [architecture overview](overview.md)
 
-`src/workspace.rs` — 6301 lines: 2160 production, 4141 inline `#[cfg(test)]`,
-79 `#[test]` functions. The test module begins at `workspace.rs:2311`.
+`src/workspace.rs` — 6951 lines: 2439 production, 4512 inline `#[cfg(test)]`,
+87 `#[test]` functions. The test module begins at `workspace.rs:2441`.
 
 It is the bridge between "we found some `Cargo.toml` files" and "we know which
 physical bytes we are allowed to touch". Everything downstream of it — grouping,
@@ -22,15 +22,15 @@ The production half imports exactly three things from the crate
 (`workspace.rs:8-12`): `domain::*` for the whole shared vocabulary,
 `progress::{ProgressObserver, ScanPhase}` to report gate transitions without
 knowing the renderer, and `traverse` — used at exactly two call sites,
-`measure_many_targets` (`:1897`) and `workspace_member_activity` (`:2302`).
-Plus four fully-qualified `crate::domain::elapsed_nanos` uses (`:564`, `:694`,
-`:1799`, `:1901`).
+`measure_many_targets` (`:1992`) and `workspace_member_activity` (`:2302`).
+Plus four fully-qualified `crate::domain::elapsed_nanos` uses (`:624`, `:754`,
+`:1894`, `:1996`).
 
 **Does not own:**
 
 - **Activity / inactivity.** Source recency comes from `traverse::workspace_member_activity`
-  (`workspace.rs:2302`); byte sizing and output recency come from
-  `traverse::measure_many_targets` (`workspace.rs:1897`). This module decides
+  (`workspace.rs:2407`); byte sizing and output recency come from
+  `traverse::measure_many_targets` (`workspace.rs:1992`). This module decides
   *whether to ask* and *what the answer means for a group*, never the answer.
 - **Deletion.** Nothing here removes a byte. `cleanup.rs` invokes `cargo clean`.
 - **Cargo configuration semantics.** The module doc states it outright
@@ -38,24 +38,24 @@ Plus four fully-qualified `crate::domain::elapsed_nanos` uses (`:564`, `:694`,
   Cargo. The only parsing of Cargo output is JSON — with exactly one narrow
   parse of a Cargo *message* (§4, `believed_workspace_manifest`).
 - **Reporting.** This module produces `PhysicalOutputGroup`; the report-facing
-  `EligibleOutputGroup` is built in `main.rs:1664-1677`.
+  `EligibleOutputGroup` is built in `main.rs:1742-1755`.
 
 **The workspace → cleanup edge is one-way, and in this file it is test-only.**
 The production half of `workspace.rs` contains *zero* references to
-`crate::cleanup`. The two calls are at `workspace.rs:4539` and `:4818`
+`crate::cleanup`. The two calls are at `workspace.rs:4846` and `:5125`
 (`crate::cleanup::covering_is_authorized`), both inside the test module,
 asserting that source-overlapping groups are refused even by the most
 permissive caller.
 So the dependency direction that [the overview](overview.md) calls out is
-`cleanup → workspace` in production (`cleanup.rs:2710` resolves,
-`cleanup.rs:2752` groups, `cleanup.rs:2757` analyses, `cleanup.rs:2767` builds
-units, `cleanup.rs:3103` refreshes a root manifest, `cleanup.rs:3589` re-maps
-groups, `cleanup.rs:3621` reduces the covering union, `cleanup.rs:3700` reads
+`cleanup → workspace` in production (`cleanup.rs:2882` resolves,
+`cleanup.rs:2924` groups, `cleanup.rs:2929` analyses, `cleanup.rs:2939` builds
+units, `cleanup.rs:3247` refreshes a root manifest, `cleanup.rs:3695` re-maps
+groups, `cleanup.rs:3728` reduces the covering union, `cleanup.rs:3807` reads
 member roots) plus a test-only back-reference. There is no cycle and no
 production import from `workspace` into `cleanup`.
 
-Call sites in the read-only scan: `main.rs:1501` (runner), `main.rs:1502`
-(`resolve_workspaces`), `main.rs:1635` (`build_groups`), `main.rs:1651`
+Call sites in the read-only scan: `main.rs:1579` (runner), `main.rs:1580`
+(`resolve_workspaces`), `main.rs:1713` (`build_groups`), `main.rs:1729`
 (`analyze_groups`).
 
 ---
@@ -69,49 +69,49 @@ methods. Nothing else in the file is reachable from outside.
 
 | Item | Signature | Contract |
 |---|---|---|
-| `ProcessOutput` | `struct { success: bool, code: Option<i32>, stdout: Vec<u8>, stderr: Vec<u8> }` (`:21-27`) | A cargo subprocess result. Raw `Vec<u8>` on both streams, so a non-UTF-8 filename in cargo's output cannot break the decoder. Failed locate/metadata stderr is converted to a bounded causal excerpt (`:199-228`). |
+| `ProcessOutput` | `struct { success: bool, code: Option<i32>, stdout: Vec<u8>, stderr: Vec<u8> }` (`:21-27`) | A cargo subprocess result. Raw `Vec<u8>` on both streams, so a non-UTF-8 filename in cargo's output cannot break the decoder. Failed locate/metadata stderr is converted to a bounded causal excerpt (`:210-239`). |
 | `CargoRunner` | `trait { fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput> }` (`:29-31`) | The project's only external-process boundary. No supertraits, no associated types. |
 | `SystemCargoRunner` | `struct SystemCargoRunner;` (`:78-93`) | The real implementation. Zero-sized. |
-| `refresh_workspace_from_root_manifest` | `(root_manifest: &Path, runner: &dyn CargoRunner, counters, diagnostics, observer) -> Option<ResolvedWorkspace>` (`:59-76`) | Re-resolve one *known* root directly through `cargo metadata`: one process, no `locate-project`. Never discovers anything. Used by the cleanup final proof (`cleanup.rs:3103`). |
+| `refresh_workspace_from_root_manifest` | `(root_manifest: &Path, runner: &dyn CargoRunner, counters, diagnostics, observer) -> Option<ResolvedWorkspace>` (`:59-76`) | Re-resolve one *known* root directly through `cargo metadata`: one process, no `locate-project`. Never discovers anything. Used by the cleanup final proof (`cleanup.rs:3247`). |
 
 ### Resolution
 
 | Item | Signature | Contract |
 |---|---|---|
-| `resolve_workspaces` | `(manifests: &[PathBuf], runner, counters, diagnostics, observer) -> Vec<ResolvedWorkspace>` (`:459-467`) | Thin wrapper: `resolve_workspaces_with_coverage(..).workspaces`. Read-only scan entry point. |
-| `resolve_workspaces_with_coverage` | same params `-> ResolutionCoverage` (`:738-1057`) | The real implementation: bulk-parallel locate plus grouped metadata with a sequential emulation (§4). Also returns the *unresolved* set, which is what makes the destructive scope fail-closed. |
-| `enclosing_workspace_root` | `(dir: &Path, runner: &dyn CargoRunner) -> Option<PathBuf>` (`:617-635`) | **ADR 009.** The workspace that encloses `dir`, by asking Cargo: `cargo locate-project --workspace` run *in* the directory, with **no** `--manifest-path`. `None` for "there is no enclosing workspace" — which Cargo signals by failing, and which is a normal answer here, not an error. |
-| `working_directory_scope_roots` | `(dir: &Path, runner: &dyn CargoRunner) -> Vec<PathBuf>` (`:655-664`) | **ADR 009.** The two roots the operator's position contributes to the maintenance scope: the enclosing workspace, when there is one, and the directory itself. |
-| `capability_from_metadata` | `(had_build_field: bool, target: &str, build: Option<&str>, env_set: bool) -> CargoCapabilities` (`:124-142`) | Pure state machine over metadata evidence. No IO. |
-| `clean_capabilities_from_version` | `(version: &str) -> CargoCleanCapabilities` (`:146-165`) | Exact-string allowlist of Cargo versions whose `cargo clean` selector behaviour was qualified. |
-| `UnknownDisposition` | 3-variant enum (`:399-409`) | The M015 proof-island assignment for one unresolved manifest: `PassengerOf { named_manifest }`, `ScopeNote`, `MergeAll`. |
-| `attribute_unknown` | `(participant: &UnresolvedOwnershipParticipant, workspaces: &[ResolvedWorkspace]) -> UnknownDisposition` (`:419-438`) | Pure failure-class attribution. No spawns, no mutation, no counter or diagnostic changes. |
+| `resolve_workspaces` | `(manifests: &[PathBuf], runner, counters, diagnostics, observer) -> Vec<ResolvedWorkspace>` (`:489-497`) | Thin wrapper: `resolve_workspaces_with_coverage(..).workspaces`. Read-only scan entry point. |
+| `resolve_workspaces_with_coverage` | same params `-> ResolutionCoverage` (`:776-1095`) | The real implementation: bulk-parallel locate plus grouped metadata with a sequential emulation (§4). Also returns the *unresolved* set, which is what makes the destructive scope fail-closed. |
+| `enclosing_workspace_root` | `(dir: &Path, runner: &dyn CargoRunner) -> Option<PathBuf>` (`:660-678`) | **ADR 009.** The workspace that encloses `dir`, by asking Cargo: `cargo locate-project --workspace` run *in* the directory, with **no** `--manifest-path`. `None` for "there is no enclosing workspace" — which Cargo signals by failing, and which is a normal answer here, not an error. |
+| `working_directory_scope_roots` | `(dir: &Path, runner: &dyn CargoRunner) -> Vec<PathBuf>` (`:695-702`) | **ADR 009.** The two roots the operator's position contributes to the maintenance scope: the enclosing workspace, when there is one, and the directory itself. |
+| `capability_from_metadata` | `(had_build_field: bool, target: &str, build: Option<&str>, env_set: bool) -> CargoCapabilities` (`:125-149`) | Pure state machine over metadata evidence. No IO. |
+| `clean_capabilities_from_version` | `(version: &str) -> CargoCleanCapabilities` (`:153-172`) | Exact-string allowlist of Cargo versions whose `cargo clean` selector behaviour was qualified. |
+| `UnknownDisposition` | 3-variant enum (`:414-435`) | The M015 proof-island assignment for one unresolved manifest: `PassengerOf { named_manifest }`, `ScopeNote`, `MergeAll`. |
+| `attribute_unknown` | `(participant: &UnresolvedOwnershipParticipant, workspaces: &[ResolvedWorkspace]) -> UnknownDisposition` (`:449-468`) | Pure failure-class attribution. No spawns, no mutation, no counter or diagnostic changes. |
 
 ### Grouping
 
 | Item | Signature | Contract |
 |---|---|---|
-| `outermost` | `(roots: &[PathBuf]) -> Vec<PathBuf>` (`:1389-1407`) | Collapse a root set to its minimal non-nested antichain, sorted. The primitive that makes "counted once" possible. |
-| `build_groups` | `(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup>` (`:1466-1622`) | Union-find over canonical physical roots; assigns an `OutputOwnershipClass` to each connected component. |
-| `RawGroup` | `struct { physicals, covering, display, owners: Vec<usize>, ownership, source_overlap, nested_source_overlap }` (`:1624-1642`) | Pre-measurement group. `owners` are indices into the caller's `workspaces` slice, not IDs. |
-| `has_artifact_entries` | `(path: &Path) -> Option<bool>` (`:1646-1649`) | `Some(true)` if the directory has ≥1 entry, `Some(false)` if empty, `None` if unreadable. One `read_dir` + one `next()`. |
-| `GroupAnalysisInput` | `struct { group: RawGroup, owner_workspaces: Vec<ResolvedWorkspace> }` (`:1651-1654`) | **Dead.** Declared, never constructed, never referenced anywhere in `src/` or `tests/`. `analyze_groups_detailed` does not take it — see §7. |
-| `workspace_member_roots` | `(ws: &ResolvedWorkspace) -> Vec<PathBuf>` (`:1656-1661`) | Member `source_root`s, deduped, passed through `outermost`. Also used by `cleanup.rs:3700`. |
-| `GroupSkipReason` | 7-variant enum (`:1623-1632`) + `detail(self) -> &'static str` (`:1635-1645`) | Why a group produced no candidate. Full table in §7. |
-| `GroupOutcome` | `struct { group: RawGroup, measured: Option<PhysicalOutputGroup>, skip: Option<GroupSkipReason> }` (`:1653-1658`) | One per input group, in input order. Exactly one of `measured`/`skip` is `Some`. |
-| `analyze_groups_detailed` | 8 params `-> Vec<GroupOutcome>` (`:1669-1678`) | **The real implementation.** Fail-fast gate pipeline. |
-| `analyze_groups` | identical params `-> Vec<PhysicalOutputGroup>` (`:1991-2000`) | **Delegates** to `analyze_groups_detailed`, drops outcomes with no `measured`, sorts by bytes descending then `display_path`. Used by the read-only scan. |
-| `map_workspace_groups` | `(ws: &ResolvedWorkspace, groups: &[RawGroup]) -> Vec<usize>` (`:2126-2128`) | The inverse direction: which group indices this workspace's `OutputSet` can touch. |
+| `outermost` | `(roots: &[PathBuf]) -> Vec<PathBuf>` (`:1534-1552`) | Collapse a root set to its minimal non-nested antichain, sorted. The primitive that makes "counted once" possible. |
+| `build_groups` | `(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup>` (`:1611-1767`) | Union-find over canonical physical roots; assigns an `OutputOwnershipClass` to each connected component. |
+| `RawGroup` | `struct { physicals, covering, display, owners: Vec<usize>, ownership, source_overlap, nested_source_overlap }` (`:1769-1787`) | Pre-measurement group. `owners` are indices into the caller's `workspaces` slice, not IDs. |
+| `has_artifact_entries` | `(path: &Path) -> Option<bool>` (`:1791-1794`) | `Some(true)` if the directory has ≥1 entry, `Some(false)` if empty, `None` if unreadable. One `read_dir` + one `next()`. |
+| `GroupAnalysisInput` | `struct { group: RawGroup, owner_workspaces: Vec<ResolvedWorkspace> }` (`:1796-1799`) | **Dead.** Declared, never constructed, never referenced anywhere in `src/` or `tests/`. `analyze_groups_detailed` does not take it — see §7. |
+| `workspace_member_roots` | `(ws: &ResolvedWorkspace) -> Vec<PathBuf>` (`:1801-1806`) | Member `source_root`s, deduped, passed through `outermost`. Also used by `cleanup.rs:3807`. |
+| `GroupSkipReason` | 7-variant enum (`:1768-1777`) + `detail(self) -> &'static str` (`:1780-1790`) | Why a group produced no candidate. Full table in §7. |
+| `GroupOutcome` | `struct { group: RawGroup, measured: Option<PhysicalOutputGroup>, skip: Option<GroupSkipReason> }` (`:1798-1803`) | One per input group, in input order. Exactly one of `measured`/`skip` is `Some`. |
+| `analyze_groups_detailed` | 8 params `-> Vec<GroupOutcome>` (`:1814-1823`) | **The real implementation.** Fail-fast gate pipeline. |
+| `analyze_groups` | identical params `-> Vec<PhysicalOutputGroup>` (`:2146-2155`) | **Delegates** to `analyze_groups_detailed`, drops outcomes with no `measured`, sorts by bytes descending then `display_path`. Used by the read-only scan. |
+| `map_workspace_groups` | `(ws: &ResolvedWorkspace, groups: &[RawGroup]) -> Vec<usize>` (`:2290-2292`) | The inverse direction: which group indices this workspace's `OutputSet` can touch. |
 
 ### Units
 
 | Item | Signature | Contract |
 |---|---|---|
-| `AffectedGroup` | `struct { display, covering, ownership, kinds: Vec<OutputRootKind>, measured, skip }` (`:2154-2164`) | One physical group as seen *through one workspace's* output set. |
-| `AffectedGroup::kind_label` | `(&self) -> String` (`:2168-2182`) | `"target"`, `"build"`, `"target+build"`, or `"output"` when there are no kinds. **Not compile-checked** — the final `_` arm at `:2180` catches any future kind instead of failing the build. |
-| `CleanupUnit` | `struct { workspace_idx, id, root, root_manifest, output, capability, groups, unmapped, covering, bytes }` (`:2192-2206`) | One `cargo clean` invocation's full footprint. |
-| `CleanupUnit::fully_measured` | `(&self) -> bool` (`:2210-2212`) | `unmapped.is_empty() && groups.iter().all(\|g\| g.measured.is_some())`. |
-| `build_cleanup_units` | `(workspaces, outcomes: &[GroupOutcome]) -> Vec<CleanupUnit>` (`:2220-2291`) | One unit per workspace that has ≥1 measured affected group. |
+| `AffectedGroup` | `struct { display, covering, ownership, kinds: Vec<OutputRootKind>, measured, skip }` (`:2319-2329`) | One physical group as seen *through one workspace's* output set. |
+| `AffectedGroup::kind_label` | `(&self) -> String` (`:2333-2347`) | `"target"`, `"build"`, `"target+build"`, or `"output"` when there are no kinds. **Not compile-checked** — the final `_` arm at `:2345` catches any future kind instead of failing the build. |
+| `CleanupUnit` | `struct { workspace_idx, id, root, root_manifest, output, capability, groups, unmapped, covering, bytes }` (`:2357-2371`) | One `cargo clean` invocation's full footprint. |
+| `CleanupUnit::fully_measured` | `(&self) -> bool` (`:2375-2377`) | `unmapped.is_empty() && groups.iter().all(\|g\| g.measured.is_some())`. |
+| `build_cleanup_units` | `(workspaces, outcomes: &[GroupOutcome]) -> Vec<CleanupUnit>` (`:2385-2456`) | One unit per workspace that has ≥1 measured affected group. |
 
 ---
 
@@ -126,23 +126,23 @@ pub trait CargoRunner: Sync {                              // workspace.rs:29
 One method. No associated types. The `: Sync` bound is what makes
 `std::thread::scope` legal in the bulk resolution phases below: one
 `&dyn CargoRunner` is shared across worker threads, exactly as
-`CleanupRunner: Sync` (`cleanup.rs:999`) already allows for the parallel proof
-refresh (`cleanup.rs:3284`). All six production `&dyn CargoRunner` sites
-(`:61`, `:461`, `:547`, `:674`, `:740`, `:1062`) share through the bound; the
-pre-existing `WorkspaceCleanupAdapter` (`cleanup.rs:2790-2804`) stays valid
+`CleanupRunner: Sync` (`cleanup.rs:1037`) already allows for the parallel proof
+refresh (`cleanup.rs:3388`). All six production `&dyn CargoRunner` sites
+(`:61`, `:491`, `:577`, `:712`, `:778`, `:1100`) share through the bound; the
+pre-existing `WorkspaceCleanupAdapter` (`cleanup.rs:2962-2976`) stays valid
 because the trait it adapts from is already `Sync`.
-`WorkspaceCleanupAdapter` (`cleanup.rs:2790-2804`) implements `CargoRunner` over
+`WorkspaceCleanupAdapter` (`cleanup.rs:2962-2976`) implements `CargoRunner` over
 a `&dyn CleanupRunner` so `cleanup.rs` can reuse this module's resolver without
 inheriting its unbounded trait. Identical method signatures, matching bounds.
 
 Because `run` takes `&self`, stateful fakes need interior mutability: this file's
-own doubles use `AtomicU64` (`CountingRunner`, `:2879`) and `Mutex`
-(`RecordingRunner`, `:5848`). Every test double is field-read-only or
+own doubles use `AtomicU64` (`CountingRunner`, `:3051`) and `Mutex`
+(`RecordingRunner`, `:6082`). Every test double is field-read-only or
 synchronized, so all of them satisfy the bound with no changes.
 
 ### What `SystemCargoRunner` actually runs
 
-`:80-93`. It builds argv by handing the caller's `&[OsString]` straight to
+`:80-94`. It builds argv by handing the caller's `&[OsString]` straight to
 `std::process::Command::new("cargo")`, sets `.current_dir(cwd)`, and calls
 `.output()` — which captures both streams as `Vec<u8>` and blocks. A
 non-zero exit is **not** an error: it becomes `ProcessOutput { success: false,
@@ -153,19 +153,19 @@ Three subcommands, all built by the module:
 
 | Subcommand | argv | Built at |
 |---|---|---|
-| locate | `locate-project --workspace --manifest-path <manifest>` | `:548-556` |
-| metadata | `metadata --offline --locked --no-deps --format-version 1 --manifest-path <root_manifest>` | `:675-687` |
-| locate-in-place | `locate-project --workspace` — **no** `--manifest-path` | `:618-621` |
+| locate | `locate-project --workspace --manifest-path <manifest>` | `:578-586` |
+| metadata | `metadata --offline --locked --no-deps --format-version 1 --manifest-path <root_manifest>` | `:713-725` |
+| locate-in-place | `locate-project --workspace` — **no** `--manifest-path` | `:661-664` |
 
 The third shape is ADR 009's, and the missing option is the point. The
 child's working directory is the operator's directory and Cargo walks up from
 there to the nearest manifest, so the answer is "the workspace that owns the
 place I am standing". `--manifest-path` would name a manifest to report on
 rather than a place to search from, so it would answer for a manifest instead
-of for the operator's position (`workspace.rs:607-610`).
+of for the operator's position (`workspace.rs:667-670`).
 
-`cwd` is the manifest's own parent in the first two cases (`:559-562`,
-`:689-692`), and the operator's directory in the third.
+`cwd` is the manifest's own parent in the first two cases (`:619-622`,
+`:749-752`), and the operator's directory in the third.
 Because `--manifest-path` is resolved by the *child*, and the child's cwd is the
 manifest's parent, a relative manifest would be composed against the wrong
 directory — the `fixture/Cargo.toml` + cwd `fixture/` defect documented at
@@ -177,14 +177,14 @@ lexically absolutizes against the process cwd without resolving symlinks.
 ### Why this trait costs 4141 lines of tests
 
 Every external process crosses this one method, so a fake can substitute for all
-of Cargo. The sixteen doubles in this file — `FailingCargo` (`:2469`),
-`RelativeMemberRunner` (`:2700`), `FakeCargo` (`:2761`, impl `:2771`),
-`CountingRunner` (`:2879`), `MemberFirstFails` (`:3143`),
-`CountingFailRunner` (`:3499`), `SleepRunner` (`:3568`), `OrderRunner` (`:3644`),
-`TwoWsRunner` (`:3729`), `FailFirstRunner` (`:3798`), `BelievesRunner` (`:3903`),
-`BelievesOrphanRunner` (`:4004`), `RefusedRunner` (`:4236`),
-`MetadataFailRunner` (`:4281`), `ForwardFixture` (`:5804`),
-`RecordingRunner` (`:5848`, impl `:5852`) — plus a large number of hand-built
+of Cargo. The sixteen doubles in this file — `FailingCargo` (`:2598`),
+`RelativeMemberRunner` (`:2829`), `FakeCargo` (`:2890`, impl `:2900`),
+`CountingRunner` (`:3104`), `MemberFirstFails` (`:3422`),
+`CountingFailRunner` (`:3778`), `SleepRunner` (`:3847`), `OrderRunner` (`:3923`),
+`TwoWsRunner` (`:4008`), `FailFirstRunner` (`:4077`), `BelievesRunner` (`:4210`),
+`BelievesOrphanRunner` (`:4311`), `RefusedRunner` (`:4543`),
+`MetadataFailRunner` (`:4588`), `ForwardFixture` (`:6111`),
+`RecordingRunner` (`:6155`, impl `:6159`) — plus a large number of hand-built
 `ResolvedWorkspace` values exercise resolution, grouping, and units with no
 subprocess at all. That is the seam paying for itself, and it is the same seam
 [the overview](overview.md) names as cross-cutting invariant 5.
@@ -201,11 +201,11 @@ hold*.
 
 That risk is not hypothetical in this file, and the module has already been
 corrected for it. `a_relative_root_resolves_the_same_workspaces_as_its_absolute_spelling`
-(`:5915`) uses `SystemCargoRunner` and the *real* Cargo, with the reason stated
-in its own doc comment (`:5908-5913`): a stub that ignores the manifest path
+(`:6222`) uses `SystemCargoRunner` and the *real* Cargo, with the reason stated
+in its own doc comment (`:6215-6220`): a stub that ignores the manifest path
 would not have detected the C015 defect. The test module's most recent
 deliberate design choice is therefore to add a *real*-Cargo case and a premise
-assertion (`RecordingRunner` asserts `!seen.is_empty()` at `:5889-5892` with the
+assertion (`RecordingRunner` asserts `!seen.is_empty()` at `:6196-6199` with the
 message "the locate path was never exercised, so nothing was proven") rather
 than to trust the fake.
 
@@ -213,11 +213,11 @@ than to trust the fake.
 
 ## 4. Metadata resolution
 
-`resolve_workspaces_with_coverage` (`:738-1057`) resolves in bulk phases, not
+`resolve_workspaces_with_coverage` (`:798-1110`) resolves in bulk phases, not
 in one sequential loop: locate runs bounded-parallel over all manifests
-(`:755-757`), manifests group by located root first-seen-first (`:762-788`),
-one metadata runs bounded-parallel per group (`:793-804`), and a sequential
-emulation replays manifest order over the precomputed results (`:825-996`).
+(`:814-816`), manifests group by located root first-seen-first (`:821-847`),
+one metadata runs bounded-parallel per group (`:852-863`), and a sequential
+emulation replays manifest order over the precomputed results (`:884-1049`).
 Cargo has no batch metadata mode, so batching still means in-process
 deduplication — but the subprocess wall time, not the spawn sequence, is now
 parallel. There is exactly one deliberate semantic delta from the old
@@ -227,8 +227,8 @@ identical by construction.
 
 ### The enclosing workspace of the operator's directory (ADR 009)
 
-`enclosing_workspace_root` (`:617-635`) and `working_directory_scope_roots`
-(`:655-664`) answer a question the bulk resolver never asked: *which
+`enclosing_workspace_root` (`:677-695`) and `working_directory_scope_roots`
+(`:715-724`) answer a question the bulk resolver never asked: *which
 workspace owns the directory the operator is standing in?* It is not the bulk
 resolver's job — that one resolves a manifest it was given — so it is a
 separate, single-purpose call.
@@ -247,25 +247,25 @@ workspace is not cleaned, never that something is cleaned without proof.
 
 ### The four phases
 
-1. **Locate, in parallel (`:755-757`, worker `locate_one` at `:547-664`).**
+1. **Locate, in parallel (`:814-816`, worker `locate_one` at `:607-724`).**
    Every manifest gets exactly one `locate-project` spawn, in input-order
-   chunks of [`resolution_concurrency`] (`:476-480`, capped at
-   `RESOLUTION_CONCURRENCY_CAP = 4`, `:474`), joining in order. The worker
+   chunks of [`resolution_concurrency`] (`:536-540`, capped at
+   `RESOLUTION_CONCURRENCY_CAP = 4`, `:534`), joining in order. The worker
    only builds argv, spawns, and classifies into `LocateOutcome`
-   (`:512-533`): transport failure, Cargo-reported failure, unparseable
+   (`:572-593`): transport failure, Cargo-reported failure, unparseable
    stdout, located root, or lost worker slot. A lost slot degrades to a
    deterministic spawn-failure diagnostic — never a panic or a lost manifest.
-2. **Group, sequential (`:762-788`).** Outcomes classify in input order;
+2. **Group, sequential (`:821-847`).** Outcomes classify in input order;
    manifests locating to the same canonical root form a `ResolutionGroup`
-   (`:725-727`) in first-seen order. Group order is the order the old loop
+   (`:785-787`) in first-seen order. Group order is the order the old loop
    would have discovered workspaces in.
-3. **Metadata, in parallel (`:793-804`, worker `metadata_one` at
-   `:674-705`).** One spawn per group — the same spawn set the old loop
+3. **Metadata, in parallel (`:852-863`, worker `metadata_one` at
+   `:734-765`).** One spawn per group — the same spawn set the old loop
    issued, since every group has a first manifest that would have triggered
    metadata. Parsing and member validation stay sequential.
-4. **Emulation, sequential (`:825-996`).** The manifest loop replays
+4. **Emulation, sequential (`:884-1049`).** The manifest loop replays
    per-manifest decisions over the precomputed results:
-   - **Fast path (`:839-845`).** Canonicalize the manifest; if it is already
+   - **Fast path (`:898-903`).** Canonicalize the manifest; if it is already
      in `member_to_root` *and* that root is in `cache`, take it as covered:
      `deduped_workspace_hits += 1`, add to `authoritative_coverage`,
      `continue`. The locate for this manifest already ran in phase 1, so the
@@ -276,13 +276,13 @@ workspace is not cleaned, never that something is cleaned without proof.
      position as the old loop, with identical text.
    - **Workspace cache (`:906-921`).** Located root already known: count a
      dedup hit, register the manifest, stop. **No metadata process.**
-   - **Metadata trigger (`:922-995`).** First manifest per group: account one
+   - **Metadata trigger (`:976-1048`).** First manifest per group: account one
      metadata call plus the recorded wall time, then run the shared
-     post-spawn processor (`complete_workspace_from_metadata`, `:1093`)
+     post-spawn processor (`complete_workspace_from_metadata`, `:1146`)
      with this manifest as the diagnostic path. On success the workspace is
-     registered and members seeded exactly as before (`:973-986`).
+     registered and members seeded exactly as before (`:1027-1040`).
    - **Repeat triggers of a failed root** reuse the recorded outcome via
-     `failed_templates` (`:938-956`): one metadata call, the recorded wall
+     `failed_templates` (`:992-1010`): one metadata call, the recorded wall
      time, one failure (when the outcome counts as one), and a per-manifest
      diagnostic cloned from the path-independent template. The old loop re-spawned here;
      accounting matches a fresh spawn while one pass cannot fork the ledger
@@ -306,13 +306,13 @@ member order — there is no order-independent way to know two manifests share
 a root without asking Cargo, and ancestry inference is forbidden. The two
 tests that pinned the old count were updated with this justification
 (`n_member_workspace_requires_one_metadata_regardless_of_order`,
-`:3437`; `repeated_members_invoke_metadata_once`, `:2871`), and
+`:3716`; `repeated_members_invoke_metadata_once`, `:3096`), and
 `shared_failing_root_reaccounts_metadata_per_manifest_from_one_spawn`
-(`:3489`) pins the clone rule from the other side: two manifests, one actual
+(`:3768`) pins the clone rule from the other side: two manifests, one actual
 metadata spawn, two accounted calls with per-manifest diagnostics.
-`resolution_overlaps_locate_spawns` (`:3567`) proves spawns actually overlap
+`resolution_overlaps_locate_spawns` (`:3846`) proves spawns actually overlap
 (peak concurrency ≥ 2 on multi-core hosts), and
-`mixed_locate_and_metadata_failures_keep_manifest_order` (`:3635`) pins the
+`mixed_locate_and_metadata_failures_keep_manifest_order` (`:3914`) pins the
 interleaved diagnostic order.
 
 ### Does a member manifest short-circuit a nested metadata call?
@@ -323,7 +323,7 @@ forms, and one metadata runs against the **root** manifest. If a member's
 locate *fails*, nothing is seeded for it and the later root manifest's success
 still repairs the coverage for the members it lists:
 `failed_member_first_is_cleared_by_later_authoritative_workspace_metadata`
-(`:3134`) asserts `coverage.unresolved.is_empty()` **and**
+(`:3413`) asserts `coverage.unresolved.is_empty()` **and**
 `cargo_failures == 1` — the failed attempt's diagnostic is deliberately *not*
 retracted.
 
@@ -403,14 +403,14 @@ clean`, not even `--dry-run`.
 > and M017 replaced the earlier whole-scope block: an unresolved manifest
 > **outside** the boundary is reported as an `out_of_scope` diagnostic and
 > **never blocks**, while an **in-boundary** unknown owner still blocks the
-> boundary. `src/cleanup.rs:2619-2642` implements the three-way split, and
-> `out_of_anchor_poison_does_not_block_anchor` (`src/cleanup.rs:5728`) fails by
+> boundary. `src/cleanup.rs:2779-2802` implements the three-way split, and
+> `out_of_anchor_poison_does_not_block_anchor` (`src/cleanup.rs:5962`) fails by
 > construction against the old whole-scope rule. This passage is the one place
 > in the deep dives that still read as the superseded rule; it is corrected
 > here rather than left to rot.
 
-`resolve_workspaces` (`:459-467`) discards the `unresolved`
-vector, which is exactly why the doc comment at `:729-732` says its
+`resolve_workspaces` (`:489-497`) discards the `unresolved`
+vector, which is exactly why the doc comment at `:767-770` says its
 partial-result behaviour is "intentionally unchanged" and the read-only scan
 stays tolerant.
 
@@ -420,44 +420,44 @@ in a workspace when it's not` stays an unresolved participant — and under ADR
 007 it is an **out-of-boundary** participant that is reported, never blocking;
 an in-boundary one blocks the boundary. Withholding it from `unresolved` would
 narrow the block without ADR cover, which is exactly what
-M015's non-goals forbid (`src/workspace.rs:1043-1051`). What M015 adds is a
+M015's non-goals forbid (`src/workspace.rs:1096-1104`). What M015 adds is a
 pure decision function over the failure classes,
-`attribute_unknown` (`src/workspace.rs:419-438`), returning
-`UnknownDisposition` (`src/workspace.rs:399-409`): only `RefusedByCargo`
+`attribute_unknown` (`src/workspace.rs:472-498`), returning
+`UnknownDisposition` (`src/workspace.rs:452-462`): only `RefusedByCargo`
 unknowns (Cargo ran and refused the manifest, so it owns no bytes) avoid the
 merge — as a passenger of the island Cargo named
-(`believed_workspace_manifest`, `src/workspace.rs:372-387`) when that
+(`believed_workspace_manifest`, `src/workspace.rs:390-440`) when that
 workspace resolved here, else a scope-level note. Every other class
 (transport, unparseable output, lost workers, metadata, identity) is
 `MergeAll`, today's block; the capability is recorded where the failure is
 classified, never re-parsed from message text. The one narrow parse of a Cargo
-*message* lives in `believed_workspace_manifest` (`:372-387`) — the last one in
+*message* lives in `believed_workspace_manifest` (`:390-440`) — the last one in
 the module — and it **fails closed**: when the parse returns `None` (wrong
 class, or a truncated reason) the disposition is `ScopeNote`, never a passenger
-of an unproven island (`:413-418`, `:426-436`).
+of an unproven island (`:466-471`, `:426-436`).
 Permission, transport, parse,
 and metadata failures are untouched. Pinned by
 `misconfigured_member_with_resolved_parent_still_blocks_but_attributes_as_passenger`
 and `misconfigured_member_with_unresolved_parent_still_blocks`
-(`src/workspace.rs:3895-4001`), the per-class table
-`attribute_unknown_merges_every_unproven_class` (`src/workspace.rs:4077`),
+(`src/workspace.rs:4202-4308`), the per-class table
+`attribute_unknown_merges_every_unproven_class` (`src/workspace.rs:4384`),
 `attribute_unknown_reports_refused_manifest_as_scope_note_without_naming_evidence`
-(`src/workspace.rs:4128`),
+(`src/workspace.rs:4435`),
 `attribute_unknown_assigns_refused_believed_manifest_to_resolved_island`
-(`src/workspace.rs:4151`),
+(`src/workspace.rs:4458`),
 `attribute_unknown_with_unresolved_named_parent_is_scope_note_not_passenger`
-(`src/workspace.rs:4200`),
+(`src/workspace.rs:4507`),
 `attribute_unknown_truncated_believed_reason_is_scope_note`
-(`src/workspace.rs:4216`), and the resolution-level capability pins
+(`src/workspace.rs:4523`), and the resolution-level capability pins
 `resolution_records_refused_capability_for_cargo_refused_locate`
-(`src/workspace.rs:4235`) and
+(`src/workspace.rs:4542`) and
 `resolution_records_unproven_capability_for_metadata_failure`
-(`src/workspace.rs:4280`). Enforcement of the passenger shape arrived with
+(`src/workspace.rs:4587`). Enforcement of the passenger shape arrived with
 M016 under the accepted ADR 004 amendment and became the default under
 M017/ADR 007: a refused passenger rides along while staying named in
 `unresolved_ownership` (never a unit row); see [Cleanup](09-cleanup.md)
 § "Scoped proof is the default (M017)". The three-way split that consumes
-`attribute_unknown` lives in `cleanup.rs:2619-2643` — blocking (`MergeAll`),
+`attribute_unknown` lives in `cleanup.rs:2779-2803` — blocking (`MergeAll`),
 reported in-boundary (`PassengerOf` / `ScopeNote`), and out-of-boundary are
 three separate lists, and only the first blocks. Resolution itself is
 unchanged — still report-only.
@@ -465,7 +465,7 @@ unchanged — still report-only.
 ### Progress
 
 Resolution reports through the observer only, and only sparsely:
-`observer.workspaces_resolved(1)` per unique workspace (`:971`) and
+`observer.workspaces_resolved(1)` per unique workspace (`:1009`) and
 `observer.cargo_failure()` for every failed Cargo command. The TTY renderer
 keeps this failure total separate from filesystem discovery diagnostics; it
 does not display diagnostic text or paths. There is no `units_total` for the
@@ -477,7 +477,7 @@ resolution phase — only analysis announces a determinate total.
 
 Two independent probes answer two different questions.
 
-### `capability_from_metadata` (`:124-142`) — "what did this Cargo tell me?"
+### `capability_from_metadata` (`:125-149`) — "what did this Cargo tell me?"
 
 `CargoBuildDirCapability` (`domain.rs:116-125`) is a four-state answer about
 whether a *separate* build directory exists:
@@ -569,9 +569,9 @@ The asymmetry between the two selectors is the substantive part.
 bounds it to "exact tested releases where configured and explicit target
 dry-runs agree". `profile_selector` covers a wider, older set.
 
-Consequences, all verified in `cleanup.rs:4582-4597`: `1.96.0` → both false;
+Consequences, all verified in `cleanup.rs:4816-4831`: `1.96.0` → both false;
 `1.99.1` → both false; `1.99.0-nightly` → both false; `"unknown"` → both false.
-`runtime_clean_capabilities` (`cleanup.rs:3992-4004`) shells `cargo --version`,
+`runtime_clean_capabilities` (`cleanup.rs:4099-4111`) shells `cargo --version`,
 takes whitespace token 1, and **returns `CargoCleanCapabilities::default()` —
 all false — on any failure whatsoever**. So a user on an old, new, nightly, or
 absent Cargo gets the reduced behaviour: the clean still runs, just without
@@ -603,26 +603,26 @@ otherwise evict any kept root the candidate contains; push; final sort. Result
 is the minimal antichain under path-prefix containment — a deterministic,
 idempotent reduction used in four places: per-group `covering` (`:1555`),
 `workspace_member_roots` (`:1660`), and the cleanup unit's deduplicated union
-(`:2266`), plus `cleanup.rs:3621`.
+(`:2266`), plus `cleanup.rs:3728`.
 
-### `build_groups` (`:1466-1622`)
+### `build_groups` (`:1611-1767`)
 
-1. **Node collection (`:1480-1512`).** Per workspace, for each of `output.target` and
-   `output.build`: `is_symlink` → mark the workspace uncertain, no node (`:1494-1498`);
-   `!exists` → nothing, and *not* marked (`:1499-1501`), because a missing directory
+1. **Node collection (`:1625-1657`).** Per workspace, for each of `output.target` and
+   `output.build`: `is_symlink` → mark the workspace uncertain, no node (`:1639-1643`);
+   `!exists` → nothing, and *not* marked (`:1644-1646`), because a missing directory
    has no bytes to share; `physical_path.is_none()` (exists, uncanonicalizable) →
-   mark uncertain (`:1507-1510`); otherwise push `Node { ws, physical }`.
+   mark uncertain (`:1652-1655`); otherwise push `Node { ws, physical }`.
 
-2. **Union-find (`:1514-1537`).** O(n²) pairwise scan, union `i,j` when
-   `contains(pi, pj) || contains(pj, pi)`. `contains` (`:1277-1279`) is a pure
+2. **Union-find (`:1659-1682`).** O(n²) pairwise scan, union `i,j` when
+   `contains(pi, pj) || contains(pj, pi)`. `contains` (`:1426-1428`) is a pure
    `starts_with` component test — equality counts, per the doc at `:1276`.
 
-3. **Components → groups (`:1538-1542`, `:1548-1618`).** `physicals` sorted+deduped
-   (`:1549-1551`), `owners` sorted+deduped (`:1552-1554`),
-   `covering = outermost(physicals)` (`:1555`),
-   `display = covering[0]` (`:1557-1560`).
+3. **Components → groups (`:1683-1687`, `:1693-1763`).** `physicals` sorted+deduped
+   (`:1694-1696`), `owners` sorted+deduped (`:1697-1699`),
+   `covering = outermost(physicals)` (`:1700`),
+   `display = covering[0]` (`:1702-1705`).
 
-4. **Classification (`:1561-1608`),** in this exact order:
+4. **Classification (`:1706-1753`),** in this exact order:
 
 | Condition | Class |
 |---|---|
@@ -632,7 +632,7 @@ idempotent reduction used in four places: per-group `covering` (`:1555`),
 | single owner, inside the root, but the group **does** overlap an unrepresentable root's known aliases | `Shared` |
 | single owner, some covering root outside the workspace root | `ExternalUnproven` |
 
-5. **Sort by `display` (`:1620`).**
+5. **Sort by `display` (`:1765`).**
 
 **The load-bearing detail: exclusivity is decided per group (M-1).** A root that
 contributes no node — a symlink, or one with no physical identity — is invisible
@@ -642,15 +642,15 @@ claim `PrivateBounded`.
 
 The mechanism is two small functions plus one comparison:
 
-- `uncertain_root_aliases` (`:1418-1438`) enumerates the *known aliases* of a
+- `uncertain_root_aliases` (`:1563-1583`) enumerates the *known aliases* of a
   root with no provable identity: always the declared logical spelling, plus
   the symlink's resolved target when the link can be read and the target
   canonicalized. A link *into* a group's covering must block that group, and a
   purely logical check would miss it.
-- `group_overlaps_uncertain` (`:1444-1448`) returns true when any known alias
+- `group_overlaps_uncertain` (`:1589-1593`) returns true when any known alias
   contains, or sits inside, a covering root — either direction means
   `cargo clean` on the covering could destroy the other workspace's bytes.
-- The classification consumes it at `:1598`:
+- The classification consumes it at `:1743`:
   `inside_root && !group_overlaps_uncertain(&covering, &uncertain_aliases)`.
 
 **This used to be a global flag.** An earlier shape computed
@@ -659,20 +659,20 @@ root anywhere demote *every* disjoint group to `Shared`. M-1 made the check
 per group: a group disjoint from every known alias of every unrepresentable
 root keeps its claim, and only an *overlapping* group loses it. Both shapes
 are pinned: `another_workspaces_unrepresentable_root_blocks_a_private_claim`
-(`:4831`, unix-only) is the overlapping case, and
+(`:5065`, unix-only) is the overlapping case, and
 `disjoint_groups_stay_private_despite_a_far_away_unrepresentable_root`
-(`:4859`) is the disjoint case — the latter fails on the old global flag and
+(`:5093`) is the disjoint case — the latter fails on the old global flag and
 passes on per-group overlap.
 
 Note the residual asymmetry: a single-owner group whose covering root lies
 *outside* the workspace root still gets `ExternalUnproven` even when an
 unrepresentable root overlaps it, because that arm is guarded by `inside_root`
-(`:1593-1606`). That is safe by construction — `ExternalUnproven` is
+(`:1738-1751`). That is safe by construction — `ExternalUnproven` is
 inventory-only, and `covering_is_authorized_roots`
-(`cleanup.rs:1113-1127`) returns `Ok(false)` for anything that is not
+(`cleanup.rs:1152-1166`) returns `Ok(false)` for anything that is not
 `PrivateBounded`.
 
-`strictly_below` (`:1384-1386`) exists because `contains` is inclusive: grouping
+`strictly_below` (`:1529-1531`) exists because `contains` is inclusive: grouping
 *needs* equality, but an artifact must sit strictly inside its workspace, so the
 workspace root itself can never be an output root. `is_conventional_source_dir`
 (`:1288-1292`) is a name-based backstop for `target-dir = "src"`; its doc comment
@@ -694,11 +694,11 @@ discovery cannot see it.** The discovery does not descend into an output root,
 so a package checked in *under* the root (`target/sub/Cargo.toml`) never enters
 the resolved universe — and the classification, which works from that universe,
 has nothing to exclude it. The filesystem is where the shape is caught:
-`manifest_package_dir` (`traverse.rs:107-116`) reports the first package
+`manifest_package_dir` (`traverse.rs:277-286`) reports the first package
 directory the traversal finds under the root, `analyze_groups_detailed`
 (`:1961-2000`) turns that into an `Uncertain` group with a diagnostic instead
 of a measured candidate, and the pre-spawn proof refuses the unit again
-(`cleanup.rs:3934-3948`).
+(`cleanup.rs:4041-4055`).
 
 **One manifest rule for the whole tool.** `is_package_directory`
 (`:1303-1311`) used to test two exact file names, while the discovery tested
@@ -811,40 +811,40 @@ surely as the owner's own; consulting only the owner's `members` ratified exactl
 the shape the check exists to refuse — an outer workspace whose output directory
 was not literally named `target`, containing a real nested project, lost four
 files with exit 0 and no diagnostic. The preflight proof closes the same gap
-independently at `cleanup.rs:3653-3673`.
+independently at `cleanup.rs:3760-3780`.
 
-**Stage 4 — deep sizing (`:1888-1905`).** One bounded pool, one call:
+**Stage 4 — deep sizing (`:2037-2054`).** One bounded pool, one call:
 `traverse::measure_many_targets` over `(survivor_position, covering_path)` pairs.
 Wall time → `output_sizing_nanos`. Results are re-indexed into a
-`HashMap<usize, TargetStats>` (`:1902-1905`), so parallel completion order is
+`HashMap<usize, TargetStats>` (`:2051-2054`), so parallel completion order is
 irrelevant.
 
 **Stage 5 — aggregate per group (`:1913-2062`).** Sum `bytes` and `entries` with
 `saturating_add`, take the max `newest` mtime, and — critically — **break and
 mark uncertain if any contributing root is uncertain or missing from the result
-map** (`:1930-1944`). A partial measurement is never promoted. Then, in order:
+map** (`:2079-2093`). A partial measurement is never promoted. Then, in order:
 
 | Condition | Outcome |
 |---|---|
-| any contributor uncertain | `UncertainMeasurement` + `Error` diagnostic (`:1945-1998`) |
-| `entries == 0` | `EmptyOutput` (`:1999-2009`) |
-| `newest.is_some_and(\|t\| t >= clock_cutoff \|\| t > clock_start)` | `ActiveOutput` (`:2010-2022`) |
-| otherwise | **survivor** → `PhysicalOutputGroup` (`:1964-1975`) |
+| any contributor uncertain | `UncertainMeasurement` + `Error` diagnostic (`:2094-2153`) |
+| `entries == 0` | `EmptyOutput` (`:2154-2164`) |
+| `newest.is_some_and(\|t\| t >= clock_cutoff \|\| t > clock_start)` | `ActiveOutput` (`:2165-2177`) |
+| otherwise | **survivor** → `PhysicalOutputGroup` (`:2113-2124`) |
 
-Every branch, including the early-skipped ones at `:1914-1923`, calls
+Every branch, including the early-skipped ones at `:2063-2072`, calls
 `observer.unit_completed(ScanPhase::Analysis)` exactly once, which is what makes
 the analysis progress bar determinate. The survivor branch also fires
-`observer.group_measured(bytes)` (`:2026`) and
-`observer.reportable_group(&g.display, bytes)` (`:2055`).
+`observer.group_measured(bytes)` (`:2181`) and
+`observer.reportable_group(&g.display, bytes)` (`:2212`).
 
 ### Clock handling
 
-`clock_start` and `clock_cutoff` come from the caller; `main.rs:1639-1649` computes
+`clock_start` and `clock_cutoff` come from the caller; `main.rs:1717-1727` computes
 `clock_cutoff = scan_start - recency` and turns an overflow into
 `AppError::Config`.
 
 **The `recency: Duration` parameter is accepted and deliberately ignored**
-(`:2039-2042`):
+(`:2117-2120`):
 
 ```rust
 // `recency` is deliberately not consulted here: the inactivity window is
@@ -853,13 +853,13 @@ the analysis progress bar determinate. The survivor branch also fires
 let _ = recency;
 ```
 
-`analyze_groups` forwards it unchanged (`:2085`). A deliberate API wart, and the
+`analyze_groups` forwards it unchanged (`:2163`). A deliberate API wart, and the
 comment explains why it was kept.
 
-The output-recency predicate is `t >= clock_cutoff || t > clock_start` (`:2011`).
+The output-recency predicate is `t >= clock_cutoff || t > clock_start` (`:2089`).
 The second disjunct protects against future-dated timestamps — a skewed clock or
 a restored backup must not be silently treated as ancient. The identical
-predicate lives in `traverse.rs:362`, so source and output agree on what
+predicate lives in `traverse.rs:532`, so source and output agree on what
 "recent" means. ADR §9 (`plans/adr/001-workspace-output-ownership-and-cleanup-authorization.md:121-123`): "A physical output group
 is protected by recent activity anywhere in that group. When a shared physical
 group is recent, all owners are protected" — which is what arm 3 and this stage
@@ -869,39 +869,39 @@ jointly implement for multi-owner groups.
 
 **This module produces only `PhysicalOutputGroup`** (`:1964-1975`), with
 `covering_roots`, `owners: Vec<WorkspaceId>`, and `uncertain`. It never
-constructs `EligibleOutputGroup`; that flattening happens in `main.rs:1664-1677`,
+constructs `EligibleOutputGroup`; that flattening happens in `main.rs:1742-1755`,
 which drops `covering_roots` and `uncertain` and maps `owners` to
 `workspace_roots`. The distinction is the scan's report-facing projection versus
 the internal working type.
 
-`SizeMetric` is chosen at compile time, not runtime (`:1950-1959`):
+`SizeMetric` is chosen at compile time, not runtime (`:2028-2037`):
 `Allocated` on `unix`/`windows`, `Apparent` everywhere else.
 
 ### `GroupSkipReason` — the "why is my project not in the report" table
 
-`detail()` (`:1676-1686`) is the user-facing text.
+`detail()` (`:1754-1764`) is the user-facing text.
 
 | Variant | `detail()` | Produced when |
 |---|---|---|
-| `MissingOutput` | `output directory is missing` | No covering root yielded a dir entry, and every root was missing or unreadable (`:1832-1833`). |
-| `EmptyOutput` | `output directory contains no artifacts` | Every covering root was readable and empty (`:1834-1835`), **or** a measured group aggregated to `entries == 0` (`:1999-2009`). |
-| `ActiveSource` | `workspace source activity is recent` | Any owner's member source was touched at/after the cutoff (`:1842-1848`). |
-| `UncertainSource` | `workspace source activity could not be established` | Any owner's member walk returned `Err(())` (`:1850-1854`). |
-| `UncertainOwnership` | `output ownership could not be established` | `g.ownership == Uncertain` — symlinked root, unresolvable identity, or source overlap (`:1855-1880`). |
-| `UncertainMeasurement` | `output activity or size could not be established` | A covering root's stats were uncertain or absent from the result map (`:1945-1998`). |
-| `ActiveOutput` | `output activity is recent` | Newest mtime in the group is at/after the cutoff, or in the future (`:2010-2022`). |
+| `MissingOutput` | `output directory is missing` | No covering root yielded a dir entry, and every root was missing or unreadable (`:1910-1911`). |
+| `EmptyOutput` | `output directory contains no artifacts` | Every covering root was readable and empty (`:1912-1913`), **or** a measured group aggregated to `entries == 0` (`:2077-2087`). |
+| `ActiveSource` | `workspace source activity is recent` | Any owner's member source was touched at/after the cutoff (`:1920-1926`). |
+| `UncertainSource` | `workspace source activity could not be established` | Any owner's member walk returned `Err(())` (`:1928-1932`). |
+| `UncertainOwnership` | `output ownership could not be established` | `g.ownership == Uncertain` — symlinked root, unresolvable identity, or source overlap (`:1933-1958`). |
+| `UncertainMeasurement` | `output activity or size could not be established` | A covering root's stats were uncertain or absent from the result map (`:2023-2076`). |
+| `ActiveOutput` | `output activity is recent` | Newest mtime in the group is at/after the cutoff, or in the future (`:2088-2100`). |
 
 ### `GroupOutcome` and `map_workspace_groups`
 
-`GroupOutcome` (`:1694-1699`) is one entry per input group, in input order, with
+`GroupOutcome` (`:1772-1777`) is one entry per input group, in input order, with
 exactly one of `measured` / `skip` set. Its reason for existing is in the comment
-at `:1689-1693` and ADR C003 (`plans/adr/001-workspace-output-ownership-and-cleanup-authorization.md:207-212`): a workspace-level
+at `:1767-1771` and ADR C003 (`plans/adr/001-workspace-output-ownership-and-cleanup-authorization.md:207-212`): a workspace-level
 cleanup decision must be able to *name* the sibling physical group that blocks
 the whole unit, rather than silently dropping one group from a multi-group
 `OutputSet`.
 
-`map_workspace_groups` (`:2126-2128`, with `map_workspace_groups_indexed` at
-`:2130-2151`) is the many-to-many inverse. Why
+`map_workspace_groups` (`:2204-2206`, with `map_workspace_groups_indexed` at
+`:2208-2229`) is the many-to-many inverse. Why
 many-to-many:
 
 - **one group → many workspaces.** A `Shared` group's single `cargo clean` from
@@ -909,13 +909,13 @@ many-to-many:
 - **many groups → one workspace.** A workspace with a distinct `target/` and
   `build/` yields two groups (`:5324`, `distinct_sibling_target_build_measured_once_per_root`).
 - **nested/equal roots collapse.** Both kinds pointing at the same physical path
-  resolve to one group index, deduplicated by `!idxs.contains(&gi)` (`:2144`).
+  resolve to one group index, deduplicated by `!idxs.contains(&gi)` (`:2222`).
 
-It skips roots that are symlinks, missing, or have no `physical_path` (`:2136-2142`)
+It skips roots that are symlinks, missing, or have no `physical_path` (`:2214-2220`)
 — precisely the roots `build_groups` never made a node for, so the mapping is
-total over the graph. Output is sorted by group display path (`:2149`).
-`cleanup.rs:3589` uses it during final revalidation to compute the
-`fresh_covering` union that `outermost` then reduces (`cleanup.rs:3621`).
+total over the graph. Output is sorted by group display path (`:2227`).
+`cleanup.rs:3695` uses it during final revalidation to compute the
+`fresh_covering` union that `outermost` then reduces (`cleanup.rs:3728`).
 
 ---
 
@@ -931,37 +931,37 @@ boundary before Cargo clean may run. A PrivateBounded target group cannot
 authorize a sibling build group that is ExternalUnproven, Shared, Uncertain, or
 unauthorized."
 
-### `AffectedGroup` (`:2154-2164`)
+### `AffectedGroup` (`:2319-2329`)
 
 A `RawGroup` re-expressed through *one* workspace's lens: the same
 `RawGroup.display` / `covering` / `ownership`, plus `kinds` — the
 `OutputRootKind`s of this workspace whose `physical_path` appears in
-`o.group.physicals` (`:2165-2172`). Both kinds appear when target and build
+`o.group.physicals` (`:2330-2337`). Both kinds appear when target and build
 collapse into one physical group; the test asserts
 `kinds == [Target, Build]` and `kind_label() == "target+build"`.
-`kind_label()` (`:2089-2103`) sorts Target before Build, dedups, and falls back to
+`kind_label()` (`:2246-2260`) sorts Target before Build, dedups, and falls back to
 `"output"` for the empty case.
 
-**The label builder is not compile-checked.** The sort key at `:2170-2173`
+**The label builder is not compile-checked.** The sort key at `:2335-2338`
 *is* exhaustive over `OutputRootKind` — a new variant breaks the build there.
 The `match kinds.as_slice()` that produces the label ends in a `_` arm
-(`:2101`), so a *third* kind would silently render as `"output"` rather than
+(`:2258`), so a *third* kind would silently render as `"output"` rather than
 failing to compile. This is recorded as an open finding in
 [the overview](overview.md) § 10 (finding 18); it is not a safety issue, only a
 label-accuracy one.
 
-### `CleanupUnit` (`:2192-2206`)
+### `CleanupUnit` (`:2357-2371`)
 
 | Field | Meaning |
 |---|---|
-| `workspace_idx`, `id`, `root`, `root_manifest` | identity, copied from `ResolvedWorkspace` (`:2198-2202`) |
+| `workspace_idx`, `id`, `root`, `root_manifest` | identity, copied from `ResolvedWorkspace` (`:2363-2367`) |
 | `output`, `capability` | the full `OutputSet` and Cargo capability evidence, needed to rebuild the command and the proof |
 | `groups: Vec<AffectedGroup>` | every physical group this workspace's output set can touch, each with its own `measured`/`skip` |
-| `unmapped: Vec<OutputRoot>` | existing, non-symlink roots with `physical_path == None` (`:2150-2158`) — an unbounded cleanup footprint |
-| `covering: Vec<PathBuf>` | `outermost` of the union of all affected `covering` roots (`:2266-2271`) — the deduplicated footprint |
-| `bytes: u64` | sum of the affected groups' measured bytes (`:2272-2275`) |
+| `unmapped: Vec<OutputRoot>` | existing, non-symlink roots with `physical_path == None` (`:2315-2323`) — an unbounded cleanup footprint |
+| `covering: Vec<PathBuf>` | `outermost` of the union of all affected `covering` roots (`:2431-2436`) — the deduplicated footprint |
+| `bytes: u64` | sum of the affected groups' measured bytes (`:2437-2440`) |
 
-### `fully_measured()` (`:2210-2212`)
+### `fully_measured()` (`:2375-2377`)
 
 ```rust
 self.unmapped.is_empty() && self.groups.iter().all(|g| g.measured.is_some())
@@ -975,23 +975,23 @@ bar independently, so one bad sibling withholds the whole. A non-empty `unmapped
 means there is existing output whose physical identity could not be proven, so
 the deletion footprint cannot even be enumerated.
 
-`unit_with_unmeasured_sibling_is_not_fully_measured` (`:6275`) is the exact
+`unit_with_unmeasured_sibling_is_not_fully_measured` (`:6614`) is the exact
 case: a measured 4 KiB `target/` beside an existing-but-never-populated `build/`
 directory. The unit exists (so the user sees it and learns why it is blocked) but
 `fully_measured()` is false, and the unmeasured sibling carries
 `skip == Some(EmptyOutput)` and `kinds == [Build]`.
 
-### `build_cleanup_units` (`:2220-2291`)
+### `build_cleanup_units` (`:2385-2456`)
 
-Per workspace: map to groups (`:2228`), collect `unmapped` (`:2229-2237`), skip
-entirely if both are empty (`:2238-2240`), build `AffectedGroup`s, then **skip
-again if no affected group is measured** (`:2261-2265`) — "a workspace with no
+Per workspace: map to groups (`:2393`), collect `unmapped` (`:2394-2402`), skip
+entirely if both are empty (`:2403-2405`), build `AffectedGroup`s, then **skip
+again if no affected group is measured** (`:2426-2430`) — "a workspace with no
 reportable affected output is not a cleanup unit at all." Then the deduplicated
 union and byte sum, and finally a deterministic sort by
-`(bytes desc, root)` (`:2289`).
+`(bytes desc, root)` (`:2454`).
 
 Note the consequence, verified by `unprovable_output_identity_makes_the_group_uncertain`
-(`:6356`): one unprovable output root makes the workspace `Uncertain`
+(`:6695`): one unprovable output root makes the workspace `Uncertain`
 through `build_groups:1355-1358`, every one of its groups is skipped, and
 `build_cleanup_units` produces **no unit at all** — so the unprovable root never
 even reaches `unmapped`, because `affected` is empty first.
@@ -1002,7 +1002,7 @@ even reaches `unmapped`, because `affected` is empty first.
 (`domain.rs:255-260`), so a unit can carry any of the four classes across
 different groups. The safety property is not that a unit is uniformly
 `PrivateBounded`; it is that `cleanup.rs` re-checks each group independently
-through `covering_is_authorized_roots` (`cleanup.rs:1113-1127`), which returns
+through `covering_is_authorized_roots` (`cleanup.rs:1152-1166`), which returns
 `Ok(false)` for anything that is not `PrivateBounded` — `ExternalUnproven`,
 `Shared`, and `Uncertain` are all inventory-only, permanently
 (ADR §7, `plans/adr/001-workspace-output-ownership-and-cleanup-authorization.md:101-107`). And even a `PrivateBounded` group is
@@ -1016,18 +1016,18 @@ proof.
 **Is physical grouping a true partition?** **Yes over output-root nodes and
 canonical directory trees; no over inodes or mount points.** The union-find is a
 connected-components computation over a symmetric relation, so the components
-partition `nodes` by construction (`:1538-1542`) and no path is emitted in two
+partition `nodes` by construction (`:1683-1687`) and no path is emitted in two
 groups. The stronger property holds too: if two *different* components held
 overlapping bytes, one path would have to be an ancestor of the other — and
-`contains` is checked in both directions (`:1531-1532`) — so they would have been
+`contains` is checked in both directions (`:1676-1677`) — so they would have been
 unioned. Equal and ancestor–descendant roots therefore cannot straddle a group
 boundary, which is what makes "counted and acted on exactly once" true, and what
 ADR §5 (`plans/adr/001-workspace-output-ownership-and-cleanup-authorization.md:76-86`) requires. Three ways a byte can still count
 twice: **hard links** between two target directories (the walker sums
-`file_real_size_fast` per path, `traverse.rs:310`, so each name counts);
+`file_real_size_fast` per path, `traverse.rs:480`, so each name counts);
 **mount points** inside a target tree (`dua_core` descends into them; nothing here
 or in `traverse.rs` checks for a mount boundary); and **case-insensitive
-aliasing**, defended only by the single `fs::canonicalize` per root at `:380`,
+aliasing**, defended only by the single `fs::canonicalize` per root at `:550`,
 not per entry. I did not empirically verify canonicalization on case-insensitive
 macOS volumes; on Windows `canonicalize` returns verbatim paths, which is the
 expected mitigation — reasoning, not a measurement in this repo.
@@ -1053,31 +1053,31 @@ nondeterminism is erased before return:
 
 | Site | Non-determinism | How it is removed |
 |---|---|---|
-| `:745-750` | `cache` / `locate_cache` / `member_to_root` / `authoritative_coverage` HashMaps | Lookup only; never iterated |
+| `:915-920` | `cache` / `locate_cache` / `member_to_root` / `authoritative_coverage` HashMaps | Lookup only; never iterated |
 | `:1538-1542` | `groups_map` **is** a `HashMap` **and is iterated** (`:1548`) | Every group's `physicals` (`:1549-1551`), `owners` (`:1552-1554`) and `covering` (`outermost` → sorted, `:1405`) are individually sorted, and the group list is sorted by `display` (`:1620`) |
 | `:1001-1042` | `unresolved` | Sorted by manifest (`:1031`, `:1039`), deduped on the canonical key (`:1040-1042`) |
 | `:1888-1905` | `traverse::measure_many_targets` is parallel | Results are re-indexed into a `HashMap<usize, _>` keyed by input position (`:1902-1905`); completion order is discarded |
-| `:755-757`, `:793-804` | locate/metadata spawns run on worker threads | Outcomes join in input order and every decision replays sequentially (`:825-996`); completion order is discarded |
+| `:925-927`, `:793-804` | locate/metadata spawns run on worker threads | Outcomes join in input order and every decision replays sequentially (`:825-996`); completion order is discarded |
 | `:2093-2098` | `analyze_groups` output | Sorted `(bytes desc, display_path)` |
 | `:2149` | `map_workspace_groups` | Sorted by group display |
 | `:2289` | `build_cleanup_units` | Sorted `(bytes desc, root)` |
 
 One residual worth stating precisely: `resolve_workspaces` returns workspaces in
 **first-seen discovery order** (`:972`, collected at `:997-1000`), not sorted. The doc comment's "in
-deterministic order" (`:442-443`) means "deterministic given a fixed input list", and
+deterministic order" (`:612-613`) means "deterministic given a fixed input list", and
 it holds because `ordered_keys` is a `Vec` appended in iteration order. No
 consumer depends on it. The *other* parallel resolution in the
 project lives in
-`cleanup.rs` (`refresh_proof_universe_with_limit`, `cleanup.rs:3263`); it
-threads `batch` with `std::thread::scope` (`cleanup.rs:3284`), zips outcomes back
-against the input batch in order, and `cleanup.rs:10343` asserts sequential ==
+`cleanup.rs` (`refresh_proof_universe_with_limit`, `cleanup.rs:3367`); it
+threads `batch` with `std::thread::scope` (`cleanup.rs:3388`), zips outcomes back
+against the input batch in order, and `cleanup.rs:10921` asserts sequential ==
 parallel. So the determinism claim survives the parallel path too.
 
 **`cargo` not on `PATH`?** A **diagnostic, not a hard error.** `Command::new("cargo")
 .output()` returns `io::ErrorKind::NotFound`, which becomes `Err` from `run` and
-is caught at `:567-572` (locate transport) and `:700-704` (metadata transport),
-then surfaced as `Warning` / `CandidateUncertain` diagnostics at `:848-859` and
-`:1103-1120`: `cargo_failures += 1`,
+is caught at `:597-602` (locate transport) and `:738-742` (metadata transport),
+then surfaced as `Warning` / `CandidateUncertain` diagnostics at `:886-897` and
+`:1141-1159`: `cargo_failures += 1`,
 `observer.cargo_failure()`, a message saying
 "cargo metadata could not start" or "cargo locate-project could not start", then
 `continue` / `None`. The scan exits 0 with zero workspaces, and — via
@@ -1085,40 +1085,40 @@ then surfaced as `Warning` / `CandidateUncertain` diagnostics at `:848-859` and
 manifest lands in `unresolved`, failing the destructive scope closed. Note the
 trade-off this creates: "cargo is not installed" and "nothing to clean" are
 indistinguishable in a bare scan, which is precisely the C015-class silent-zero
-shape the module's own comments at `:33-45` and `:5680-5684` guard against.
+shape the module's own comments at `:33-45` and `:5914-5918` guard against.
 (`cleanup.rs`'s `runtime_clean_capabilities` returns all-false on the same
-condition, `cleanup.rs:3992-4004`.)
+condition, `cleanup.rs:4099-4111`.)
 
 **Warnings on stderr with a successful exit?** Ignored. `ProcessOutput.stderr`
 is inspected only after a non-zero locate/metadata exit; successful stdout remains
 authoritative and warning text cannot affect resolution. The same process-output
-type is shared with `CleanupRunner` (`cleanup.rs:997`).
+type is shared with `CleanupRunner` (`cleanup.rs:1035`).
 
 **Malformed or unexpected metadata JSON?** A warning diagnostic, the workspace is
 dropped, resolution continues (`:1147-1166`). Same for unparseable `locate-project`
-output (`:592-595`) and for a relative `workspace_root` (`:1175-1192`). The
+output (`:622-625`) and for a relative `workspace_root` (`:1304-1321`). The
 `UnresolvedOwnershipParticipant.stage` for the first two is `"metadata"` /
 `"locate"` — **recorded at the failure site**, not recovered by substring match
-on the message (`:857`, `:869-872`, `:884`, `:897`, `:935`, `:954`, `:994`;
-read back at `:1016-1028`) — see §4. Because `serde_json` is non-strict about
+on the message (`:895`, `:907-910`, `:922`, `:935`, `:973`, `:992`, `:1032`;
+read back at `:1054-1066`) — see §4. Because `serde_json` is non-strict about
 *unknown* fields, a future Cargo that
 adds fields still parses; only a *changed* `target_directory`/`workspace_root`
 contract would break it.
 
 **Is a symlinked `target/` followed, and can it escape the scope?** Not followed,
 and it cannot escape — this module is a consistent no-op on symlinks.
-`output_root` uses `fs::symlink_metadata` (`:289`), detects
+`output_root` uses `fs::symlink_metadata` (`:296`), detects
 `file_type().is_symlink()` — and, because `symlink_metadata("link/")` follows
 the final component on POSIX, also re-checks the spelling with its trailing
-separators and dot components stripped (`path_is_symlink`, `:234-254`) — and
+separators and dot components stripped (`path_is_symlink`, `:241-261`) — and
 records `is_symlink: true` with `physical_path: None` **without canonicalizing**
-(`:299-305`) — deliberately, because canonicalizing is what would resolve the
+(`:306-312`) — deliberately, because canonicalizing is what would resolve the
 link. From there: `build_groups` contributes no node and marks the workspace
-uncertain (`:1494-1498`); `map_workspace_groups` skips it (`:2137`);
+uncertain (`:1639-1643`); `map_workspace_groups` skips it (`:2301`);
 `build_cleanup_units` skips it for both the mapped *and* the `unmapped` list
-(`:2231-2233`); and `traverse` never follows links either
-(`traverse.rs:7-8`, `symlink_metadata` guards at `traverse.rs:137`, `136`,
-`202`, `244`, plus `Options::default()` with no follow flag at `traverse.rs:83` — I
+(`:2396-2398`); and `traverse` never follows links either
+(`traverse.rs:7-8`, `symlink_metadata` guards at `traverse.rs:307`, `136`,
+`202`, `244`, plus `Options::default()` with no follow flag at `traverse.rs:253` — I
 read this module's usage, not dua-core's default). Consequences worth naming: a
 workspace whose *only* output is a symlink produces **no groups and no
 diagnostic** — `symlink_output_is_uncertain` (`:4893`) asserts exactly
@@ -1130,31 +1130,31 @@ only the groups whose covering overlaps its known aliases (`:1598`), never a
 disjoint group — but the user gets no message. **This is a real gap between ADR
 wording and implementation**, and it is the one I would file. What the *spawned* `cargo
 clean` does with such a root is outside this module; `cleanup.rs`'s final proof
-(`cleanup.rs:3381`) is the only thing that could catch a change between scan
+(`cleanup.rs:3486`) is the only thing that could catch a change between scan
 and clean, and I did not audit that path in full.
 
 **Can a member's manifest produce a disagreeing nested resolution?** Only by
 being in a *different* workspace, which is correct behaviour. Within one
 workspace, a member never gets its own metadata call (step 4 above). The
 untested case is a *conflicting* mapping: `member_to_root.entry(..).or_insert(..)`
-(`:974-986`) is first-writer-wins in group first-seen order and a conflict is neither detected nor
-diagnosed. Combined with the fast path at `:839-845`, a manifest mapped to the
-wrong root is never re-located within that pass. `TwoWsRunner` (`:3729`) proves
+(`:1012-1024`) is first-writer-wins in group first-seen order and a conflict is neither detected nor
+diagnosed. Combined with the fast path at `:877-883`, a manifest mapped to the
+wrong root is never re-located within that pass. `TwoWsRunner` (`:3836`) proves
 the *legitimate* two-workspace case; no test constructs a genuine conflict.
 
 **Bounded, or O(manifests)?** **Bounded by unique workspaces for spawns that
 matter, and asymptotically O(manifests) overall — with bounded parallelism.**
 
 - `cargo metadata`: exactly **one spawn per unique canonical workspace root**
-  (`:793-804`), counted at `:957` (trigger) and `:943` (repeat-trigger
+  (`:831-842`), counted at `:995` (trigger) and `:981` (repeat-trigger
   re-accounting, which replays the recorded outcome without re-spawning). So
   ≤ O(unique workspaces) ≤ O(manifests) spawns.
-- `cargo locate-project`: **exactly one per discovered manifest** (`:755-757`),
+- `cargo locate-project`: **exactly one per discovered manifest** (`:793-795`),
   including manifests the fast path later covers without metadata. Worst case
   is O(manifests): a machine of N unrelated single-crate projects costs N
   locate + N metadata.
 - `refresh_workspace_from_root_manifest` (`:59-76`) costs one metadata and zero
-  locate per call; `cleanup.rs:3103` calls it per candidate at the destructive
+  locate per call; `cleanup.rs:3247` calls it per candidate at the destructive
   boundary, tracked in the separate `proof_*` counters so `--stats` cannot hide
   it (`domain.rs:338-345`, `merge_proof` at `domain.rs:428`).
 
@@ -1169,60 +1169,60 @@ outright. The `cargo_locate_nanos` / `cargo_metadata_nanos` split
 ## 10. Testing
 
 **76 `#[test]` functions** — confirmed by count. The inline module starts at
-`workspace.rs:2311` (`#[cfg(test)] mod tests {`).
+`workspace.rs:2440` (`#[cfg(test)] mod tests {`).
 
 | Area | Count | Tests (line) |
 |---|---|---|
-| Selector qualification | 3 | `:2363`, `:2436`, `:2453` |
-| Bounded Cargo failure causes | 6 | `:2518`, `:2536`, `:2562`, `:2593`, `:2623`, `:2659` |
-| Capability probing | 4 | `:2845`, `:2851`, `:2859`, `:2865` |
-| Metadata resolution & coverage | 16 | `:2696`, `:2871`, `:2934`, `:2989`, `:3134`, `:3207`, `:3237`, `:3274`, `:3310`, `:3379`, `:3437`, `:3489`, `:3567`, `:3635`, `:3727`, `:3797` |
-| Failure-class attribution (M015) | 10 | `:3864`, `:3895`, `:4002`, `:4077`, `:4128`, `:4151`, `:4200`, `:4216`, `:4235`, `:4280` |
-| Grouping & ownership classification | 13 | `:4336`, `:4350`, `:4377`, `:4514`, `:4551`, `:4766`, `:4831`, `:4859`, `:4923`, `:4959`, `:5045`, `:5087`, `:5126` |
-| Analysis, gates, measurement, progress | 11 | `:5139`, `:5324`, `:5373`, `:5395`, `:5423`, `:5479`, `:5521`, `:5606`, `:5658`, `:5704`, `:5749` |
-| Real-Cargo & premise qualification | 5 | `:5847`, `:5915`, `:6006`, `:6048`, `:6097` |
-| Cleanup units & output-root probing | 8 | `:6157`, `:6209`, `:6275`, `:6308`, `:6330`, `:6356`, `:6398`, `:6437` |
+| Selector qualification | 3 | `:2492`, `:2565`, `:2582` |
+| Bounded Cargo failure causes | 6 | `:2647`, `:2665`, `:2691`, `:2722`, `:2752`, `:2788` |
+| Capability probing | 4 | `:3070`, `:3076`, `:3084`, `:3090` |
+| Metadata resolution & coverage | 16 | `:2825`, `:3096`, `:3213`, `:3268`, `:3413`, `:3486`, `:3516`, `:3553`, `:3589`, `:3658`, `:3716`, `:3768`, `:3846`, `:3914`, `:4006`, `:4076` |
+| Failure-class attribution (M015) | 10 | `:4171`, `:4202`, `:4309`, `:4384`, `:4435`, `:4458`, `:4507`, `:4523`, `:4542`, `:4587` |
+| Grouping & ownership classification | 13 | `:4643`, `:4657`, `:4684`, `:4821`, `:4858`, `:5073`, `:5138`, `:5166`, `:5230`, `:5266`, `:5352`, `:5394`, `:5433` |
+| Analysis, gates, measurement, progress | 11 | `:5446`, `:5631`, `:5680`, `:5702`, `:5730`, `:5786`, `:5828`, `:5913`, `:5965`, `:6011`, `:6056` |
+| Real-Cargo & premise qualification | 5 | `:6154`, `:6222`, `:6313`, `:6355`, `:6404` |
+| Cleanup units & output-root probing | 8 | `:6464`, `:6516`, `:6582`, `:6615`, `:6637`, `:6663`, `:6705`, `:6744` |
 
 Most significant: `n_member_workspace_requires_one_metadata_regardless_of_order`
-(`:3437`) — one metadata per workspace in both discovery orders, with one
+(`:3716`) — one metadata per workspace in both discovery orders, with one
 locate per manifest under bulk resolution;
-`another_workspaces_unrepresentable_root_blocks_a_private_claim` (`:4831`) and
-`disjoint_groups_stay_private_despite_a_far_away_unrepresentable_root` (`:4859`) —
+`another_workspaces_unrepresentable_root_blocks_a_private_claim` (`:5138`) and
+`disjoint_groups_stay_private_despite_a_far_away_unrepresentable_root` (`:5166`) —
 the two halves of the per-group exclusivity rule;
 `failed_member_first_is_cleared_by_later_authoritative_workspace_metadata`
-(`:3134`) — coverage completeness under partial failure;
-`unit_with_unmeasured_sibling_is_not_fully_measured` (`:6275`) — the atomicity
+(`:3413`) — coverage completeness under partial failure;
+`unit_with_unmeasured_sibling_is_not_fully_measured` (`:6582`) — the atomicity
 gate; `the_composed_locate_arguments_resolve_against_the_supplied_working_directory`
-(`:5847`) — the C015 regression.
+(`:6154`) — the C015 regression.
 
 ### Test doubles and what each uniquely proves
 
 | Double | Line | Uniquely proves |
 |---|---|---|
-| `FakeCargo` | `:2761` | The general scripted shape: one locate root, N synthetic members, optional `build_directory`, three failure switches (`fail_locate`, `fail_metadata`, `malformed`). It **records nothing**, so it structurally cannot prove call counts. |
-| `CountingRunner` | `:2879` | *Call counts.* Wraps `FakeCargo` with an `AtomicU64` on `argv[0] == "metadata"`, supplying the one observation `FakeCargo` cannot make — that one metadata per workspace holds while every manifest locates. |
-| `MemberFirstFails` | `:3143` | The failure mode where a **member-first** locate failure is cached as permanently unresolved and never cleared. It discriminates on the manifest path so only the member's locate fails, then asserts `unresolved.is_empty()` **and** `cargo_failures == 1`: coverage is repaired, the diagnostic is not retracted. Without this test, a plausible cache-seeding bug would make resolution order-dependent. |
-| `TwoWsRunner` | `:3729` | The *opposite* failure — over-eager member caching. Routes locate by substring on the manifest path to two independent roots and requires 2 locate + 2 metadata. If `member_to_root` were seeded wrongly, workspace B would be silently folded into A. |
-| `FailFirstRunner` | `:3798` | A poisoned cache: one workspace's locate failure must not suppress an unrelated workspace's resolution. |
-| `RecordingRunner` | `:5848` | *Argument composition*, with no Cargo at all. Records `(cwd, argv)` and returns failure; asserts `cwd.join(args.last()).exists()`. Carries an explicit anti-false-green assertion at `:5889-5892`: "the locate path was never exercised, so nothing was proven." |
-| `BelievesRunner` / `BelievesOrphanRunner` | `:3903` / `:4004` | The M015 *believed workspace* message shapes: one whose named parent workspace resolved here (passenger) and one whose named parent did not (scope note). |
-| `RefusedRunner` / `MetadataFailRunner` | `:4236` / `:4281` | The two capability classes at the resolution boundary: a Cargo-refused locate records `RefusedByCargo`; a metadata failure records `Unproven`. |
+| `FakeCargo` | `:2890` | The general scripted shape: one locate root, N synthetic members, optional `build_directory`, three failure switches (`fail_locate`, `fail_metadata`, `malformed`). It **records nothing**, so it structurally cannot prove call counts. |
+| `CountingRunner` | `:3104` | *Call counts.* Wraps `FakeCargo` with an `AtomicU64` on `argv[0] == "metadata"`, supplying the one observation `FakeCargo` cannot make — that one metadata per workspace holds while every manifest locates. |
+| `MemberFirstFails` | `:3422` | The failure mode where a **member-first** locate failure is cached as permanently unresolved and never cleared. It discriminates on the manifest path so only the member's locate fails, then asserts `unresolved.is_empty()` **and** `cargo_failures == 1`: coverage is repaired, the diagnostic is not retracted. Without this test, a plausible cache-seeding bug would make resolution order-dependent. |
+| `TwoWsRunner` | `:4008` | The *opposite* failure — over-eager member caching. Routes locate by substring on the manifest path to two independent roots and requires 2 locate + 2 metadata. If `member_to_root` were seeded wrongly, workspace B would be silently folded into A. |
+| `FailFirstRunner` | `:4077` | A poisoned cache: one workspace's locate failure must not suppress an unrelated workspace's resolution. |
+| `RecordingRunner` | `:6155` | *Argument composition*, with no Cargo at all. Records `(cwd, argv)` and returns failure; asserts `cwd.join(args.last()).exists()`. Carries an explicit anti-false-green assertion at `:6196-6199`: "the locate path was never exercised, so nothing was proven." |
+| `BelievesRunner` / `BelievesOrphanRunner` | `:4210` / `:4311` | The M015 *believed workspace* message shapes: one whose named parent workspace resolved here (passenger) and one whose named parent did not (scope note). |
+| `RefusedRunner` / `MetadataFailRunner` | `:4543` / `:4588` | The two capability classes at the resolution boundary: a Cargo-refused locate records `RefusedByCargo`; a metadata failure records `Unproven`. |
 
 ### Platform risk — and it is real in this file
 
 The brief's premise that "the CI never needs a real `cargo`" is **not true for
 `workspace.rs`**. Four tests drive `SystemCargoRunner` against real fixtures
-(`:5915`, `:6006`, `:6048`, `:6097`), one drives a recording runner against the
-real argument shape (`:5847`), and one calls `Command::new("cargo")`
-directly (`:5918`).
+(`:6222`, `:6313`, `:6355`, `:6404`), one drives a recording runner against the
+real argument shape (`:6154`), and one calls `Command::new("cargo")`
+directly (`:6225`).
 
-That is defensible and deliberate — `:5908-5913` states the reason: a stub that
+That is defensible and deliberate — `:6215-6220` states the reason: a stub that
 ignores the manifest path would not have caught C015. But it puts this file in
 the same class as the project's documented false-green incidents. `plans/registry.md:275-277`
 records C012: "a Windows case that had
 never executed and was green only because an unrelated real `cargo install`
 failed". The exact shape of that hazard is reproduced in this file's
-own history: the version gate at `:5934-5942` once compared the **patch**
+own history: the version gate at `:6241-6249` once compared the **patch**
 component, so `1.99.0` read as patch 0, fell under the threshold, and the case
 "silently skipped -- passing without proving anything, **twice**". The gate now
 compares the **minor** component against 77, which is below the 1.89 MSRV, so on
@@ -1230,11 +1230,11 @@ any supported toolchain it cannot fire. That is a real, verifiable mitigation.
 
 Residual risks, honestly stated:
 
-1. The skip is a bare `return` inside a passing test (`:5939-5942`). It is
+1. The skip is a bare `return` inside a passing test (`:6246-6249`). It is
 self-documenting via `eprintln!`, but nothing makes it *fail*. A toolchain
 older than 1.77 would quietly convert the real-Cargo tests into skips.
-2. `:6048` writes a `.cargo/config.toml` with a forward-slashed path and a
-   `Cargo.lock`, with the Windows rationale in a comment (`:6059-6061`) — the lane
+2. `:6355` writes a `.cargo/config.toml` with a forward-slashed path and a
+   `Cargo.lock`, with the Windows rationale in a comment (`:6366-6368`) — the lane
    risk is at least partly handled by hand, and `--offline --locked` makes a
    network-dependent false green impossible.
 3. `scripts/check-fixture-portability.py` **does** cover this file:
@@ -1246,14 +1246,14 @@ older than 1.77 would quietly convert the real-Cargo tests into skips.
    module most needs: "whether a case's pass condition proves the intended branch
    … Reviewing that is the point of the C013 inventory" (script lines 46-47).
 
-**Honest gaps:** no test for a *conflicting* member→root mapping (`:974-986`);
+**Honest gaps:** no test for a *conflicting* member→root mapping (`:1028-1040`);
 no test asserting a diagnostic for a
 symlink-only output root, because none is emitted; and
-`observer_counts_progress_without_allocation_per_entry` (`:5139`) asserts one
+`observer_counts_progress_without_allocation_per_entry` (`:5446`) asserts one
 atomic on a `TestObserver` without exercising this module at all.
 The unreadable-covering-root → `MissingOutput` path through the `None` branch of
-`has_artifact_entries` (`:1741`) is now *partly* covered from the other side —
-`unreadable_output_root_is_uncertain_never_absent` (`:6437`) proves the probe
+`has_artifact_entries` (`:1836`) is now *partly* covered from the other side —
+`unreadable_output_root_is_uncertain_never_absent` (`:6744`) proves the probe
 reports `exists: true` with no physical identity — but the `read_dir` failure
 inside `has_artifact_entries` itself is still unpinned.
 
@@ -1263,23 +1263,23 @@ inside `has_artifact_entries` itself is still unpinned.
 
 1. **Every new failure path is a diagnostic, never a `return` from the loop.**
    Any `?`/`?`-like early exit added to `resolve_workspaces_with_coverage`
-   (`:738-1057`) would silently shrink the ownership universe. Compare `:848-859`
-   and `:1103-1120`.
+   (`:798-1110`) would silently shrink the ownership universe. Compare `:906-917`
+   and `:1156-1173`.
 2. **Any new output root must be added to all four consuming sites** or it will
-   be invisible to some: `build_groups` node collection (`:1480-1512`),
-   `all_outputs` exclusion (`:1760-1770`), `map_workspace_groups` (`:2136-2149`),
-   `build_cleanup_units` `unmapped` (`:2229-2237`).
+   be invisible to some: `build_groups` node collection (`:1551-1583`),
+   `all_outputs` exclusion (`:1855-1865`), `map_workspace_groups` (`:2237-2250`),
+   `build_cleanup_units` `unmapped` (`:2330-2338`).
 3. **Exclusivity is per group, and it is the only thing standing between an
    incomplete graph and a `PrivateBounded` claim.** A root that contributes no
    node must contribute its known aliases to `uncertain_aliases`
-   (`:1496`, `:1509`), and the classification must consult
-   `group_overlaps_uncertain` (`:1598`) before granting `PrivateBounded`.
-   Widening the alias set is safe; narrowing it is not. Tests: `:4831` and
-   `:4859`.
-4. **Never canonicalize a symlink.** `output_root` (`:289-357`) checks
+   (`:1567`, `:1580`), and the classification must consult
+   `group_overlaps_uncertain` (`:1693`) before granting `PrivateBounded`.
+   Widening the alias set is safe; narrowing it is not. Tests: `:5138` and
+   `:5166`.
+4. **Never canonicalize a symlink.** `output_root` (`:307-375`) checks
    `symlink_metadata` *before* `canonicalize`; reordering those two lines would
    turn a refused root into a followed one. Also keep `traverse`'s
-   `symlink_metadata` guards (`traverse.rs:137`, `136`, `202`, `244`).
+   `symlink_metadata` guards (`traverse.rs:307`, `136`, `202`, `244`).
 5. **Record the stage and capability where the diagnostic is pushed**, not by
    parsing the message back. Every new failure branch needs its own
    `unresolved_stage.insert(..)` entry (`:857`, `:869-872`, `:884`, `:897`,
@@ -1303,10 +1303,10 @@ inside `has_artifact_entries` itself is still unpinned.
     per-group cleanable flag would let a `PrivateBounded` target authorize a
     sibling `Shared` build root, which ADR C003 forbids.
 11. **Version-gated capability changes are empirical, not documented.** The
-    allowlist at `:147-163` may only gain a release after real `cargo clean`
+    allowlist at `:317-333` may only gain a release after real `cargo clean`
     qualification with a *configured* `build.target`; unknown versions stay
-    `false` (tests `cleanup.rs:4582-4597`).
+    `false` (tests `cleanup.rs:4816-4831`).
 12. **New real-Cargo tests need a premise assertion, not a stub.** Follow
-    `:5728-5731` (the case ran) and `:5757-5765` (cargo is present and
+    `:5962-5965` (the case ran) and `:5991-5999` (cargo is present and
     responded) — and check the new file against
     `scripts/check-fixture-portability.py`.

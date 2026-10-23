@@ -37,7 +37,7 @@ set edit:completion:arg-completer[cargo] = {|@words|
             cand --verbose 'Show the detailed human surface: every workspace considered (including the ones that were skipped), the scope census, the per-phase counters, and the diagnostic detail'
             cand -i 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
             cand --interactive 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
-            cand --dry-run 'Simulate: run every decision, proof, and reporting step, but invoke no `cargo clean` process at all. Honoured wherever it appears, so the `cargo cleanme --dry-run clean ROOT` spelling cannot fall back to Execute. Only `clean` (and `update`''s own `--dry-run`) honour it: `scan` and `config` ignore a global `--dry-run` (read-only / local-only, no behaviour change)'
+            cand --dry-run 'Simulate: run every decision, proof, and reporting step, but invoke no `cargo clean` process at all. Honoured wherever it appears, so the `cargo cleanme --dry-run ROOT` spelling cannot fall back to Execute. Only the cleanup surface (and `update`''s own `--dry-run`) honour it: `scan` and `config` ignore a global `--dry-run` (read-only / local-only, no behaviour change)'
             cand --dryrun 'Historical spelling of `--dry-run`; retained as a hidden alias'
             cand --full 'Complete Full reconciliation before cleaning its learned roots'
             cand --cargo-preview 'Cargo preview: after the same complete final proof, invoke Cargo''s own `clean --dry-run --verbose`. Never removes anything'

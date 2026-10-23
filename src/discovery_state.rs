@@ -359,14 +359,16 @@ pub fn reconcile_full(
         // not intersect the path with uncertainty. "Exists but no project was
         // found" keeps ADR 002 age behavior; symlinks, files, permission
         // failures and indeterminate errors are never positive absence.
-        if !uncertainty
-            .iter()
-            .any(|p| uncertainty_intersects(&old.path, p))
-            && matches!(
-                fs::symlink_metadata(&old.path).map_err(|e| e.kind()),
-                Err(std::io::ErrorKind::NotFound)
-            )
-        {
+        //
+        // The "coverage does not intersect the path with uncertainty" half of
+        // that condition is enforced *above*, by the uncertainty rule that
+        // retains any intersecting root and continues. Repeating the test
+        // here would be a conjunct that can never be false — and a conjunct
+        // that reads like it guards something it cannot.
+        if matches!(
+            fs::symlink_metadata(&old.path).map_err(|e| e.kind()),
+            Err(std::io::ErrorKind::NotFound)
+        ) {
             continue;
         }
         if old.last_project_seen_at > observed_at
@@ -1076,8 +1078,15 @@ mod tests {
             "temporary fixture root is not an automatic maintenance location: {:?}",
             state.learned_roots
         );
-        // Intersecting uncertainty vetoes even positive absence: the boundary
+        // Intersecting uncertainty retains even positive absence: the boundary
         // cannot be proved, so the root is retained.
+        //
+        // The rule that retains it is the **uncertainty** rule, not a veto
+        // inside the absence check: the absence check is only reached by a
+        // root that intersects no uncertainty at all. The case below is
+        // therefore paired with a discriminating one — an *existing* root
+        // that is past its retention and intersects uncertainty — which only
+        // the uncertainty rule can retain.
         let uncertain = reconcile_full(
             &prior,
             &[],
@@ -1093,6 +1102,59 @@ mod tests {
         assert!(
             state.learned_roots.iter().any(|r| r.path == absent),
             "uncertain absence must retain: {:?}",
+            state.learned_roots
+        );
+        // The discriminating case: an *existing* root that is **past** its
+        // retention and intersects uncertainty. The age rule would drop it
+        // and the absence rule does not apply to it, so only the uncertainty
+        // rule can retain it. This is what pins the rule that actually does
+        // the work — a case that only asserted "uncertain absence is
+        // retained" was satisfied by the same rule but named a veto that
+        // could never fire.
+        let stale = dir.path().join("stale-but-uncertain");
+        fs::create_dir(&stale).unwrap();
+        let prior_stale = DiscoveryState {
+            learned_roots: vec![LearnedRoot {
+                path: stale.clone(),
+                // 100 days old: well past a 30-day retention.
+                last_project_seen_at: 100_000_000 - 100 * 86400,
+            }],
+            ..Default::default()
+        };
+        let stale_result = reconcile_full(
+            &prior_stale,
+            &[],
+            std::slice::from_ref(&stale),
+            ReconciliationMode::Complete,
+            100_000_000,
+            30,
+            None,
+        );
+        let Reconciliation::Publish(state) = stale_result else {
+            panic!("completed Full should publish")
+        };
+        assert!(
+            state.learned_roots.iter().any(|r| r.path == stale),
+            "uncertainty must retain a root the age rule would drop: {:?}",
+            state.learned_roots
+        );
+        // The same root, without the uncertainty, is dropped by the age rule:
+        // so the retention above is the uncertainty's doing.
+        let stale_alone = reconcile_full(
+            &prior_stale,
+            &[],
+            &[],
+            ReconciliationMode::Complete,
+            100_000_000,
+            30,
+            None,
+        );
+        let Reconciliation::Publish(state) = stale_alone else {
+            panic!("completed Full should publish")
+        };
+        assert!(
+            !state.learned_roots.iter().any(|r| r.path == stale),
+            "without uncertainty the age rule must drop the root: {:?}",
             state.learned_roots
         );
         // An incomplete Full never prunes: without a complete traversal there

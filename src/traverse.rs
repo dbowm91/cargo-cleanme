@@ -23,6 +23,176 @@ use std::{
     time::SystemTime,
 };
 
+/// Whether `path` is a symlink, or a spelling of one.
+///
+/// **One definition, four call sites.** The predicate answered "is this path a
+/// symlink?" had four byte-identical copies — one in each module that probes
+/// an output root — and a copy is a place the predicate can drift: the four
+/// must agree, because the same path is classified by several of them and a
+/// disagreement would make one module treat a symlinked output as a plain
+/// directory while another treats it as a symlink.
+///
+/// A trailing separator or a `/.` component makes `symlink_metadata` follow
+/// the link, so the spelling is trimmed and re-probed. The two spellings that
+/// hide a symlink are `link/` — POSIX `symlink_metadata` follows the final
+/// component — and `link/.`, which stats through the link as well.
+pub fn path_is_symlink(path: &Path) -> bool {
+    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return true;
+    }
+    let mut spelling = path.as_os_str().to_string_lossy().into_owned();
+    loop {
+        let trimmed = spelling.trim_end_matches(['/', '\\']).to_owned();
+        if trimmed.ends_with("/.") || trimmed.ends_with("\\.") {
+            spelling = trimmed[..trimmed.len() - 1].to_owned();
+            continue;
+        }
+        spelling = trimmed;
+        break;
+    }
+    if !spelling.is_empty()
+        && fs::symlink_metadata(&spelling).is_ok_and(|m| m.file_type().is_symlink())
+    {
+        return true;
+    }
+    false
+}
+
+/// The lexical identity of a path: `.` and `..` resolved textually, with no
+/// filesystem access.
+///
+/// `..` is popped lexically rather than resolved through the filesystem,
+/// because the path may not exist — and a path that does not exist still has
+/// to be comparable with its siblings. A relative path is returned unchanged:
+/// there is no absolute spelling to reduce it to.
+pub fn lexical_identity(path: &Path) -> PathBuf {
+    if !path.is_absolute() {
+        return path.to_path_buf();
+    }
+    let mut out = PathBuf::from(std::path::MAIN_SEPARATOR_STR);
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Resolve a path as far as the filesystem allows.
+///
+/// Canonicalizes the deepest existing ancestor and re-appends the remaining
+/// components, so a path that does not exist yet is still compared in its
+/// physical location instead of lexically. This keeps the cross-workspace
+/// overlap check sound when a path component (for example macOS `/var`, or a
+/// symlinked ancestor of a configured output directory) is not canonical.
+pub fn resolve_as_far_as_possible(path: &Path) -> PathBuf {
+    if let Ok(canonical) = fs::canonicalize(path) {
+        return canonical;
+    }
+    resolve_beneath_existing_ancestor(path)
+}
+
+/// The walk-up half of [`resolve_as_far_as_possible`], for a caller that has
+/// already established that the path does not resolve.
+fn resolve_beneath_existing_ancestor(path: &Path) -> PathBuf {
+    let mut current = path;
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    while let Some(name) = current.file_name() {
+        tail.push(name.to_os_string());
+        let Some(parent) = current.parent() else {
+            break;
+        };
+        if let Ok(canonical) = fs::canonicalize(parent) {
+            let mut resolved = canonical;
+            for part in tail.iter().rev() {
+                resolved.push(part);
+            }
+            return resolved;
+        }
+        if parent.as_os_str().is_empty() {
+            break;
+        }
+        current = parent;
+    }
+    path.to_path_buf()
+}
+
+/// A scope root, resolved for comparison and kept for reporting.
+///
+/// The two are separate because a root that does not resolve still has to be
+/// *compared* in its physical location — otherwise a symlinked prefix makes
+/// one physical root look like two — while it still has to be *reported* by
+/// the name the operator gave it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedRoot {
+    /// The identity the root is compared by: its physical location, resolved
+    /// as far as the filesystem allows.
+    pub identity: PathBuf,
+    /// The spelling the root is reported as: the canonical one when the root
+    /// resolves, and the caller's own spelling when it does not.
+    pub spelling: PathBuf,
+    /// The error that stopped the root from resolving, if it did not resolve.
+    pub error: Option<String>,
+}
+
+/// Resolve one scope root.
+pub fn resolve_root(path: &Path) -> ResolvedRoot {
+    match fs::canonicalize(path) {
+        Ok(canonical) => ResolvedRoot {
+            identity: lexical_identity(&canonical),
+            spelling: canonical,
+            error: None,
+        },
+        Err(e) => {
+            let resolved = resolve_beneath_existing_ancestor(path);
+            ResolvedRoot {
+                identity: lexical_identity(&resolved),
+                spelling: path.to_path_buf(),
+                error: Some(e.to_string()),
+            }
+        }
+    }
+}
+
+/// Collapse a set of scope roots to the outermost ones.
+///
+/// A root contained in another root is dropped: the ancestor covers it, so
+/// walking the ancestor covers the descendant too.
+///
+/// **One definition, three call sites.** The collapse — canonicalise, dedup,
+/// drop nested roots — was implemented four times, and the copies disagreed
+/// about a root that cannot be resolved: one swallowed the failure, one failed
+/// the whole run, one compared the unresolved root lexically against
+/// canonicalised siblings, and one did not canonicalise at all. The *policy*
+/// still belongs to the caller (the cleanup surface fails closed; the scan
+/// and display surfaces keep the spelling), but the *mechanism* is one.
+///
+/// The comparison is by [`ResolvedRoot::identity`], so a symlinked prefix
+/// cannot make one physical root look like two: `/var/x` and `/private/var/x`
+/// are one root on macOS, not two.
+pub fn collapse_outermost(roots: Vec<PathBuf>) -> Vec<ResolvedRoot> {
+    let mut resolved: Vec<ResolvedRoot> =
+        roots.into_iter().map(|root| resolve_root(&root)).collect();
+    // Sort and dedup by the reported spelling, so the surviving root of a
+    // duplicated pair is the one the per-surface implementations kept.
+    resolved.sort_by(|a, b| a.spelling.cmp(&b.spelling));
+    resolved.dedup_by(|a, b| a.spelling == b.spelling);
+    let mut collapsed: Vec<ResolvedRoot> = Vec::new();
+    for root in resolved {
+        if !collapsed
+            .iter()
+            .any(|parent: &ResolvedRoot| root.identity.starts_with(&parent.identity))
+        {
+            collapsed.push(root);
+        }
+    }
+    collapsed
+}
+
 /// Whether `path` is a directory holding a nested-repository marker.
 ///
 /// One definition, four call sites: the descend decision and the entry

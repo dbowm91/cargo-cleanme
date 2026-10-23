@@ -189,27 +189,20 @@ mod tests {
             fs::set_permissions(&editor, fs::Permissions::from_mode(0o755)).unwrap();
         }
         let dir = program.path();
-        // SAFETY: single-threaded test process; restores the previous values.
-        let previous_visual = std::env::var_os("VISUAL");
-        let previous_editor = std::env::var_os("EDITOR");
-        unsafe {
-            std::env::set_var("VISUAL", "/nonexistent/editor");
-            std::env::set_var("EDITOR", &editor);
-            let (resolved, args) = resolve_editor().unwrap();
-            assert_eq!(resolved, editor, "must fall through to EDITOR");
-            assert!(args.is_empty());
-            std::env::remove_var("VISUAL");
-            let (resolved, _) = resolve_editor().unwrap();
-            assert_eq!(resolved, editor);
-        }
-        match previous_visual {
-            Some(v) => unsafe { std::env::set_var("VISUAL", v) },
-            None => unsafe { std::env::remove_var("VISUAL") },
-        }
-        match previous_editor {
-            Some(v) => unsafe { std::env::set_var("EDITOR", v) },
-            None => unsafe { std::env::remove_var("EDITOR") },
-        }
+        // The environment is process-global: the guard holds the one
+        // environment lock for the whole mutation and restores every variable
+        // it touched, panic or not. A failure between the set and the restore
+        // used to leave `VISUAL`/`EDITOR` pointing at a temporary file for
+        // every later test in this binary.
+        let mut env = crate::progress::test_env::EnvRestore::acquire();
+        env.set("VISUAL", "/nonexistent/editor");
+        env.set("EDITOR", &editor);
+        let (resolved, args) = resolve_editor().unwrap();
+        assert_eq!(resolved, editor, "must fall through to EDITOR");
+        assert!(args.is_empty());
+        env.remove("VISUAL");
+        let (resolved, _) = resolve_editor().unwrap();
+        assert_eq!(resolved, editor);
         let _ = dir;
     }
 }

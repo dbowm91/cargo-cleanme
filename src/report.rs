@@ -93,8 +93,19 @@ impl HumanOptions {
 /// stable, and serde escapes it a second time.
 fn path_text(p: &Path) -> String {
     let text = p.to_string_lossy();
+    escape_path_text(&text).into_owned()
+}
+
+/// Escape the control characters in a path (or any) text for a human surface.
+///
+/// Every human surface routes path text through here, so a directory name can
+/// never carry a raw newline, carriage return or escape byte into a terminal.
+/// The escaped form is printable ASCII, which is also what the frame geometry
+/// assumes: a frame line is one physical row, and a raw newline inside one
+/// would paint a row the frame never counted.
+pub(crate) fn escape_path_text(text: &str) -> std::borrow::Cow<'_, str> {
     if !text.chars().any(char::is_control) {
-        return text.into_owned();
+        return std::borrow::Cow::Borrowed(text);
     }
     let mut escaped = String::with_capacity(text.len() + 8);
     for c in text.chars() {
@@ -104,22 +115,23 @@ fn path_text(p: &Path) -> String {
             escaped.push(c);
         }
     }
-    escaped
+    std::borrow::Cow::Owned(escaped)
 }
 pub fn format_bytes(n: u64) -> String {
     const UNITS: [&str; 7] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
     // Scaled in integer arithmetic: `n as f64` silently loses bytes above
     // 2^53, so the largest units could not be reported accurately at all.
+    //
+    // The loop's own re-check is what promotes a value that rounds up to
+    // exactly 1024.00: the body rounds to the next unit's hundredths, and the
+    // condition is re-evaluated, so "1024.00 KiB" can never be printed. There
+    // is no second pass for it — one that could not run, because the loop
+    // exits either with the largest unit reached (no unit left to promote
+    // into) or with the value already below the threshold.
     let mut hundredths = u128::from(n) * 100;
     let mut unit = 0usize;
     while unit + 1 < UNITS.len() && hundredths >= 1024 * 100 {
         hundredths = (hundredths + 512) / 1024;
-        unit += 1;
-    }
-    // A value that rounds up to exactly 1024.00 must change unit, not print
-    // "1024.00 KiB".
-    if unit + 1 < UNITS.len() && hundredths >= 1024 * 100 {
-        hundredths /= 1024;
         unit += 1;
     }
     let number = format!("{}.{:02}", hundredths / 100, hundredths % 100);
@@ -142,17 +154,24 @@ pub fn render(report: &mut ScanReport, options: &HumanOptions) -> String {
         .iter()
         .fold(0u64, |s, g| s.saturating_add(g.bytes));
     let mut o = String::new();
-    // One column width for the whole table, so the sizes line up.
-    let width = report
+    // Each path is rendered once and kept: the column width and the row need
+    // the same text, and rendering it twice doubled the path work — a
+    // relativization pass and a control-character scan per group — for no gain.
+    let rendered: Vec<String> = report
         .groups
         .iter()
-        .map(|g| options.path(&g.display_path).chars().count())
+        .map(|g| options.path(&g.display_path))
+        .collect();
+    // One column width for the whole table, so the sizes line up.
+    let width = rendered
+        .iter()
+        .map(|path| path.chars().count())
         .max()
         .unwrap_or(0);
-    for g in &report.groups {
+    for (g, path) in report.groups.iter().zip(rendered.iter()) {
         o.push_str(&format!(
             "{:<width$}  {}  [{}]\n",
-            options.path(&g.display_path),
+            path,
             format_bytes(g.bytes).trim(),
             g.ownership.label(),
         ));

@@ -2,6 +2,7 @@ use crate::{
     config::ScanConfig,
     domain::{DiscoveryFilters, EffectiveScanPolicy, ScanRequest, ScanScope},
     error::AppError,
+    traverse::path_is_symlink,
 };
 use std::{
     fs,
@@ -80,16 +81,16 @@ pub fn routine_seed_candidates(home: &Path) -> Vec<PathBuf> {
 
 /// Provenance of a cleanup root candidate.
 ///
-/// Explicit roots are caller-selected (`scan.root`, `scan ROOT`, `clean ROOT`)
-/// and authoritative: any defect is fatal. Automatic roots (seed hints and
+/// Explicit roots are caller-selected (`scan.root`, `scan ROOT`,
+/// `cargo cleanme ROOT`) and authoritative: any defect is fatal. Automatic roots (seed hints and
 /// learned state) are search hints only: proven absence/non-directory omits
 /// them from the current invocation, while uncertainty blocks mutation.
 ///
 /// Operator roots are the roots the working directory contributes to the
 /// maintenance scope (ADR 009). The operator chose them by standing there, so
 /// the maintainability rule does not apply to them: that rule stops the tool
-/// from *choosing* a transient origin on its own, and `clean ROOT` already
-/// permits the same subtree. Every other defect keeps the automatic root's
+/// from *choosing* a transient origin on its own, and `cargo cleanme ROOT`
+/// already permits the same subtree. Every other defect keeps the automatic root's
 /// handling — a symlink blocks the scope, an absent or non-directory root is
 /// omitted — because a scope that quietly reduced itself is worse than one
 /// that stops.
@@ -219,32 +220,6 @@ impl ClassifiedRoots {
 pub fn classify_cleanup_roots(entries: CleanupCandidates) -> Result<ClassifiedRoots, AppError> {
     let home = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf());
     classify_cleanup_roots_with_home(entries, home.as_deref())
-}
-
-/// `symlink_metadata("link/")` follows the final component on POSIX, so a
-/// trailing slash hides a symlink from the `is_symlink` check. Judge the
-/// path with its trailing separators stripped as well. A trailing `/.`
-/// spells the same bypass, so dot components are stripped too.
-fn path_is_symlink(path: &Path) -> bool {
-    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
-        return true;
-    }
-    let mut spelling = path.as_os_str().to_string_lossy().into_owned();
-    loop {
-        let trimmed = spelling.trim_end_matches(['/', '\\']).to_owned();
-        if trimmed.ends_with("/.") || trimmed.ends_with("\\.") {
-            spelling = trimmed[..trimmed.len() - 1].to_owned();
-            continue;
-        }
-        spelling = trimmed;
-        break;
-    }
-    if !spelling.is_empty()
-        && fs::symlink_metadata(&spelling).is_ok_and(|m| m.file_type().is_symlink())
-    {
-        return true;
-    }
-    false
 }
 
 fn classify_cleanup_roots_with_home(
@@ -546,7 +521,7 @@ impl FullCleanupVerdict {
     }
 }
 
-/// Decide `clean --full` roots from a finished Full reconciliation.
+/// Decide `cargo cleanme --full` roots from a finished Full reconciliation.
 ///
 /// The roots come from the in-memory generation the traversal just proved,
 /// never from a disk reload that could be an older generation when
@@ -802,27 +777,6 @@ pub fn global_discovery_policy() -> GlobalDiscoveryPolicy {
     }
 }
 
-/// Lexically normalize an absolute path without touching the filesystem.
-///
-/// Used as the identity of a root that cannot be canonicalized (deleted, or
-/// unreadable). It is only ever compared against other roots, never walked.
-fn lexical_identity(path: &Path) -> PathBuf {
-    if !path.is_absolute() {
-        return path.to_path_buf();
-    }
-    let mut out = PathBuf::from(std::path::MAIN_SEPARATOR_STR);
-    for component in path.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
-}
-
 fn canonical_dedup_roots(roots: Vec<PathBuf>) -> Vec<PathBuf> {
     canonical_dedup_roots_protecting(roots, &[])
 }
@@ -835,6 +789,13 @@ fn canonical_dedup_roots(roots: Vec<PathBuf>) -> Vec<PathBuf> {
 /// [`compose_global_policy`]). Collapsing it would re-create the ambiguity the
 /// caller resolved, and the scan would double-count nothing while losing the
 /// exception.
+///
+/// The collapse itself is [`crate::traverse::collapse_outermost`] — the one
+/// implementation the scan, display and cleanup surfaces share. What is
+/// specific to this surface is the *protection*: a protected root survives
+/// even when an ancestor contains it. The protection is compared by identity
+/// too, so it holds for a root whose spelling differs from its physical
+/// location.
 fn canonical_dedup_roots_protecting(roots: Vec<PathBuf>, protected: &[PathBuf]) -> Vec<PathBuf> {
     // Dedup and collapse on the best available identity for each root. A root
     // that cannot be canonicalized previously kept its raw spelling, so it was
@@ -842,29 +803,31 @@ fn canonical_dedup_roots_protecting(roots: Vec<PathBuf>, protected: &[PathBuf]) 
     // subtree was scanned twice (L16). Each surviving root keeps its own
     // spelling, so "scan root is unavailable" still names what the user asked
     // for.
-    let mut identified: Vec<(PathBuf, PathBuf)> = roots
-        .into_iter()
-        .map(|root| match fs::canonicalize(&root) {
-            // Resolvable roots keep their canonical spelling, as before.
-            Ok(canonical) => (canonical.clone(), canonical),
-            // Unresolvable roots keep their own spelling, but are compared by
-            // their lexical identity so an overlapping parent still collapses.
-            Err(_) => (lexical_identity(&root), root),
+    let protected_identities: Vec<PathBuf> = protected
+        .iter()
+        .map(|root| {
+            crate::traverse::lexical_identity(&crate::traverse::resolve_as_far_as_possible(root))
         })
         .collect();
-    identified.sort();
-    identified.dedup_by(|a, b| a.0 == b.0);
-    let mut collapsed: Vec<(PathBuf, PathBuf)> = Vec::new();
-    for (identity, root) in identified {
-        if protected.contains(&identity)
+    let mut identified: Vec<crate::traverse::ResolvedRoot> = roots
+        .into_iter()
+        .map(|root| crate::traverse::resolve_root(&root))
+        .collect();
+    identified.sort_by(|a, b| a.spelling.cmp(&b.spelling));
+    identified.dedup_by(|a, b| a.spelling == b.spelling);
+    let mut collapsed: Vec<crate::traverse::ResolvedRoot> = Vec::new();
+    for root in identified {
+        if protected_identities.contains(&root.identity)
             || !collapsed
                 .iter()
-                .any(|(parent, _): &(PathBuf, PathBuf)| identity.starts_with(parent))
+                .any(|parent: &crate::traverse::ResolvedRoot| {
+                    root.identity.starts_with(&parent.identity)
+                })
         {
-            collapsed.push((identity, root));
+            collapsed.push(root);
         }
     }
-    collapsed.into_iter().map(|(_, root)| root).collect()
+    collapsed.into_iter().map(|root| root.spelling).collect()
 }
 
 fn managed_rust_prunes() -> Vec<PathBuf> {
@@ -1324,8 +1287,8 @@ mod tests {
         );
     }
 
-    /// C028 + M018: `clean --full` consumes the fresh in-memory generation or
-    /// refuses. A missing generation stays fatal; a failed save is the
+    /// C028 + M018: `cargo cleanme --full` consumes the fresh in-memory
+    /// generation or refuses. A missing generation stays fatal; a failed save is the
     /// caller's warning, not this decision.
     ///
     /// M018: an incomplete reconciliation no longer refuses wholesale. It
@@ -1529,8 +1492,8 @@ mod tests {
     /// ADR 009: the operator's roots are exempt from the maintainability rule.
     ///
     /// The rule stops the tool from *choosing* a transient origin on its own. An
-    /// operator standing in `~/.codex/worktrees` has chosen it, and `clean ROOT`
-    /// already permits the same subtree. The same path as an *automatic* root is
+    /// operator standing in `~/.codex/worktrees` has chosen it, and
+    /// `cargo cleanme ROOT` already permits the same subtree. The same path as an *automatic* root is
     /// still refused — the exemption is the provenance, not the path.
     #[test]
     fn operator_provenance_admits_what_the_maintainability_rule_refuses() {
