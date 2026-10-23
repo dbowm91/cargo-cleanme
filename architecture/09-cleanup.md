@@ -664,7 +664,7 @@ root holds a package directory, or lies inside a workspace's source tree (see
 [07 — Workspace](07-workspace.md)); both shapes are invisible to the resolved
 universe, which is what the classification works from. The proof re-derives them
 from the filesystem at the moment of the spawn: a covered root that lies inside
-a source tree is refused at `:3963-3980`, and a covered root that holds a
+a source tree is refused at `:3972-3995`, and a covered root that holds a
 package directory is refused at `:4045-4054`. Both refusals are
 `SkippedSafety` — the unit is withheld, not failed, and the scope continues.
 

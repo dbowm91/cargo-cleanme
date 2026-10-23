@@ -745,7 +745,7 @@ Three honest limits:
   `$HOME` either.
 - It is a *conservative-in-the-right-direction* heuristic, not an authority. The
   real containment guarantee for the Routine walk is
-  `canonical_dedup_roots` in `policy.rs:780-782`, not this function.
+  `canonical_dedup_roots` in `policy.rs:782-784`, not this function.
 
 ## 6. Publication
 

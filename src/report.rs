@@ -100,10 +100,13 @@ fn path_text(p: &Path) -> String {
 ///
 /// Every human surface routes path text through here, so a directory name can
 /// never carry a raw newline, carriage return or escape byte into a terminal.
-/// The escaped form is printable ASCII, which is also what the frame geometry
+/// The escaped form is printable, which is also what the frame geometry
 /// assumes: a frame line is one physical row, and a raw newline inside one
 /// would paint a row the frame never counted.
-pub(crate) fn escape_path_text(text: &str) -> std::borrow::Cow<'_, str> {
+///
+/// Public because the binary's stderr surfaces are human surfaces too, and
+/// they are a separate crate from this module.
+pub fn escape_path_text(text: &str) -> std::borrow::Cow<'_, str> {
     if !text.chars().any(char::is_control) {
         return std::borrow::Cow::Borrowed(text);
     }

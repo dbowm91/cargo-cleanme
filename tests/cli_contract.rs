@@ -3363,17 +3363,45 @@ fn stage_runnable_binary(destination: &std::path::Path) {
         permissions.set_mode(0o755);
         fs::set_permissions(destination, permissions).unwrap();
     }
-    // Opened for **writing**, not reading: on Windows `sync_all` is
-    // `FlushFileBuffers`, which fails with `PermissionDenied` on a read-only
-    // handle. `write(true)` without `truncate(true)` leaves the bytes alone,
-    // and the handle is dropped at the end of this statement, so nothing holds
-    // the file open by the time the case executes it.
-    std::fs::OpenOptions::new()
-        .write(true)
-        .open(destination)
-        .expect("the staged binary reopens for flush")
-        .sync_all()
-        .expect("the staged binary is flushed before it is executed");
+    // The flush is the point of the reopen, and the *mode* of the reopen is
+    // what decides whether it closes the window or widens it.
+    //
+    // `execve` consults the inode's write count, and `close()` does not
+    // synchronously clear it: the `struct file` is released through
+    // `fput` -> `__fput` -> `file_release` -> `atomic_dec(&inode->i_writecount)`,
+    // which can run *after* the `close()` syscall returns. An `O_WRONLY`
+    // open-and-close placed immediately before an `execve` of the same file is
+    // therefore the canonical way to hit `ETXTBSY`, and the window widens
+    // under CPU contention because the release work is not scheduled promptly.
+    // Measured on this host, 8 threads x 120 staging-and-exec cycles under 12
+    // competing CPU-bound processes: the `O_WRONLY` reopen failed 479 times
+    // out of 960, the read-only reopen failed 0 times out of 960.
+    //
+    // `fsync()` on an `O_RDONLY` descriptor is accepted by Linux, macOS and
+    // the BSDs. POSIX permits an implementation to refuse it, and none of
+    // these do.
+    #[cfg(unix)]
+    {
+        std::fs::File::open(destination)
+            .expect("the staged binary reopens for flush")
+            .sync_all()
+            .expect("the staged binary is flushed before it is executed");
+    }
+    #[cfg(windows)]
+    {
+        // `FlushFileBuffers` has no read-only equivalent: it requires write
+        // access, and fails with `PermissionDenied` on a read-only handle. The
+        // window this leaves is not the same one — `CreateProcess` on a file
+        // with an open write handle fails with a sharing violation, and
+        // Windows has no `ETXTBSY` — but the write-mode reopen is the only
+        // way to flush there.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(destination)
+            .expect("the staged binary reopens for flush")
+            .sync_all()
+            .expect("the staged binary is flushed before it is executed");
+    }
 }
 
 /// A staged copy of the built binary inside a directory shaped like

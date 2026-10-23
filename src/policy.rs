@@ -192,10 +192,12 @@ impl ClassifiedRoots {
                     .iter()
                     .take(3)
                     .map(|path| {
-                        path.display()
-                            .to_string()
+                        // The shared escaper, then the bound on the *rendered*
+                        // text: a path of control characters must not be able
+                        // to push the visible text past the bound by rendering
+                        // shorter than it is.
+                        crate::report::escape_path_text(&path.display().to_string())
                             .chars()
-                            .filter(|ch| !ch.is_control())
                             .take(200)
                             .collect::<String>()
                     })
@@ -790,8 +792,8 @@ fn canonical_dedup_roots(roots: Vec<PathBuf>) -> Vec<PathBuf> {
 /// caller resolved, and the scan would double-count nothing while losing the
 /// exception.
 ///
-/// The collapse itself is [`crate::traverse::collapse_outermost`] — the one
-/// implementation the scan, display and cleanup surfaces share. What is
+/// The collapse itself is [`crate::traverse::collapse_outermost_protecting`] —
+/// the one implementation the scan, display and cleanup surfaces share. What is
 /// specific to this surface is the *protection*: a protected root survives
 /// even when an ancestor contains it. The protection is compared by identity
 /// too, so it holds for a root whose spelling differs from its physical
@@ -809,25 +811,10 @@ fn canonical_dedup_roots_protecting(roots: Vec<PathBuf>, protected: &[PathBuf]) 
             crate::traverse::lexical_identity(&crate::traverse::resolve_as_far_as_possible(root))
         })
         .collect();
-    let mut identified: Vec<crate::traverse::ResolvedRoot> = roots
+    crate::traverse::collapse_outermost_protecting(roots, &protected_identities)
         .into_iter()
-        .map(|root| crate::traverse::resolve_root(&root))
-        .collect();
-    identified.sort_by(|a, b| a.spelling.cmp(&b.spelling));
-    identified.dedup_by(|a, b| a.spelling == b.spelling);
-    let mut collapsed: Vec<crate::traverse::ResolvedRoot> = Vec::new();
-    for root in identified {
-        if protected_identities.contains(&root.identity)
-            || !collapsed
-                .iter()
-                .any(|parent: &crate::traverse::ResolvedRoot| {
-                    root.identity.starts_with(&parent.identity)
-                })
-        {
-            collapsed.push(root);
-        }
-    }
-    collapsed.into_iter().map(|root| root.spelling).collect()
+        .map(|root| root.spelling)
+        .collect()
 }
 
 fn managed_rust_prunes() -> Vec<PathBuf> {
@@ -1618,6 +1605,62 @@ mod tests {
             1,
             "a symlinked operator root blocks the scope: {:?}",
             classified.blocked
+        );
+    }
+
+    /// The policy surface's collapse is the shared collapse.
+    ///
+    /// *Fails if:* the policy surface keeps a copy of the collapse. The copy
+    /// existed so a protected root could survive an ancestor; the protection
+    /// was the only part specific to this surface, and it now rides on the
+    /// shared mechanism. A copy would drift from it silently — the two would
+    /// agree until one of them changed, and nothing would say which was
+    /// right.
+    #[test]
+    fn the_policy_collapse_is_the_shared_collapse() {
+        let d = tempfile::tempdir().unwrap();
+        let outer = d.path().join("outer");
+        let inner = outer.join("inner");
+        fs::create_dir_all(&inner).unwrap();
+        let sibling = d.path().join("sibling");
+        fs::create_dir_all(&sibling).unwrap();
+        let roots = vec![outer.clone(), inner.clone(), sibling.clone(), outer.clone()];
+
+        let shared = crate::traverse::collapse_outermost(roots.clone())
+            .into_iter()
+            .map(|root| root.spelling)
+            .collect::<Vec<_>>();
+        let policy = canonical_dedup_roots_protecting(roots, &[]);
+        assert_eq!(
+            policy, shared,
+            "the policy collapse must be the shared one, with no protection"
+        );
+    }
+
+    /// A protected root survives an ancestor that contains it.
+    ///
+    /// *Fails if:* the protection is applied by a separate mechanism that the
+    /// shared collapse does not carry, or is dropped by the collapse. The
+    /// protected root is the exception that keeps the ancestor's coverage
+    /// from swallowing it.
+    #[test]
+    fn a_protected_root_survives_the_ancestor_that_contains_it() {
+        let d = tempfile::tempdir().unwrap();
+        let outer = d.path().join("outer");
+        let inner = outer.join("inner");
+        fs::create_dir_all(&inner).unwrap();
+
+        let collapsed = canonical_dedup_roots_protecting(
+            vec![outer.clone(), inner.clone()],
+            std::slice::from_ref(&inner),
+        );
+        assert!(
+            collapsed.contains(&inner),
+            "the protected root must survive: {collapsed:?}"
+        );
+        assert!(
+            collapsed.contains(&outer),
+            "the ancestor must still be there: {collapsed:?}"
         );
     }
 }

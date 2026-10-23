@@ -524,72 +524,45 @@ impl ProgressObserver for IndicatifRenderer {
 /// Test-only support for process-global environment mutation.
 ///
 /// The environment is process-global: a test that sets a variable changes it
-/// for every other test in the binary. Two rules follow, and both are
-/// enforced here rather than at each call site:
+/// for every other test in the binary, and the readers are everywhere — a
+/// `getenv` on another thread while the environment is being rewritten is not
+/// safe.
 ///
-/// - The restore must survive a **panic**. A failure between the set and the
-///   restore left `TERM=dumb` for every later test in the binary.
-/// - The mutation must be **serialised**. Two tests that set the same
-///   variable at the same time are a race whose outcome depends on the
-///   scheduler.
+/// A lock over the *writers* does not close that. It stopped two writers from
+/// colliding, but every reader stayed outside it, so a test could set `TERM`
+/// while another thread read it. The environment is therefore mutated in a
+/// **child process**: the parent spawns the current test binary, filtered to a
+/// single probe, with an arming marker in the child's environment. The child
+/// has its own environment; the parent never mutates its own.
+///
+/// The probe passes vacuously without the marker, so a direct `cargo test`
+/// run can never poison the shared parallel-test environment, and the parent
+/// checks that the probe ran *exactly once* — a filter that matches nothing
+/// would otherwise make the parent green for the wrong reason.
 #[cfg(test)]
 pub(crate) mod test_env {
-    use std::ffi::OsStr;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
-
-    /// The one lock every environment-mutating test holds.
-    fn lock() -> MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    /// Run `probe` in a child process and return what it printed.
+    pub(crate) fn run_in_child(marker: &str, probe: &str) -> std::process::Output {
+        let exe = std::env::current_exe().unwrap();
+        std::process::Command::new(exe)
+            .args([probe, "--exact", "--nocapture"])
+            .env(marker, "1")
+            .output()
+            .unwrap()
     }
 
-    /// Holds the environment lock, and restores every variable it touched.
-    pub(crate) struct EnvRestore {
-        keys: Vec<(&'static str, Option<std::ffi::OsString>)>,
-        _lock: MutexGuard<'static, ()>,
-    }
-
-    impl EnvRestore {
-        /// Takes the environment lock. Every variable set through this guard
-        /// is restored when it is dropped.
-        pub(crate) fn acquire() -> Self {
-            Self {
-                keys: Vec::new(),
-                _lock: lock(),
-            }
-        }
-
-        /// Sets `key`, remembering its previous value the first time.
-        pub(crate) fn set(&mut self, key: &'static str, value: impl AsRef<OsStr>) {
-            self.remember(key);
-            unsafe { std::env::set_var(key, value) };
-        }
-
-        /// Removes `key`, remembering its previous value the first time.
-        pub(crate) fn remove(&mut self, key: &'static str) {
-            self.remember(key);
-            unsafe { std::env::remove_var(key) };
-        }
-
-        fn remember(&mut self, key: &'static str) {
-            if self.keys.iter().any(|(k, _)| *k == key) {
-                return;
-            }
-            self.keys.push((key, std::env::var_os(key)));
-        }
-    }
-
-    impl Drop for EnvRestore {
-        fn drop(&mut self) {
-            for (key, prev) in &self.keys {
-                match prev {
-                    Some(v) => unsafe { std::env::set_var(key, v) },
-                    None => unsafe { std::env::remove_var(key) },
-                }
-            }
-        }
+    /// The child must have run exactly the one probe, and it must have passed.
+    pub(crate) fn assert_probe_ran(out: &std::process::Output) {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success(),
+            "probe child failed: {stdout}\n{stderr}"
+        );
+        assert!(
+            stdout.contains("1 passed"),
+            "probe must execute exactly once (filter premise): {stdout}\n{stderr}"
+        );
     }
 }
 
@@ -785,19 +758,41 @@ mod tests {
         assert_eq!(o.completed_count(ScanPhase::Analysis), 1);
     }
 
+    /// `TERM=dumb` refuses progress.
+    ///
+    /// *Fails if:* the gate stops reading `TERM`, or reads something else.
+    /// The mutation runs in a child process: `TERM` is process-global, and
+    /// the lock this test used to take covered the writers only — another
+    /// thread in this binary could read `TERM` while it was being rewritten.
     #[test]
     fn should_show_progress_respects_flag_and_dumb_term() {
         assert!(!should_show_progress(true), "the explicit flag is absolute");
-        // TERM is process-global, so the restore has to survive a panic: a
-        // failure between set and restore left TERM=dumb for every later test
-        // in this binary.
-        let mut env = crate::progress::test_env::EnvRestore::acquire();
-        env.set("TERM", "dumb");
+        let out = crate::progress::test_env::run_in_child(
+            "PROGRESS_ENV_PROBE_ARMED",
+            "progress::tests::term_is_dumb_probe",
+        );
+        crate::progress::test_env::assert_probe_ran(&out);
+    }
+
+    /// Probe for the test above.
+    ///
+    /// Passes vacuously without the arming marker, so a direct `cargo test`
+    /// run never mutates the shared environment. With the marker — a child
+    /// process running exactly this one test — it mutates `TERM` and asserts
+    /// on the gate.
+    #[test]
+    fn term_is_dumb_probe() {
+        if std::env::var("PROGRESS_ENV_PROBE_ARMED").is_err() {
+            return;
+        }
+        // SAFETY: this process runs exactly this one test, so no other
+        // thread can observe the mutation.
+        unsafe { std::env::set_var("TERM", "dumb") };
         // Asserted on the gate, not on `should_show_progress`: stderr is not a
         // terminal under `cargo test`, so the public function returns false
         // either way and this assertion used to hold with the branch deleted.
         assert!(term_is_dumb(), "TERM=dumb must refuse progress");
-        env.set("TERM", "xterm-256color");
+        unsafe { std::env::set_var("TERM", "xterm-256color") };
         assert!(!term_is_dumb(), "only the literal `dumb` refuses progress");
     }
 

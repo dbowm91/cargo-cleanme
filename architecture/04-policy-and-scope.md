@@ -75,7 +75,7 @@ calls are reads:
 | Call | Location | Reads |
 |---|---|---|
 | `fs::symlink_metadata` | `policy.rs:33` | explicit root stat (resolve) |
-| `fs::symlink_metadata` | `traverse.rs:40`, `:54` | symlink identity, trailing separators stripped — the shared `path_is_symlink` predicate, imported at `policy.rs:5` |
+| `fs::symlink_metadata` | `traverse.rs:48`, `:55` | symlink identity, trailing separators stripped — the shared `path_is_symlink` predicate, imported at `policy.rs:5` |
 | `fs::symlink_metadata` | `policy.rs:231` | admission classification |
 | `fs::symlink_metadata` | `policy.rs:387`, `:448` | late premise recheck |
 | `fs::symlink_metadata` | `policy.rs:620` | raw seed existence (cleanup candidates) |
@@ -214,7 +214,7 @@ directories under `$HOME` plus retained learned roots from the state file (§5).
 Worked example: a developer with `~/Code/api` and `~/Code/web` plus a learned
 root at `~/scratch/lab`, where the state file's `last_project_seen_at` for
 `~/scratch/lab` is 10 days old and retention is 30.
-`canonical_dedup_roots` (`policy.rs:780`) collapses nothing here, so the scan
+`canonical_dedup_roots` (`policy.rs:782`) collapses nothing here, so the scan
 walks all three, applying `scan.ignore` / `scan.unignore` normally. A Rust
 project in `~/Documents/sidequest` is **not** found — that is the deliberate
 blind spot, and `scan --all` is the documented way to teach the tool about it.
@@ -423,7 +423,7 @@ symlinked root into its target and hide the invalid identity:
   path at a known-transient origin omits as `NotMaintainable`, a missing
   durable location omits as `NotFound`; symlinks never reach that arm and
   every other failure still blocks.
-- `path_is_symlink` (`src/traverse.rs:26-59`) closes the trailing-separator
+- `path_is_symlink` (`src/traverse.rs:47-59`) closes the trailing-separator
   bypass: `symlink_metadata("link/")` follows the final component on POSIX, so
   a trailing slash (or a trailing `/.`) would otherwise hide a symlink from the
   `is_symlink` check. The stripped spelling is judged too.
@@ -596,7 +596,7 @@ and both were once missing:
    `"/usr/local".starts_with("/")`. `compose_global_policy` therefore computes
    the *protected* set first: every root sitting strictly inside a global-only
    prune is that prune's exception, so `canonical_dedup_roots_protecting`
-   (`policy.rs:799-831`) keeps it as a walk root of its own.
+   (`policy.rs:801-818`) keeps it as a walk root of its own.
 2. **Application.** A root that survived composition would still be unwalked:
    `entry_is_within` matches on `parent_path`, so with root `/usr/local` every
    entry's parent `starts_with("/usr")` and the subtree read as pruned.
@@ -635,10 +635,10 @@ acquire platform prunes it never asked for.
 
 ### Root normalization
 
-`canonical_dedup_roots` (`policy.rs:780-782`) is the shared normalizer for all
+`canonical_dedup_roots` (`policy.rs:782-784`) is the shared normalizer for all
 three roots lists; it delegates to `traverse::collapse_outermost`
-(`src/traverse.rs:177-194`), which resolves each root through
-`traverse::resolve_root` (`src/traverse.rs:143-159`):
+(`src/traverse.rs:189-191`), which resolves each root through
+`traverse::resolve_root` (`src/traverse.rs:155-...`):
 
 1. For each root, try `fs::canonicalize`. Success → identity is the canonical
    path *and* the retained spelling is canonical. Failure → identity is
@@ -814,10 +814,10 @@ exercise the resolved scope rather than the flags.
   The platform *tables* are therefore still covered only through the pure
   `unix_policy` helper, and the `#[cfg(windows)]` body (`policy.rs:754-778`)
   is untested on any lane.
-- `canonical_dedup_roots` (`policy.rs:780-782`) and `lexical_identity`
-  (`src/traverse.rs:61-83`) now have
+- `canonical_dedup_roots` (`policy.rs:782-784`) and `lexical_identity`
+  (`src/traverse.rs:80-102`) now have
   a direct caller in a test (`policy.rs:881` and `policy.rs:888`), but the
-  unresolvable-root branch (the L16 fix, `src/traverse.rs:150-157`) still has no direct
+  unresolvable-root branch (the L16 fix, `src/traverse.rs:162-169`) still has no direct
   test. The `other unix` arm (`policy.rs:744-746`) and the
   `BaseDirs::new() == None` branch (`policy.rs:646-648`) are uncovered.
 - The retention filter (`policy.rs:676-682`) is not directly tested:

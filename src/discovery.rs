@@ -2007,8 +2007,33 @@ mod tests {
             "nested target manifest must be pruned"
         );
     }
+    /// The Cargo home's registry is pruned from the scan.
+    ///
+    /// *Fails if:* a registry under `CARGO_HOME` is walked as a candidate
+    /// workspace. The environment mutation runs in a child process:
+    /// `CARGO_HOME` is process-global, and the lock this test used to take
+    /// covered the writers only — another thread in this binary could read
+    /// it while it was being rewritten.
     #[test]
     fn manifest_discovery_prunes_cargo_home_registry() {
+        let out = crate::progress::test_env::run_in_child(
+            "DISCOVERY_ENV_PROBE_ARMED",
+            "discovery::tests::cargo_home_registry_prune_probe",
+        );
+        crate::progress::test_env::assert_probe_ran(&out);
+    }
+
+    /// Probe for the test above.
+    ///
+    /// Passes vacuously without the arming marker, so a direct `cargo test`
+    /// run never mutates the shared environment. With the marker — a child
+    /// process running exactly this one test — it points `CARGO_HOME` at a
+    /// temporary home and asserts the prune.
+    #[test]
+    fn cargo_home_registry_prune_probe() {
+        if std::env::var("DISCOVERY_ENV_PROBE_ARMED").is_err() {
+            return;
+        }
         let d = tempdir().unwrap();
         let cargo_home = d.path().join("cargo-home");
         fs::create_dir_all(cargo_home.join("registry/src/pkg")).unwrap();
@@ -2016,12 +2041,9 @@ mod tests {
         let proj = d.path().join("proj");
         fs::create_dir_all(&proj).unwrap();
         fs::write(proj.join("Cargo.toml"), "").unwrap();
-        // Point CARGO_HOME at the temp home for this test. The guard holds
-        // the one environment lock and restores `CARGO_HOME` panic or not: a
-        // failure between the set and the restore used to leave the whole
-        // binary pointed at a temporary Cargo home.
-        let mut env = crate::progress::test_env::EnvRestore::acquire();
-        env.set("CARGO_HOME", &cargo_home);
+        // SAFETY: this process runs exactly this one test, so no other
+        // thread can observe the mutation.
+        unsafe { std::env::set_var("CARGO_HOME", &cargo_home) };
         let policy = EffectiveScanPolicy {
             recency: std::time::Duration::from_secs(300),
             scope: ScanScope::Explicit(d.path().to_path_buf()),
@@ -2029,7 +2051,6 @@ mod tests {
         };
         let noop = NoopObserver;
         let found = discover_manifests(&policy, &noop).unwrap();
-        drop(env);
         assert_eq!(found.manifests.len(), 1);
         assert_eq!(found.manifests[0], proj.join("Cargo.toml"));
     }

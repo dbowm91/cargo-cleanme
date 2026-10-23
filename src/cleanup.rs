@@ -3268,15 +3268,24 @@ fn collapse_roots(roots: Vec<PathBuf>) -> Result<Vec<PathBuf>, AppError> {
     // runs over the *input* order, so the root named in the refusal is the
     // first one that failed rather than the first one that survived the
     // collapse.
-    for p in &roots {
-        if let Err(e) = fs::canonicalize(p) {
+    //
+    // The roots are resolved once, and that resolution is what both the
+    // refusal and the collapse read: resolving twice would ask the
+    // filesystem the same question twice and leave a window in which the two
+    // answers could differ.
+    let resolved: Vec<crate::traverse::ResolvedRoot> = roots
+        .iter()
+        .map(|root| crate::traverse::resolve_root(root))
+        .collect();
+    for (root, resolution) in roots.iter().zip(&resolved) {
+        if let Some(error) = &resolution.error {
             return Err(AppError::InvalidRoot {
-                path: p.display().to_string(),
-                reason: format!("cleanup root changed before collapse: {e}"),
+                path: root.display().to_string(),
+                reason: format!("cleanup root changed before collapse: {error}"),
             });
         }
     }
-    Ok(crate::traverse::collapse_outermost(roots)
+    Ok(crate::traverse::collapse_resolved(resolved)
         .into_iter()
         .map(|root| root.spelling)
         .collect())
@@ -3965,10 +3974,16 @@ fn final_cleanup_proof_roots(
     // output root inside a crate's own `src` tree would delete that crate's
     // sources. The classification refuses such a group; this re-proves it
     // against the filesystem at the moment of the spawn.
+    //
+    // The source-tree directories are the same for every covering root of this
+    // unit, so the set is computed once here rather than once per covering
+    // root — the set is rebuilt per workspace member, and this is the proof
+    // path.
+    let fresh_source_dirs = workspace::source_tree_dirs(&fresh_universe);
     if unit
         .covering
         .iter()
-        .any(|c| workspace::inside_source_tree(c, &fresh_universe))
+        .any(|c| workspace::inside_source_tree_dirs(c, &fresh_source_dirs))
     {
         return Err(ProofFailure::new(
             CleanupReasonCode::SkippedSafety,
@@ -4295,7 +4310,10 @@ fn unqualified_selector_detail(selector: &str, host_cargo: Option<&str>) -> Stri
 ///
 /// `manifests_found` is deliberately **not** merged: it counts the manifests
 /// the run knows about, and a re-walk rediscovers the same manifests rather
-/// than finding new ones.
+/// than finding new ones. The prune counters *are* merged: a prune is a
+/// decision, not a discovery, and each walk makes its own — so a re-walk's
+/// skips are as much work as the first walk's, and reporting only the first
+/// walk's would under-state how much of the scope was skipped, and why.
 fn merge_walk_counters(
     totals: &mut crate::domain::ScanCounters,
     walk: &crate::domain::ScanCounters,
@@ -4306,6 +4324,21 @@ fn merge_walk_counters(
     totals.directories_pruned = totals
         .directories_pruned
         .saturating_add(walk.directories_pruned);
+    totals.platform_system_prunes = totals
+        .platform_system_prunes
+        .saturating_add(walk.platform_system_prunes);
+    totals.cargo_home_prunes = totals
+        .cargo_home_prunes
+        .saturating_add(walk.cargo_home_prunes);
+    totals.rustup_home_prunes = totals
+        .rustup_home_prunes
+        .saturating_add(walk.rustup_home_prunes);
+    totals.target_vcs_prunes = totals
+        .target_vcs_prunes
+        .saturating_add(walk.target_vcs_prunes);
+    totals.user_ignore_prunes = totals
+        .user_ignore_prunes
+        .saturating_add(walk.user_ignore_prunes);
 }
 
 /// The host Cargo's version, as `cargo --version` reports it.

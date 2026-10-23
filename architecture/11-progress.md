@@ -602,7 +602,7 @@ harness and a new dev-dependency. This is recorded as an open coverage gap in
 `plans/closure/distribution-release-update/c023-status.md` §11.4. What
 `src/progress.rs` does now test is the renderer half it relies on: that a
 `finish_and_clear` leaves **no live bar** for a later error or a drop
-(`progress.rs:949-1006`). A panic is still uncovered — indicatif leaves partial
+(`progress.rs:945-1002`). A panic is still uncovered — indicatif leaves partial
 frames and the prompt resumes mid-frame with no newline — and a `Drop` impl on
 `IndicatifRenderer` would close that deterministically.
 
@@ -654,10 +654,10 @@ known (`progress.rs:669-672`), and that twenty further refreshes do not scroll t
 buffer (`progress.rs:673-684`). Tests 4 and 5 (`progress.rs:694-727`,
 `:734-751`) pin the verbose/quiet split on that same one-line frame: the verbose
 line carries `discovery-errors 7` and `cargo-failures 2`, the quiet line carries
-neither. Test 15 (`progress.rs:949-1006`) asserts that the bar really drew and
-was live before the clear (`progress.rs:957-965`), that the clear empties the
-frame (`progress.rs:973-977`), and that an error raised after the clear neither
-resurrects a live bar nor redraws (`progress.rs:984-997`). Every other test
+neither. Test 15 (`progress.rs:945-1002`) asserts that the bar really drew and
+was live before the clear (`progress.rs:952-960`), that the clear empties the
+frame (`progress.rs:968-977`), and that an error raised after the clear neither
+resurrects a live bar nor redraws (`progress.rs:983-992`). Every other test
 inspects accessors or
 `TestObserver` state. So: **rendering is observable via the `in_memory` feature,
 but only as message substrings, a line count, and frame emptiness.**
@@ -691,18 +691,29 @@ a **hidden** renderer: the visible 10 Hz throttle is never measured, and the tes
 proves `0 == 0`.
 
 **Platform risk.** The only environment-sensitive test is
-`should_show_progress_respects_flag_and_dumb_term` (`progress.rs:788-802`), which
-mutates the process-global `TERM` through the shared `test_env` guard
-(`progress.rs:794-801`), whose `set` does the `unsafe { std::env::set_var }`
-(`progress.rs:565-568`) — correctly wrapped, which edition 2024 /
-`rust-version = "1.89"` requires (`Cargo.toml:4-5`). It asserts only the flag and
-`TERM=dumb` branches, so it is **not** TTY-dependent and is safe on CI and
-Windows. But `TERM` is process-global and `cargo test` runs tests in parallel
-threads: the guard serialises *mutations* of `TERM` against each other
-(`progress.rs:540-546`), but a test that only *reads* `TERM` — or lets
-indicatif/`console` read it — does not take the lock, so the race against such a
-reader remains. No other test in this file touches `TERM`, so it is contained
-today.
+`should_show_progress_respects_flag_and_dumb_term` (`progress.rs:768-780`), which
+asserts the flag branch in-process and **spawns a child process** for the
+`TERM` branches: the child runs the probe `term_is_dumb_probe`
+(`progress.rs:784-797`) with the arming marker `PROGRESS_ENV_PROBE_ARMED`
+set, and the probe's `unsafe { std::env::set_var }` (`progress.rs:790`,
+`:795`) is correctly wrapped, which edition 2024 / `rust-version = "1.89"`
+requires (`Cargo.toml:4-5`). The child-process shape is not a style choice:
+`TERM` is process-global, `cargo test` runs tests in parallel threads, and
+`setenv`/`getenv` are not safe against each other. The previous shape took a
+lock around the *writers* only (`progress.rs:543-563` now holds the
+child-process helper), so a test that only *read* `TERM` — or let
+indicatif/`console` read it — raced the writer. The mutation now happens in a
+process that contains no other test. The probe passes vacuously without the
+marker, so a direct `cargo test` run never mutates the shared environment, and
+the parent checks that the probe ran **exactly once**, so a filter that
+matched nothing could not make the parent green for the wrong reason. The
+branches asserted are only the flag and `TERM=dumb`, so it is **not**
+TTY-dependent and is safe on CI and Windows.
+
+The same shape now covers the other two environment-mutating tests in the
+crate — `editor.rs`'s `VISUAL`/`EDITOR` fall-through and `discovery.rs`'s
+`CARGO_HOME` registry prune — because the gap was the same in all three:
+a writer's lock is not a reader's lock.
 
 **Coverage by the fixture checker.** `scripts/check-fixture-portability.py`
 contains **no reference to `progress.rs` or to `progress` at all** (grepped

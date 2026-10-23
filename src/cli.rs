@@ -745,13 +745,16 @@ fn dry_run_spellings(
 }
 
 /// The same override given at two levels, named by the spelling used.
+///
+/// The flag is a boolean, so there are no two *values* to be ambiguous about:
+/// both spellings mean the same thing, and the refusal is about the
+/// invocation, not the value. Saying "the two values are ambiguous" about a
+/// flag that carries no value points the operator at a conflict that does not
+/// exist.
 fn duplicate_dry_run(spellings: &[&str]) -> String {
     let named = spellings.join(" and ");
     let verb = if spellings.len() == 1 { "was" } else { "were" };
-    format!(
-        "{named} {verb} given at the root and on `clean`. The two values are ambiguous; \
-         give it at one level only."
-    )
+    format!("{named} {verb} given at the root and on `clean`. Give it at one level only.")
 }
 
 /// Two mutually exclusive selectors were given at different levels.

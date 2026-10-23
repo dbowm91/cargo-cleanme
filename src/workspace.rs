@@ -185,8 +185,12 @@ pub fn clean_capabilities_from_version(version: &str) -> CargoCleanCapabilities 
 /// is a relative name, not the top of a filesystem. The predicate used to
 /// treat a relative path's empty parent as a root, which would have refused
 /// a relative `target_directory` with a message about a filesystem root.
+///
+/// The empty path is not a root either. It has no parent, so the parent test
+/// alone answered "yes" for it, and the refusal would have named a filesystem
+/// root where there is no path at all.
 fn is_filesystem_root(path: &Path) -> bool {
-    path.parent().is_none()
+    path.parent().is_none() && !path.as_os_str().is_empty()
 }
 
 fn canonical_or_absolute(path: &Path) -> Result<PathBuf, String> {
@@ -245,32 +249,6 @@ fn cargo_failure_reason(stderr: &[u8]) -> String {
     reason
 }
 
-/// `symlink_metadata("link/")` follows the final component on POSIX, so a
-/// trailing slash hides a symlink from the `is_symlink` check. Judge the
-/// path with its trailing separators stripped as well. A trailing `/.`
-/// spells the same bypass, so dot components are stripped too.
-fn path_is_symlink(path: &Path) -> bool {
-    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
-        return true;
-    }
-    let mut spelling = path.as_os_str().to_string_lossy().into_owned();
-    loop {
-        let trimmed = spelling.trim_end_matches(['/', '\\']).to_owned();
-        if trimmed.ends_with("/.") || trimmed.ends_with("\\.") {
-            spelling = trimmed[..trimmed.len() - 1].to_owned();
-            continue;
-        }
-        spelling = trimmed;
-        break;
-    }
-    if !spelling.is_empty()
-        && fs::symlink_metadata(&spelling).is_ok_and(|m| m.file_type().is_symlink())
-    {
-        return true;
-    }
-    false
-}
-
 /// Probe one declared output root.
 ///
 /// The path comes from untrusted `cargo metadata`, so a probe can fail for
@@ -314,13 +292,15 @@ fn output_root(
         },
         // A trailing slash (`link/`) makes `symlink_metadata` follow the
         // link, so check the stripped spelling too before trusting `Ok`.
-        Ok(meta) if meta.file_type().is_symlink() || path_is_symlink(&logical) => OutputRoot {
-            kind,
-            logical_path: logical,
-            physical_path: None,
-            exists: true,
-            is_symlink: true,
-        },
+        Ok(meta) if meta.file_type().is_symlink() || traverse::path_is_symlink(&logical) => {
+            OutputRoot {
+                kind,
+                logical_path: logical,
+                physical_path: None,
+                exists: true,
+                is_symlink: true,
+            }
+        }
         Err(e) => {
             // Unreadable is not absent: say so, and keep the root unusable.
             // The root reports `exists: true` with no physical identity so
@@ -1377,8 +1357,12 @@ const SOURCE_DIR_NAMES: [&str; 4] = ["src", "tests", "benches", "examples"];
 /// covering root's own final component, so `src/foo` slips past it. This is
 /// the containment form of the same guard, and it fails safe - it can only
 /// ever *withhold* a cleanup, never authorize one.
-pub(crate) fn inside_source_tree(covering: &Path, workspaces: &[ResolvedWorkspace]) -> bool {
-    inside_source_tree_dirs(covering, &source_tree_dirs(workspaces))
+///
+/// The set of source directories is a parameter rather than something derived
+/// here: it does not depend on the covering root being tested, so a caller
+/// that tests several covering roots computes it once.
+pub(crate) fn inside_source_tree_dirs(covering: &Path, source_dirs: &[PathBuf]) -> bool {
+    source_dirs.iter().any(|dir| contains(dir, covering))
 }
 
 /// The conventional source directories of every resolved workspace.
@@ -1387,7 +1371,7 @@ pub(crate) fn inside_source_tree(covering: &Path, workspaces: &[ResolvedWorkspac
 /// computed once per scan rather than once per group: the old form
 /// allocated eight `PathBuf`s per workspace member for every group it
 /// classified.
-fn source_tree_dirs(workspaces: &[ResolvedWorkspace]) -> Vec<PathBuf> {
+pub(crate) fn source_tree_dirs(workspaces: &[ResolvedWorkspace]) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     for w in workspaces {
         for m in &w.members {
@@ -1400,11 +1384,6 @@ fn source_tree_dirs(workspaces: &[ResolvedWorkspace]) -> Vec<PathBuf> {
         }
     }
     dirs
-}
-
-/// [`inside_source_tree`] against an already-computed source-tree set.
-fn inside_source_tree_dirs(covering: &Path, source_dirs: &[PathBuf]) -> bool {
-    source_dirs.iter().any(|dir| contains(dir, covering))
 }
 
 /// True when a covering root is nested inside a package directory.

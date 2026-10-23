@@ -170,10 +170,33 @@ mod tests {
         assert!(split_words("vim 'unfinished").is_err());
     }
 
+    /// An unusable `VISUAL` falls through to `EDITOR`.
+    ///
+    /// *Fails if:* the resolver hard-fails on an unusable `VISUAL` even when
+    /// `EDITOR` names a usable program (L19). The environment mutation runs
+    /// in a child process: `VISUAL`/`EDITOR` are process-global, and the
+    /// lock this test used to take covered the writers only — another thread
+    /// in this binary could read them while they were being rewritten.
     #[test]
     fn unresolvable_visual_falls_through_to_the_next_candidate() {
-        // L19: an unusable VISUAL used to hard-fail the whole command, even when
-        // EDITOR named a perfectly good program.
+        let out = crate::progress::test_env::run_in_child(
+            "EDITOR_ENV_PROBE_ARMED",
+            "editor::tests::unresolvable_visual_probe",
+        );
+        crate::progress::test_env::assert_probe_ran(&out);
+    }
+
+    /// Probe for the test above.
+    ///
+    /// Passes vacuously without the arming marker, so a direct `cargo test`
+    /// run never mutates the shared environment. With the marker — a child
+    /// process running exactly this one test — it mutates `VISUAL`/`EDITOR`
+    /// and asserts on the fall-through.
+    #[test]
+    fn unresolvable_visual_probe() {
+        if std::env::var("EDITOR_ENV_PROBE_ARMED").is_err() {
+            return;
+        }
         let program = tempfile::tempdir().unwrap();
         let editor = program.path().join("ed");
         // fixture-scope: never executed on any platform, so the `#!` line is
@@ -189,18 +212,16 @@ mod tests {
             fs::set_permissions(&editor, fs::Permissions::from_mode(0o755)).unwrap();
         }
         let dir = program.path();
-        // The environment is process-global: the guard holds the one
-        // environment lock for the whole mutation and restores every variable
-        // it touched, panic or not. A failure between the set and the restore
-        // used to leave `VISUAL`/`EDITOR` pointing at a temporary file for
-        // every later test in this binary.
-        let mut env = crate::progress::test_env::EnvRestore::acquire();
-        env.set("VISUAL", "/nonexistent/editor");
-        env.set("EDITOR", &editor);
+        // SAFETY: this process runs exactly this one test, so no other
+        // thread can observe the mutation.
+        unsafe {
+            std::env::set_var("VISUAL", "/nonexistent/editor");
+            std::env::set_var("EDITOR", &editor);
+        }
         let (resolved, args) = resolve_editor().unwrap();
         assert_eq!(resolved, editor, "must fall through to EDITOR");
         assert!(args.is_empty());
-        env.remove("VISUAL");
+        unsafe { std::env::remove_var("VISUAL") };
         let (resolved, _) = resolve_editor().unwrap();
         assert_eq!(resolved, editor);
         let _ = dir;

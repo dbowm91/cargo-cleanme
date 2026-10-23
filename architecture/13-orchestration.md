@@ -831,7 +831,7 @@ does and does not claim.
 
 ## 6. Root resolution and collapse
 
-`collapse_roots` sits at **`src/main.rs:1485-1499`**, called from
+`collapse_roots` sits at **`src/main.rs:1489-1498`**, called from
 `admit_automatic` — after provenance admission, never before it. Its position
 is the C028 fix: classification must see the raw identities, because
 canonicalizing first would resolve a symlinked root into its target and admit
@@ -839,7 +839,7 @@ a real directory where a block belongs
 (`policy::routine_cleanup_candidates`, `src/policy.rs:613`).
 
 ```rust
-// collapse_roots — src/main.rs:1485-1499
+// collapse_roots — src/main.rs:1489-1498
 fn collapse_roots(roots: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
     // The collapse itself is the shared one (`traverse::collapse_outermost`):
     // canonicalise, dedup, drop nested roots. The scan and display surfaces
@@ -853,7 +853,7 @@ fn collapse_roots(roots: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
 ```
 
 **The collapse is one implementation, and the policy is the caller's.**
-`traverse::collapse_outermost` (`src/traverse.rs:177-199`) canonicalises each
+`traverse::collapse_outermost` (`src/traverse.rs:189-191`) canonicalises each
 root, drops the duplicates, and drops a root that another root contains. The
 comparison is by the root's **identity** — its physical location, resolved as
 far as the filesystem allows (`traverse::resolve_root`,
@@ -876,7 +876,7 @@ admission→validation race defence (`run_engine_guarded`, `src/main.rs:753`)
 cover the residual window.
 
 **The engine re-collapses, fail-closed.** `cleanup.rs` has its *own*
-`collapse_roots` (`src/cleanup.rs:3264-3281`), and it is the strict one: a
+`collapse_roots` (`src/cleanup.rs:3264-3292`), and it is the strict one: a
 canonicalize failure is an `InvalidRoot`, not a passthrough. So the permissive
 spelling in `main.rs` is not the last word — the engine re-derives the
 canonical set and refuses to continue if a root stopped resolving between
@@ -1589,7 +1589,7 @@ to a module are the ones with no coverage.
 14. **`collapse_roots` canonicalization is best-effort.**
     `src/main.rs:1408` uses `unwrap_or(p)`, so a missing or unresolvable root
     passes through unvalidated. The engine's own `collapse_roots`
-    (`src/cleanup.rs:3148-3174`) is the fail-closed one and is what actually
+    (`src/cleanup.rs:3264-3292`) is the fail-closed one and is what actually
     guards the boundary. Confirm the permissive version in `main.rs` is
     understood to be a *pre*-pass, and that the `sort()` at `src/main.rs:1475` is
     understood to be *required* by the containment filter at `:1479`.

@@ -108,6 +108,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 python3 scripts/check-fixture-portability.py --self-test && python3 scripts/check-fixture-portability.py
 python3 scripts/check-doc-citations.py --self-test && python3 scripts/check-doc-citations.py
+python3 scripts/check-selector-qualification.py --self-test && python3 scripts/check-selector-qualification.py
 cargo run --quiet --features dev-tools --bin generate-docs -- --check
 ```
 
@@ -115,6 +116,14 @@ The last step is the **generated-artifact drift gate**. It only matters if you
 touched the CLI surface, but it is cheap, and a CLI change that leaves the
 completions and man pages stale fails CI rather than you. Regenerate with
 `cargo run --quiet --features dev-tools --bin generate-docs`.
+
+The **selector-qualification gate** is the one that keeps
+`release/selector-qualification.json`, the CI runtime allowlist, the hosted
+qualification matrix, `scripts/check-selector-qualification.py` and
+`clean_capabilities_from_version` in exact agreement — it decides whether
+`--profile` and `--package` are usable at all. It is enforced in CI
+(`.github/workflows/ci.yml`) and in `scripts/release-check.sh`; a change to
+any of those files passes the rest of the ladder and fails it.
 
 Focused test: `cargo test --all-features --test cli_contract <test_name>`
 (`tests/` holds `cli_contract.rs` and `end_to_end.rs`, plus inline unit tests in
@@ -231,14 +240,14 @@ source of truth for module line counts and the inline-test total; verify each
 against `src/`, fix the overview first, then align the deep dives.
 
 The same rule applies to **per-platform test counts**, which have disagreed
-across three documents: they are 585 declared, 583 on Linux, 536 on Windows,
-580 on macOS. Derive them with a brace-tracking parser that evaluates each
+across three documents: they are 594 declared, 592 on Linux, 542 on Windows,
+588 on macOS. Derive them with a brace-tracking parser that evaluates each
 test's *effective* gate set against `rustc --print cfg --target <triple>`, and
 cross-check against `cargo test --lib -- --list`. **Count the tests a gate
 excludes, not the gates.** A naive "the `#[cfg(unix)]` immediately above a
-`#[test]`" grep finds 35 of the **45** tests a `#[cfg(unix)]` gate actually
-excludes, because Rust allows `#[test]` to precede the gate — ten of the 45
-have it that way. The remaining gates in test scope sit on helpers and on
+`#[test]`" grep finds 35 of the **47** tests a `#[cfg(unix)]` gate actually
+excludes, because Rust allows `#[test]` to precede the gate — twelve of the
+47 have it that way. The remaining gates in test scope sit on helpers and on
 blocks *inside* a test function, which exclude no test at all: a block inside
 a test is removed on Windows, and the test still compiles and still runs. A
 derivation that subtracts gate counts instead of test counts lands 16 high on
@@ -249,7 +258,7 @@ The Windows figure can be checked without a Windows host: cross-compile the
 test binary for `x86_64-pc-windows-gnu` (the `windows-gnu` std is
 installable, and `mingw-w64` supplies the C toolchain `ring` needs) and
 confirm it carries exactly the derived set of tests and no others. That check
-is what settled the figure at 536.
+is what settled the figure at 542.
 
 ## 7. Planning and decision records
 

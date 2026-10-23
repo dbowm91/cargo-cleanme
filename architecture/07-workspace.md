@@ -683,8 +683,8 @@ one."
 enough.** `is_conventional_source_dir` sees only the covering root's *final
 component*, so `target-dir = "src/foo"` — an output root inside the crate's own
 source tree — slips past it, and `cargo clean --target-dir <root>` removes the
-whole root, taking the crate's own `.rs` files with it. `inside_source_tree`
-(`:1316-1337`) is the containment form of the same guard: it asks whether the
+whole root, taking the crate's own `.rs` files with it. `inside_source_tree_dirs`
+(`:1364-1372`) is the containment form of the same guard: it asks whether the
 covering root lies inside any member's conventional source directory (`src`,
 `tests`, `benches`, `examples`) or inside the workspace root's. It fails the
 same way — it can only ever *withhold* a cleanup.
@@ -1107,12 +1107,12 @@ contract would break it.
 
 **Is a symlinked `target/` followed, and can it escape the scope?** Not followed,
 and it cannot escape — this module is a consistent no-op on symlinks.
-`output_root` uses `fs::symlink_metadata` (`:296`), detects
+`output_root` uses `fs::symlink_metadata` (`:285`), detects
 `file_type().is_symlink()` — and, because `symlink_metadata("link/")` follows
-the final component on POSIX, also re-checks the spelling with its trailing
-separators and dot components stripped (`path_is_symlink`, `:241-261`) — and
+the final component on POSIX, also re-checks the spelling with the **shared**
+`traverse::path_is_symlink` (`:295`, `src/traverse.rs:47-59`) — and
 records `is_symlink: true` with `physical_path: None` **without canonicalizing**
-(`:306-312`) — deliberately, because canonicalizing is what would resolve the
+(`:295-303`) — deliberately, because canonicalizing is what would resolve the
 link. From there: `build_groups` contributes no node and marks the workspace
 uncertain (`:1639-1643`); `map_workspace_groups` skips it (`:2301`);
 `build_cleanup_units` skips it for both the mapped *and* the `unmapped` list

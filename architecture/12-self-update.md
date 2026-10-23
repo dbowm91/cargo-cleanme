@@ -159,8 +159,8 @@ assembles `"{PRODUCT} is {code}; run this instead:\n  {command}"`.
   path- or name-based ownership anywhere in the module.
 - `published_stable_version(&[u8]) -> Result<String, UpdateError>`
   (`src/update.rs:823`), `compare_release_versions(&str, &str) -> Option<Ordering>`
-  (`src/update.rs:851`), `is_release_version(&str) -> bool`
-  (`src/update.rs:867`). §4.
+  (`src/update.rs:857`), `is_release_version(&str) -> bool`
+  (`src/update.rs:873`). §4.
 - `run(&dyn UpdateEnvironment, bool) -> Result<UpdatePlan, UpdateError>`
   (`src/update.rs:1090`) — the whole transaction behind an injected environment,
   and the only reason the module is testable.
@@ -370,7 +370,7 @@ is pinned by `version_authority_reads_exactly_one_field`
 (`src/update.rs:1913`); an outage is a distinct tested outcome, not a guess —
 `a_registry_outage_is_reported_not_guessed` (`src/update.rs:2003`).
 
-### `is_release_version` (`src/update.rs:867-876`)
+### `is_release_version` (`src/update.rs:873-882`)
 
 Requires **exactly three** dot-separated components, each non-empty and all ASCII
 digits, with no fourth. One predicate rejects:
@@ -390,8 +390,8 @@ authority's own output, not decoration.
 ### `compare_release_versions` — numeric, definitively
 
 ```rust
-let parse = |value: &str| -> Option<[u64; 3]> { /* split '.', parse u64, reject 4th */ };
-Some(parse(left)?.cmp(&parse(right)?))          // src/update.rs:805-816
+let parse = |value: &str| -> Option<[u64; 3]> { /* reject a non-plain release, then split '.' */ };
+Some(parse(left)?.cmp(&parse(right)?))          // src/update.rs:857-870
 ```
 
 Each side parses into a `[u64; 3]`, compared as a tuple. This is
@@ -986,7 +986,7 @@ integrity before replacing*, not *function after replacing*. Recovery is manual 
 ### Yanked or unpublished versions
 
 Handled by field choice, not an explicit check: `crate.max_stable_version`
-excludes yanked releases, and `is_release_version` (`src/update.rs:867`) rejects
+excludes yanked releases, and `is_release_version` (`src/update.rs:873`) rejects
 anything not plain `X.Y.Z`, which is also what rejects a prerelease. No separate
 yanked check exists; the doc comment mentions "a prerelease or a yanked
 version" (`src/update.rs:819-820`) without a distinct yanked path — the comment
@@ -1249,11 +1249,13 @@ Concrete checks, each anchored to a line observed. Priority reflects blast radiu
    returns `NewerThanPublished` and the comparison source is
    `env!("CARGO_PKG_VERSION")` (`src/update.rs:1004-1006`), not anything scraped at
    runtime.
-5. **Comparison must stay numeric.** `src/update.rs:852-863` parses to
+5. **Comparison must stay numeric.** `src/update.rs:857-870` parses to
    `[u64; 3]` and compares tuples. Any refactor toward string comparison — or
    toward a general semver crate that would accept and then order prereleases —
-   changes a proven property. `is_release_version` (`src/update.rs:867-876`) is
-   the prerelease gate; it must reject `1.2.3-rc.1` and `1.2.3+build`.
+   changes a proven property. `is_release_version` (`src/update.rs:873-882`) is
+   the prerelease gate; it must reject `1.2.3-rc.1` and `1.2.3+build`. The
+   comparison **uses that same predicate**, so the two cannot drift apart and
+   order a build-metadata version (`+1.0.0`) against a release.
 6. **Atomicity and the crash window.** Verify the old file is *renamed aside*
    into a backup, not deleted, and the new file renamed over it
    (`eggup-core-0.1.2/src/transaction.rs:583` and

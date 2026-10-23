@@ -213,3 +213,63 @@ is the one recorded in the release record. The finding is recorded here
 rather than fixed inside the release, because a fix to the update path is a
 safety-adjacent change that deserves its own review, and because the
 intermittency is not understood well enough to fix responsibly.
+
+## Amendment 2026-10-23 — the measurement method, and the scope of the window
+
+Two things about this plan were wrong, and both were found by an independent
+audit of the *test harness's own* `ETXTBSY` window (`architecture/overview.md`
+§10 findings **95** and **96**). The plan is open, so this is a correction to
+an open plan rather than a new one.
+
+### 1. The re-measurement was taken on an unloaded host, and a count of
+consecutive passes is not a bound
+
+§"What is known, and what is not" records "the test alone, 40 consecutive runs
+— 40 pass, 0 fail" and "the whole lib suite, 8-way CPU load, 8 runs — 8 pass,
+0 fail", and finding 61 in `architecture/overview.md` §10 repeats the second
+one as "Re-measured: the test alone passed 40 of 40 consecutive runs, and an
+8-way parallel full-suite burst passed 8 of 8."
+
+**The defect is contention-dependent by construction**: the `execve` race needs
+the deferred `file_release` to be scheduled late, so an unloaded-host
+measurement cannot bound it. Under contention on the same tree, a full-suite
+failure was observed in **1 of 6** runs, and the full
+`cargo test --all-features --all-targets` command failed **twice in 8**
+invocations. The "8 of 8" was therefore a **miss**, not a contradiction of the
+mechanism — the flake is rare enough to escape an eight-run burst.
+
+The recorded number is a *rate*, not a count of consecutive passes, and it
+must be taken **under load**. Any future measurement of this defect reports a
+rate and names the load it was taken under. This correction does not change
+the plan's diagnosis — the mechanism, the leading hypothesis and the required
+work are unaffected — but it does change what the plan's §"Acceptance
+criteria" can be checked against: "the gate is green over at least 50
+whole-suite runs" is not evidence if the runs are on an idle host.
+
+### 2. The window is not confined to the product's update path
+
+This plan's scope is `eggup-core`'s `run_bounded` executing the **staged
+candidate** — the product's update path. That is where the finding was
+observed, and it stays in scope.
+
+But the repository's **own** CLI-contract harness had a *second*, larger
+`ETXTBSY` window, in `tests/cli_contract.rs`'s `stage_runnable_binary`
+(finding **95**). Its mitigation was an `O_WRONLY` reopen-and-`fsync`
+immediately before the staged binary was executed — which is the canonical
+way to *cause* the failure, because `execve` consults the inode's write
+count, and `close()` does not synchronously clear it. Measured: **479 failures
+in 960** staging-and-exec cycles under load, against **0 in 960** for the
+read-only reopen that replaced it.
+
+That window is **repository code, not upstream code**, it was **untracked**,
+and nothing in this plan mentioned it. Finding **95** is now closed with the
+read-only flush; the plan records it here because the *pattern* — a
+write-mode reopen placed immediately before an `execve` — is the same shape
+the update path's hypothesis is about, and a reader scoping this plan to the
+update path alone would not look for it.
+
+The scope is therefore widened in one direction only: **the repository's own
+staging helpers are in scope for the pattern**, even where the specific
+window is already closed. The upstream `eggup-core` work in §"Required work"
+is unchanged.
+

@@ -848,15 +848,21 @@ pub fn published_stable_version(metadata: &[u8]) -> Result<String, UpdateError> 
 ///
 /// `None` when either side is not a plain release, so a caller can never
 /// accidentally order a prerelease or a malformed string.
+///
+/// The guard is [`is_release_version`], the same one the published-version
+/// check uses. A build suffix such as `+1.0.0` is not a plain release, and
+/// parsing it as one would let a *build metadata* version order against a
+/// release — `+1.0.0` sorted above `0.9.0` — which is not a comparison any
+/// caller of this function means to make.
 pub fn compare_release_versions(left: &str, right: &str) -> Option<std::cmp::Ordering> {
     let parse = |value: &str| -> Option<[u64; 3]> {
+        if !is_release_version(value) {
+            return None;
+        }
         let mut parts = value.split('.');
         let mut out = [0u64; 3];
         for slot in out.iter_mut() {
             *slot = parts.next()?.parse::<u64>().ok()?;
-        }
-        if parts.next().is_some() {
-            return None;
         }
         Some(out)
     };
@@ -3203,8 +3209,47 @@ mod tests {
             compare_release_versions("0.1.0", "0.2.0"),
             Some(Ordering::Less)
         );
-        for bad in [("1.2", "1.2.0"), ("1.2.3-rc.1", "1.2.3"), ("x", "1.2.3")] {
+        for bad in [
+            ("1.2", "1.2.0"),
+            ("1.2.3-rc.1", "1.2.3"),
+            ("x", "1.2.3"),
+            // A build suffix is not a plain release. `+1` parses as the number
+            // one, so `+1.0.0` used to order *above* `0.9.0` — a build
+            // metadata version compared as if it were a release.
+            ("+1.0.0", "0.9.0"),
+        ] {
             assert_eq!(compare_release_versions(bad.0, bad.1), None, "{bad:?}");
+        }
+    }
+
+    /// The two version predicates agree about what a plain release is.
+    ///
+    /// *Fails if:* one of the two accepts a version the other refuses.
+    /// `compare_release_versions` used to parse `+1.0.0` as `1.0.0` — `+1`
+    /// parses as the number one — while `is_release_version` refused it, so
+    /// the updater could order a build-metadata version against a published
+    /// release and believe the local build was newer.
+    #[test]
+    fn the_version_predicates_agree_about_plain_releases() {
+        for version in [
+            "1.0.0",
+            "0.2.10",
+            "10.20.30",
+            "1.2.3-rc.1",
+            "1.2.3+build",
+            "+1.0.0",
+            "1.2",
+            "1.2.3.4",
+            "x",
+            "",
+            "1..0",
+            "1.2.",
+        ] {
+            assert_eq!(
+                is_release_version(version),
+                compare_release_versions(version, "1.0.0").is_some(),
+                "{version:?}: the two predicates disagree"
+            );
         }
     }
 

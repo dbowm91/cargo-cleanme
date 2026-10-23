@@ -606,9 +606,11 @@ order-independent.
 (`:426-429``, `:630-646``) and the scan continues with `Ok`. The symlink refusal is
 deliberate (comment `:476-480``, L7): `Path::is_dir` follows symlinks while the
 walker does not, so a symlinked root used to produce a *successful empty* scan for
-a directory the user asked for. `path_is_symlink` (`src/traverse.rs:26-59`) additionally
+a directory the user asked for. `path_is_symlink` (`src/traverse.rs:47-59`) additionally
 strips a trailing `/` or `/.`, because `symlink_metadata("link/")` follows the
-final component on POSIX and would otherwise hide the symlink (B1).
+final component on POSIX and would otherwise hide the symlink (B1). The
+stripping is platform-aware — `\` is an ordinary filename character on Unix —
+and never decodes the bytes, so a name that is not valid UTF-8 survives it.
 
 A root that vanishes between `root_is_usable` and the walk becomes a `Warning`
 (`:1036-1040``, `:1100-1121``), **not** `Error` + `PlatformRoot`. Because C029 it

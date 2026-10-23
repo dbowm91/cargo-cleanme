@@ -429,13 +429,16 @@ dropping them because the report got shorter would turn "boundary clean" into
 
 ### Escaping
 
-`path_text` (`report.rs:94-119`) is the terminal-safety boundary. It converts
-lossily (`report.rs:95`), checks `chars().any(char::is_control)`, and if any
-control character is present rewrites **every** control character as `\u{hex}`
-(`report.rs:113`). Non-UTF-8 bytes degrade to U+FFFD via `to_string_lossy` and
-are not re-escaped, since U+FFFD is not a control character. Two tests cover this
-(`report.rs:206-216` for ESC/BEL in a valid-UTF-8 name, `report.rs:219-238` for a
-raw `\xff`). The invariant: a directory name cannot drive the terminal.
+`path_text` (`report.rs:94-97`) is the terminal-safety boundary, and it delegates
+to the shared `escape_path_text` (`report.rs:109-123`), which is **public**:
+the binary's stderr surfaces are human surfaces too, and they are a separate
+crate. `path_text` converts lossily (`report.rs:95`), and the escaper checks
+`chars().any(char::is_control)` and, if any control character is present,
+rewrites **every** control character as `\u{hex}` (`report.rs:116`). Non-UTF-8
+bytes degrade to U+FFFD via `to_string_lossy` and are not re-escaped, since U+FFFD
+is not a control character. Two tests cover this (`report.rs:209-221` for ESC/BEL
+in a valid-UTF-8 name, `report.rs:222-241` for a raw `\xff`). The invariant: a
+directory name cannot drive the terminal.
 
 **Both surfaces go through it.** The cleanup report used to have its own private
 escaping helper, which quoted non-UTF-8 paths with Rust's `Debug` form and wrote
@@ -444,6 +447,16 @@ through `HumanOptions::path` (`report.rs:50-52`) and the verbose surface does th
 same, so both land in `path_text` and neither can drive a terminal. The helper's
 old `Debug` quoting is gone with it — the lossy U+FFFD form is now the only
 non-UTF-8 spelling on the human surface.
+
+**And so do the surfaces outside this module.** The escaper is `pub`, because the
+binary's stderr surfaces are human surfaces too and `main.rs` is a separate
+crate. Two of them did *not* route through it: the binary's own
+`sanitize_path_text` **dropped** control characters rather than escaping them —
+a different filter for the same job, so the same path rendered differently on
+two surfaces — and `policy.rs`'s omission diagnostics had a third copy of the
+filter inline. Both now call the shared escaper, and the bound each of them
+applies is applied to the *escaped* text, so a path of control characters cannot
+push the visible text past the bound by rendering shorter than it is.
 
 The machine projection now renders a non-UTF-8 path **identically** — see §6,
 "Non-UTF-8 path rendering". The two surfaces no longer disagree here.
@@ -1522,10 +1535,10 @@ JSON.)
 **Escaping hazards.** The two projections now differ in *mechanism* but agree in
 *content* for non-UTF-8 paths:
 
-- *Human*: `path_text` (`report.rs:94-119`) escapes **every** control character to
+- *Human*: `path_text` (`report.rs:94-97`) escapes **every** control character to
 `\u{hex}` if any is present, and lossy-converts non-UTF-8. ANSI sequences are
 neutralised — ESC is `0x1b`, a control character, so it is rewritten. Covered
-by `report.rs:206-216`. Terminal injection through a directory name is closed.
+by `report.rs:209-221`. Terminal injection through a directory name is closed.
 - *JSON*: `output::path` (`output.rs:262-266`) does **no** escaping of its own; a
 valid-UTF-8 path passes through verbatim, ANSI escapes included. Serde's string
 escaper maps C0 control characters (including `0x1b`) to `\u00XX`, so the
@@ -1598,21 +1611,21 @@ contract (§7).
 
 ## 10. Testing
 
-**`report.rs` — 11 tests, all inline** (`#[cfg(test)] mod tests`, `report.rs:188-383`):
+**`report.rs` — 11 tests, all inline** (`#[cfg(test)] mod tests`, `report.rs:192-387`):
 
 | Test | Line | Covers |
 |---|---|---|
-| `report_escapes_control_bytes_in_paths` | 187 | ESC/BEL in a UTF-8 name escaped, never raw |
-| `report_escapes_non_utf8_paths` | 200 | raw `\xff` → U+FFFD; no control survives |
-| `report_ordering_and_zero_report` | 221 | zero-state wording **and** path tie-break |
-| `zero_state_uses_the_same_inventory_wording_as_results` | 230 | "inventory estimate" in both states; never "reclaimable" |
-| `format_bytes_scales_to_eib_and_promotes_rounded_units` | 241 | whole ladder incl. `u64::MAX` and the 1024.00 promotion |
-| `groups_render_every_group_with_ownership_and_deduped_total` | 252 | ordering, all three labels, every group printed, no "recovered" |
-| `groups_total_does_not_double_count_equal_roots` | 281 | duplicate physical paths counted once; singular "1 group" |
-| `a_bounded_scope_spells_its_paths_relative_to_the_scope_root` | 298 | a path under the scope root is relative; one under no root stays absolute |
-| `a_full_scope_spells_its_paths_absolutely` | 322 | a Full scope's paths keep their absolute form |
-| `a_one_component_path_is_qualified_with_the_scope_root_name` | 339 | `my-app/target`, not a bare `target` |
-| `the_scope_root_itself_is_spelled_with_its_own_name` | 355 | the scope root names itself instead of rendering as an empty column |
+| `report_escapes_control_bytes_in_paths` | 209 | ESC/BEL in a UTF-8 name escaped, never raw |
+| `report_escapes_non_utf8_paths` | 222 | raw `\xff` → U+FFFD; no control survives |
+| `report_ordering_and_zero_report` | 243 | zero-state wording **and** path tie-break |
+| `zero_state_uses_the_same_inventory_wording_as_results` | 252 | "inventory estimate" in both states; never "reclaimable" |
+| `format_bytes_scales_to_eib_and_promotes_rounded_units` | 263 | whole ladder incl. `u64::MAX` and the 1024.00 promotion |
+| `groups_render_every_group_with_ownership_and_deduped_total` | 274 | ordering, all three labels, every group printed, no "recovered" |
+| `groups_total_does_not_double_count_equal_roots` | 303 | duplicate physical paths counted once; singular "1 group" |
+| `a_bounded_scope_spells_its_paths_relative_to_the_scope_root` | 320 | a path under the scope root is relative; one under no root stays absolute |
+| `a_full_scope_spells_its_paths_absolutely` | 344 | a Full scope's paths keep their absolute form |
+| `a_one_component_path_is_qualified_with_the_scope_root_name` | 361 | `my-app/target`, not a bare `target` |
+| `the_scope_root_itself_is_spelled_with_its_own_name` | 377 | the scope root names itself instead of rendering as an empty column |
 
 The first two are `#[cfg(unix)]` (raw `OsString::from_vec`). The last four are
 M020's, and they are the tests that make the relative-path rule a contract rather

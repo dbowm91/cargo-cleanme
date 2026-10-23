@@ -481,7 +481,7 @@ fn run_cleanup(
         for unproven in &resolved.unproven_roots {
             eprintln!(
                 "cargo-cleanme: learned root {} was skipped: {}",
-                unproven.root.display(),
+                sanitize_path_text(&unproven.root.display().to_string()),
                 unproven.detail
             );
         }
@@ -1257,11 +1257,15 @@ fn canonicalize_cached(
 
 /// A path rendered for a human-readable report.
 ///
-/// Control characters are dropped and the text is bounded, so a path the
-/// operator did not choose cannot rewrite the report's own layout.
+/// Control characters are escaped and the text is bounded, so a path the
+/// operator did not choose cannot rewrite the report's own layout. The
+/// escaping is the shared one — the same routine the library's report and
+/// selection surfaces use — and the bound is applied to the *escaped* text,
+/// so a path of control characters cannot push the visible text past the
+/// bound by rendering shorter than it is.
 fn sanitize_path_text(path: &str) -> String {
-    path.chars()
-        .filter(|ch| !ch.is_control())
+    cargo_cleanme::report::escape_path_text(path)
+        .chars()
         .take(200)
         .collect()
 }
@@ -1905,14 +1909,9 @@ fn run_scan(
                 if group.1.len() < 3
                     && let Some(path) = &diagnostic.path
                 {
-                    group.1.push(
-                        path.display()
-                            .to_string()
-                            .chars()
-                            .filter(|ch| !ch.is_control())
-                            .take(200)
-                            .collect(),
-                    );
+                    group
+                        .1
+                        .push(sanitize_path_text(&path.display().to_string()));
                 }
             }
             for (cause, (count, paths)) in cargo_groups.iter().take(8) {

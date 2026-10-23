@@ -8,7 +8,7 @@
 
 The verification apparatus does three distinct jobs. The third is what makes it unusual.
 
-**(a) Product behaviour.** 585 declared inline `#[test]` functions in `src/`, plus two
+**(a) Product behaviour.** 594 declared inline `#[test]` functions in `src/`, plus two
 integration suites: one drives the compiled binary as a subprocess, the other drives the
 library's scan entry point in-process. Between them they cover ownership proof, cleanup
 authorization, the three clean modes, workspace resolution, real Cargo failure presentation,
@@ -41,7 +41,7 @@ were the premises, and is any of them unchecked?*
 
 | Layer | Location | Count | What it can catch | What it cannot catch |
 |---|---|---:|---|---|
-| Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 585 declared `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
+| Inline unit tests | `src/**/*.rs`, in-file `#[cfg(test)] mod tests` | 594 declared `#[test]` | Logic errors, ownership/authorization decisions, argument construction, refactor regressions | Anything needing a real process, filesystem, or network; any premise of a fake |
 | Integration — CLI contract | `tests/cli_contract.rs` (4,860 lines) | 77 `#[test]` | The subprocess boundary end to end: argv normalization, exit codes, JSON shape, log-line shape, `--stats` stream discipline, selector behaviour, usage conflicts, stale-learned-root admission, repeated-root noise bounds, incomplete-discovery stage counts, real Cargo failure summaries, default Routine execution against real Cargo | Internals of `run()`; anything on a real machine; platform-gated cases are excluded on other lanes |
 | Integration — end to end | `tests/end_to_end.rs` (840 lines) | 4 `#[test]` | Full production-pipeline scans against synthetic trees with real mtimes, under both a filtered Routine scope and an explicit scope | Cleanup, update, config editing |
 | Shared harness | `tests/common/mod.rs` (286 lines) | 0 tests | `set_path_modified` / `backdate_file` (per-platform mtime control), `inactive_project` tree construction, `write_fake_cargo` / `cargo_calls` (unix only) | — |
@@ -98,53 +98,55 @@ from `src/`, never copied between documents.
 
 | File | `#[test]` | `mod tests` opens at | Total lines | Lines in test module |
 |---|---:|---:|---:|---:|
-| `src/cleanup.rs` | 136 | 4476 | 11938 | 7463 |
-| `src/workspace.rs` | 87 | 2440 | 6951 | 4512 |
-| `src/update.rs` | 53 | 1494 | 3297 | 1804 |
-| `src/interactive.rs` | 76 | 1818 | 3606 | 1789 |
-| `src/cli.rs` | 59 | 944 | 2773 | 1830 |
-| `src/discovery.rs` | 41 | 1126 | 2625 | 1500 |
-| `src/policy.rs` | 24 | 839 | 1623 | 785 |
-| `src/output.rs` | 22 | 273 (`path_tests`), 512 (`tests`), 992 (`update_tests`) | 1113 | 841 |
-| `src/config.rs` | 20 | 614 | 1499 | 886 |
-| `src/discovery_state.rs` | 17 | 637 | 1277 | 641 |
-| `src/progress.rs` | 15 | 596 | 1007 | 412 |
-| `src/report.rs` | 11 | 188 | 384 | 197 |
-| `src/main.rs` | 12 | 1996 | 2500 | 505 |
-| `src/traverse.rs` | 9 | 708 | 936 | 229 |
-| `src/editor.rs` | 2 | 156 | 208 | 53 |
-| `src/domain.rs` | 1 | 472 | 500 | 29 |
+| `src/cleanup.rs` | 136 | 4510 | 11971 | 7462 |
+| `src/workspace.rs` | 87 | 2420 | 6930 | 4511 |
+| `src/update.rs` | 54 | 1501 | 3342 | 1842 |
+| `src/interactive.rs` | 76 | 1819 | 3606 | 1788 |
+| `src/cli.rs` | 59 | 948 | 2776 | 1829 |
+| `src/discovery.rs` | 42 | 1127 | 2646 | 1520 |
+| `src/policy.rs` | 26 | 827 | 1666 | 840 |
+| `src/output.rs` | 22 | 274 (`path_tests`), 513 (`tests`), 993 (`update_tests`) | 1113 | 840 |
+| `src/config.rs` | 20 | 615 | 1499 | 885 |
+| `src/discovery_state.rs` | 17 | 638 | 1277 | 640 |
+| `src/progress.rs` | 16 | 570 | 1002 | 433 |
+| `src/report.rs` | 11 | 192 | 387 | 196 |
+| `src/main.rs` | 12 | 1996 | 2499 | 504 |
+| `src/traverse.rs` | 12 | 756 | 1076 | 321 |
+| `src/editor.rs` | 3 | 157 | 229 | 73 |
+| `src/domain.rs` | 1 | 473 | 500 | 28 |
 | `src/error.rs` | 0 | — | 16 | — |
 | `src/lib.rs` | 0 | — | 16 | — |
-| **Total** | **585** | | | |
+| **Total** | **594** | | | |
 
-**The count is declared, not executed.** 585 `#[test]` functions exist in `src/`; **583
+**The count is declared, not executed.** 594 `#[test]` functions exist in `src/`; **592
 compile on Linux x86_64**, because two are gated to the other platforms
 (`config.rs:995`, `#[cfg(windows)]`, and `discovery.rs:1677`,
-`#[cfg(any(target_os = "macos", windows))]`). Beyond that, **45** carry a
-`#[cfg(unix)]` gate and four are Linux-only (`config.rs:1443`,
+`#[cfg(any(target_os = "macos", windows))]`). Beyond that, **47** carry a
+`#[cfg(unix)]` gate and five are Linux-only (`config.rs:1443`,
 `discovery.rs:1697`, `output.rs:280`, `workspace.rs:6054` — the last of which
-is also `#[cfg(unix)]`), so the other two lanes compile smaller sets. The three
-hosted lanes therefore compile different sets — 583 on Linux x86_64, 580 on
-macOS, and **536** on Windows, where **49** of the 585 are excluded: the 45
-unix-gated tests, the three Linux-only tests that are not also unix-gated, and
-the one test gated on Linux *and* `x86_64`. Platform-gated tests mean a green
+is also `#[cfg(unix)]` — and `traverse.rs:1055`, whose *fixture* writes a file
+name that is not valid UTF-8, which only Linux's filesystem can hold), so the
+other two lanes compile smaller sets. The three hosted lanes therefore compile
+different sets — 592 on Linux x86_64, 588 on macOS, and **542** on Windows,
+where **52** of the 594 are excluded: the 47 unix-gated tests, the four
+Linux-only tests that are not also unix-gated, and the one test gated on Linux
+*and* `x86_64`. Platform-gated tests mean a green
 local run does not mean a green run elsewhere — which is the whole reason the OS
 matrix exists, and the reason `check-fixture-portability.py` exists to catch a
 *new* ungated fixture before a lane disagrees about it.
 
 > **Count the gates with a parser, not a grep.** A naive "the `#[cfg(unix)]`
-> immediately above `#[test]`" search finds 35, not 45, because Rust allows
-> `#[test]` to precede the gate — ten of the 45 have it that way. The
+> immediately above `#[test]`" search finds 35, not 47, because Rust allows
+> `#[test]` to precede the gate — twelve of the 47 have it that way. The
 > figures above come from a brace-tracking evaluation against
 > `rustc --print cfg --target <triple>`, cross-checked against
 > `cargo test --lib -- --list` on the host platform. The Windows total is
 > **source-derived *and* build-verified**: it was checked against a test binary
-> cross-compiled for `x86_64-pc-windows-gnu`, which carries exactly the 536
+> cross-compiled for `x86_64-pc-windows-gnu`, which carries exactly the 542
 > derived tests and no others. The macOS total remains **source-derived, not
 > build-verified** — the hosted CI matrix is the only thing that proves it.
 
-`cleanup.rs` (136) + `workspace.rs` (87) = 223 of 585 = **38.1%**. The two largest and most
+`cleanup.rs` (136) + `workspace.rs` (87) = 223 of 594 = **37.5%**. The two largest and most
 safety-critical modules — authorization, ownership proof, pre-spawn decision, and the `cargo
 metadata` resolution everything depends on — hold roughly two fifths of the unit tests. That
 allocation is correct, and it is the one place the pyramid is emphatically *not* inverted.
@@ -152,13 +154,13 @@ allocation is correct, and it is the one place the pyramid is emphatically *not*
 ### The structural observation: the testing is inverted
 
 The convention is a separate `tests/` tree beside a lean `src/`. This crate does the
-opposite. `cleanup.rs` is 11,938 lines of which **7,467 are test code** — 63% of that file is
-fake-Cargo runners and assertion bodies. `workspace.rs` is 6951 lines, 4512 of them tests.
-`report.rs` runs the other way: its test module opens at line 188, roughly the first third,
+opposite. `cleanup.rs` is 11,971 lines of which **7,462 are test code** — 62% of that file is
+fake-Cargo runners and assertion bodies. `workspace.rs` is 6930 lines, 4511 of them tests.
+`report.rs` runs the other way: its test module opens at line 192, roughly the first third,
 so the rendering tests sit *above* most of the production code they exercise.
 
 The consequence for review is concrete. Opening `src/cleanup.rs` to understand the pre-spawn
-decision puts 7,467 lines of `FakeCleanupRunner` variants (`cleanup.rs:4476`–`11938`) between
+decision puts 7,462 lines of `FakeCleanupRunner` variants (`cleanup.rs:4510`–`11971`) between
 the reader and nearly all production code. Locate the boundary first — `mod tests {` at
 `cleanup.rs:4476` — and read upward. Do not infer "few tests" from a file's position in the
 tree, and do not count `cleanup.rs` as production code when estimating where complexity
@@ -170,7 +172,7 @@ lives.
 
 ### The test-double architecture
 
-Two process seams keep almost all of the 585 declared tests from spawning a real `cargo`:
+Two process seams keep almost all of the 594 declared tests from spawning a real `cargo`:
 
 - **`CargoRunner`** — `src/workspace.rs:29`. `fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput>`.
 - **`CleanupRunner`** — declared in `src/cleanup.rs` for the destructive step, so cleanup is exercised while `cargo clean` is a no-op returning recorded bytes.
@@ -1056,7 +1058,7 @@ and the hosted workflow is what asks them automatically. It is still the one scr
 reference tree; `release-benchmark.py` re-measures and fails on a configurable regression
 percentage, run by the `benchmark` job. The regression it catches is the class no correctness
 test notices: a change that keeps every answer right but makes the scan substantially slower.
-With `cleanup.rs` at 11,163 lines and the parallel probe fan-out a live optimisation surface
+With `cleanup.rs` at 11,971 lines and the parallel probe fan-out a live optimisation surface
 (`ParallelProbeRunner` exists precisely to assert the fan-out), that is a realistic and
 otherwise invisible failure mode. The trade-off is inherent: a wall-clock threshold is flaky on
 shared runners, so this gate is the one most likely to be loosened — itself a thing to watch in
@@ -1068,27 +1070,27 @@ review.
 
 | Module | Lines | Tests | Tests / prod. lines | Verdict |
 |---|---:|---:|---:|---|
-| `cleanup.rs` | 10403 | 120 | 120 / 3937 | Appropriate. Most safety-critical module has the most tests; the race fakes show the hard cases were found and pinned — and it is also the module that carried the long-standing red, R7, now corrected by C037 |
-| `workspace.rs` | 6301 | 79 | 79 / 2160 | Appropriate, and the fakes are argument-focused rather than result-focused — the right instinct |
-| `update.rs` | 2886 | 47 | 47 / 1289 | Reasonable unit coverage, but this is the module whose defects (C011, C016, C017) escaped to production. Unit tests cannot see a transport that cannot reach its authority. Its transaction-hygiene evidence was briefly a false green too — see R6 |
-| `interactive.rs` | 2985 | 67 | 67 / 1493 | Good for a new module, and the only one that put the terminal behind a pure seam. Its *surface* — a real selection session — is covered nowhere outside the module, because the integration suite has no terminal |
-| `discovery.rs` | 2363 | 39 | 39 / 1000 | Permission traversal has a premise-checked Unix fixture; 1,001 synthetic errors prove per-root aggregation stays bounded |
-| `cli.rs` | 1293 | 32 | 32 / 501 | Good |
-| `output.rs` | 1065 | 21 | 21 / 540 | **Split verdict, and the split is the finding.** The in-file tests cover bounded log output and update JSON; the scan/cleanup envelope layer still has **zero** direct in-file tests |
+| `cleanup.rs` | 11971 | 136 | 136 / 4504 | Appropriate. Most safety-critical module has the most tests; the race fakes show the hard cases were found and pinned — and it is also the module that carried the long-standing red, R7, now corrected by C037 |
+| `workspace.rs` | 6930 | 87 | 87 / 2418 | Appropriate, and the fakes are argument-focused rather than result-focused — the right instinct |
+| `update.rs` | 3342 | 54 | 54 / 1499 | Reasonable unit coverage, but this is the module whose defects (C011, C016, C017) escaped to production. Unit tests cannot see a transport that cannot reach its authority. Its transaction-hygiene evidence was briefly a false green too — see R6 |
+| `interactive.rs` | 3606 | 76 | 76 / 1817 | Good for a new module, and the only one that put the terminal behind a pure seam. Its *surface* — a real selection session — is covered nowhere outside the module, because the integration suite has no terminal |
+| `discovery.rs` | 2646 | 42 | 42 / 1125 | Permission traversal has a premise-checked Unix fixture; 1,001 synthetic errors prove per-root aggregation stays bounded |
+| `cli.rs` | 2776 | 59 | 59 / 946 | Good |
+| `output.rs` | 1113 | 22 | 22 / 543 | **Split verdict, and the split is the finding.** The in-file tests cover bounded log output and update JSON; the scan/cleanup envelope layer still has **zero** direct in-file tests |
 | `config.rs` | 1499 | 20 | 20 / 613 | Good for its surface |
-| `progress.rs` | 945 | 15 | 15 / 515 | Thin relative to size. Terminal-capability detection is mostly untested, and integration tests force `--no-progress` (`cli_contract.rs:178`), excluding the renderer from end-to-end coverage by construction |
-| `discovery_state.rs` | 1129 | 17 | 17 / 580 | Candidate provenance and cache/runtime exclusion are pinned alongside C028 absence handling — but see R9: the absence rule itself and `sweep_own_stale_temps` are not discriminated by any case |
-| `policy.rs` | 1451 | 21 | 21 / 791 | Adequate for the module deciding the Routine/Full scope boundary: decision table, symlink refusal, premise recheck, Full-generation freshness, and raw-candidate identity are pinned |
-| `traverse.rs` | 624 | 6 | 6 / 494 | **Too low for the module that walks the whole filesystem.** No test double for traversal-scale error attribution; `source_activity` (`:350`) has no production caller, and its one test does not discriminate what it claims (R8) |
-| `report.rs` | 365 | 11 | 11 / 168 | **Unusually good for its size.** Covers control-character and non-UTF-8 path escaping, zero-state wording, the full `format_bytes` ladder including `u64::MAX`, group ordering with the path tie-break, and total de-duplication across equal physical roots. Two are `#[cfg(unix)]` (`report.rs:88`, `:112`) because they use `OsString::from_vec` |
-| `editor.rs` | 215 | 2 | 2 / 155 | Low, but the process-exec behaviour is covered end to end at `cli_contract.rs:1105`, the right place for it |
-| `domain.rs` | 435 | 1 | 1 / 406 | Defensible. Pure data, exercised transitively, with one well-premised test for the saturating counter conversion. Semantic *rules* live in the modules that interpret the types |
+| `progress.rs` | 1002 | 16 | 16 / 542 | Thin relative to size. Terminal-capability detection is mostly untested, and integration tests force `--no-progress` (`cli_contract.rs:178`), excluding the renderer from end-to-end coverage by construction |
+| `discovery_state.rs` | 1277 | 17 | 17 / 636 | Candidate provenance and cache/runtime exclusion are pinned alongside C028 absence handling — but see R9: the absence rule itself and `sweep_own_stale_temps` are not discriminated by any case |
+| `policy.rs` | 1666 | 26 | 26 / 825 | Adequate for the module deciding the Routine/Full scope boundary: decision table, symlink refusal, premise recheck, Full-generation freshness, and raw-candidate identity are pinned |
+| `traverse.rs` | 1076 | 12 | 12 / 754 | **Too low for the module that walks the whole filesystem.** No test double for traversal-scale error attribution; `source_activity` (`:350`) has no production caller, and its one test does not discriminate what it claims (R8) |
+| `report.rs` | 387 | 11 | 11 / 190 | **Unusually good for its size.** Covers control-character and non-UTF-8 path escaping, zero-state wording, the full `format_bytes` ladder including `u64::MAX`, group ordering with the path tie-break, and total de-duplication across equal physical roots. Two are `#[cfg(unix)]` (`report.rs:209`, `:222`) because they use `OsString::from_vec` |
+| `editor.rs` | 229 | 3 | 3 / 155 | Low, but the process-exec behaviour is covered end to end at `cli_contract.rs:1105`, the right place for it |
+| `domain.rs` | 500 | 1 | 1 / 471 | Defensible. Pure data, exercised transitively, with one well-premised test for the saturating counter conversion. Semantic *rules* live in the modules that interpret the types |
 | `error.rs` | 16 | 0 | — | Defensible |
 | `lib.rs` | 16 | 0 | — | Defensible |
-| `main.rs` | 1562 | 4 | 4 / 1425 | **Four inline tests for the composition root**, added by C038: the interactive surface's three endings and the report verdict. Still thin — `cli_contract.rs` runs the binary as a subprocess and pins several non-zero exit paths, but `run()`'s structure remains opaque, and C023 established that the cleanup progress-bar ordering here is unreachable from the tests |
+| `main.rs` | 2499 | 12 | 12 / 1994 | **Twelve inline tests for the composition root**: the interactive surface's three endings, the report verdict, the M018 coverage gate's three endings, the update log line, and the usage-error refusals. Still thin — `cli_contract.rs` runs the binary as a subprocess and pins several non-zero exit paths, but `run()`'s structure remains opaque, and C023 established that the cleanup progress-bar ordering here is unreachable from the tests |
 
 The contrast in the last three rows is the finding. The *human* renderer beside the
-*machine* DTO layer has 7 unusually strong tests, while the envelope layer below the log
+*machine* DTO layer has 11 unusually strong tests, while the envelope layer below the log
 renderer still has none — and the
 one surface automation actually depends on has all its assertions living in a different
 crate (`tests/`). Add a field to `EnvelopeV1` and nothing inside the crate fails; only
@@ -1101,8 +1103,8 @@ sees a covered module where the versioned DTOs are exactly as unpinned as before
 1. **`main.rs` composition and the exit-code table.** `run()` stitches the two pipelines together and maps outcomes to codes. **All three** codes are pinned: `1` asserted at `cli_contract.rs:754` and `:1153`, `2` at `:674` and `:3076`, and `0` at `:2016`, `:2055`, `:2077`, and `:2107` (the resolved-scope label test is at `:213`). The *distinct failure routes* are not all pinned — a usage error and a config error both surface as `2`, and nothing distinguishes them at the exit-code level. `src/main.rs:1837` shows the `full_incomplete` → 1 path. The cleanup pipeline has its own `Ok(1)` route — a failed unit or a blocked scope (`src/main.rs:607`) — now tested through the `scope_blocked.is_some()` shape M012A introduced, and M012A also made bare `cargo cleanme` a cleanup path, so `run()`'s dispatch is materially larger than when this list was written.
 2. **`clean --full` itself.** No live run exists, and none can exist on a host with an unreadable directory, because `policy::full_cleanup_roots` (`src/policy.rs:546`) fails closed with exit 2 whenever the Full reconciliation was incomplete (`src/policy.rs:551-557`). The only evidence is a source-string guard on `enum EmitReport` (`tests/cli_contract.rs:3300`, `src/main.rs:1520`). A pty harness, as C023 proposed for the progress-bar ordering, is the shape of thing that would close this properly.
 3. **`update_json` output shape** (`output.rs:950-987`). Bypasses `EnvelopeV1` and has its own `schema_version` literal at `output.rs:952`. C022 added the four missing cases (`output.rs:1016`, `:1042`, `:1056`, `:1096`) plus the CLI failure-shape case; what remains unpinned is a successful live document and the schema reconciliation itself. See R3.
-4. **`output.rs` envelope field completeness.** `scan()` (`output.rs:105`) and `cleanup()` (`output.rs:161`): adding, removing, or renaming a field breaks no in-crate test. The 17 tests in the log and path modules all live below `pub mod log` or in `path_tests`; the four `update_tests` cover the other contract.
-5. **`report.rs` rendering is covered, but not end to end.** The 7 inline tests are strong; the default `--format text` path is never asserted through the binary.
+4. **`output.rs` envelope field completeness.** `scan()` (`output.rs:105`) and `cleanup()` (`output.rs:161`): adding, removing, or renaming a field breaks no in-crate test. The 18 tests in the log and path modules all live below `pub mod log` or in `path_tests`; the four `update_tests` cover the other contract.
+5. **`report.rs` rendering is covered, but not end to end.** The 11 inline tests are strong; the default `--format text` path is never asserted through the binary.
 6. **`domain.rs` semantics.** One test is defensible for the data shapes, but any *meaningful* method on those types is untested by construction — nothing would catch one being added.
 7. **`traverse.rs` measurement.** 6 tests for parallel size/recency measurement. Symlink handling, `CACHEDIR.TAG` qualification, and per-entry `ReadDir` error attribution are what would go wrong on a real machine, and what the platform matrix would be best placed to catch — but the fakes are hand-rolled per test, so real behaviour is only sampled, and the one activity test does not discriminate (R8).
 8. **The whole self-update path.** 47 inline tests against `FixtureEnvironment`, plus manual live rehearsal. Every published defect in this line escaped that apparatus, and the reason is structural: a fixture that replaces the network can never discover that the real network rejects you. The automated evidence is a substitute for the thing, not a check of it.

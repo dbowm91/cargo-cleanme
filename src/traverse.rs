@@ -36,26 +36,38 @@ use std::{
 /// the link, so the spelling is trimmed and re-probed. The two spellings that
 /// hide a symlink are `link/` — POSIX `symlink_metadata` follows the final
 /// component — and `link/.`, which stats through the link as well.
+///
+/// The trimming is done with `Path`'s own component handling, which knows
+/// which characters separate components *on this platform*: `\` separates on
+/// Windows and is an ordinary filename character on Unix, where a directory
+/// may legitimately be named `link\`. The bytes are never decoded, so a name
+/// that is not valid UTF-8 survives the trimming — a lossy conversion would
+/// turn it into a path that does not exist, and the probe would answer about
+/// a different path than the one it was asked about.
 pub fn path_is_symlink(path: &Path) -> bool {
     if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
         return true;
     }
-    let mut spelling = path.as_os_str().to_string_lossy().into_owned();
-    loop {
-        let trimmed = spelling.trim_end_matches(['/', '\\']).to_owned();
-        if trimmed.ends_with("/.") || trimmed.ends_with("\\.") {
-            spelling = trimmed[..trimmed.len() - 1].to_owned();
-            continue;
+    match trimmed_spelling(path) {
+        // The trimmed spelling is the same path when the original spelling
+        // hides nothing, so there is nothing left to probe.
+        Some(trimmed) if trimmed.as_os_str() != path.as_os_str() => {
+            fs::symlink_metadata(&trimmed).is_ok_and(|m| m.file_type().is_symlink())
         }
-        spelling = trimmed;
-        break;
+        _ => false,
     }
-    if !spelling.is_empty()
-        && fs::symlink_metadata(&spelling).is_ok_and(|m| m.file_type().is_symlink())
-    {
-        return true;
-    }
-    false
+}
+
+/// The path with its trailing separators and trailing `.` component removed.
+///
+/// `Path` already knows the platform's separators, so the result is the same
+/// path on every platform: `link/` and `link/.` both become `link`, while a
+/// Unix path whose name ends in `\` is left alone — that is a directory of
+/// that name, not a spelling of a link.
+fn trimmed_spelling(path: &Path) -> Option<PathBuf> {
+    let name = path.file_name()?;
+    let parent = path.parent()?;
+    Some(parent.join(name))
 }
 
 /// The lexical identity of a path: `.` and `..` resolved textually, with no
@@ -175,17 +187,52 @@ pub fn resolve_root(path: &Path) -> ResolvedRoot {
 /// cannot make one physical root look like two: `/var/x` and `/private/var/x`
 /// are one root on macOS, not two.
 pub fn collapse_outermost(roots: Vec<PathBuf>) -> Vec<ResolvedRoot> {
-    let mut resolved: Vec<ResolvedRoot> =
-        roots.into_iter().map(|root| resolve_root(&root)).collect();
+    collapse_resolved_protecting(resolve_roots(roots), &[])
+}
+
+/// Collapse a set of scope roots to the outermost ones, keeping every root
+/// whose identity is in `protected` even when an ancestor contains it.
+///
+/// The protection is the only part that is specific to a surface that has one:
+/// the policy surface's protected roots are their ancestor's exceptions, and
+/// collapsing them would re-create the ambiguity the caller resolved. The
+/// mechanism — resolve, sort, dedup, drop nested roots — is the shared one.
+pub fn collapse_outermost_protecting(
+    roots: Vec<PathBuf>,
+    protected: &[PathBuf],
+) -> Vec<ResolvedRoot> {
+    collapse_resolved_protecting(resolve_roots(roots), protected)
+}
+
+/// Collapse roots that are already resolved.
+///
+/// The cleanup surface resolves its roots itself, because a root that does not
+/// resolve fails the run there; collapsing the roots it already resolved
+/// keeps the filesystem from being asked the same question twice.
+pub fn collapse_resolved(resolved: Vec<ResolvedRoot>) -> Vec<ResolvedRoot> {
+    collapse_resolved_protecting(resolved, &[])
+}
+
+/// Resolve every root once.
+fn resolve_roots(roots: Vec<PathBuf>) -> Vec<ResolvedRoot> {
+    roots.into_iter().map(|root| resolve_root(&root)).collect()
+}
+
+/// The collapse itself, over roots that are already resolved.
+fn collapse_resolved_protecting(
+    mut resolved: Vec<ResolvedRoot>,
+    protected: &[PathBuf],
+) -> Vec<ResolvedRoot> {
     // Sort and dedup by the reported spelling, so the surviving root of a
     // duplicated pair is the one the per-surface implementations kept.
     resolved.sort_by(|a, b| a.spelling.cmp(&b.spelling));
     resolved.dedup_by(|a, b| a.spelling == b.spelling);
     let mut collapsed: Vec<ResolvedRoot> = Vec::new();
     for root in resolved {
-        if !collapsed
-            .iter()
-            .any(|parent: &ResolvedRoot| root.identity.starts_with(&parent.identity))
+        if protected.contains(&root.identity)
+            || !collapsed
+                .iter()
+                .any(|parent: &ResolvedRoot| root.identity.starts_with(&parent.identity))
         {
             collapsed.push(root);
         }
@@ -932,5 +979,104 @@ mod tests {
             SourceActivity::Recent(_) => {}
             SourceActivity::Quiet(_) => panic!("fresh source must short-circuit"),
         }
+    }
+
+    /// The symlink predicate answers the same for every spelling of a link.
+    ///
+    /// *Fails if:* a spelling that hides the link is not recognised. The two
+    /// hiding spellings are `link/` and `link/.`: POSIX `symlink_metadata`
+    /// follows the final component for both, so the first probe answers "not
+    /// a symlink" about a link. The predicate was introduced as *the*
+    /// definition and had no test in this module at all, so both spellings
+    /// were unexamined.
+    #[test]
+    #[cfg(unix)]
+    fn path_is_symlink_recognises_every_spelling_of_a_link() {
+        use std::os::unix::fs::symlink;
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let link = d.path().join("link");
+        symlink(&target, &link).unwrap();
+
+        assert!(path_is_symlink(&link), "the plain spelling");
+        assert!(
+            path_is_symlink(&link.join("")),
+            "a trailing separator must not hide the link"
+        );
+        assert!(
+            path_is_symlink(Path::new(&format!("{}/.", link.display()))),
+            "a trailing dot component must not hide the link"
+        );
+
+        // The negative cases: a plain directory is not a link, and a path that
+        // does not exist is not a link.
+        let plain = d.path().join("plain");
+        fs::create_dir(&plain).unwrap();
+        assert!(!path_is_symlink(&plain), "a plain directory is not a link");
+        assert!(
+            !path_is_symlink(&d.path().join("nowhere")),
+            "a path that does not exist is not a link"
+        );
+    }
+
+    /// A directory whose name ends in a backslash is not a symlink.
+    ///
+    /// *Fails if:* the trailing-separator trimming is not platform-aware. `\`
+    /// is a separator on Windows and an ordinary filename character on Unix,
+    /// so trimming it unconditionally rewrites the path to a *different* one:
+    /// the predicate then answered about some other directory and reported a
+    /// symlink that was not there. Every caller treats a true answer as "this
+    /// is a symlink", so a real directory was refused as one.
+    #[test]
+    #[cfg(unix)]
+    fn a_unix_directory_named_with_a_trailing_backslash_is_not_a_symlink() {
+        let d = tempfile::tempdir().unwrap();
+        let plain = d.path().join("link\\");
+        fs::create_dir_all(&plain).unwrap();
+        assert!(
+            plain.exists(),
+            "the fixture is a real directory with a backslash in its name"
+        );
+        assert!(
+            !path_is_symlink(&plain),
+            "a backslash is an ordinary filename character on Unix"
+        );
+    }
+
+    /// A link whose name is not valid UTF-8 is still a link.
+    ///
+    /// *Fails if:* the spelling arithmetic goes through a lossy string. The
+    /// bytes of a name that is not valid UTF-8 do not survive
+    /// `to_string_lossy`, so the trimmed probe stat'ed a path that does not
+    /// exist and the predicate answered "not a symlink" — about a spelling
+    /// that hides a link, which is exactly what the guard exists to catch.
+    ///
+    /// The gate is `target_os = "linux"`, not `unix`: it is the *fixture* that
+    /// is Linux-only — a file name that is not valid UTF-8 is not
+    /// representable on macOS's filesystem. The behaviour under test is
+    /// platform-independent, and the other two spellings are covered by the
+    /// unix-gated test above.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_non_utf8_link_spelled_with_a_trailing_separator_is_still_a_symlink() {
+        use std::os::unix::ffi::OsStringExt;
+        use std::os::unix::fs::symlink;
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let name = std::ffi::OsString::from_vec(b"bad-\xff".to_vec());
+        let link = d.path().join(name);
+        symlink(&target, &link).unwrap();
+        assert!(path_is_symlink(&link), "the plain spelling");
+
+        // The trailing separator is what hides the link from `symlink_metadata`.
+        // It is built with `join`, not with `display`, so the bytes of the
+        // name survive: a lossy rendering would spell a different path.
+        let slashed = link.join("");
+        assert!(
+            path_is_symlink(&slashed),
+            "a trailing separator must not hide a link whose name is not UTF-8"
+        );
     }
 }
