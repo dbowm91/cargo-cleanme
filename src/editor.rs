@@ -39,7 +39,12 @@ pub fn resolve_editor() -> Result<(PathBuf, Vec<String>), String> {
 fn resolve_program(spec: &str) -> Option<PathBuf> {
     let path = Path::new(spec);
     if path.components().count() > 1 || path.is_absolute() {
-        return path.is_file().then(|| path.to_path_buf());
+        // An explicit path has to be *runnable*, not merely present. A file
+        // that cannot be executed resolves to a launch that fails with
+        // "Permission denied", and the operator is told to point VISUAL or
+        // EDITOR at an executable — so accepting one would hide the next
+        // candidate behind a value the resolver already knows is unusable.
+        return runnable_file(path).then(|| path.to_path_buf());
     }
     find_on_path(spec)
 }
@@ -201,10 +206,9 @@ mod tests {
         let editor = program.path().join("ed");
         // fixture-scope: never executed on any platform, so the `#!` line is
         // not a claim that this file is an executable. `resolve_editor` only
-        // *resolves* a program (`resolve_program` accepts any existing file for
-        // an explicit path); it never spawns it. The case asserts the
-        // fall-through from an unusable VISUAL to a usable EDITOR, and would be
-        // identical with an empty file.
+        // *resolves* a program (`resolve_program` accepts an existing
+        // runnable file for an explicit path); it never spawns it. The case
+        // asserts the fall-through from an unusable VISUAL to a usable EDITOR.
         fs::write(&editor, "#!/bin/sh\nexit 0\n").unwrap();
         #[cfg(unix)]
         {
@@ -225,5 +229,64 @@ mod tests {
         let (resolved, _) = resolve_editor().unwrap();
         assert_eq!(resolved, editor);
         let _ = dir;
+    }
+
+    /// A `VISUAL` that cannot be executed falls through to `EDITOR`.
+    ///
+    /// The contract at the top of this file says an unusable value in one
+    /// variable must not hide the next candidate. A file that is present but
+    /// not executable is unusable: accepting it produced a launch that failed
+    /// with "Permission denied", while the resolver had already decided the
+    /// value was good and never consulted `EDITOR` or the fallback list.
+    ///
+    /// Platform scope: on Windows every file is a candidate to spawn, so
+    /// there is no "not executable" state to fall through from.
+    #[cfg(unix)]
+    #[test]
+    fn an_unexecutable_visual_falls_through_to_the_next_candidate() {
+        let out = crate::progress::test_env::run_in_child(
+            "EDITOR_ENV_PROBE_ARMED",
+            "editor::tests::unexecutable_visual_probe",
+        );
+        crate::progress::test_env::assert_probe_ran(&out);
+    }
+
+    /// Probe for the test above.
+    ///
+    /// Passes vacuously without the arming marker, so a direct `cargo test`
+    /// run never mutates the shared environment.
+    #[cfg(unix)]
+    #[test]
+    fn unexecutable_visual_probe() {
+        if std::env::var("EDITOR_ENV_PROBE_ARMED").is_err() {
+            return;
+        }
+        let program = tempfile::tempdir().unwrap();
+        // Present, readable, and not executable: a value the resolver must
+        // reject rather than resolve.
+        let unusable = program.path().join("not-executable");
+        fs::write(&unusable, "#!/bin/sh\nexit 0\n").unwrap();
+        let editor = program.path().join("ed");
+        fs::write(&editor, "#!/bin/sh\nexit 0\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&editor, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        // SAFETY: this process runs exactly this one test, so no other
+        // thread can observe the mutation.
+        unsafe {
+            std::env::set_var("VISUAL", &unusable);
+            std::env::set_var("EDITOR", &editor);
+        }
+        let (resolved, args) = resolve_editor().unwrap();
+        assert_eq!(
+            resolved, editor,
+            "a VISUAL that cannot be executed must not hide EDITOR"
+        );
+        assert!(args.is_empty());
+        unsafe {
+            std::env::remove_var("VISUAL");
+            std::env::remove_var("EDITOR");
+        }
     }
 }

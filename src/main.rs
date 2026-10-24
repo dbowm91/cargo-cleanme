@@ -261,7 +261,7 @@ fn run_config(
             if log {
                 println!("{}", cargo_cleanme::output::log::config("path"));
             } else {
-                println!("{}", path.display());
+                println!("{}", sanitize_path_text(&path.display().to_string()));
             }
         }
         ConfigCommand::Show => {
@@ -297,7 +297,7 @@ fn run_config(
                 } else {
                     eprintln!(
                         "cargo-cleanme: editor exited with {status}; config was not reverted: {}",
-                        path.display()
+                        sanitize_path_text(&path.display().to_string())
                     );
                 }
                 // The exit contract is 0/1/2: an editor's arbitrary status
@@ -309,16 +309,19 @@ fn run_config(
                 // deleted config would silently reset every policy.
                 return Err(AppError::Config(format!(
                     "editor removed the config file {}; refusing to treat that as an edit to defaults",
-                    path.display()
+                    sanitize_path_text(&path.display().to_string())
                 )));
             }
             config::load(path).map_err(|e| {
-                AppError::Config(format!("edited config {} is invalid: {e}", path.display()))
+                AppError::Config(format!(
+                    "edited config {} is invalid: {e}",
+                    sanitize_path_text(&path.display().to_string())
+                ))
             })?;
             if log {
                 println!("{}", cargo_cleanme::output::log::config("edit"));
             } else {
-                println!("edited {}", path.display());
+                println!("edited {}", sanitize_path_text(&path.display().to_string()));
             }
         }
     }
@@ -444,15 +447,21 @@ fn run_cleanup(
             .min_reclaimable_bytes
             .unwrap_or(configured.min_reclaimable_bytes),
         min_inactive_seconds: overrides.older_than.or(configured.min_inactive_seconds),
+        // The patterns are matched against canonicalized workspace roots, so a
+        // pattern spelled the way the operator's own shell shows it (through a
+        // symlink) would match nothing. The configured patterns are rewritten
+        // when the config is loaded; the command-line ones need the same
+        // rewrite, or an `--exclude` spelled through a symlink would protect
+        // nothing and the tree it named would be cleaned anyway.
         include: if overrides.include.is_empty() {
             configured.include.clone()
         } else {
-            overrides.include.clone()
+            config::canonical_policy_patterns(&overrides.include)
         },
         exclude: if overrides.exclude.is_empty() {
             configured.exclude.clone()
         } else {
-            overrides.exclude.clone()
+            config::canonical_policy_patterns(&overrides.exclude)
         },
     };
     let selector = overrides
@@ -861,7 +870,7 @@ fn zero_proven_block(
     }
     let mut paths: Vec<String> = unproven
         .iter()
-        .map(|u| u.root.display().to_string())
+        .map(|u| sanitize_path_text(&u.root.display().to_string()))
         .collect();
     paths.sort();
     Some(cargo_cleanme::cleanup::ScopeBlock::new(
@@ -1127,7 +1136,7 @@ fn resolve_cleanup_roots(
                     };
                     let (entries, warning) = cargo_cleanme::policy::routine_cleanup_candidates(
                         &home,
-                        config.scan.learned_root_retention_days as u16,
+                        config.scan.learned_root_retention_days,
                         cargo_cleanme::discovery_state::load_default(),
                     );
                     if let Some(warning) = warning {
@@ -1394,7 +1403,7 @@ fn emit_cleanup(
                 "combined roots {}\n{}",
                 roots
                     .iter()
-                    .map(|r| r.display().to_string())
+                    .map(|r| sanitize_path_text(&r.display().to_string()))
                     .collect::<Vec<_>>()
                     .join(", "),
                 report.render(&human)
@@ -1711,7 +1720,7 @@ fn run_scan(
                 &uncertainty,
                 mode,
                 now,
-                c.scan.learned_root_retention_days as u16,
+                c.scan.learned_root_retention_days,
                 directories::BaseDirs::new()
                     .map(|b| b.home_dir().to_path_buf())
                     .as_deref(),
@@ -1931,14 +1940,19 @@ fn run_scan(
             // Preserve other diagnostic detail, capped independently of Cargo's
             // repetition so the normal stderr path remains bounded.
             for diagnostic in other_diagnostics.iter().take(10) {
+                // The message carries the path it is about, so it is escaped
+                // too: a directory name must never carry a raw newline or
+                // escape byte into the operator's terminal. The message keeps
+                // its full length — truncating prose mid-sentence would hide
+                // the reason — while the path field stays bounded.
                 eprintln!(
                     "  {}: {}{}",
                     diagnostic.severity.as_str(),
-                    diagnostic.message,
+                    cargo_cleanme::report::escape_path_text(&diagnostic.message),
                     diagnostic
                         .path
                         .as_ref()
-                        .map(|p| format!(" ({})", p.display()))
+                        .map(|p| format!(" ({})", sanitize_path_text(&p.display().to_string())))
                         .unwrap_or_default()
                 );
             }

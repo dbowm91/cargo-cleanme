@@ -2022,6 +2022,33 @@ pub fn clean_with_roots_policy_selector_guarded(
                 detail,
             });
         };
+        // The same row, with the size the decision was actually made against.
+        //
+        // `unit.bytes` is the scan-time measurement; a size-based decision is
+        // made against the size measured again at proof time. A row that
+        // published the scan-time figure while its `detail` quoted the
+        // proof-time one described two different numbers for one unit, and a
+        // consumer reconciling the summary total against the per-unit
+        // `before_bytes` got a mismatch no field explains.
+        let skipped_with_size = |report: &mut CleanReport,
+                                 detail: String,
+                                 disposition: Option<PolicyDisposition>,
+                                 reason_code: CleanupReasonCode,
+                                 before_bytes: u64| {
+            report.results.push(CleanResult {
+                display_path: unit.root.clone(),
+                workspace_roots: vec![unit.root.clone()],
+                output_roots: unit.covering.clone(),
+                ownership: unit_blocking_class(unit),
+                outcome: CleanOutcome::Skipped,
+                policy_disposition: disposition,
+                reason_code,
+                before_bytes: Some(before_bytes),
+                after_bytes: None,
+                observed_decrease: None,
+                detail,
+            });
+        };
         if !includes.is_empty() && !includes.is_match(&unit.root) {
             skipped(
                 &mut report,
@@ -2225,14 +2252,15 @@ pub fn clean_with_roots_policy_selector_guarded(
             }
         };
         if proof.pre_bytes < policy.min_reclaimable_bytes {
-            skipped(
+            skipped_with_size(
                 &mut report,
                 format!(
-                    "cleanup policy: fresh size {} bytes is below minimum {}",
+                    "cleanup policy: current size {} bytes is below minimum {}",
                     proof.pre_bytes, policy.min_reclaimable_bytes
                 ),
                 Some(PolicyDisposition::BelowMinimumSize),
                 CleanupReasonCode::BelowMinimumSize,
+                proof.pre_bytes,
             );
             observer.unit_completed(cleanup_phase);
             continue;
@@ -4067,7 +4095,11 @@ fn final_cleanup_proof_roots(
                 ),
             ));
         }
-        if stats.newest.is_some_and(|t| t >= cutoff || t > start) {
+        // The cutoff is `start - recency` with an *unsigned* recency, so
+        // `cutoff <= start` and "modified since the scan began" is already
+        // inside "modified since the cutoff". The second disjunct was
+        // subsumed by the first and could never change the verdict.
+        if stats.newest.is_some_and(|t| t >= cutoff) {
             return Err(ProofFailure::new(
                 CleanupReasonCode::SkippedActive,
                 "workspace changed before cleanup; skipped: output became active",
@@ -4871,6 +4903,65 @@ mod tests {
                 });
             }
             CargoRunner::run(self, cwd, args)
+        }
+    }
+
+    /// A runner that shrinks the measured output between the scan and the
+    /// proof.
+    ///
+    /// The reclaimable-size gate is checked twice: once against the size the
+    /// scan measured, and once against the size measured again at proof time.
+    /// A fixture whose output shrinks in between is the only way to reach the
+    /// second gate, and the second gate is the one whose published
+    /// `before_bytes` used to contradict its own `detail`.
+    struct ShrinkingTargetRunner {
+        inner: FakeCleanupRunner,
+        metadata_calls: std::sync::atomic::AtomicUsize,
+        old: SystemTime,
+    }
+
+    impl ShrinkingTargetRunner {
+        fn new(root: &Path, target: &Path) -> Self {
+            Self {
+                inner: FakeCleanupRunner::new(root, target, 1),
+                metadata_calls: std::sync::atomic::AtomicUsize::new(0),
+                old: SystemTime::now() - Duration::from_secs(3600),
+            }
+        }
+    }
+
+    impl CargoRunner for ShrinkingTargetRunner {
+        fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput> {
+            if args.first().is_some_and(|a| a == "metadata")
+                && self
+                    .metadata_calls
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    >= 1
+            {
+                // Truncate rather than remove: a removal would touch the
+                // directory's mtime and the output would read as *active*,
+                // which is a different skip with a different code.
+                let artifact = self.inner.target.join("artifact.bin");
+                if let Ok(file) = fs::OpenOptions::new().write(true).open(&artifact) {
+                    let _ = file.set_len(0);
+                    let _ = file.set_modified(self.old);
+                }
+            }
+            CargoRunner::run(&self.inner, cwd, args)
+        }
+    }
+
+    impl CleanupRunner for ShrinkingTargetRunner {
+        fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput> {
+            CargoRunner::run(self, cwd, args)
+        }
+        fn run_with_env(
+            &self,
+            cwd: &Path,
+            args: &[OsString],
+            env: &[(OsString, OsString)],
+        ) -> io::Result<ProcessOutput> {
+            self.inner.run_with_env(cwd, args, env)
         }
     }
 
@@ -8313,6 +8404,60 @@ mod tests {
     }
 
     #[test]
+    fn a_size_skip_publishes_the_size_its_own_detail_quotes() {
+        // The reclaimable-size gate is checked twice: once against the size
+        // the scan measured, and once against the size measured again at
+        // proof time. The second gate used to publish the *scan-time* figure
+        // as `before_bytes` while its `detail` quoted the *proof-time* one, so
+        // one row described two different sizes and a consumer reconciling
+        // the summary against the per-unit figure had a mismatch no field
+        // explains.
+        let (_d, root, target) = valid_fixture(1);
+        let runner = ShrinkingTargetRunner::new(&root, &target);
+        let policy = CleanupPolicy {
+            // Between the size the scan measured (the artifact plus its
+            // marker) and the size the proof measures once the artifact is
+            // gone (the marker alone).
+            min_reclaimable_bytes: 6000,
+            ..Default::default()
+        };
+        let report = clean_with_roots_policy(
+            std::slice::from_ref(&root),
+            0,
+            &[],
+            CleanMode::Simulate,
+            &runner,
+            &NoopObserver,
+            &policy,
+        )
+        .unwrap();
+        let row = report
+            .results
+            .iter()
+            .find(|r| r.policy_disposition == Some(PolicyDisposition::BelowMinimumSize))
+            .expect("the proof-time size gate must fire");
+        assert_eq!(
+            row.reason_code,
+            CleanupReasonCode::BelowMinimumSize,
+            "detail: {}",
+            row.detail
+        );
+        let quoted: u64 = row
+            .detail
+            .split(" bytes is below minimum ")
+            .next()
+            .and_then(|head| head.rsplit(' ').next())
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("the detail must quote a size: {}", row.detail));
+        assert_eq!(
+            row.before_bytes,
+            Some(quoted),
+            "the published size must be the one the decision used: {}",
+            row.detail
+        );
+    }
+
+    #[test]
     fn real_cargo_package_selector_preserves_sibling_workspace_artifacts() {
         // This case integrates with the *real* Cargo rather than a stub, so
         // its premise is that a real Cargo answered. An unreadable version
@@ -11219,11 +11364,20 @@ mod tests {
         // The metadata calls run on more than one thread: the engine spawns
         // them, and it does so however the scheduler happens to run them.
         // That is a property of the *code*.
-        let threads = runner.metadata_threads.lock().unwrap().len();
-        assert!(
-            threads >= 2,
-            "the metadata calls must run on more than one thread: {threads}"
-        );
+        //
+        // The engine's worker pool is sized by `available_parallelism`, so a
+        // single-CPU host has one worker and the probe can only ever see one
+        // thread. The sibling case in `workspace.rs` guards the same claim
+        // the same way; without the guard this case failed on every
+        // single-CPU host, reporting a defect in the engine where the host
+        // simply had one worker.
+        if std::thread::available_parallelism().map_or(1, usize::from) > 1 {
+            let threads = runner.metadata_threads.lock().unwrap().len();
+            assert!(
+                threads >= 2,
+                "the metadata calls must run on more than one thread: {threads}"
+            );
+        }
         // The refresh's own concurrency counter stays within the cap: the
         // bound is the code's promise.
         let refresh_peak = report.counters.proof_metadata_peak_concurrency as usize;
@@ -11511,10 +11665,14 @@ mod tests {
     fn package_selector_with_valid_workspace_index_evaluates_spec() {
         // L-1: the `workspace_idx` lookup is fail-closed (`.get()`); this
         // exercises the path through the public entry without panicking.
-        // Host Cargo 1.89 lacks the package-selector capability, so the
-        // runtime gate reports `SelectorUnsupported` before spec resolution;
-        // on a runtime with package support the same call reports
-        // `SelectorInvalid`. Either way the unit skips and nothing spawns.
+        //
+        // The runner here answers `--version` with a string that is not a
+        // Cargo release, so the qualification gate refuses the selector
+        // before the spec is ever resolved. The premise is *unsupported*, not
+        // *invalid*; the invalid case — a qualified Cargo that cannot find
+        // the spec — is pinned by
+        // `an_unknown_package_spec_on_a_qualified_cargo_is_selector_invalid`,
+        // which names the Cargo it runs against.
         let (_d, root, target) = valid_fixture(1);
         let runner = FakeCleanupRunner::new(&root, &target, 1);
         let report = clean_with_roots_policy_selector(
@@ -11530,15 +11688,60 @@ mod tests {
         .unwrap();
         assert_eq!(report.results.len(), 1);
         assert_eq!(report.results[0].outcome, CleanOutcome::Skipped);
-        assert!(
-            matches!(
-                report.results[0].reason_code,
-                CleanupReasonCode::SelectorInvalid | CleanupReasonCode::SelectorUnsupported
-            ),
-            "unexpected code: {:?}",
+        assert_eq!(
+            report.results[0].reason_code,
+            CleanupReasonCode::SelectorUnsupported,
+            "an unqualified Cargo refuses the selector before the spec is resolved: {:?}",
             report.results[0].reason_code
         );
         assert!(runner.clean_calls().is_empty());
+    }
+
+    /// An unknown package spec is *invalid*, not *unsupported*.
+    ///
+    /// The two are different facts with different operator responses: an
+    /// unqualified Cargo cannot run the selector at all, while a qualified one
+    /// that cannot find the spec was asked for something that does not
+    /// exist. The case names the Cargo it runs against, so the branch is
+    /// reachable on every host — the disjunctive assertion it complements
+    /// accepted either code and so pinned neither.
+    #[test]
+    fn an_unknown_package_spec_on_a_qualified_cargo_is_selector_invalid() {
+        let (d, runner) = versioned_runner_fixture("1.99.0");
+        let root = d.path().join("ws");
+        let report = clean_with_roots_policy_selector(
+            std::slice::from_ref(&root),
+            0,
+            &[],
+            CleanMode::Simulate,
+            &runner,
+            &NoopObserver,
+            &CleanupPolicy::default(),
+            Some(CleanupSelector::Package("no-such-package".into())),
+        )
+        .unwrap();
+        assert_eq!(report.results.len(), 1);
+        assert_eq!(report.results[0].outcome, CleanOutcome::Skipped);
+        assert_eq!(
+            report.results[0].reason_code,
+            CleanupReasonCode::SelectorInvalid,
+            "a qualified Cargo that cannot find the spec must say the spec is invalid: {:?}",
+            report.results[0]
+        );
+        assert!(
+            report.results[0].detail.contains("no-such-package"),
+            "the row must name the spec that was asked for: {:?}",
+            report.results[0]
+        );
+        assert!(
+            runner
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|args| { !args.first().is_some_and(|a| a == "clean") }),
+            "nothing may spawn for an invalid spec"
+        );
     }
 
     #[test]

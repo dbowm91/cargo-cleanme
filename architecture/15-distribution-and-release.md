@@ -71,9 +71,9 @@ verification ladder — is inventoried in
 
 ## 2. Distribution channels
 
-`Provenance` (`src/update.rs:166-192`) has exactly four variants, and each
+`Provenance` (`src/update.rs:166-181`) has exactly four variants, and each
 channel maps to one of them. The classification is computed by
-`classify_provenance_in` (`src/update.rs:441`), which is a positive-evidence
+`classify_provenance_in` (`src/update.rs:403`), which is a positive-evidence
 decision: it never infers ownership from a filename or a directory shape.
 
 | Channel | Mechanism | Platforms | Install location | `Provenance` |
@@ -98,7 +98,7 @@ chooses `/usr/local/bin` (elevated) or `$HOME/.local/bin` (normal user)
 `VerifiableSelfManaged`. The source comment on that fall-through names the
 installers directly: it "keeps the published installer's `/usr/local/bin` and
 `~/.local/bin` on the self-managed path", because "'no Cargo evidence anywhere'
-must remain eligible" (`src/update.rs:527-530`). **If either installer were
+must remain eligible" (`src/update.rs:483-486`). **If either installer were
 changed to install into `$CARGO_HOME/bin`, every installation it created would
 immediately become un-updatable.** That is a cross-component coupling invisible
 from either side alone.
@@ -106,22 +106,22 @@ from either side alone.
 **The classification is by positive record, not by location.** A binary sitting
 inside `<cargo root>/bin` is `CargoManaged` only if Cargo's own metadata records
 this package and this binary name there; if the root records nothing, the result
-is `UnprovableOwnership`, not `CargoManaged` (`src/update.rs:482-490`). The
+is `UnprovableOwnership`, not `CargoManaged` (`src/update.rs:444-452`). The
 same applies to the ancestor scan that covers `cargo install --root DIR`
-(`src/update.rs:520-534`). A directory that merely *looks* like an install root
+(`src/update.rs:476-490`). A directory that merely *looks* like an install root
 is not evidence.
 
 The load-bearing property is therefore **distinguishability**, and it holds with
 four outcomes rather than two. Self-update is entitled to replace only a
 `VerifiableSelfManaged` installation, and only after re-proving the destination
 by its exact prior digest under the mutation lock
-(`src/update.rs:183-186`; `LiveDigestVerifier` at `src/update.rs:241-244`, and
-its `verify` implementation at `src/update.rs:246-260`). A `CargoManaged`
+(`src/update.rs:172-175`; `LiveDigestVerifier` at `src/update.rs:219-222`, and
+its `verify` implementation at `src/update.rs:224-238`). A `CargoManaged`
 installation must be refused with the corrective command printed instead —
-`cargo install cargo-cleanme --locked --force`, with `--root DIR` added when the
-installation used one (`src/update.rs:209-218`) — because replacing it in place would make
+`cargo install cargo-cleanme --locked --force`
+(`src/update.rs:197-199`) — because replacing it in place would make
 `cargo install --list` and Cargo's uninstall bookkeeping lie. `UnprovableOwnership`
-is refused too, with its own remediation (`src/update.rs:222-225`).
+is refused too, with its own remediation (`src/update.rs:203-206`).
 
 That distinction is not cosmetic. The `v0.1.3 → v0.1.4` rehearsal (C017) found a
 `CargoManaged` binary that was misdetected and silently replaced, and it shipped
@@ -389,7 +389,7 @@ by staleness. The outputs are **13 generated artefacts** in total:
   (`xtask/src/main.rs:21-22`). Each is generated with
   `clap_complete::generate` (`xtask/src/main.rs:46`).
 - **8 manpages** in `man/`, one per command node, via `clap_mangen`
-  (`xtask/src/main.rs:155-198`).
+  (`xtask/src/main.rs:134-187`).
 
 The `--check` flag is what makes CI enforcement possible: it regenerates in
 memory and compares against the checked-in tree instead of writing
@@ -398,7 +398,7 @@ memory and compares against the checked-in tree instead of writing
 ### 4.2 Naming convention in `completions/`
 
 The output path per shell is chosen explicitly in `completion_path`
-(`xtask/src/main.rs:136-147`), and the naming is **not** uniform — deliberately:
+(`xtask/src/main.rs:115-126`), and the naming is **not** uniform — deliberately:
 
 | File | Shell | Convention note |
 | --- | --- | --- |
@@ -427,7 +427,7 @@ One page per subcommand means **the manpage set is a direct projection of the
 `src/cli.rs` command enum**, and the generator says so: it "renders one man page
 per command node, the conventional multi-page layout," because
 `clap_mangen::Man::new` only renders the node it is given and would otherwise
-produce a single page (`xtask/src/main.rs:141-143`). The file name is
+produce a single page (`xtask/src/main.rs:120-122`). The file name is
 `man/cargo-cleanme.1` for the root and `man/cargo-cleanme-{name}.1` for each
 subcommand (`xtask/src/main.rs:177-179`).
 

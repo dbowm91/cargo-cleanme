@@ -2,8 +2,8 @@
 
 > Component deep dive · part of the [architecture overview](overview.md)
 
-Subject: `src/discovery_state.rs` (1277 lines, of which 641 are inline tests —
-17 tests).
+Subject: `src/discovery_state.rs` (1335 lines, of which 699 are inline tests —
+18 tests).
 
 ## 1. Responsibility
 
@@ -41,7 +41,7 @@ if let Some(cargo_home) = crate::discovery::effective_cargo_home() {   // :143
 
 That is the module's **only** crate-internal reference, and it is a single
 path-qualified call — not an `use` statement — to one pure function
-(`discovery.rs:169`) that reads `CARGO_HOME` or the OS home directory.
+(`discovery.rs:164`) that reads `CARGO_HOME` or the OS home directory.
 
 The dependency is also now **cyclic**, and the cycle involves three modules:
 
@@ -53,7 +53,7 @@ policy.rs:278, policy.rs:324, policy.rs:414, policy.rs:680
 ```
 
 All three edges are production (the test modules of `discovery.rs` and
-`policy.rs` start at `discovery.rs:1126` and `policy.rs:811`, far below those
+`policy.rs` start at `discovery.rs:1147` and `policy.rs:854`, far below those
 lines). So the production import graph contains
 `discovery_state → discovery → policy → discovery_state`, a three-module cycle
 that did not exist when this document was written. The
@@ -66,7 +66,7 @@ what it remembers: no `cleanup`, no `workspace`, no `output`, no `policy`. The
 C030 dependency on `discovery` is a *location* lookup (where Cargo's home is),
 not a discovery call — `effective_cargo_home` walks nothing.
 
-The module's import block is still three external crates plus `std` (`:1047-1055`):
+The module's import block is still three external crates plus `std` (`:1105-2060`):
 
 | Import | Line | Use |
 |---|---|---|
@@ -103,7 +103,7 @@ pub struct DiscoveryState {
 | `schema_version` | `u32` | Format generation. `0` is treated as invalid on read (`:12-18`). | Every `reconcile_full` publish (`:237`); normalized in memory on every successful load (`:237-413`); passthrough on a Routine touch. |
 | `last_full_at` | `Option<u64>` | The generation stamp: wall-clock seconds of the newest **complete** Full reconciliation that published. `None` = never reconciled. | `reconcile_full` only (`:237`). Never written by the Routine/Explicit touch branch. |
 | `projects` | `Vec<ProjectRecord>` | Exact project inventory from the last complete Full scan. Fully replaced, never merged. | `reconcile_full` only (`:237-413`). |
-| `learned_roots` | `Vec<LearnedRoot>` | Containers the Routine scan should search, each with a positive-observation stamp. | `reconcile_full` (`:243-357`), and `last_project_seen_at` only via the Routine touch in `main.rs:1690-1705`. |
+| `learned_roots` | `Vec<LearnedRoot>` | Containers the Routine scan should search, each with a positive-observation stamp. | `reconcile_full` (`:243-357`), and `last_project_seen_at` only via the Routine touch in `main.rs:1574-1589`. |
 
 `#[serde(default)]` sits on the **struct** (`:64`), so all four fields may be
 absent from the JSON and decode to `Default`. That is what lets a v1 file with
@@ -148,8 +148,8 @@ distinct places:
   a complete Full reconciliation, but only after the uncertainty veto at
   `:342-348`` has had its chance — an uncertain legacy root is retained even when
   its provenance is known-bad.
-- **Routine reads** (`policy.rs:655`) and **cleanup admission**
-  (`policy.rs:253`, `policy.rs:299`): the same check filters legacy learned
+- **Routine reads** (`policy.rs:680`) and **cleanup admission**
+  (`policy.rs:278`, `policy.rs:324`): the same check filters legacy learned
   roots out of automatic Routine use and decides whether an automatic cleanup
   root is admitted, omitted, or blocked.
 
@@ -158,15 +158,15 @@ stores), Trash, temporary locations (platform temp root plus the `/tmp`,
 `/private/tmp`, `/var/tmp` aliases), system software locations (`/usr/local`,
 `/opt`), the `~/Downloads` drop zone, `node_modules`, and transient Codex
 worktrees are not promoted into Routine scope. Entries are compared by both
-canonical and raw spelling (`:186-198`), so a missing candidate spelled through
+canonical and raw spelling (`:186-1234`), so a missing candidate spelled through
 a symlink (e.g. `/tmp` → `/private/tmp` on macOS) is still recognised. Two
 details of the implementation are load-bearing and easy to misread:
 
-- **A symlink is *maintainable* by construction** (`:118-120`). The function
+- **A symlink is *maintainable* by construction** (`:4468-120`). The function
   answers "is this a durable developer location?", and a symlink's identity is
   not a location claim the function is willing to make. It returns `true` so
   the symlink is *not* silently dropped; blocking it is the admission layer's
-  job (`policy.rs:244-251`).
+  job (`policy.rs:269-276`).
 - **The temp-family exemption is conditional** (`:163-179`). When the resolved
   home sits under the canonical temp root — the normal shape of a test harness
   home — the whole temp tree is fixture namespace and the temp entries do not
@@ -240,14 +240,14 @@ Both `Missing` and `Unavailable` fail to produce a usable prior, but only
 | `UnsupportedNewer` | `None` | **No** |
 | `Unavailable(_)` | `None` | **No** |
 
-The boolean is `replacing_invalid`. `main.rs:1400-1405` uses it to print
+The boolean is `replacing_invalid`. `main.rs:1296-1301` uses it to print
 "replaced unusable discovery state after successful Full reconciliation" — an
 operator-visible acknowledgement that stale bytes were clobbered, so the
 replacement is never silent.
 
 `Unavailable` and `UnsupportedNewer` returning `None` is the fail-closed half of
 the design: an unreadable file and a future-schema file are both treated as
-**unknown**, and unknown is never a licence to write. `main.rs:1754-1760` turns
+**unknown**, and unknown is never a licence to write. `main.rs:1567-1573` turns
 that `None` into a stderr warning and a skipped reconciliation.
 
 ### `load_default` (`:569-574`)
@@ -272,7 +272,7 @@ behaviour, not `Unavailable`. Everything else delegates to `load_at`.
    serde's message (`:608-610``).
 4. `schema_version == 0` → `RecoverableInvalid("invalid schema 0")` (`:612-613``).
 5. Normalize `schema_version` to `CURRENT_SCHEMA` in memory; return `Loaded`
-   (`:615-617``).
+   (`:1043-617``).
 
 ### serde strictness — what is actually there
 
@@ -307,12 +307,12 @@ It returns `Option<PathBuf>`, and the two `?` operators have **different**
 reasons. Worth stating precisely because the intuitive reading is wrong:
 
 - `state_dir()` is `None` **on macOS and Windows** — the `directories` 6.0.0
-  docs table lists state_dir as `–` for both (`directories` 6.0.0's `src/lib.rs:520-521`). That is
+  docs table lists state_dir as `–` for both (`src/lib.rs:520-521`). That is
   exactly the case the `.or_else(|| Some(dirs.data_local_dir()))` fallback
   exists for. The `or_else` arm is `Some(..)`, so it can never produce `None`;
   that `?` is dead in practice.
 - Therefore the **only** live source of `None` is the first `?`: `ProjectDirs::from`
-  returning `None` when the OS yields no home directory (`directories` 6.0.0's
+  returning `None` when the OS yields no home directory (`directories`
   `src/lib.rs:405-412`). That is the condition to name in a bug report.
 
 Concretely, with an empty qualifier and organization, the file is
@@ -336,7 +336,7 @@ Returns `Option<String>`: `None` for `Missing` and `Loaded` (both are normal
 outcomes that need no explanation), and a distinct sentence per failure —
 "ignoring unusable discovery state …" / "… uses unsupported schema N; update
 cargo-cleanme" / "cannot read discovery state …". It is consumed by
-`main.rs:1756-1758` and by `policy.rs:640` and `policy.rs:687`.
+`main.rs:1570` and by `policy.rs:643` and `policy.rs:643`.
 
 ## 4. Reconciliation
 
@@ -473,13 +473,13 @@ Five facts, in the order the code applies them:
 - **C030's second check** (`:271-273`). The promoted *container* is checked
   separately from the *project*. **This check cannot independently fire today**,
   and that is worth knowing rather than assuming. The forbidden-location test
-  (`:186-198`) is `starts_with`-based in both the canonical and the raw
+  (`:186-1234`) is `starts_with`-based in both the canonical and the raw
   spelling, and the `node_modules` component test (`:203-208`) also propagates
   downward; since `candidate` is either `project` itself or `project`'s parent,
   and `canonical(project)` always lies under `canonical(candidate)`, a
   non-maintainable container implies a non-maintainable project. The one escape
   — a symlink between the two — is neutralised by the symlink early return at
-  `:118-120`, which makes a symlink *maintainable*. So `:271-273` is
+  `:4468-120`, which makes a symlink *maintainable*. So `:271-273` is
   **defence in depth**: it would start to matter if the forbidden list ever
   gained an exact-match entry, or if the comparison stopped being monotone.
   Removing it would not change today's behaviour; keeping it means a future
@@ -518,7 +518,7 @@ root is pushed verbatim (`:313`). Rules 1–5 below then do not run at all.
 
 Two qualifications on rule 4, both load-bearing:
 
-- It requires **no intersecting uncertainty** (`:337-339`). That precondition
+- It requires **no intersecting uncertainty** (`:1906-339`). That precondition
   is redundant in production — see §5 — but it is the mechanism that makes the
   rule safe in principle.
 - It uses `symlink_metadata` and matches **only** `ErrorKind::NotFound`
@@ -533,9 +533,9 @@ because uncertainty means "this scan could not judge it".
 
 Retention arithmetic: `u64::from(retention_days) * 86400` is overflow-free
 because `config::load` caps the value at 3650 (`config.rs:107-110`), giving at
-most 315,360,000 — which is also what makes `policy.rs:47`'s `as u16` cast
+most 315,360,000 — which is also what makes `policy.rs:46`'s `as u16` cast
 lossless. `saturating_sub` means a future `old.last_project_seen_at` cannot
-wrap; it is caught by the explicit `>` guard at `:347` first anyway. This is the
+wrap; it is caught by the explicit `>` guard at `:1906` first anyway. This is the
 ADR §5 rule "Future timestamps fail conservative: they do not cause expiration"
 (`:81`) implemented literally. The C028 absence probe is deliberately *not*
 arithmetic: it distinguishes "physically absent" from "present but
@@ -568,40 +568,40 @@ holds both facts.
 `Option<(DiscoveryState, bool)>` splits the two things a caller needs: the state
 (reconciliation input, or a fresh default for `Missing`/`RecoverableInvalid`),
 and a boolean reporting whether that state *replaces* something unusable — a
-purely operator-communication concern, used at `main.rs:1400-1405` and nowhere
+purely operator-communication concern, used at `main.rs:1296-1301` and nowhere
 else. Because the gate lives outside, a caller that forgets to consult it cannot
 silently clobber a newer binary's file. The one in-tree reconciliation caller
-does consult it (`main.rs:1599`); `policy.rs` never reconciles.
+does consult it (`main.rs:1483`); `policy.rs` never reconciles.
 
 ### How `main.rs` supplies the two gate inputs
 
-`uncertainty` — `main.rs:1610-1622`: `discovered.diagnostics` filtered to
+`uncertainty` — `main.rs:1494-1506`: `discovered.diagnostics` filtered to
 `DiagnosticCategory::PermissionDenied | Metadata | Vanished`, then
 `filter_map(|d| d.path.clone())`. `InvalidEntry`, `PlatformRoot`, and
 `CandidateUncertain` diagnostics are **excluded** and play no part in
 reconciliation. A diagnostic with `path: None` is silently dropped, which is
 fail-open for that entry — see §5, where this turns out to be load-bearing.
 
-`complete` — `main.rs:1601-1605`:
+`complete` — `main.rs:1485-1489`:
 `discovered.coverage_complete && !discovered.diagnostics.iter().any(|d| d.category == PlatformRoot && d.severity == Error)`.
 Only an `Error`-severity `PlatformRoot` diagnostic, or an incomplete traversal,
 makes a Full scan incomplete. Everything else — including every
-`Warning`-severity diagnostic — leaves the scan publishable. `main.rs:1790`
+`Warning`-severity diagnostic — leaves the scan publishable. `main.rs:1674`
 recomputes the identical predicate into `full_incomplete` for the exit code;
 the duplication is redundant but harmless.
 
-**The mode is a third input, and it is the caller's choice.** `main.rs:1693`
-reads `complete`, and `main.rs:1699-1703` turns it into a mode: `Complete` when
+**The mode is a third input, and it is the caller's choice.** `main.rs:1562`
+reads `complete`, and `main.rs:1568-1572` turns it into a mode: `Complete` when
 the traversal finished, and otherwise **the mode the caller passed in**.
-`run_scan` takes that mode as a parameter (`main.rs:1539`), and the two callers
+`run_scan` takes that mode as a parameter (`main.rs:1391`), and the two callers
 supply opposite answers:
 
 | Caller | Mode | Why |
 |---|---|---|
 | the read-only `scan --all` (`main.rs:91`) | `IncompleteDiscard` | an incomplete reconciliation must not rewrite the learned state |
-| the Full *cleanup* (`main.rs:1021`) | `IncompleteRetain` | M018: the cleanup's proof boundary is the learned root, so it needs a generation to judge coverage against even when the platform walk did not finish |
+| the Full *cleanup* (`main.rs:965`) | `IncompleteRetain` | M018: the cleanup's proof boundary is the learned root, so it needs a generation to judge coverage against even when the platform walk did not finish |
 
-The mode is what decides whether the result is published: `main.rs:1706-1707`
+The mode is what decides whether the result is published: `main.rs:1590-1591`
 guards the `publish` call with `mode == ReconciliationMode::Complete`, so the
 `IncompleteRetain` generation is consumed **in memory** and the persisted state
 keeps describing the last complete reconciliation.
@@ -616,9 +616,9 @@ root == uncertain || root.starts_with(uncertain) || uncertain.starts_with(root)
 
 | Property | Value |
 |---|---|
-| Semantics | Symmetric path containment on **components**, not on string prefixes. `/work/a` does not match `/workspace/a` (tested at `:1171``). |
+| Semantics | Symmetric path containment on **components**, not on string prefixes. `/work/a` does not match `/workspace/a` (tested at `:1229``). |
 | Canonicalization | **None.** It is pure `Path` arithmetic; it never touches the filesystem. |
-| Symmetry | Explicitly both directions, tested at `:1170-1178``. |
+| Symmetry | Explicitly both directions, tested at `:1315-1236``. |
 
 Symmetry is the design choice. The two operands are not peers: `root` is a
 learned container to be retained, `uncertain` is a location the traversal could
@@ -664,20 +664,20 @@ no longer the case, and the current behaviour is stronger than the old finding:
 Three facts, each independently verifiable:
 
 1. **Every producer of the three uncertainty categories emits `path: None`.**
-   The aggregate global-walk diagnostic is built at `discovery.rs:907-921` with
-   `path: None` (`discovery.rs:916`), and the explicit-root diagnostic at
-   `discovery.rs:1103-1121` with `path: None` (`discovery.rs:916`). The comment at
-   `discovery.rs:882-885` states the reason: dua-core's error event carries no
+   The aggregate global-walk diagnostic is built at `discovery.rs:928-942` with
+   `path: None` (`discovery.rs:937`), and the explicit-root diagnostic at
+   `discovery.rs:1124-1142` with `path: None` (`discovery.rs:937`). The comment at
+   `discovery.rs:903-906` states the reason: dua-core's error event carries no
    child path, only a root index, and naming the root "would falsely identify
    the entire root as unreadable". These are the only two production emitters of
    `PermissionDenied` / `Vanished` / `Metadata` anywhere in `src/`.
-2. **`main.rs:1571` drops them.** `filter_map(|d| d.path.clone())` discards
+2. **`main.rs:1455` drops them.** `filter_map(|d| d.path.clone())` discards
    every diagnostic with no path, so the vector handed to `reconcile_full` is
    empty whenever those diagnostics are the only ones present.
 3. **The same events make the scan incomplete anyway.** A traversal error sets
-   `*coverage_complete = false` at `discovery.rs:745` (global walk) and
-   `discovery.rs:745` (explicit walk), so `full_traversal_complete` is false at
-   `main.rs:1543-1547`, `complete` is false at `main.rs:1622`, and
+   `*coverage_complete = false` at `discovery.rs:766` (global walk) and
+   `discovery.rs:766` (explicit walk), so `full_traversal_complete` is false at
+   `main.rs:1435-1439`, `complete` is false at `main.rs:1506`, and
    `reconcile_full` returns `NoPublication` at `:248-504`.
 
 Therefore, in production, `reconcile_full` is **always** called with
@@ -697,9 +697,9 @@ The consequences are worth stating plainly, because they cut both ways:
   (`:998``) asserts a behaviour that is correct for the function but that
   `main.rs` cannot currently produce. It is a green test whose premise the
   pipeline does not supply — the failure class `plans/registry.md` warns about.
-  The same is true of `uncertainty_containment_is_symmetric` (`:1171``).
+  The same is true of `uncertainty_containment_is_symmetric` (`:1235``).
 - **The fail-open edge is now the only path, and it is the live one.** A
-  diagnostic with `path: None` is dropped from `uncertainty` at `main.rs:1571`
+  diagnostic with `path: None` is dropped from `uncertainty` at `main.rs:1455`
   silently, with no way for the module to know. That is not a latent gap: it
   is the current, and only, production behaviour. The defence is the
   completeness gate, not the uncertainty veto.
@@ -722,7 +722,7 @@ promotion (`:311``) and the M-7 post-fallback recheck (`:316``).
 | Windows directory names | `:536-548`` | `users`, `documents and settings`, `windows`, `program files`, `program files (x86)`, `programdata` — matched by **final component**, case-insensitively, so `C:\Users\Alice` is caught by name. |
 
 Its role is to be the guard that stops a learned root from being too broad to be
-trustworthy, which is ADR §2 (`:47`) and §4's "refuse promotion across
+trustworthy, which is ADR §2 (`:355`) and §4's "refuse promotion across
 broad/platform boundaries" (`:64`) in code form. Without it, a project at
 `/usr/local/thing` would promote `/usr/local` to a learned root, and the Routine
 scan would then walk a system directory.
@@ -731,7 +731,7 @@ Three honest limits:
 
 - The unix list is **exact equality, not prefix**. `/opt/homebrew/…` does not
   match, and neither does `/var`, `/tmp`, or `/usr/local` (which *is* an added
-  global discovery root at `policy.rs:713`). A project directly under
+  global discovery root at `policy.rs:738`). A project directly under
   `/usr/local` would learn `/usr/local` as a root, because `project.parent()`
   there is `/usr/local` itself and `is_broad_root("/usr/local")` is `false`.
   (`automatic_root_is_maintainable` blocks `/usr/local` separately, at
@@ -745,51 +745,47 @@ Three honest limits:
   `$HOME` either.
 - It is a *conservative-in-the-right-direction* heuristic, not an authority. The
   real containment guarantee for the Routine walk is
-  `canonical_dedup_roots` in `policy.rs:782-784`, not this function.
+  `canonical_dedup_roots` in `policy.rs:804-846`, not this function.
 
 ## 6. Publication
 
 ### Atomicity — yes
 
-`publish` (`src/discovery_state.rs:529-534``) resolves the path and delegates to
-`publish_at` (`src/discovery_state.rs:536-553`):
+`publish` (`:527-532``) resolves the path and delegates to `publish_at`
+(`:534-551``):
 
-1. `fs::create_dir_all(parent)` (`src/discovery_state.rs:538`).
-2. `sweep_own_stale_temps(path)` (`src/discovery_state.rs:539`) — see below.
-3. `serde_json::to_vec_pretty(state)` (`src/discovery_state.rs:540`).
-4. `create_unique_temp` (`src/discovery_state.rs:541`, defined
-   `src/discovery_state.rs:591-610`).
+1. `fs::create_dir_all(parent)` (`:536``).
+2. `sweep_own_stale_temps(path)` (`:537``) — see below.
+3. `serde_json::to_vec_pretty(state)` (`:538``).
+4. `create_unique_temp` (`:591`, defined `:589-608``).
 5. `file.write_all(&bytes)`, `file.sync_all()`, `drop(file)`, `replace_file(&tmp, path)`
-   (`src/discovery_state.rs:542-547`).
-6. On any failure, `fs::remove_file(&tmp)` and return `Err`
-   (`src/discovery_state.rs:548-551`).
+   (`:540-545``).
+6. On any failure, `fs::remove_file(&tmp)` and return `Err` (`:546-549``).
 
 **It is temp-file + rename, never truncate-in-place.** `replace_file` is
-`fs::rename` on non-Windows (`src/discovery_state.rs:611-614`) and `MoveFileExW` with
+`fs::rename` on non-Windows (`:611-614`) and `MoveFileExW` with
 `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH` on Windows
-(`src/discovery_state.rs:615-633`). A reader therefore sees either the complete old generation or the
+(`:613-633``). A reader therefore sees either the complete old generation or the
 complete new one, never a truncated file. This is ADR §6's "built in memory and
-atomically replaces the old state".
+atomically replaces the old state" (`:88`).
 
 Temp naming is `.{name}.{pid}.{attempt}.tmp` with `create_new(true)` and up to 32
-attempts (`src/discovery_state.rs:597-608`), which is what makes two concurrent publishers in
-different processes collide-free, and what
-`unique_temp_attempts_replace_existing_state`
-(`src/discovery_state.rs:923`) pins.
+attempts (`:595-607``), which is what makes two concurrent publishers in
+different processes collide-free, and what the test at `:921`` pins.
 
 ### Orphaned temp files are now swept — own-pid only
 
-`sweep_own_stale_temps` (`src/discovery_state.rs:562-590``) runs before every publish. It removes files
+`sweep_own_stale_temps` (`:560-588``) runs before every publish. It removes files
 in the state directory whose name matches `.{state-file-name}.{pid}.*.tmp`
 **for the current process id** and whose modification time is more than an hour
-old (`src/discovery_state.rs:576-585`). Two properties matter:
+old (`:574-583``). Two properties matter:
 
-- **Own-pid only** (`src/discovery_state.rs:567`). Another live publisher's temp files are never
+- **Own-pid only** (`:565``). Another live publisher's temp files are never
   touched, so the sweep cannot race a concurrent process.
-- **An hour old only** (`src/discovery_state.rs:582`). The 32-attempt skip in `create_unique_temp`
+- **An hour old only** (`:580``). The 32-attempt skip in `create_unique_temp`
   preserves a *fresh* colliding temp, and the sweep preserves it too.
 
-The limitation is explicit in the doc comment at `src/discovery_state.rs:554-561`: only pid reuse
+The limitation is explicit in the doc comment at `:552-559``: only pid reuse
 could exhaust the 32-attempt space, so this is a tidiness measure, not a
 correctness one. A crashed publisher under a *different* pid leaves its temp
 file behind permanently — the sweep will not remove it.
@@ -817,15 +813,15 @@ convention rather than an oversight in this module. It is still worth a decision
 failure as a warning, never as a scan failure:
 
 - Full branch: `pending_notices.push(format!("discovery state was not saved: {error}"))`
-  (`main.rs:1407-1410`).
-- Routine/Explicit touch: the same message at `main.rs:1701-1705`, guarded by
+  (`main.rs:1303-1306`).
+- Routine/Explicit touch: the same message at `main.rs:1585-1589`, guarded by
   `!observed.is_empty()` so an empty scan performs no write at all.
 
 `NoPublication` prints `"discovery state was not reconciled: {reason}"`
-(`main.rs:1749-1752`), and a `None` prior prints the `StateLoad::diagnostic()`
-message plus "; Full state reconciliation was skipped" (`main.rs:1754-1760`).
+(`main.rs:1562-1565`), and a `None` prior prints the `StateLoad::diagnostic()`
+message plus "; Full state reconciliation was skipped" (`main.rs:1567-1573`).
 Both Full-branch notices are collected into `pending_notices` and fanned out to
-stderr only after the progress renderer has been cleared (`main.rs:1838-1842`) —
+stderr only after the progress renderer has been cleared (`main.rs:1477-1481`) —
 a raw `eprintln!` while the bars are live would corrupt the frame.
 
 **One correction to the usual framing — and the correction has since been
@@ -844,9 +840,9 @@ That contradicted the module's own stated invariant, *"State is an optimization
 only"*, which sits directly above `publish_at` in this file (`:627`).
 
 The `state_reconciled` flag has been **removed**. The exit decision is now
-`if full_incomplete { return Ok(1); }` (`main.rs:1911-1917`) and nothing else, so
+`if full_incomplete { return Ok(1); }` (`main.rs:1795-1801`) and nothing else, so
 both branches leave the exit code alone and a failed save is a stderr notice
-only. The comment at `main.rs:1904-1910` records the reasoning: exit 1 means
+only. The comment at `main.rs:1788-1794` records the reasoning: exit 1 means
 "the requested scan did not fully complete", and a failed state save is not
 that. A genuinely incomplete Full scan still exits 1, through `full_incomplete`
 — which is computed from the same predicate as `complete`, not from the save
@@ -858,18 +854,18 @@ result.
 > corrupt a scan result.
 
 **Confirmed in code.** The scan pipeline's own results — `manifests`,
-`counters`, `diagnostics`, `workspaces` (`main.rs:1580`), `groups`
-(`main.rs:1713`), `physical` (`main.rs:1729`), `report` (`main.rs:1741-1760`) —
+`counters`, `diagnostics`, `workspaces` (`main.rs:1464`), `groups`
+(`main.rs:1597`), `physical` (`main.rs:1613`), `report` (`main.rs:1625-1644`) —
 are computed and rendered independently of `discovery_state`. The state write
-happens at `main.rs:1347-1441`, strictly *between* workspace resolution and
+happens at `main.rs:1243-1337`, strictly *between* workspace resolution and
 grouping, and its result feeds only `full_state`, `publish_ok`, and stderr text.
 No discovery, measurement, grouping, or report value is read from or derived
 from the published state. `clean --full` is the strongest case: it calls
-`run_scan(ScanIntent::Full, …, EmitReport::No)` (`main.rs:1031-1037`), refuses to
+`run_scan(ScanIntent::Full, …, EmitReport::No)` (`main.rs:765`), refuses to
 clean when the scan reported a nonzero code or produced no generation
-(`policy.rs:551-557`), and consumes the **in-memory** generation the reconciliation
+(`main.rs:759-766`), and consumes the **in-memory** generation the reconciliation
 proved — never a disk reload — via `policy::full_cleanup_roots`
-(`policy.rs:546-595`). A failed publish can never hand a half-built root list
+(`policy.rs:519-543`). A failed publish can never hand a half-built root list
 to `cleanup`.
 
 The cost of a failure is bounded and matches ADR §3 (`:52-54`): learned roots
@@ -885,21 +881,21 @@ it. Persistent targeted retirement remains decision-gated by proposed ADR 005.
 
 | Consumer | Call site | Reads | Notes |
 |---|---|---|---|
-| `policy::routine_roots` | `policy.rs:623` | `load_default()` | Routine scan root set. |
-| `policy::routine_roots_from_state` | `policy.rs:638-668` | `StateLoad`, `learned_roots`, `last_project_seen_at`, `now_seconds()` | Re-implements the retention filter independently at `policy.rs:654-660` (same three clauses as `discovery_state.rs:92-95`, plus its own `now < r.last_project_seen_at` future-timestamp clause) and applies C030's maintainability check at `policy.rs:655`. Seeds are always unioned in first (`policy.rs:643-646`); a non-`Loaded` load falls back to seeds + one warning (`policy.rs:618-619`). |
-| `policy::routine_cleanup_candidates` | `policy.rs:591` | `StateLoad`, `learned_roots`, `last_project_seen_at`, `now_seconds()` | C028: the cleanup-only variant. Same age filter (`policy.rs:608-613`), but raw paths with provenance and no canonicalization, so classification (`policy.rs:231`) sees a symlink before any collapse could resolve it. |
-| `clean --full` roots | `policy.rs:546`, `main.rs:883` | `learned_roots[].path` of the in-memory generation | C028: `full_cleanup_roots` consumes the generation the just-finished reconciliation proved — never a disk reload — then `admit_automatic` (`main.rs:915`) classifies before collapsing. A missing generation or non-zero reconciliation refuses cleanup. |
-| `clean --full` / maintenance generation | `main.rs:1019-1024`, `main.rs:1066-1071` | `last_full_at` | `Option<u64>` → `state_generation`. |
-| `run_scan`, Full branch | `main.rs:1356-1424` | everything | `load_default`, `full_reconciliation_prior`, `now_seconds`, `ProjectObservation`, `reconcile_full`, `publish`. Returns the proven generation in `ScanOutcome::full_state` (`main.rs:1649`) even when the save fails, so `clean --full` never falls back to a stale disk generation. |
-| `run_scan`, Routine/Explicit branch | `main.rs:1690-1705` | `learned_roots[].last_project_seen_at` | The touch branch. Mutates only timestamps; never adds roots, never removes them, never touches `projects` or `last_full_at`. Advances a root when `project.starts_with(&root.path)` (`main.rs:1696`) for an observed workspace root. |
-| Human output | `main.rs:596` | `state_generation` | `println!("state generation last_full_at={generation} (Unix seconds)")` — Human format only, and only when a generation exists. |
+| `policy::routine_roots` | `policy.rs:648` | `load_default()` | Routine scan root set. |
+| `policy::routine_roots_from_state` | `policy.rs:663-693` | `StateLoad`, `learned_roots`, `last_project_seen_at`, `now_seconds()` | Re-implements the retention filter independently at `policy.rs:679-685` (same three clauses as `discovery_state.rs:92-95`, plus its own `now < r.last_project_seen_at` future-timestamp clause) and applies C030's maintainability check at `policy.rs:680`. Seeds are always unioned in first (`policy.rs:668-671`); a non-`Loaded` load falls back to seeds + one warning (`policy.rs:643-644`). |
+| `policy::routine_cleanup_candidates` | `policy.rs:616` | `StateLoad`, `learned_roots`, `last_project_seen_at`, `now_seconds()` | C028: the cleanup-only variant. Same age filter (`policy.rs:633-638`), but raw paths with provenance and no canonicalization, so classification (`policy.rs:256`) sees a symlink before any collapse could resolve it. |
+| `clean --full` roots | `policy.rs:549`, `main.rs:772` | `learned_roots[].path` of the in-memory generation | C028: `full_cleanup_roots` consumes the generation the just-finished reconciliation proved — never a disk reload — then `admit_automatic` (`main.rs:773`) classifies before collapsing. A missing generation or non-zero reconciliation refuses cleanup. |
+| `clean --full` / maintenance generation | `main.rs:963-968`, `main.rs:1010-1015` | `last_full_at` | `Option<u64>` → `state_generation`. |
+| `run_scan`, Full branch | `main.rs:1252-1320` | everything | `load_default`, `full_reconciliation_prior`, `now_seconds`, `ProjectObservation`, `reconcile_full`, `publish`. Returns the proven generation in `ScanOutcome::full_state` (`main.rs:1533`) even when the save fails, so `clean --full` never falls back to a stale disk generation. |
+| `run_scan`, Routine/Explicit branch | `main.rs:1574-1589` | `learned_roots[].last_project_seen_at` | The touch branch. Mutates only timestamps; never adds roots, never removes them, never touches `projects` or `last_full_at`. Advances a root when `project.starts_with(&root.path)` (`main.rs:1580`) for an observed workspace root. |
+| Human output | `main.rs:503` | `state_generation` | `println!("state generation last_full_at={generation} (Unix seconds)")` — Human format only, and only when a generation exists. |
 | JSON output | `output.rs:242` | `state_generation` | Serialized as `state_generation_last_full_at: Option<u64>` (`output.rs:61`, `output.rs:242`). |
 
 `cleanup.rs` has **no** import of this module (verified by grep over `src/`).
 Learned roots reach it only as admitted root paths plus an `AdmissionPremise`
 of safely omitted roots through
-`clean_with_roots_policy_selector_guarded` (`cleanup.rs:1746`, called from
-`run_engine_guarded` at `main.rs:737`). That is the structural expression of
+`clean_with_roots_policy_selector_guarded` (`cleanup.rs:1601`, called from
+`run_engine_guarded` at `main.rs:682`). That is the structural expression of
 ADR §8: the module that authorizes deletion has no access to the state that
 decides where to look, and the omitted set travels alongside only so the
 engine can re-prove the boundary before spawning.
@@ -910,15 +906,15 @@ engine can re-prove the boundary before spawning.
 partially-valid state. The consequences diverge sharply by consumer, and that
 divergence is intentional:
 
-- **Routine scope** (`policy.rs:660-689`): falls back to seed/configured roots
+- **Routine scope** (`policy.rs:672-692`): falls back to seed/configured roots
   with one warning. The scan still works; it is merely no longer adaptive.
-- **`clean --full`** (`policy.rs:551-557`): `Loaded` is required, so roots become
+- **`clean --full`** (`main.rs:758-766`): `Loaded` is required, so roots become
   empty. `run_scan` has already returned 0 (it did not reconcile), so execution
-  reaches `main.rs:540` and prints "no bounded cleanup roots are known; no
+  reaches `main.rs:447` and prints "no bounded cleanup roots are known; no
   cleanup commands were run", exit 0. **Fails safe: nothing is deleted.**
-- **`run_scan` Full branch** (`main.rs:1683-1689`): skipped entirely with a
+- **`run_scan` Full branch** (`main.rs:1567-1573`): skipped entirely with a
   warning. The exit code stays 0 unless the scan was independently incomplete.
-- **Routine touch** (`main.rs:1690`): the `if let StateLoad::Loaded(prior)`
+- **Routine touch** (`main.rs:1574`): the `if let StateLoad::Loaded(prior)`
   pattern simply does not match, so no write occurs. Silent, and correctly so.
 
 In every case the newer file is left byte-for-byte intact. The test at
@@ -992,7 +988,7 @@ Two further qualifications, both load-bearing:
   fires and no root is retained for uncertainty. The behaviour the dismissal
   reasons about is reachable only from unit tests.
 - **A diagnostic with `path: None` is dropped from `uncertainty`** at
-  `main.rs:1571` via `filter_map`, silently, with no way for the module to
+  `main.rs:1455` via `filter_map`, silently, with no way for the module to
   know. That fail-open edge is now the *only* production path, and it is
   covered by the completeness gate rather than by the uncertainty veto.
 
@@ -1002,13 +998,13 @@ Two further qualifications, both load-bearing:
 `IncompleteDiscard` returns before any mutation (`:235-237`), and it is the sole
 production `NoPublication` site; the read-only Full scan uses it
 (`main.rs:91`). `IncompleteRetain` — the Full *cleanup*'s mode
-(`main.rs:1021`) — publishes **nothing to disk**: `main.rs:1706-1707` guards the
+(`main.rs:965`) — publishes **nothing to disk**: `main.rs:1590-1591` guards the
 `publish` call with `mode == ReconciliationMode::Complete`, so the retained
 generation is consumed in memory only and the persisted state keeps describing
 the last complete reconciliation.
 
 The exit code is carried by the independently computed `full_incomplete`
-at `main.rs:1790` with `main.rs:1961`. The existing file is untouched —
+at `main.rs:1674` with `main.rs:1845`. The existing file is untouched —
 asserted directly at `:853`.
 
 ### What happens on the very first run?
@@ -1030,7 +1026,7 @@ the trade-off explicitly at `:626``: *"State is an optimization only: concurrent
 publishers use atomic last-writer-wins replacement."*
 
 Therefore a **lost update is possible**: two Full scans both load generation *N*
-at `main.rs:1590`, both reconcile, and the second rename wins. The first scan's
+at `main.rs:1474`, both reconcile, and the second rename wins. The first scan's
 learned roots vanish from the file. The second scan's `last_full_at` is the one
 that survives, and because it is computed as `now.max(prior.last_full_at)`
 (`:271`) the stamp itself is monotone, so no generation appears to go backwards.
@@ -1068,7 +1064,7 @@ explicit future-timestamp guard (`:459``).
   correction, a wrong RTC, a timezone-adjacent mistake) inflates `observed_at`,
   so every root's computed age exceeds the retention window and **all learned
   roots expire on the next complete Full scan**. Consequence: Routine scope
-  collapses to seed roots only (`policy.rs:643-646`) until the next Full scan
+  collapses to seed roots only (`policy.rs:668-671`) until the next Full scan
   re-learns them. Not destructive — learned roots are search scope, and Full
   scope is unaffected (ADR §3, `:50-54`) — but it silently removes the
   performance benefit the module exists to provide, and nothing warns. There is
@@ -1081,10 +1077,10 @@ explicit future-timestamp guard (`:459``).
 
 **Self-healing, by design, with one deliberate exception.** A corrupt file
 yields `RecoverableInvalid`, not an error, and read-only scanning stays fully
-functional: `policy.rs:647-667` falls back to seed/configured roots with one
+functional: `policy.rs:672-692` falls back to seed/configured roots with one
 warning. The *next complete Full scan* replaces it, sets
 `schema_version: CURRENT_SCHEMA`, and reports the replacement
-(`main.rs:1400-1405`). Pinned by
+(`main.rs:1296-1301`). Pinned by
 `full_reconciliation_recovers_invalid_only_after_complete_scan` (`:895-928``),
 which also asserts the corrupt bytes are untouched while the scan is incomplete
 (`:915``).
@@ -1117,27 +1113,27 @@ what is removable.
 ## 9. Testing
 
 `discovery_state.rs` **does** have an inline `#[cfg(test)]` module, at
-**`:690-1289`** — 581 of the file's 1215 lines, and **17 tests**:
+**`:690`** — 581 of the file's 1215 lines, and **17 tests**:
 
 | # | Test | Line | What it pins |
 |---|---|---|---|
-| 1 | `unresolved_and_cache_manifests_never_create_routine_roots` | `:695` | An unresolved manifest and a cache/transient-location project create no learned root, while `projects` still keeps all four manifests. |
-| 2 | `system_and_transient_locations_never_create_routine_roots` | `:756` | C030: platform caches, the download drop zone, and system software locations never become learned roots, while a durable developer location still does. |
-| 3 | `shared_temp_aliases_are_non_maintainable` | `:833` | `/private/tmp/app`, `/tmp/app`, `/var/tmp/app` are non-maintainable with `home: None`. |
-| 4 | `v1_migrates_in_memory_and_newer_schema_is_rejected` | `:842` | v1 loads, `schema_version` becomes `CURRENT_SCHEMA`, `resolution` defaults to `Resolved`; v99 → `UnsupportedNewer`. |
-| 5 | `state_load_classifies_absent_invalid_newer_and_unavailable_paths` | `:859` | All five `StateLoad` outcomes, including a directory-as-file → `Unavailable` and `u64::MAX` → `UnsupportedNewer`. |
-| 6 | `supported_schema_with_invalid_structure_is_recoverable` | `:883` | Current version + structurally invalid record → `RecoverableInvalid`. |
-| 7 | `full_reconciliation_recovers_invalid_only_after_complete_scan` | `:895` | `replacing_invalid == true`; `complete=false` → `NoPublication` **and the corrupt bytes survive** (`:895`); then recovery to v2. |
-| 8 | `full_reconciliation_never_selects_newer_or_unavailable_state_for_publication` | `:931` | `full_reconciliation_prior` → `None` for `UnsupportedNewer` and `Unavailable`; the `"future"` field's bytes are preserved verbatim. |
-| 9 | `full_reconciliation_creates_missing_and_migrates_v1_state` | `:945` | First run and v1 run both publish; `replacing_invalid == false`; `last_full_at == Some(10)`. |
-| 10 | `unique_temp_attempts_replace_existing_state` | `:977` | A colliding `.{name}.{pid}.0.tmp` is skipped, not clobbered; the destination is replaced. |
-| 11 | `localized_uncertainty_retains_intersecting_roots_and_publishes_positives` | `:998` | Uncertain root retained, expired root dropped, `ManifestObservedUnresolved` recorded — from a complete scan. |
-| 12 | `zero_retention_disables_expiration_and_nested_roots_collapse` | `:1049` | **Does not demonstrate what its name says** — see the coverage finding below. The assertion is `learned_roots.is_empty()`. |
-| 13 | `complete_certain_full_prunes_only_positively_absent_learned_roots` | `:1092` | **Does not discriminate the rule it names** — see the coverage finding below. Both fixture roots are pruned, but by the C030 rule, not by the C028 absence probe. |
-| 14 | `uncertainty_containment_is_symmetric` | `:1171` | Containment both directions; `/workspace/a` correctly does not match. |
-| 15 | `failed_replacement_preserves_existing_destination_and_cleans_temp` | `:1180` | A failed replace leaves the destination intact **and** removes the temp file. |
-| 16 | `duplicate_observations_for_one_workspace_fold_into_one_learned_root` | `:1206` | N members of one workspace contribute N observations that fold into one root. |
-| 17 | `filesystem_root_workspace_is_never_a_learned_root` | `:1259` | M-7: a workspace at `/` is never learned. |
+| 1 | `unresolved_and_cache_manifests_never_create_routine_roots` | `:642` | An unresolved manifest and a cache/transient-location project create no learned root, while `projects` still keeps all four manifests. |
+| 2 | `system_and_transient_locations_never_create_routine_roots` | `:703` | C030: platform caches, the download drop zone, and system software locations never become learned roots, while a durable developer location still does. |
+| 3 | `shared_temp_aliases_are_non_maintainable` | `:779` | `/private/tmp/app`, `/tmp/app`, `/var/tmp/app` are non-maintainable with `home: None`. |
+| 4 | `v1_migrates_in_memory_and_newer_schema_is_rejected` | `:788` | v1 loads, `schema_version` becomes `CURRENT_SCHEMA`, `resolution` defaults to `Resolved`; v99 → `UnsupportedNewer`. |
+| 5 | `state_load_classifies_absent_invalid_newer_and_unavailable_paths` | `:805` | All five `StateLoad` outcomes, including a directory-as-file → `Unavailable` and `u64::MAX` → `UnsupportedNewer`. |
+| 6 | `supported_schema_with_invalid_structure_is_recoverable` | `:829` | Current version + structurally invalid record → `RecoverableInvalid`. |
+| 7 | `full_reconciliation_recovers_invalid_only_after_complete_scan` | `:841` | `replacing_invalid == true`; `complete=false` → `NoPublication` **and the corrupt bytes survive** (`:895`); then recovery to v2. |
+| 8 | `full_reconciliation_never_selects_newer_or_unavailable_state_for_publication` | `:877` | `full_reconciliation_prior` → `None` for `UnsupportedNewer` and `Unavailable`; the `"future"` field's bytes are preserved verbatim. |
+| 9 | `full_reconciliation_creates_missing_and_migrates_v1_state` | `:891` | First run and v1 run both publish; `replacing_invalid == false`; `last_full_at == Some(10)`. |
+| 10 | `unique_temp_attempts_replace_existing_state` | `:923` | A colliding `.{name}.{pid}.0.tmp` is skipped, not clobbered; the destination is replaced. |
+| 11 | `localized_uncertainty_retains_intersecting_roots_and_publishes_positives` | `:944` | Uncertain root retained, expired root dropped, `ManifestObservedUnresolved` recorded — from a complete scan. |
+| 12 | `zero_retention_disables_expiration_and_nested_roots_collapse` | `:995` | **Does not demonstrate what its name says** — see the coverage finding below. The assertion is `learned_roots.is_empty()`. |
+| 13 | `complete_certain_full_prunes_only_positively_absent_learned_roots` | `:1096` | **Does not discriminate the rule it names** — see the coverage finding below. Both fixture roots are pruned, but by the C030 rule, not by the C028 absence probe. |
+| 14 | `uncertainty_containment_is_symmetric` | `:1235` | Containment both directions; `/workspace/a` correctly does not match. |
+| 15 | `failed_replacement_preserves_existing_destination_and_cleans_temp` | `:1244` | A failed replace leaves the destination intact **and** removes the temp file. |
+| 16 | `duplicate_observations_for_one_workspace_fold_into_one_learned_root` | `:1270` | N members of one workspace contribute N observations that fold into one root. |
+| 17 | `filesystem_root_workspace_is_never_a_learned_root` | `:1307` | M-7: a workspace at `/` is never learned. |
 
 The count and the split agree with [the overview](overview.md) §3.1, which is the
 source of truth for module line counts. The module has exactly one `saturating_sub`
@@ -1173,7 +1169,7 @@ reads it, but never exercises `reconcile_full` or `publish` end to end, and
 `repeated_routine_runs_bound_stale_root_noise_without_mutating_state`
 (`tests/cli_contract.rs:3687`) asserts the opposite for the Routine branch — the
 state file must be untouched. There is no integration test that observes
-`state generation last_full_at=` (`main.rs:596`), the `state_generation_last_full_at`
+`state generation last_full_at=` (`main.rs:503`), the `state_generation_last_full_at`
 JSON field (`output.rs:61`), the "replaced unusable discovery state" message, or
 the "Full state reconciliation was skipped" message.
 
@@ -1193,7 +1189,7 @@ weak exactly where the module is subtle. Concretely under-tested:
    positively confirmed nonexistent (`ENOENT` via `symlink_metadata`) is pruned
    *independent of the age window* — the one behaviour that distinguishes it
    from ordinary retention. Its nominal test,
-   `complete_certain_full_prunes_only_positively_absent_learned_roots` (`:1084`),
+   `complete_certain_full_prunes_only_positively_absent_learned_roots` (`:1096`),
    stages its two roots inside a `tempfile::tempdir()` and calls
    `reconcile_full` with `home: None`. **Both fixture paths are therefore
    non-maintainable** — with no home, the canonical temp root is in the
@@ -1214,16 +1210,16 @@ weak exactly where the module is subtle. Concretely under-tested:
    currently pinning C030.
 
    The same mutation also shows that
-   `zero_retention_disables_expiration_and_nested_roots_collapse` (`:1040`) no
+   `zero_retention_disables_expiration_and_nested_roots_collapse` (`:995`) no
    longer demonstrates either of the two behaviours in its name. Its fixture is
    likewise under the system temp root, so C030 empties the set before the
    retention rule or the collapse can be observed; the test's own comment at
-   `:1041-1044` shows it was *rewritten* to cope with C028 and now asserts
+   `:1099-1102` shows it was *rewritten* to cope with C028 and now asserts
    `learned_roots.is_empty()` — the opposite of "zero retention disables
    expiration". The zero-retention path and the containment collapse are
    therefore unexercised in the module, except for the exact-duplicate fold
    that `duplicate_observations_for_one_workspace_fold_into_one_learned_root`
-   (`:1150`) does cover.
+   (`:1208`) does cover.
 
 1. **The `covered`-skip-before-uncertainty ordering (`:339` vs `:314`).** No test
    constructs an old root that both intersects uncertainty *and* is an ancestor
@@ -1233,18 +1229,18 @@ weak exactly where the module is subtle. Concretely under-tested:
 2. **`is_broad_root`'s Windows name list is untested** — the `#[cfg(windows)]`
    arm (`:445-460`) has no test anywhere in-tree. The unix literals are now
    exercised indirectly by `system_and_transient_locations_never_create_routine_roots`
-   (`:748`) and `filesystem_root_workspace_is_never_a_learned_root` (`:1187`).
+   (`:748`) and `filesystem_root_workspace_is_never_a_learned_root` (`:1307`).
 3. **The `home` filter at `:244` is untested**, including the symlinked-`$HOME`
    miss described in §5.
-4. **Clock regression** (`:260`, `:372`) and **the forward-jump mass-expiry**
+4. **Clock regression** (`:260`, `:1906`) and **the forward-jump mass-expiry**
    case from §8 have no test. `now` is always a small literal or `10` in every
    existing case.
 5. **Retention boundary arithmetic at `±1` second** is untested. The
-   `retention_days == 0` path is reached by `:1040` only nominally (item 0
-   above), and `:989` uses a far-past stamp.
+   `retention_days == 0` path is reached by `:1098` only nominally (item 0
+   above), and `:942` uses a far-past stamp.
 6. **The collapse direction versus the `covered` direction** (§8 items 1 and 2) is
    never tested in combination. The containment collapse itself is only covered
-   for the *exact-duplicate* case, by `:1150`; the ancestor-folds-into-descendant
+   for the *exact-duplicate* case, by `:1208`; the ancestor-folds-into-descendant
    direction is not.
 7. **Uncertainty granularity.** Test `:989` feeds a deep path the real pipeline
    never produces (§5), so nothing would fail if `discovery.rs` changed the
@@ -1255,7 +1251,7 @@ weak exactly where the module is subtle. Concretely under-tested:
    "removes own stale temp" path nor the "never removes another pid's temp"
    path.
 10. **`ReconciliationMode::IncompleteRetain` has no test at all.** The mode is
-    M018's, and it is the Full *cleanup*'s mode (`main.rs:1021`), but nothing in
+    M018's, and it is the Full *cleanup*'s mode (`main.rs:965`), but nothing in
     `discovery_state.rs` exercises it: the inline tests pass `Complete` or
     `IncompleteDiscard`, and the mode's two distinctive behaviours — *nothing
     is expired* (`:344-361`) and *no root is narrowed* — are unasserted. A
@@ -1286,13 +1282,13 @@ question should be reviewed against the code, not against its test count.
 1. **Does anything still return `NoPublication` for a reason other than
    `!complete`?** `reconcile_full`'s only production refusal site is
    `:257-266``. A new refusal reason must be added to `Reconciliation`
-   (`:122-126`) and will need a matching `main.rs:1749-1752` message.
+   (`:122-126`) and will need a matching `main.rs:1562-1565` message.
 2. **Is the five-rule order intact — covered, uncertainty, C030 provenance, C028
    absence, then retention?** `discovery_state.rs:339` must precede
    `:342`` (uncertainty), which must precede `:352`` (C030 provenance), which must
-   precede `:362`` (positive `ENOENT`), which must precede `:374`` (retention).
+   precede `:1254`` (positive `ENOENT`), which must precede `:374`` (retention).
    Coverage short-circuits before every drop/retain decision; the absence probe
-   carries its own no-intersecting-uncertainty precondition (`:362-364``) and
+   carries its own no-intersecting-uncertainty precondition (`:1254-364``) and
    `ENOENT`-only positive absence (`:356-359`). Hoisting the retention rule
    ahead of the probe reintroduces age-based retention for physically absent
    roots — the C028 defect.
@@ -1302,42 +1298,42 @@ question should be reviewed against the code, not against its test count.
    `full_reconciliation_never_selects_newer_or_unavailable_state_for_publication`
    (`:877``) is the test.
 4. **Is the version pre-check still before the typed decode?**
-   `discovery_state.rs:498-510` must stay ahead of `:517``. Reversed, a v3 file
+   `discovery_state.rs:496-508` must stay ahead of `:515``. Reversed, a v3 file
    that this binary cannot parse becomes `RecoverableInvalid` and is then
    overwritten.
 5. **Does the publish still go through temp + rename, and still remove its temp
-   on failure?** `discovery_state.rs:529-553` and `replace_file` at `:612-614`.
+   on failure?** `discovery_state.rs:527-551` and `replace_file` at `:610-612`.
    The success-path test is `unique_temp_attempts_replace_existing_state`
    (`:923``); its failure twin is
    `failed_replacement_preserves_existing_destination_and_cleans_temp`
-   (`:1186``). A truncate-in-place regression would leave `last_full_at`
+   (`:1244``). A truncate-in-place regression would leave `last_full_at`
    corruptible.
 6. **Has anything besides the module's own temp file become deletable?**
-   `discovery_state.rs:549` and `:587`` are the only production `remove_file`
+   `discovery_state.rs:547` and `:585`` are the only production `remove_file`
    calls in the file, and `:587`` is scoped to the current pid and to files over
    an hour old. The sweep must never widen to another publisher's temps.
 7. **Is `observed_at` still `now.max(prior.last_full_at.unwrap_or(0))`?**
    `discovery_state.rs:260`. Removing the `max` reintroduces a regressing
    generation stamp and makes the future-timestamp guard at `:374`` the only
    remaining defence.
-8. **Do `policy.rs:654-660` and `discovery_state.rs:374-377` still agree?**
+8. **Do `policy.rs:679-685` and `discovery_state.rs:372-375` still agree?**
    The retention predicate is duplicated across the module boundary. Any change
    to one must be made to the other, and the fact that Routine applies it at
    read time while Full applies it at write time is easy to miss.
 9. **Did a change to `discovery.rs` diagnostic `path` values alter what reaches
-   `uncertain`?** `discovery.rs:907-921` and `discovery.rs:1103-1121` now carry
+   `uncertain`?** `discovery.rs:928-942` and `discovery.rs:1124-1142` now carry
    **`path: None`** — the walk root is named in the message, not the path field.
-   A `None` path is dropped at `main.rs:1571` and cannot retain anything. The
-   defence is the completeness gate at `discovery.rs:745` and `discovery.rs:745`,
+   A `None` path is dropped at `main.rs:1455` and cannot retain anything. The
+   defence is the completeness gate at `discovery.rs:766` and `discovery.rs:766`,
    which makes such a scan incomplete and therefore unpublishable. Check this
    whenever diagnostics are refactored: removing the `coverage_complete = false`
    assignments without restoring a path on the diagnostic would make an
    incomplete scan publishable.
 10. **Has the save-failure exit-code coupling come back?** It is now
     structurally absent: the exit decision reads only `full_incomplete`
-    (`main.rs:1911-1917`) and there is no flag to set. The regression to watch
+    (`main.rs:1795-1801`) and there is no flag to set. The regression to watch
     for is someone reintroducing a save-result branch into that `if` — the
-    module's own `publish` unavailability error at `discovery_state.rs:529-534`
+    module's own `publish` unavailability error at `discovery_state.rs:527-532`
     is the authority to cite when arguing against it.
 11. **Does a new caller of `automatic_root_is_maintainable` understand what
     `true` means?** A symlink is *maintainable* by construction

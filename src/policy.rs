@@ -44,7 +44,7 @@ pub fn resolve(request: ScanRequest, config: &ScanConfig) -> Result<EffectiveSca
     } else {
         (
             // `config::load` range-checks retention to 0–3650 days.
-            ScanScope::Routine(routine_roots(config.learned_root_retention_days as u16)),
+            ScanScope::Routine(routine_roots(config.learned_root_retention_days)),
             DiscoveryFilters::Active {
                 ignore: config.ignore.clone(),
                 unignore: config.unignore.clone(),
@@ -614,7 +614,7 @@ enum RootVerdict {
 /// uses this seam.
 pub fn routine_cleanup_candidates(
     home: &Path,
-    retention_days: u16,
+    retention_days: u32,
     load: crate::discovery_state::StateLoad,
 ) -> (CleanupCandidates, Option<String>) {
     let mut entries: CleanupCandidates = routine_seed_candidates(home)
@@ -644,7 +644,7 @@ pub fn routine_cleanup_candidates(
     (entries, warning)
 }
 
-fn routine_roots(retention_days: u16) -> Vec<PathBuf> {
+fn routine_roots(retention_days: u32) -> Vec<PathBuf> {
     let Some(home) = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf()) else {
         return Vec::new();
     };
@@ -661,7 +661,7 @@ fn routine_roots(retention_days: u16) -> Vec<PathBuf> {
 
 fn routine_roots_from_state(
     home: &Path,
-    retention_days: u16,
+    retention_days: u32,
     load: crate::discovery_state::StateLoad,
 ) -> (Vec<PathBuf>, Option<String>) {
     let mut roots: Vec<PathBuf> = routine_seed_candidates(home)

@@ -568,15 +568,23 @@ pub enum SourceActivity {
 /// entries themselves. Any walk or metadata failure is conservative
 /// (`Err(())`). Timestamps use `fs::metadata` (following) to preserve the
 /// previous source-activity semantics for included entries.
+///
+/// `_start` is the instant the scan began; the cutoff is derived from it as
+/// `start - recency`, so `cutoff <= start`. The parameter is kept because the
+/// signature is public API, but the verdict is decided by the cutoff alone.
 pub fn source_activity(
     project: &Path,
     target: &Path,
-    start: SystemTime,
+    _start: SystemTime,
     cutoff: SystemTime,
 ) -> Result<SourceActivity, ()> {
     let project_root = project.to_path_buf();
     let target_root = target.to_path_buf();
-    let is_recent = move |time: SystemTime| time >= cutoff || time > start;
+    // The cutoff is `start - recency` with an *unsigned* recency, so
+    // `cutoff <= start` and "modified since the scan began" is already inside
+    // "modified since the cutoff". The second disjunct was subsumed by the
+    // first and could never change the verdict.
+    let is_recent = move |time: SystemTime| time >= cutoff;
     let walk_root = project_root.clone();
     let descend_project = project_root.clone();
     let descend_target = target_root.clone();
@@ -668,16 +676,24 @@ fn is_excluded(
 /// nested VCS marker) are excluded including their own boundary mtime, so
 /// activity inside an independent nested repo never protects the outer member.
 /// Any walk/metadata failure is conservative (`Err(())`).
+///
+/// `_start` is the instant the scan began; the cutoff is derived from it as
+/// `start - recency`, so `cutoff <= start`. The parameter is kept because the
+/// signature is public API, but the verdict is decided by the cutoff alone.
 pub fn workspace_member_activity(
     member_root: &Path,
     output_roots: &[PathBuf],
-    start: SystemTime,
+    _start: SystemTime,
     cutoff: SystemTime,
 ) -> Result<SourceActivity, ()> {
     let root = member_root.to_path_buf();
     let outputs = output_roots.to_vec();
     let outputs_for_closure = outputs.clone();
-    let is_recent = move |time: SystemTime| time >= cutoff || time > start;
+    // The cutoff is `start - recency` with an *unsigned* recency, so
+    // `cutoff <= start` and "modified since the scan began" is already inside
+    // "modified since the cutoff". The second disjunct was subsumed by the
+    // first and could never change the verdict.
+    let is_recent = move |time: SystemTime| time >= cutoff;
     let descend_root = root.clone();
     let markers = NestedRepoMarkers::default();
     let descend_markers = markers.clone();

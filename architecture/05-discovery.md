@@ -2,8 +2,8 @@
 
 > Component deep dive · part of the [architecture overview](overview.md)
 
-`src/discovery.rs` — 2625 lines; production code ends at `:1124`, the inline
-`#[cfg(test)]` module opens at `:1126` and holds 41 `#[test]` functions. It is
+`src/discovery.rs` — 2646 lines; production code ends at `:1125`, the inline
+`#[cfg(test)]` module opens at `:1126` and holds 42 `#[test]` functions. It is
 step 3 of the scan pipeline: given the scope decided by
 [`policy.rs`](04-policy-and-scope.md), walk it for `Cargo.toml` files and report
 what could not be seen.
@@ -26,11 +26,11 @@ Since M018 it also owns the **per-root coverage ledger**
 
 - **Workspace resolution.** `manifests` are raw paths; turning them into
   workspaces, members and physical groups is `workspace::resolve_workspaces`
-  (`main.rs:1630`, see [Workspace](07-workspace.md)). Discovery never parses a
+  (`main.rs:1514`, see [Workspace](07-workspace.md)). Discovery never parses a
   manifest, never calls `cargo metadata`, and never asks Cargo where an output
   directory is.
 - **Sizing or activity.** No `mtime`, no byte counts —
-  `traverse.rs`/`workspace::analyze_groups` (`main.rs:1779`).
+  `traverse.rs`/`workspace::analyze_groups` (`main.rs:1663`).
 - **The inactivity decision.** `Active`/`Inactive`/`Uncertain`
   (`domain.rs:40-44`) is decided after physical grouping, on group ownership
   evidence.
@@ -39,23 +39,18 @@ Since M018 it also owns the **per-root coverage ledger**
   applies the platform policy's own prune lists when the scope is the machine's
   `Global` scope, and applies what it is given.
 
-**Actual `crate::` dependencies** (`discovery.rs:2-7`, plus one qualified use):
+**Actual `crate::` dependencies** (`discovery.rs:2`, plus one qualified use):
 
 ```rust
-use crate::{
-    domain::*,
-    error::AppError,
-    progress::ProgressObserver,
-    traverse::{self, path_is_symlink},
-};
-// :348  crate::policy::global_discovery_policy
+use crate::{domain::*, error::AppError, progress::ProgressObserver, traverse};
+// :337  crate::policy::global_discovery_policy
 ```
 
 `domain::*` supplies `ScanScope`, `DiscoveryFilters`, `EffectiveScanPolicy`,
 `ScanDiagnostic`, `DiagnosticCategory`, `DiagnosticSeverity`, `ScanCounters`
 ([Domain & errors](01-domain-and-errors.md)). External crates: `globset` (`:8`),
 `directories::BaseDirs` (`:153`, `:177`), `dua_core` 4.1 (`Cargo.toml:67`),
-`tempfile` in tests only (`:984`). Note the inversion: `policy.rs:833-836` calls
+`tempfile` in tests only (`:984`). Note the inversion: `policy.rs:848-852` calls
 back into `crate::discovery::effective_rustup_home`, so `policy` depends on this
 module for exactly one function.
 
@@ -76,12 +71,12 @@ module for exactly one function.
 `discover_manifests` is a one-line delegation (`:334`); all logic is in
 `discover_manifests_with_attribution`, and `discover_manifests` exists so that
 callers who do not want the per-entry attribution map do not have to pass a
-`false`. Callers: `main.rs:1588-1591` (with `options.stats`),
-`cleanup.rs:1688`, `cleanup.rs:2194` and `cleanup.rs:3300` (the destructive
+`false`. Callers: `main.rs:1472-1475` (with `options.stats`),
+`cleanup.rs:1543`, `cleanup.rs:2039` and `cleanup.rs:3196` (the destructive
 paths, without), `tests/end_to_end.rs:135`,
 `examples/traversal-qualification.rs:35`.
 
-`verify_root_coverage` has exactly one caller: `main.rs:887-914`, the M018
+`verify_root_coverage` has exactly one caller: `main.rs:831-858`, the M018
 verification pass, and it runs **only** when the platform walk was incomplete.
 
 **`impl Filters` is private API.** `struct Filters` at `:18` has no `pub`, so
@@ -125,7 +120,7 @@ testable without touching the process environment (`:1402-1421``).
 ### `effective_cargo_home` (`:169-178`)
 
 Same precedence — `CARGO_HOME` → `~/.cargo` — with the same fail-closed handling
-of a relative value (`:172-175`): a *relative* `CARGO_HOME` returns `None` and
+of a relative value (`:172-869`): a *relative* `CARGO_HOME` returns `None` and
 does **not** fall back to `~/.cargo`. That is the right direction. An unusable
 `CARGO_HOME` disables the prune; a fallback would prune the wrong directory.
 `cargo_home_prunes` then returns an empty `Vec` (`:375-377`) — the same "prune
@@ -143,7 +138,7 @@ subtrees hold *real, buildable* `Cargo.toml` files that are not user projects:
 `registry/src/*/*/` (extracted third-party crate sources) and
 `git/checkouts/*/*/` (git-dependency checkouts). Admitting them would (a) inflate
 the candidate set by thousands of entries, each of which becomes a `cargo
-metadata` subprocess in `workspace::resolve_workspaces` (`main.rs:1580-1586`), and
+metadata` subprocess in `workspace::resolve_workspaces` (`main.rs:1464-1470`), and
 (b) let the tool attribute `target/` output built *by* a dependency to a "project"
 it does not own. Test: `manifest_discovery_prunes_cargo_home_registry`
 (`:2011-2036``).
@@ -156,8 +151,8 @@ system lists overlap on Linux:
 | Prune set | Owner | Consulted when | Applied in |
 |---|---|---|---|
 | `<cargo home>/{registry,git}` | **this module** (`:369``) | always | every scope |
-| `global_only_prunes` (`/System /dev /bin /sbin /usr` on macOS; `/proc /sys /dev /run` on Linux — `policy.rs:711-721`) | `policy.rs` | only when the scope is `Global` **and** its roots match the policy's own roots (`:341-350`) | global path only (`:576`, `:658`) |
-| `managed_tool_prunes` (the rustup home) | `policy.rs:833-836`, *computed from* `effective_rustup_home` | same guard (`:364-370`) | global path only (`:578`, `:660`) |
+| `global_only_prunes` (`/System /dev /bin /sbin /usr` on macOS; `/proc /sys /dev /run` on Linux — `policy.rs:736-746`) | `policy.rs` | only when the scope is `Global` **and** its roots match the policy's own roots (`:341-350`) | global path only (`:576`, `:658`) |
+| `managed_tool_prunes` (the rustup home) | `policy.rs:848-852`, *computed from* `effective_rustup_home` | same guard (`:359-365`) | global path only (`:599`, `:681`) |
 | `system_prune` (hardcoded: `/proc /sys /dev /run` on Linux, `/dev` on macOS, `false` on Windows) | **this module** (`:134-147`) | always | sequential path only (`:1024`, `:1061`) |
 
 `policy` is authoritative for *what to walk*; this module for the env-derived
@@ -167,7 +162,7 @@ tests do) gets `None` for the policy and therefore no platform or rustup prunes 
 the module never silently reinterprets a caller-supplied scope as "the machine".
 
 There is a fourth, hardcoded system prune for the non-global path:
-`system_prune` (`:134-147`). It duplicates the Linux list from `policy.rs:719`
+`system_prune` (`:134-147`). It duplicates the Linux list from `policy.rs:744`
 in a second place and is reachable only when a user explicitly points a scan at
 a system directory. The two lists are not the same rule: macOS's `/usr` and
 `/System` are pruned only by the platform policy (and therefore only in a
@@ -187,14 +182,14 @@ let global = matches!(policy.scope, ScanScope::Global(_) | ScanScope::Routine(_)
 | | global/routine | explicit / explicit-roots |
 |---|---|---|
 | entry point | `discover_global_roots` (`:604``) | `discover_manifests_root` (`:604`), once per root |
-| walker | `dua_core::walk_roots` (`:685``) | `dua_core::walk` (`:1216`) |
+| walker | `dua_core::walk_roots` (`:473``) | `dua_core::walk` (`:473`) |
 | workers | `traverse::worker_threads().min(GLOBAL_DISCOVERY_WORKER_CAP)` (`:397``) | `traverse::worker_threads()` (`:1008``) |
 | order | `Order::ParentFirst` by default (`:229-235`) | `Order::ParentFirst` (`:1009``) |
 | options | `skip_metadata` on Linux and macOS by default (`:415-421`) | full metadata (`:415`) |
 | attribution | per-entry map (`:756-771``) | never (`top_level_entries` empty, `:458``) |
 
 **Not the standard library.** `std::fs` appears only for `symlink_metadata`
-(`:823``, `:1074``) and `canonicalize` (`:469``, `:628``); every
+(`:823``, `:1074``, `:844``, `:1095``) and `canonicalize` (`:464``, `:669``); every
 directory read is `dua_core`'s. (One test premise reads a directory directly to
 *establish* that a child is unreadable, `:1161-1165``.) Inside dua-core 4.1 a
 crossbeam work-stealing pool (`Injector`/`Stealer`/`Unparker`) reads directories,
@@ -209,7 +204,7 @@ its children (`dua-core lib.rs:1409-1421`); `Order::Completion` schedules first
 (`:1402-1414`); "sibling order is unspecified in both modes" (`lib.rs:6`). The
 stream is parent-before-descendant but otherwise scheduler-dependent — §7.
 
-**Descent decision.** The `descend` predicate (`:694-719`` global, `:1055-1075`
+**Descent decision.** The `descend` predicate (`:694-24`` global, `:1055-1075`
 sequential) returns `false` to refuse a subtree. Two properties matter: a refused
 directory is **still yielded** (`dua-core lib.rs:8-9`), which is why discovery can
 count the directory it just decided to skip; and the predicate runs for the root
@@ -239,7 +234,7 @@ dua-core's 64-job back-pressure, and the 8-worker cap.
 `MAX_DISCOVERY_PROFILE_WORKERS = 32` (`:192`) are *worker* caps, not scan caps.
 Termination is the pool's final `Finished` event, which ends the iterator rather
 than being yielded (`dua-core lib.rs:267-268`); `dua_core::RootEvent::Finished`
-is *per root* and only bumps `finished_roots` (`:751-754`). There is no early
+is *per root* and only bumps `finished_roots` (`:751-4`). There is no early
 exit: an unusable root is skipped (`:425-429``, `:627-646``) while the remaining
 roots are still walked.
 
@@ -285,7 +280,7 @@ Every skip the code implements, with the reason it is auditable:
 
 | Reason | Rule | Global path | Sequential path | Counter | Diagnostic |
 |---|---|---|---|---|---|
-| Platform system dir | `global_only_prunes` (`policy.rs:711-721`) | descend `:576`, count `:658` | **not applied** | `platform_system_prunes` | none |
+| Platform system dir | `global_only_prunes` (`policy.rs:736-746`) | descend `:597`, count `:679` | **not applied** | `platform_system_prunes` | none |
 | Platform system dir (hardcoded) | `system_prune` (`:134-147`) | **not applied** | descend `:134`, count `:134` | — (the sequential literal has no such field) | none |
 | Cargo home `registry`/`git` | `cargo_home_prunes()` (`:185`) | descend `:185`, count `:185` | descend `:185`, count `:185` | `cargo_home_prunes` | none |
 | Rustup home (managed tool) | `managed_tool_prunes` (`:373-379`) | descend `:586`, count `:586` | **not applied** | `rustup_home_prunes` | none |
@@ -322,7 +317,7 @@ any of them here.
    maintains per-reason classification logic (`:1058-1071``), but the sequential
    `ScanCounters` literal (`:466-471``) fills only `directories_visited`,
    `directories_pruned` and `manifests_found`. On `scan <dir>` the `--stats` line
-   (`domain.rs:381`) reports `rustup_prunes=0 target_vcs_prunes=0
+   (`domain.rs:361`) reports `rustup_prunes=0 target_vcs_prunes=0
    user_ignore_prunes=0` even when
    directories were pruned: the total is honest, the breakdown is not produced.
 2. **A whole root inside a pruned subtree under-reports — except for a user
@@ -332,7 +327,7 @@ any of them here.
    `entry_is_within`). A root that is itself inside a cargo-home prune is walked
    as a single refused entry: 1 visited, 0 pruned. The walk is right; the
    accounting loses the skip. The user-ignore reason deliberately does **not**
-   carry that guard (`:798-802``). Since C019 a scan root can inherit exclusion
+   carry that guard (`:798-4``). Since C019 a scan root can inherit exclusion
    from a literal ignored ancestor and be refused outright, and a scan that
    returned nothing while reporting zero prunes would be unexplainable — so that
    one reason is counted at `depth == 0` as well. The **sequential** path does
@@ -340,9 +335,9 @@ any of them here.
    ignore reason too, so the same tree reports 0 prunes there. The two paths
    therefore disagree, and only the global path is tested (`:2594-2612``).
 3. **The rustup prune needs the machine's own `Global` policy** (`:346-355`,
-   `:370-376``), so a Routine scan gets none. Routine roots are
+   `:370-4``), so a Routine scan gets none. Routine roots are
    `$HOME/<Projects|projects|Developer|dev|Code|code|src|repos|Repos|GitHub|github|workspace|workspaces>`
-   (`policy.rs:61-80`) plus learned roots, so this only bites if a learned root
+   (`policy.rs:60-79`) plus learned roots, so this only bites if a learned root
    points into a toolchain — where `lib/rustlib/src/rust/library/**` holds
    hundreds of real manifests.
 
@@ -358,7 +353,7 @@ sites are derived from one disposition rather than two predicates.
 
 **Explicit scope bypasses `scan.ignore` at three levels.** `explicit ||`
 short-circuits the descend predicate (`:1030``) *and* the counter condition repeats
-`!explicit` (`:917`); in addition `policy.rs:43` hands `ScanScope::Explicit` the
+`!explicit` (`:3079`); in addition `policy.rs:42` hands `ScanScope::Explicit` the
 `DiscoveryFilters::Bypassed` variant, which becomes empty slices at `:366``.
 
 ---
@@ -374,7 +369,7 @@ short-circuits the descend predicate (`:1030``) *and* the counter condition repe
 | `pruned_dirs: u64` | the same accumulator as `counters.directories_pruned` (`:814-817`` → `:946``, `:972``) | a duplicate of the counter, kept for the report |
 | `diagnostics: Vec<ScanDiagnostic>` | three shapes, below | see the table below |
 | `counters: ScanCounters` | per-reason accumulation | 8 of the 34 fields are ever set here (`domain.rs:308-315`) |
-| `top_level_entries: BTreeMap<PathBuf,u64>` | per-root, per-first-component counts (`:756-771``, `:958-961``) | `--stats` only; empty otherwise (`:958-961``) |
+| `top_level_entries: BTreeMap<PathBuf,u64>` | per-root, per-first-component counts (`:756-771``, `:958-4``) | `--stats` only; empty otherwise (`:958-4``) |
 | `coverage_complete: bool` | `false` on any unusable root or any walk error (`:427`, `:631`, `:745`, `:1037`) | the fail-closed coverage flag (C029) |
 | `root_coverage: Vec<RootCoverage>` | one entry per walk root, built **before** the walk (`:623-657`) and corrected by the walk's error events (`:894-906`) | M018: the per-root coverage verdict; see the subsection below |
 
@@ -407,9 +402,9 @@ roots, not by the number of errors: the test
 pins 1001 errors into one record.
 
 Unknown-location loss fails closed. `coverage_complete` is set `false` at the
-moment the error is observed (`:745`, `:1037`), so `main.rs:1601-1605` refuses to
+moment the error is observed (`:745`, `:1037`), so `main.rs:1485-1489` refuses to
 treat the walk as complete, `discovery_state.rs:220-222` refuses to publish a
-Full generation from it, and `main.rs:1790` with `main.rs:1961` makes
+Full generation from it, and `main.rs:1674` with `main.rs:1845` makes
 `scan --full` exit 1. An incomplete walk is positive inventory only.
 
 **Diagnostic-stream determinism.** Both walkers emit at most one summary per
@@ -454,7 +449,7 @@ no child path — only the root index — so a subtree's incompleteness *cannot*
 attributed below the root that contains it. The comment at `:890-893` says so
 explicitly.
 
-**`verify_root_coverage` (`discovery.rs:565-601`) is the measurement.** It
+**`verify_root_coverage` (`discovery.rs:586-622`) is the measurement.** It
 re-walks each root as its **own** walk root, so the existing per-walk-root
 attribution decides — per root — whether that root's subtree was fully read.
 It is a *coverage measurement*, not a second discovery: it collects no
@@ -471,12 +466,12 @@ verdict it stands in for"* (`:560-563`).
 The pass is **not** free: it costs a second traversal of the learned roots'
 subtrees. It therefore runs **only** when the platform walk was incomplete —
 a completed platform walk proves every learned root by definition
-(`main.rs:987-994`).
+(`main.rs:931-938`).
 
 ### The `main.rs` contract, and how it can break
 
 ```rust
-// main.rs:1532-1544 — the three-category uncertainty filter
+// main.rs:1494-1506 — the three-category uncertainty filter
 let uncertainty: Vec<PathBuf> = discovered
     .diagnostics
     .iter()
@@ -507,7 +502,7 @@ negative evidence.
 
 > **Two traps live here.** First, the `matches!` filter above covers **three of
 > the seven** `DiagnosticCategory` variants and has **no `_` arm**
-> (`src/main.rs:1613-1620`), so a newly-added category is *silently* excluded.
+> (`src/main.rs:1497-1504`), so a newly-added category is *silently* excluded.
 > Second, the filter itself is correct and should not be "fixed" by adding a
 > catch-all that admits pathless diagnostics — that would make the vector
 > non-empty with values that carry no location, which is worse than empty.
@@ -516,7 +511,7 @@ negative evidence.
 
 - The diagnostic categories distinguish `PermissionDenied`, `Vanished`, and
   other metadata errors. Traversal summaries count each class, although a mixed
-  aggregate uses one representative category for the row (`:909-915``, `:1105-1111``).
+  aggregate uses one representative category for the row (`:909-24``, `:1105-24``).
 - *Known localized diagnostics would* use their paths to protect intersecting
   old roots — but no category currently emits a path, so this branch is
   unreachable in production. Pathless informational diagnostics remain
@@ -526,16 +521,16 @@ negative evidence.
 
 **Cleanup, under ADR 007.** The old "any discovery diagnostic blocks the whole
 scope" rule is gone. Cleanup blocks only on *in-boundary* discovery diagnostics
-(`cleanup.rs:1722-1723`, `cleanup.rs:2821-2834`): a diagnostic whose path lies
+(`cleanup.rs:1577-1578`, `cleanup.rs:2661-2674`): a diagnostic whose path lies
 outside the selected boundary is reported and never blocks. Pathless diagnostics
 cannot be attributed, so they count as in-boundary (fail-closed,
-`cleanup.rs:2829-2830`) — which is exactly why discovery's path-aggregated walk
+`cleanup.rs:2669-2670`) — which is exactly why discovery's path-aggregated walk
 errors still block the scope they occurred in. The block is raised only after
 metadata resolution, so workspace and unit counts describe attempted work
-(`cleanup.rs:1706-1715`, `cleanup.rs:1811-1822`). The final proof re-walk is
+(`cleanup.rs:1561-1570`, `cleanup.rs:1666-1677`). The final proof re-walk is
 unchanged: it re-discovers over the *selected* roots and refuses any diagnostic
-(`cleanup.rs:2194-2218`), and the ownership refresh does the same
-(`cleanup.rs:3300-3312`).
+(`cleanup.rs:2039-2061`), and the ownership refresh does the same
+(`cleanup.rs:3196-3208`).
 
 ---
 
@@ -551,13 +546,13 @@ parameter, which is why no lock appears.
 **Work division.** Directory reads are pool jobs; each finished read schedules
 its subdirectories into the shared queue and other workers steal them
 (`dua-core lib.rs:3-6`). `traverse::worker_threads()` is
-`available_parallelism().clamp(1, 8)` (`traverse.rs:242-246`) — a budget *shared
+`available_parallelism().clamp(1, 8)` (`traverse.rs:72-76`) — a budget *shared
 with* the measurement traversal, capped at 8.
 
-**One pool for all roots, in the global path** (`:685``): N roots share ≤8
+**One pool for all roots, in the global path** (`:473``): N roots share ≤8
 workers. **One pool per root, in the sequential path** (`:1006``): `walk` starts
 a fresh pool, and dropping the iterator stops and joins its workers
-(`dua-core lib.rs:11`). `ScanScope::ExplicitRoots` from `cleanup.rs:1676`
+(`dua-core lib.rs:11`). `ScanScope::ExplicitRoots` from `cleanup.rs:1531`
 therefore pays one pool startup per selected root.
 
 **Result ordering, honestly.** Results are *not* merged from several threads —
@@ -571,12 +566,12 @@ deterministic because every output is order-insensitive by construction:
 | `manifests` | `sort()` then `dedup()` (`:453-454`, `:453-456`) |
 | `top_level_entries` | `BTreeMap` (`:975`, `:975`) |
 | counters | commutative sums, one increment per event |
-| `diagnostics` (global) | per-root buffer, then `sort_by_key(root index)` (`:456-457`) |
+| `diagnostics` (global) | per-root buffer, then `sort_by_key(root index)` (`:456-1843`) |
 | `diagnostics` (sequential) | one summary per root, in root order (§6) |
 
 `examples/traversal-qualification.rs:35` (stage 6) is the harness that runs the
 production global path with attribution for benchmarking, and
-`synthetic_wide_and_deep_manifest_set_is_stable_across_worker_caps` (`:1530-1544`)
+`synthetic_wide_and_deep_manifest_set_is_stable_across_worker_caps` (`:1530-1628`)
 asserts the determinism claim across 6 worker counts × 2 metadata modes × 2
 orders, and that `top_level_entries` sums to `visited_entries` (`:314-318`).
 The consequence for report stability: the report is stable; the progress
@@ -606,24 +601,22 @@ order-independent.
 (`:426-429``, `:630-646``) and the scan continues with `Ok`. The symlink refusal is
 deliberate (comment `:476-480``, L7): `Path::is_dir` follows symlinks while the
 walker does not, so a symlinked root used to produce a *successful empty* scan for
-a directory the user asked for. `path_is_symlink` (`src/traverse.rs:47-59`) additionally
+a directory the user asked for. `path_is_symlink` (`:475-495`) additionally
 strips a trailing `/` or `/.`, because `symlink_metadata("link/")` follows the
-final component on POSIX and would otherwise hide the symlink (B1). The
-stripping is platform-aware — `\` is an ordinary filename character on Unix —
-and never decodes the bytes, so a name that is not valid UTF-8 survives it.
+final component on POSIX and would otherwise hide the symlink (B1).
 
 A root that vanishes between `root_is_usable` and the walk becomes a `Warning`
 (`:1036-1040``, `:1100-1121``), **not** `Error` + `PlatformRoot`. Because C029 it
 still sets `coverage_complete = false` (`:1037``), so a Full scan neither
-publishes (`main.rs:1622` → `discovery_state.rs:220-222`) nor exits 0
-(`main.rs:1740`, `main.rs:1911-1917`). It never reaches the path-carrying
+publishes (`main.rs:1506` → `discovery_state.rs:220-222`) nor exits 0
+(`main.rs:1624`, `main.rs:1795-1801`). It never reaches the path-carrying
 `uncertainty` vector, because the diagnostic is pathless.
 
 **Root vs deep-tree permission errors: distinguished, and it matters.** An
 unstat-able root is `Error` + `PlatformRoot` — the only thing that makes
 `scan --full` exit 1 through the `PlatformRoot && Error` predicate
-(`main.rs:1544-1547` → `main.rs:1740` → `main.rs:1911-1917`) and `complete` false
-(`main.rs:1622` → `discovery_state.rs:220-222`). An unreadable subtree is
+(`main.rs:1436-1439` → `main.rs:1624` → `main.rs:1795-1801`) and `complete` false
+(`main.rs:1506` → `discovery_state.rs:220-222`). An unreadable subtree is
 `Warning` + `PermissionDenied`/`Vanished`/`Metadata`, pathless, named by root in
 the message. It reaches the scan through the other predicate,
 `coverage_complete`. A platform-level failure and a deep hole both make the scan
@@ -636,7 +629,7 @@ because both share the same accumulator and are separated only by `ErrorKind`
 (`:266-273`: `PermissionDenied` → denied, `NotFound` → vanished, anything else →
 "other"). A `Cargo.toml` removed before the `symlink_metadata` re-validation is
 dropped **silently**: `is_ok_and` is false, so it is neither counted nor
-reported (`:823-824``, `:1074-1077``) — a real unrecorded incompleteness, bounded by
+reported (`:823-824``, `:1074-302``) — a real unrecorded incompleteness, bounded by
 the fact that a project which just vanished cannot be reaped anyway.
 
 **Hostile or unusual paths.** No `unwrap`, `expect` or `panic!` anywhere in the
@@ -655,18 +648,18 @@ constructions in the file. `discover_manifests_root` is declared
 `Result<(), AppError>` but contains no `?` and always returns `Ok(())` (`:1123``), so
 the `?` at `:442`` cannot fire today; `AppError::Scan` is never constructed here.
 **Fatal = bad glob syntax; every filesystem condition degrades into a
-diagnostic.** (Contrast `policy.rs:33-42`, where an unusable *root* is a fatal
+diagnostic.** (Contrast `policy.rs:32-41`, where an unusable *root* is a fatal
 `AppError::InvalidRoot` before discovery ever runs.)
 
 ---
 
 ## 9. Testing
 
-39 `#[test]` functions (verified `grep -c '#\[test\]' src/discovery.rs`), all in
-`discovery.rs:1126-2625`. Seven are compile-time platform-gated — `:1145``
-(`unix`), `:1677`` (`macos`/`windows`), `:1697`` (`linux`), and `:1741``, `:1773``,
-`:2093``, `:2532`` (all `unix`) — so a Linux or macOS run executes 38 and a
-Windows run 33.
+42 `#[test]` functions (verified `grep -c '#\[test\]' src/discovery.rs`), all in
+`discovery.rs:1126-2646`. Nine are compile-time platform-gated — `:1146``
+(`unix`), `:1678`` (`macos`/`windows`), `:1698`` (`linux`), and `:1742``, `:1774``,
+`:1844``, `:1911``, `:2115``, `:2554`` (all `unix`) — so a Linux run executes 40,
+a macOS run 41 and a Windows run 33.
 
 | Test | Line | Invariant protected |
 |---|---|---|
@@ -690,35 +683,35 @@ Windows run 33.
 | `a_real_traversal_produces_the_code_the_gate_judges` | `:1912` | M018: a real traversal produces the coverage codes the Full gate judges (`complete`, `error_events`, `permission_denied`, `vanished`) |
 | `manifest_discovery_finds_project_without_target` | `:1975` | a project with no `target/` is still a candidate |
 | `manifest_discovery_prunes_target_children` | `:1991` | a nested `target/` manifest is excluded |
-| `manifest_discovery_prunes_cargo_home_registry` | `:2011` | `$CARGO_HOME/registry/src` sources are not user projects |
-| `ignored_subtree_never_invokes_cargo_manifest_count_zero_for_pruned` | `:2037` | an ignored tree contributes prunes and zero manifests |
-| `discovery_reaches_unignored_project_without_entering_ignored_sibling` | `:2063` | the `/*` half of the unignore mechanism, against canonical spellings |
-| `discovery_rejects_symlink_target` | `:2095` | a symlinked `target` does not stop manifest discovery (eligibility is decided later) |
-| `filters_ignored_parent_keeps_exception_route` | `:2116` | the re-enable path in `Filters` |
-| `literal_ignored_ancestor_becomes_pass_through_and_not_inherited_by_siblings` | `:2146` | the disposition state model: `PassThrough` / `Pruned` / `ReIncluded` |
-| `disposition_of_a_recursive_ignore_pattern_is_still_pass_through` | `:2196` | the documented `/**` workaround still reaches the exception |
-| `literal_ignored_ancestor_does_not_readmit_ignored_siblings` | `:2221` | C019's premise negative |
-| `pass_through_directory_manifest_itself_stays_excluded` | `:2248` | H-1: a manifest directly under a `PassThrough` directory is excluded |
-| `explicit_walk_respects_explicit_flag_for_pass_through_manifest` | `:2271` | H-1's explicit half: `explicit = true` bypasses ignore entirely |
-| `user_ignore_prune_counts_only_the_subtrees_the_walk_refused` | `:2345` | the prune-counter contract: the pass-through ancestor and the re-included directory are not skips |
-| `wildcard_and_recursive_ignore_patterns_keep_their_documented_behavior` | `:2376` | `*` and `**` admit only the exception |
-| `several_exceptions_under_one_ignored_ancestor_are_each_reachable` | `:2399` | multiple and nested exceptions, at both levels |
-| `a_deeply_nested_exception_never_visits_a_pruned_siblings_subtree` | `:2426` | the refused siblings' subtrees are never read |
-| `an_exact_unignore_reincludes_the_whole_subtree_at_its_root` | `:2462` | re-inclusion covers the subtree at the exception root |
-| `an_explicit_root_still_bypasses_a_literal_ignore_entirely` | `:2484` | a named root means it |
-| `an_exact_unignore_does_not_reopen_an_internal_prune` | `:2500` | internal prunes are decided before the user filters |
-| `an_exact_unignore_does_not_reopen_a_symlinked_directory` | `:2534` | a symlinked directory stays refused even when unignored by name |
-| `a_broad_ignored_region_is_pruned_before_its_siblings_are_read` | `:2561` | 200 refused siblings, each refused exactly once |
-| `an_explicit_unignore_of_the_scan_root_prunes_the_whole_root_visibly` | `:2594` | a root refused by an inherited ignore is counted at `depth == 0` (global path) |
-| `an_empty_policy_includes_everything` | `:2615` | the explicit-scope case has no exclusion to inherit and nothing to re-include |
+| `manifest_discovery_prunes_cargo_home_registry` | `:2018` | `$CARGO_HOME/registry/src` sources are not user projects |
+| `ignored_subtree_never_invokes_cargo_manifest_count_zero_for_pruned` | `:2058` | an ignored tree contributes prunes and zero manifests |
+| `discovery_reaches_unignored_project_without_entering_ignored_sibling` | `:2084` | the `/*` half of the unignore mechanism, against canonical spellings |
+| `discovery_rejects_symlink_target` | `:2116` | a symlinked `target` does not stop manifest discovery (eligibility is decided later) |
+| `filters_ignored_parent_keeps_exception_route` | `:2137` | the re-enable path in `Filters` |
+| `literal_ignored_ancestor_becomes_pass_through_and_not_inherited_by_siblings` | `:2167` | the disposition state model: `PassThrough` / `Pruned` / `ReIncluded` |
+| `disposition_of_a_recursive_ignore_pattern_is_still_pass_through` | `:2217` | the documented `/**` workaround still reaches the exception |
+| `literal_ignored_ancestor_does_not_readmit_ignored_siblings` | `:2242` | C019's premise negative |
+| `pass_through_directory_manifest_itself_stays_excluded` | `:2269` | H-1: a manifest directly under a `PassThrough` directory is excluded |
+| `explicit_walk_respects_explicit_flag_for_pass_through_manifest` | `:2292` | H-1's explicit half: `explicit = true` bypasses ignore entirely |
+| `user_ignore_prune_counts_only_the_subtrees_the_walk_refused` | `:2366` | the prune-counter contract: the pass-through ancestor and the re-included directory are not skips |
+| `wildcard_and_recursive_ignore_patterns_keep_their_documented_behavior` | `:2397` | `*` and `**` admit only the exception |
+| `several_exceptions_under_one_ignored_ancestor_are_each_reachable` | `:2420` | multiple and nested exceptions, at both levels |
+| `a_deeply_nested_exception_never_visits_a_pruned_siblings_subtree` | `:2447` | the refused siblings' subtrees are never read |
+| `an_exact_unignore_reincludes_the_whole_subtree_at_its_root` | `:2483` | re-inclusion covers the subtree at the exception root |
+| `an_explicit_root_still_bypasses_a_literal_ignore_entirely` | `:2505` | a named root means it |
+| `an_exact_unignore_does_not_reopen_an_internal_prune` | `:2521` | internal prunes are decided before the user filters |
+| `an_exact_unignore_does_not_reopen_a_symlinked_directory` | `:2555` | a symlinked directory stays refused even when unignored by name |
+| `a_broad_ignored_region_is_pruned_before_its_siblings_are_read` | `:2582` | 200 refused siblings, each refused exactly once |
+| `an_explicit_unignore_of_the_scan_root_prunes_the_whole_root_visibly` | `:2615` | a root refused by an inherited ignore is counted at `depth == 0` (global path) |
+| `an_empty_policy_includes_everything` | `:2636` | the explicit-scope case has no exclusion to inherit and nothing to re-include |
 
 **Not covered — the gaps a reader should worry about.**
 
 1. **The global path's walk-error branch has no test at all** (`:744-749``,
    `:879-922``): its per-root drain, its `coverage_complete = false`, and its
    `sort_by_key` ordering. The sequential path's equivalent *is* tested
-   (`:1001`). This is the branch `main.rs:1601-1605` depends on. M018's
-   `verification_pass_attributes_coverage_to_the_root_that_failed` (`:1883`)
+   (`:4`). This is the branch `main.rs:1485-1489` depends on. M018's
+   `verification_pass_attributes_coverage_to_the_root_that_failed` (`:1845`)
    covers the *per-root attribution* of the same failures through the
    verification pass, not the platform walk's own drain.
 2. **`root_is_usable`'s "unavailable" branch is untested** (`:481-494`, the
@@ -733,17 +726,19 @@ Windows run 33.
    verifies the rule, not its own stated premise. That is exactly the hazard the
    project's lesson names: *a green test proves only that its own premises hold.*
 4. **The `CARGO_CLEANME_PROFILE_*` wiring is unexercised** — only the pure helpers
-   are tested (`:1511-1526``), never `discover_manifests_with_attribution`'s use of
+   are tested (`:1511-966``), never `discover_manifests_with_attribution`'s use of
    them (`:393-403``). Likewise `top_level_entry_map` with multiple or nested
    roots is unasserted (`:290-310`; the accounting sum is checked for a single
    root only, `:1620-1624``).
 5. **The two paths disagree about a root refused by an inherited ignore** — the
-   global path counts it (`depth == 0`, `:798-802``), the sequential path does not
+   global path counts it (`depth == 0`, `:798-4``), the sequential path does not
    (`path != root_path`, `:1059``). Only the global path is tested (`:2594``).
 6. **Process-global environment mutation.** `manifest_discovery_prunes_cargo_home_registry`
-   now takes the shared environment lock and restores `CARGO_HOME` panic or not
-   (`src/discovery.rs:2019-2024`, `src/discovery.rs:2032`), so the race this item
-   previously reported is closed. `scripts/check-fixture-portability.py` scans
+   writes `CARGO_HOME` with `unsafe { std::env::set_var }` and restores it after
+   the call (`:2041-2054``). The harness runs tests concurrently, so this races any
+   test in the same binary that reads `CARGO_HOME` or depends on
+   `cargo_home_prunes()` — a flakiness risk, not a false green, since the
+   assertion is still meaningful. `scripts/check-fixture-portability.py` scans
    `src/**/*.rs` and applies four rules (literal PATH separator assembly, an
    unjustified POSIX shebang fixture, raw byte names, platform-specific entry
    literals); none of them is about environment mutation, so nothing catches
@@ -751,18 +746,18 @@ Windows run 33.
    are the right form — compile-time, not a runtime `if` that silently passes.
 7. **Windows is the thinnest lane**: 33 of 41 tests, including *neither* symlink
    test (both are `unix`-gated), with `system_prune` (`:134-147`)
-   unconditionally `false` and `skip_metadata` always `false` (`:596`).
+   unconditionally `false` and `skip_metadata` always `false` (`:3721`).
 
 ---
 
 ## 10. Review checklist
 
 1. **Does any new `DiagnosticCategory` mean "I could not see here"?** Then it must
-   be added to `main.rs:1610-1622` *and*, if it should block Full reconciliation,
-   to the `PlatformRoot && Error` check (`main.rs:1602-1605`) and to the
-   `coverage_complete` flag (`:459`, `:459`). Missing the first silently
+   be added to `main.rs:1494-1506` *and*, if it should block Full reconciliation,
+   to the `PlatformRoot && Error` check (`main.rs:1486-1489`) and to the
+   `coverage_complete` flag (`:454`, `:454`). Missing the first silently
    converts a hole in the scan into certainty about learned roots. Before adding
-   anything at all, check `cleanup.rs:2821-2834`: under ADR 007 a discovery
+   anything at all, check `cleanup.rs:2661-2674`: under ADR 007 a discovery
    diagnostic blocks only when it is in-boundary, and a pathless one always
    counts as in-boundary.
 2. **Does a new prune reason have a `ScanCounters` field and a position in the
@@ -779,7 +774,7 @@ Windows run 33.
    covers the ignore reason as well.
 4. **Is a new prune reachable in both paths?** The sequential `ScanCounters`
    literal (`:466-471``) fills only 3 fields, the platform prune lists are
-   global-only (`:347-356``, `:390-396``), and the hardcoded `system_prune` is
+   global-only (`:347-4``, `:390-396``), and the hardcoded `system_prune` is
    sequential-only (`:1024``). A reason added to one path only looks implemented
    in `--stats` on `scan <dir>` and reports zeros.
 5. **Is every prune still silent?** Only the two `root_is_usable` outcomes and the
@@ -798,7 +793,7 @@ Windows run 33.
    The case-insensitivity test (`:1679-1693``) is the current example of a green
    test that does not prove its stated premise. Relatedly: did a change touch
    `is_manifest_name` or `Filters::directly_ignored`? Both encode platform
-   assumptions with compile-time-gated tests (`:1677``, `:1697``); a runtime `cfg!`
+   assumptions with compile-time-gated tests (`:1677``, `:1077``); a runtime `cfg!`
    in their place turns a skipped test into a passing one.
 9. **Are the four undocumented `CARGO_CLEANME_PROFILE_*` knobs still inert by
    default?** They are gated on `CARGO_CLEANME_PROFILE_SUBTREES` (`:393-403``,

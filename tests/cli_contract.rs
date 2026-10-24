@@ -168,6 +168,297 @@ fn cargo_external_config_edit_help_matches_direct() {
     assert_eq!(direct_stdout, String::from_utf8_lossy(&external.stdout));
 }
 
+/// A command-line `--exclude` must protect the tree it names, however it is
+/// spelled.
+///
+/// The policy patterns are matched against canonicalized workspace roots, so a
+/// pattern spelled through a symlink matched nothing: the exclusion failed
+/// *open*, and the tree the operator had excluded was cleaned anyway. The
+/// config file's own patterns are canonicalized when the config is loaded; the
+/// command-line ones needed the same rewrite.
+///
+/// Platform scope: the Cargo stub is a POSIX `/bin/sh` script, and a symlink
+/// is a Unix-shaped fixture.
+#[cfg(unix)]
+#[test]
+fn a_command_line_exclude_spelled_through_a_symlink_still_excludes() {
+    use std::os::unix::fs::symlink;
+    let fixture = MaintenanceFixture::new(true);
+    // The same directory under a second name. The workspace root is
+    // canonical, so the pattern has to be canonicalized to reach it.
+    let alias = tempfile::tempdir().unwrap();
+    let link = alias.path().join("link");
+    symlink(fixture.temp.path(), &link).unwrap();
+    let pattern = format!("{}/*", link.display());
+
+    let output = fixture.run(&["--dry-run", "--exclude", &pattern]);
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        json["result"]["units"][0]["policy_disposition"], "excluded",
+        "the excluded tree must not be a candidate: {json}"
+    );
+    assert_eq!(
+        json["result"]["units"][0]["reason_code"], "excluded",
+        "the exclusion must carry its typed code: {json}"
+    );
+    assert_eq!(
+        json["result"]["summary"]["simulated"], 0,
+        "nothing may be simulated for an excluded tree: {json}"
+    );
+    assert_eq!(fixture.clean_calls(), 0, "simulation spawns nothing");
+    assert!(
+        fixture.artifact().exists(),
+        "the excluded tree's bytes must be untouched"
+    );
+
+    // The mirror: an `--include` spelled through a symlink must select the
+    // tree, not exclude everything.
+    let included = fixture.run(&["--dry-run", "--include", &pattern]);
+    let included_json: serde_json::Value = serde_json::from_slice(&included.stdout).unwrap();
+    assert_eq!(
+        included_json["result"]["units"][0]["policy_disposition"], "selected",
+        "the included tree must be a candidate: {included_json}"
+    );
+}
+
+/// A control character in a directory name must never reach the terminal raw.
+///
+/// The human surfaces escape path text — the invariant `report.rs` states — and
+/// the machine surfaces escape it a second time. A newline in a directory name
+/// used to reach stderr raw, so one diagnostic occupied three physical
+/// terminal rows; an ANSI escape sequence could repaint the operator's screen
+/// from a cloned repository's directory name.
+///
+/// Platform scope: Windows rejects a file name that contains a control
+/// character, so the fixture can only be built on the filesystem family that
+/// can hold it. Linux is the honest gate.
+#[cfg(target_os = "linux")]
+mod control_character_names {
+    use super::*;
+
+    /// One Cargo project whose directory name carries a control character.
+    ///
+    /// The name is the only thing under test: every assertion below is about
+    /// how the tool *spells* that name, not about what it discovered.
+    fn project(parent: &std::path::Path, control: char) -> PathBuf {
+        // The control character lives in a *parent* directory's name: the
+        // package name has to stay a legal Cargo identifier, and the path is
+        // what the surfaces spell.
+        let holder = parent.join(format!("we{control}ird"));
+        fs::create_dir_all(&holder).unwrap();
+        common::inactive_project(&holder, "workspace")
+    }
+
+    /// Run cargo-cleanme with the Cargo stub on `PATH`.
+    fn run(
+        temp: &std::path::Path,
+        bin: &std::path::Path,
+        root: &std::path::Path,
+        target: &std::path::Path,
+        format: &str,
+        args: &[&str],
+    ) -> std::process::Output {
+        let config = temp.join("config.toml");
+        fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        command.args([
+            "--config",
+            config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            format,
+        ]);
+        command.args(args);
+        command
+            .env("PATH", path_with(bin))
+            .env("FIXTURE_ROOT", root)
+            .env("FIXTURE_TARGET", target)
+            .env("CARGO_LOG", temp.join("cargo.log"))
+            .env("CARGO_ARGS_LOG", temp.join("cargo-args.log"))
+            .current_dir(temp)
+            .output()
+            .unwrap()
+    }
+
+    /// The scan's non-Cargo diagnostics name the path they are about.
+    ///
+    /// DEL rather than a newline: the Cargo stub answers with the path inside
+    /// a JSON document, and a raw newline inside a JSON string is not valid
+    /// JSON — so a newline would measure the stub's infidelity rather than
+    /// the product's spelling. DEL is a control character too, and a JSON
+    /// string may carry it.
+    #[test]
+    fn a_control_character_in_a_directory_name_never_reaches_the_scan_diagnostics_raw() {
+        let temp = tempfile::tempdir().unwrap();
+        let bin = temp.path().join("bin");
+        common::write_fake_cargo(&bin, temp.path());
+        let root = project(temp.path(), '\u{7f}');
+        // The declared target directory cannot be inspected at all: its parent
+        // is a file, so the diagnostic has to name it.
+        let blocked = root.join("blocked");
+        fs::write(&blocked, "not a directory").unwrap();
+        let target = blocked.join("target");
+
+        let output = run(
+            temp.path(),
+            &bin,
+            &root,
+            &target,
+            "json",
+            &["scan", root.to_str().unwrap(), "--verbose"],
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(
+            stderr.contains("we\\u{7f}ird"),
+            "the escaped spelling must be what the terminal sees: {stderr:?} stdout={stdout:?}"
+        );
+        assert!(
+            !stderr.contains('\u{7f}'),
+            "a raw control byte must never reach the terminal: {stderr:?}"
+        );
+    }
+
+    /// The cleanup's verbose preamble names the roots the run walked.
+    #[test]
+    fn a_control_character_in_a_directory_name_never_reaches_the_cleanup_preamble_raw() {
+        let temp = tempfile::tempdir().unwrap();
+        let bin = temp.path().join("bin");
+        common::write_fake_cargo(&bin, temp.path());
+        let root = project(temp.path(), '\u{7f}');
+
+        let output = run(
+            temp.path(),
+            &bin,
+            &root,
+            &root.join("target"),
+            "human",
+            &["--dry-run", "--verbose", root.to_str().unwrap()],
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(
+            stdout.contains("combined roots"),
+            "premise: the verbose preamble must be printed: {stdout:?}"
+        );
+        assert!(
+            stdout.contains("we\\u{7f}ird"),
+            "the escaped spelling must be what the terminal sees: {stdout:?}"
+        );
+        assert!(
+            !stdout.contains('\u{7f}'),
+            "a raw control byte must never reach the terminal: {stdout:?}"
+        );
+    }
+}
+
+/// A direct `cargo-cleanme cleanme` must keep the operator's ROOT.
+///
+/// Since M019 the ROOT positional lives on the root, so `cleanme` is a legal
+/// ROOT spelling — and it is spelled exactly like the token Cargo injects at
+/// argv[1]. Stripping that token because of *what it is spelled* made a
+/// bounded cleanup a machine-wide one: the scope label changed from
+/// `explicit` to `routine` and the operator's real project trees joined the
+/// selected roots.
+///
+/// The launch context separates the two forms: Cargo exports `CARGO` to the
+/// external subcommand it runs, and a direct invocation does not.
+///
+/// Platform scope: the Cargo stub this uses is a POSIX `/bin/sh` script, so
+/// the case is Unix-only — a lane that could not run the stub would prove
+/// nothing here rather than reporting green.
+#[cfg(unix)]
+#[test]
+fn a_direct_cleanme_root_stays_a_bounded_scope() {
+    let temp = tempfile::tempdir().unwrap();
+    let bin = temp.path().join("bin");
+    common::write_fake_cargo(&bin, temp.path());
+    // The named root, and a sibling that must not become a candidate.
+    let named = common::inactive_project(temp.path(), "cleanme");
+    let sibling = common::inactive_project(temp.path(), "other");
+    let config = temp.path().join("config.toml");
+    fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
+
+    let run = |launched_by_cargo: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
+        // The ROOT comes first on purpose: the token Cargo injects is argv[1],
+        // so a ROOT anywhere else would never be the token in question.
+        command.args([
+            "cleanme",
+            "--dry-run",
+            "--config",
+            config.to_str().unwrap(),
+            "--no-progress",
+            "--format",
+            "json",
+        ]);
+        command
+            .env("PATH", path_with(&bin))
+            .env("FIXTURE_ROOT", &named)
+            .env("FIXTURE_TARGET", named.join("target"))
+            .env("CARGO_LOG", temp.path().join("cargo.log"))
+            .env("CARGO_ARGS_LOG", temp.path().join("cargo-args.log"))
+            .current_dir(temp.path());
+        if launched_by_cargo {
+            command.env("CARGO", "cargo");
+        } else {
+            command.env_remove("CARGO");
+        }
+        command.output().unwrap()
+    };
+
+    // The direct form: the token is the operator's ROOT, not Cargo's.
+    let direct = run(false);
+    assert!(
+        direct.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&direct.stdout),
+        String::from_utf8_lossy(&direct.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&direct.stdout).unwrap();
+    assert_eq!(
+        json["scope"], "explicit",
+        "a direct `cleanme` must stay a bounded scope: {json}"
+    );
+    assert_eq!(
+        json["result"]["selected_roots"],
+        serde_json::json!([named.to_str().unwrap()]),
+        "the operator named one directory: {json}"
+    );
+    let units = json["result"]["units"].as_array().unwrap();
+    assert_eq!(units.len(), 1, "only the named root is a candidate: {json}");
+    assert_eq!(
+        units[0]["workspace_root"],
+        named.to_str().unwrap(),
+        "the sibling must not be selected: {json}"
+    );
+    assert!(
+        sibling.join("target").join("artifact.bin").exists(),
+        "the sibling's bytes must be untouched: {json}"
+    );
+
+    // The Cargo form, by contrast, loses the injected token and stays Routine.
+    // Only the scope label is asserted: the Routine scope spans the machine,
+    // so its root list is not a machine-independent fact.
+    let external = run(true);
+    assert!(
+        external.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&external.stdout),
+        String::from_utf8_lossy(&external.stderr)
+    );
+    let external_json: serde_json::Value = serde_json::from_slice(&external.stdout).unwrap();
+    assert_eq!(
+        external_json["scope"], "routine",
+        "the Cargo-injected token is not a scope selector: {external_json}"
+    );
+}
+
 #[test]
 fn json_scan_is_one_versioned_document_and_stats_stay_on_stderr() {
     let dir = tempfile::tempdir().unwrap();
@@ -2562,7 +2853,7 @@ fn known_scan_resolves_routine_without_a_configured_root_and_explicit_with_one()
             .env("HOME", home.path())
             .env("PATH", path_with(&fixture.bin))
             .env("FIXTURE_ROOT", root)
-            .env("FIXTURE_TARGET", root.join("target"))
+            .env("FIXTURE_TARGET", &fixture.target)
             .env("CARGO_LOG", &fixture.log)
             .env("CARGO_ARGS_LOG", &fixture.args_log)
             // ADR 009: the read-only maintenance inventory covers the working

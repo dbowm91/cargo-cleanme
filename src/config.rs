@@ -171,20 +171,8 @@ pub fn load(path: &Path) -> Result<Config, AppError> {
             ))
         })
         .collect();
-    c.cleanup.policy.include = c
-        .cleanup
-        .policy
-        .include
-        .iter()
-        .map(|p| canonical_pattern_prefix(p, PatternKind::Glob))
-        .collect();
-    c.cleanup.policy.exclude = c
-        .cleanup
-        .policy
-        .exclude
-        .iter()
-        .map(|p| canonical_pattern_prefix(p, PatternKind::Glob))
-        .collect();
+    c.cleanup.policy.include = canonical_policy_patterns(&c.cleanup.policy.include);
+    c.cleanup.policy.exclude = canonical_policy_patterns(&c.cleanup.policy.exclude);
     // The rewrite above manufactures pattern text that no longer exists in the
     // file, so what was validated on the way in is not what is compiled on the
     // way out. Validating the results is what stops a canonical spelling from
@@ -348,6 +336,21 @@ fn dangling_trailing_escape(prefix: &str, backslash_escapes: bool) -> bool {
 /// pattern unchanged rather than rewriting it.
 fn is_windows_drive_root(bare: &str) -> bool {
     bare.len() == 2 && bare.as_bytes()[1] == b':' && bare.as_bytes()[0].is_ascii_alphabetic()
+}
+
+/// Rewrite a cleanup policy glob's literal prefix to its canonical spelling.
+///
+/// The patterns are matched against canonicalized workspace roots, so a
+/// pattern spelled the way the user's own shell shows it (`/tmp/...` where
+/// `/tmp` is a symlink) matches nothing. The config file's own patterns are
+/// rewritten when the config is loaded; a pattern that arrives on the command
+/// line needs the same rewrite, or an `--exclude` spelled through a symlink
+/// protects nothing and the tree it named is cleaned anyway.
+pub fn canonical_policy_patterns(patterns: &[String]) -> Vec<String> {
+    patterns
+        .iter()
+        .map(|p| canonical_pattern_prefix(p, PatternKind::Glob))
+        .collect()
 }
 
 fn canonical_pattern_prefix(pattern: &str, kind: PatternKind) -> String {
@@ -797,6 +800,51 @@ mod tests {
             canonical_pattern_prefix(&written, PatternKind::Glob),
             written,
             "a `{{` in the canonical spelling cannot be escaped, so the pattern is untouched"
+        );
+    }
+
+    // Unix-only, and the gate is the subject: the canonical spelling must
+    // differ from what the operator wrote, which needs a second name for one
+    // directory. Every canonical path on Windows carries backslashes, so the
+    // glob rewrite is a no-op there.
+    #[cfg(unix)]
+    #[test]
+    fn a_command_line_policy_pattern_is_canonicalized_like_a_configured_one() {
+        use std::os::unix::fs::symlink;
+        let d = tempfile::tempdir().unwrap();
+        let base = fs::canonicalize(d.path()).unwrap();
+        let real = base.join("real/proj");
+        fs::create_dir_all(&real).unwrap();
+        let link = base.join("link");
+        symlink(base.join("real"), &link).unwrap();
+        assert_ne!(
+            link.display().to_string(),
+            real.display().to_string(),
+            "premise: the fixture needs a spelling that is not the canonical one, \
+             or the rewrite never runs"
+        );
+
+        // The pattern the operator spelled, and the canonical root the matcher
+        // is compared against.
+        let written = vec![format!("{}/*", link.display())];
+        let canonical = canonical_policy_patterns(&written);
+        assert_eq!(
+            canonical,
+            vec![format!("{}/*", base.join("real").display())]
+        );
+        let matcher = globset::Glob::new(&canonical[0]).unwrap().compile_matcher();
+        assert!(
+            matcher.is_match(format!("{}/proj", base.join("real").display())),
+            "the rewritten pattern must match the canonical root: {}",
+            canonical[0]
+        );
+        // The spelling the operator wrote matches nothing: this is the
+        // failure the rewrite exists to prevent, and it is why the
+        // command-line path needs the same rewrite the config path has.
+        let spelled = globset::Glob::new(&written[0]).unwrap().compile_matcher();
+        assert!(
+            !spelled.is_match(format!("{}/proj", base.join("real").display())),
+            "premise: the un-canonicalized spelling must not match"
         );
     }
 

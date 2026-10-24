@@ -60,7 +60,7 @@ The `update` operation reuses `schema_version: 1` without the `EnvelopeV1` shape
 
 Cargo profile selection is supported only for the exact qualified releases 1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0, 1.98.1, and 1.99.0. Package selection is supported only for 1.98.1 and 1.99.0, where configured and explicit target cleanup previews agreed. Unknown/unqualified versions fail closed before `cargo clean`. Package specs must uniquely identify a resolved workspace package; duplicate package names fail closed. Cargo may remove shared dependency outputs. Any nonzero minimum-size policy with a selector is rejected because selector-specific bytes are unknown. Preview delegates `--dry-run` to Cargo; Simulate invokes no Cargo clean; Execute delegates deletion to Cargo after the unchanged complete-workspace proof. cargo-cleanme does not parse Cargo's private artifact layout.
 
-Stable policy disposition values are `selected`, `below_minimum_size`, `too_recent_for_policy`, `not_included`, `excluded`, and `selector_estimate_unavailable`. Paths are UTF-8 strings when representable; otherwise the display string uses the platform escaped debug form and is not a reversible identity encoding.
+Stable policy disposition values are `selected`, `below_minimum_size`, `too_recent_for_policy`, `not_included`, `excluded`, and `selector_estimate_unavailable`. Paths are UTF-8 strings when representable; otherwise each undecodable byte becomes the Unicode replacement character `U+FFFD`, and the result is not a reversible identity encoding.
 
 `--format log` is **not** part of this contract. It emits one bounded ASCII
 summary line for an unattended history pane and drops every per-unit field.

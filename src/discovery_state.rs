@@ -240,7 +240,7 @@ pub fn reconcile_full(
     uncertainty: &[PathBuf],
     mode: ReconciliationMode,
     now: u64,
-    retention_days: u16,
+    retention_days: u32,
     home: Option<&Path>,
 ) -> Reconciliation {
     match mode {
@@ -1029,6 +1029,64 @@ mod tests {
         // The fixture lives under the host's temporary directory, which is
         // deliberately excluded from automatic maintenance learning.
         assert!(state.learned_roots.is_empty());
+    }
+
+    /// A retention window larger than a `u16` must not truncate.
+    ///
+    /// The retention days travelled as a `u16` from the config to the expiry
+    /// rule, so a window of 65536 days truncated to 0 — and 0 is the "never
+    /// expire" sentinel. A root that was 65537 days old would then have been
+    /// kept forever. The config range-checks the value it loads, but
+    /// `ScanConfig` is public API, so the type itself has to carry the
+    /// window: a truncation must not be expressible.
+    #[test]
+    fn a_retention_window_larger_than_a_u16_is_not_truncated() {
+        let dir = tempfile::tempdir().unwrap();
+        // A synthetic home: the roots have to be somewhere a learned root may
+        // live, and the temp tree is excluded from maintenance learning
+        // unless the home is synthetic.
+        let home = dir.path().join("home");
+        let inside = home.join("inside");
+        let outside = home.join("outside");
+        fs::create_dir_all(&inside).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        const NOW: u64 = 100_000_000_000;
+        const RETENTION_DAYS: u32 = 65_536;
+        let prior = DiscoveryState {
+            learned_roots: vec![
+                LearnedRoot {
+                    path: inside.clone(),
+                    last_project_seen_at: NOW - 65_535 * 86_400,
+                },
+                LearnedRoot {
+                    path: outside.clone(),
+                    last_project_seen_at: NOW - 65_537 * 86_400,
+                },
+            ],
+            ..Default::default()
+        };
+        let result = reconcile_full(
+            &prior,
+            &[],
+            &[],
+            ReconciliationMode::Complete,
+            NOW,
+            RETENTION_DAYS,
+            Some(&home),
+        );
+        let Reconciliation::Publish(state) = result else {
+            panic!("completed Full should publish")
+        };
+        assert!(
+            state.learned_roots.iter().any(|r| r.path == inside),
+            "a root inside the window must be kept: {:?}",
+            state.learned_roots
+        );
+        assert!(
+            !state.learned_roots.iter().any(|r| r.path == outside),
+            "a root past the window must expire, not live forever: {:?}",
+            state.learned_roots
+        );
     }
 
     /// C028: a learned root positively confirmed nonexistent (`ENOENT`) is

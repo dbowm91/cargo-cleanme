@@ -864,23 +864,57 @@ struct CleanAlias {
     known: bool,
 }
 
+/// The token Cargo injects when it runs an external subcommand.
+///
+/// Cargo resolves `cargo cleanme` to a `cargo-cleanme` binary and runs it with
+/// the subcommand name injected as the second argv element.
+const CARGO_EXTERNAL_TOKEN: &str = "cleanme";
+
 /// Normalize Cargo external-subcommand argv before clap parses it.
 ///
 /// Cargo executes an external subcommand `cargo cleanme ...` by invoking the
 /// `cargo-cleanme` binary with the subcommand name injected as the second argv
-/// element (`["cargo-cleanme", "cleanme", ...]`). Direct invocation never
-/// produces that shape for a valid command because `cleanme` is not a
-/// `cargo-cleanme` subcommand; the only valid first arguments are
-/// `scan`/`config`/`clean`/`update`/help/version flags or no argument at all.
+/// element (`["cargo-cleanme", "cleanme", ...]`).
 ///
-/// This strips exactly one `cleanme` token in the documented second position
-/// and leaves every later `cleanme` path/value untouched.
+/// **The injected token is identified by the launch context, not by its
+/// spelling.** Since M019 the ROOT positional lives on the root, so `cleanme`
+/// is also a legal ROOT: `cargo-cleanme cleanme` names the directory
+/// `cleanme`, and the premise that the second argv element "cannot be a valid
+/// direct command" no longer holds. A token that is stripped because of *what
+/// it is spelled* is a token the operator can lose, and losing it turns a
+/// bounded cleanup into a machine-wide one.
+///
+/// Cargo exports `CARGO` in the environment of an external subcommand, and a
+/// direct invocation does not, so the launch context is observable. The strip
+/// therefore fires only for a process Cargo actually launched.
 pub fn normalize_cargo_argv(args: impl IntoIterator<Item = OsString>) -> Vec<OsString> {
+    normalize_cargo_argv_with(args, launched_by_cargo())
+}
+
+/// Deterministic normalization against an explicit launch context.
+///
+/// The launch context is a parameter rather than an environment read so that
+/// both branches are reachable from a test without mutating the process
+/// environment, which is shared with every other test in the binary.
+#[doc(hidden)]
+pub fn normalize_cargo_argv_with(
+    args: impl IntoIterator<Item = OsString>,
+    launched_by_cargo: bool,
+) -> Vec<OsString> {
     let mut argv: Vec<OsString> = args.into_iter().collect();
-    if argv.len() >= 2 && argv[1] == "cleanme" {
+    if launched_by_cargo && argv.len() >= 2 && argv[1] == CARGO_EXTERNAL_TOKEN {
         argv.remove(1);
     }
     argv
+}
+
+/// Whether Cargo launched this process.
+///
+/// Cargo exports `CARGO` — the path of the Cargo binary — to the external
+/// subcommand it runs. A direct invocation of `cargo-cleanme` does not have it,
+/// so the variable separates the two launch forms.
+fn launched_by_cargo() -> bool {
+    std::env::var_os("CARGO").is_some()
 }
 
 /// Resolve a user-supplied `cargo cleanme ROOT` against the invocation
@@ -2474,7 +2508,7 @@ mod tests {
             ],
         ] {
             let normalized: Vec<OsString> = args.iter().map(OsString::from).collect();
-            let parsed = Cli::try_parse_from(normalize_cargo_argv(normalized)).unwrap();
+            let parsed = Cli::try_parse_from(normalize_cargo_argv_with(normalized, true)).unwrap();
             assert_eq!(parsed.format, OutputFormat::Log, "{args:?}");
         }
         assert_eq!(
@@ -2591,11 +2625,11 @@ mod tests {
     #[test]
     fn direct_argv_is_unchanged() {
         assert_eq!(
-            normalize_cargo_argv(argv(&["cargo-cleanme"])),
+            normalize_cargo_argv_with(argv(&["cargo-cleanme"]), false),
             argv(&["cargo-cleanme"])
         );
         assert_eq!(
-            normalize_cargo_argv(argv(&["cargo-cleanme", "scan", "/x"])),
+            normalize_cargo_argv_with(argv(&["cargo-cleanme", "scan", "/x"]), false),
             argv(&["cargo-cleanme", "scan", "/x"])
         );
     }
@@ -2603,19 +2637,22 @@ mod tests {
     #[test]
     fn cargo_external_argv_strips_exactly_one_documented_token() {
         assert_eq!(
-            normalize_cargo_argv(argv(&["cargo-cleanme", "cleanme"])),
+            normalize_cargo_argv_with(argv(&["cargo-cleanme", "cleanme"]), true),
             argv(&["cargo-cleanme"])
         );
         assert_eq!(
-            normalize_cargo_argv(argv(&["cargo-cleanme", "cleanme", "scan", "/x"])),
+            normalize_cargo_argv_with(argv(&["cargo-cleanme", "cleanme", "scan", "/x"]), true),
             argv(&["cargo-cleanme", "scan", "/x"])
         );
         assert_eq!(
-            normalize_cargo_argv(argv(&["cargo-cleanme", "cleanme", "config", "show"])),
+            normalize_cargo_argv_with(argv(&["cargo-cleanme", "cleanme", "config", "show"]), true),
             argv(&["cargo-cleanme", "config", "show"])
         );
         assert_eq!(
-            normalize_cargo_argv(argv(&["cargo-cleanme", "cleanme", "clean", "/x", "--yes"])),
+            normalize_cargo_argv_with(
+                argv(&["cargo-cleanme", "cleanme", "clean", "/x", "--yes"]),
+                true
+            ),
             argv(&["cargo-cleanme", "clean", "/x", "--yes"])
         );
     }
@@ -2623,15 +2660,18 @@ mod tests {
     #[test]
     fn later_literal_cleanme_values_are_preserved() {
         assert_eq!(
-            normalize_cargo_argv(argv(&["cargo-cleanme", "scan", "cleanme"])),
+            normalize_cargo_argv_with(argv(&["cargo-cleanme", "scan", "cleanme"]), true),
             argv(&["cargo-cleanme", "scan", "cleanme"])
         );
         assert_eq!(
-            normalize_cargo_argv(argv(&["cargo-cleanme", "cleanme", "scan", "cleanme"])),
+            normalize_cargo_argv_with(argv(&["cargo-cleanme", "cleanme", "scan", "cleanme"]), true),
             argv(&["cargo-cleanme", "scan", "cleanme"])
         );
         assert_eq!(
-            normalize_cargo_argv(argv(&["cargo-cleanme", "clean", "./cleanme", "--yes"])),
+            normalize_cargo_argv_with(
+                argv(&["cargo-cleanme", "clean", "./cleanme", "--yes"]),
+                true
+            ),
             argv(&["cargo-cleanme", "clean", "./cleanme", "--yes"])
         );
     }
@@ -2639,17 +2679,75 @@ mod tests {
     #[test]
     fn help_and_version_forms_normalize() {
         assert_eq!(
-            normalize_cargo_argv(argv(&["cargo-cleanme", "cleanme", "--help"])),
+            normalize_cargo_argv_with(argv(&["cargo-cleanme", "cleanme", "--help"]), true),
             argv(&["cargo-cleanme", "--help"])
         );
         assert_eq!(
-            normalize_cargo_argv(argv(&["cargo-cleanme", "cleanme", "--version"])),
+            normalize_cargo_argv_with(argv(&["cargo-cleanme", "cleanme", "--version"]), true),
             argv(&["cargo-cleanme", "--version"])
         );
         assert_eq!(
-            normalize_cargo_argv(argv(&["cargo-cleanme", "cleanme", "clean", "--help"])),
+            normalize_cargo_argv_with(argv(&["cargo-cleanme", "cleanme", "clean", "--help"]), true),
             argv(&["cargo-cleanme", "clean", "--help"])
         );
+    }
+
+    #[test]
+    fn a_direct_cleanme_root_is_never_stripped() {
+        // Since M019 the ROOT positional lives on the root, so `cleanme` is a
+        // legal ROOT and the second argv element of a *direct* invocation is
+        // the operator's scope selector. Stripping it because of its spelling
+        // turns a bounded cleanup into a machine-wide one, so the launch
+        // context decides and the spelling never does.
+        assert_eq!(
+            normalize_cargo_argv_with(argv(&["cargo-cleanme", "cleanme"]), false),
+            argv(&["cargo-cleanme", "cleanme"])
+        );
+        assert_eq!(
+            normalize_cargo_argv_with(argv(&["cargo-cleanme", "cleanme", "--dry-run"]), false),
+            argv(&["cargo-cleanme", "cleanme", "--dry-run"])
+        );
+        assert_eq!(
+            normalize_cargo_argv_with(argv(&["cargo-cleanme", "cleanme", "scan", "/x"]), false),
+            argv(&["cargo-cleanme", "cleanme", "scan", "/x"])
+        );
+    }
+
+    #[test]
+    fn a_direct_cleanme_root_resolves_to_an_explicit_scope() {
+        // The stripped token used to turn this into a Routine Execute cleanup:
+        // the scope label changed and the selected roots grew to the whole
+        // machine. The parse must keep the operator's selector.
+        let cli = Cli::try_parse_from(normalize_cargo_argv_with(
+            argv(&["cargo-cleanme", "cleanme"]),
+            false,
+        ))
+        .unwrap();
+        match cli.invocation() {
+            Invocation::Cleanup(request) => {
+                assert_eq!(
+                    request.scope,
+                    CleanupScope::Root(std::path::PathBuf::from("cleanme")),
+                    "a direct `cleanme` must stay the operator's bounded root"
+                );
+            }
+            other => panic!("expected a cleanup request, got {other:?}"),
+        }
+        // The Cargo form, by contrast, loses the injected token and keeps the
+        // bare routine scope.
+        let cargo = Cli::try_parse_from(normalize_cargo_argv_with(
+            argv(&["cargo-cleanme", "cleanme"]),
+            true,
+        ))
+        .unwrap();
+        match cargo.invocation() {
+            Invocation::Cleanup(request) => assert_eq!(
+                request.scope,
+                CleanupScope::Maintenance,
+                "the Cargo-injected token is not a scope selector"
+            ),
+            other => panic!("expected a cleanup request, got {other:?}"),
+        }
     }
 
     #[test]
@@ -2680,8 +2778,8 @@ mod tests {
                 argv(&["cargo-cleanme", "cleanme", "clean", "/x"]),
             ),
         ] {
-            let a = Cli::try_parse_from(normalize_cargo_argv(direct)).unwrap();
-            let b = Cli::try_parse_from(normalize_cargo_argv(external)).unwrap();
+            let a = Cli::try_parse_from(normalize_cargo_argv_with(direct, false)).unwrap();
+            let b = Cli::try_parse_from(normalize_cargo_argv_with(external, true)).unwrap();
             assert_eq!(
                 a.invocation(),
                 b.invocation(),
@@ -2769,7 +2867,7 @@ mod tests {
             ],
         ] {
             let normalized: Vec<OsString> = args.iter().map(OsString::from).collect::<Vec<_>>();
-            let parsed = Cli::try_parse_from(normalize_cargo_argv(normalized)).unwrap();
+            let parsed = Cli::try_parse_from(normalize_cargo_argv_with(normalized, true)).unwrap();
             assert!(parsed.stats, "{args:?}");
         }
     }
