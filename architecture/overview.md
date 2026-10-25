@@ -19,7 +19,7 @@ distinction matters.
 - **What it is:** a Cargo subcommand (`cargo cleanme`) that finds inactive Cargo
   build artifacts on a machine and either reports or safely reclaims them.
 - **Shape:** one binary (`src/main.rs`) over one library (`src/lib.rs`) of 16
-  modules, 18 source files, 43,057 lines in `src/` (18,777 of them outside
+  modules, 18 source files, 43,057 lines in `src/` (19,168 of them outside
   every `#[cfg(test)]` scope), no async runtime of its own, and exactly one
   binary dependency that matters for safety (`cargo metadata`).
 - **Version:** 0.2.9 (unpublished; latest published tag `v0.2.8`) ·
@@ -111,7 +111,7 @@ spelling; it is generated from the same clap model, so it cannot drift.
 | Source files | 18 | `src/` |
 | Library modules | 16 | `src/lib.rs` |
 | Total lines in `src/` | 43,057 | `wc -l src/*.rs` |
-| Production lines | 18,777 | total minus every `#[cfg(test)]` scope |
+| Production lines | 19,168 | total minus every `#[cfg(test)]` scope |
 | Inline `#[test]` functions | 602 | `#[test]` attributes in `src/` |
 | Integration test files | 2 | `tests/cli_contract.rs`, `tests/end_to_end.rs` |
 | Contract-checker scripts | 17 | `scripts/` — the set is machine-gated, see §9 |
@@ -134,7 +134,7 @@ reimplemented here.
 ### 3.1 Module sizes
 
 `total` is the whole file; `prod` is everything outside every `#[cfg(test)]`
-scope — including the *nested* test modules, which is why `output.rs` has 540
+scope — including the *nested* test modules, which is why `output.rs` has 543
 production lines rather than the 272 a naive "lines before the first
 `#[cfg(test)]`" reading would report. `tests` counts `#[test]` attributes in
 the file itself; the integration suites in `tests/` are counted separately in
@@ -152,16 +152,6 @@ the file itself; the integration suites in `tests/` are counted separately in
 | `cli.rs` | 2874 | 980 | 61 | `lib.rs` | 16 | 16 | 0 
 | `policy.rs` | 1666 | 825 | 26 | | | | 
 | `discovery_state.rs` | 1335 | 636 | 18 | | | | 
-| `cleanup.rs` | 11163 | 4241 | 126 | `output.rs` | 1065 | 540 | 21 |
-| `workspace.rs` | 6301 | 2160 | 79 | `progress.rs` | 948 | 518 | 15 |
-| `update.rs` | 2886 | 1289 | 47 | `report.rs` | 365 | 168 | 11 |
-| `discovery.rs` | 2647 | 1146 | 41 | `traverse.rs` | 624 | 494 | 6 |
-| `interactive.rs` | 2985 | 1493 | 67 | `domain.rs` | 480 | 451 | 1 |
-| `config.rs` | 1499 | 613 | 20 | `editor.rs` | 215 | 155 | 2 |
-| `main.rs` | 2244 | 1864 | 9 | `error.rs` | 16 | 16 | 0 |
-| `cli.rs` | 1973 | 777 | 45 | `lib.rs` | 16 | 16 | 0 |
-| `policy.rs` | 1660 | 875 | 24 | | | | |
-| `discovery_state.rs` | 1215 | 634 | 17 | | | | |
 
 Two observations a reader should carry forward. **Coverage is concentrated**:
 `cleanup.rs` and `workspace.rs` alone hold 225 of the 602 inline tests, and
@@ -786,15 +776,19 @@ items 1, 7, 8, 10, 11 and 22, as of the v0.2.10 release close-out, which
 corrected item 50 and added item 61, and as of the ADR 008 acceptance of
 2026-10-21, which added item 62. Items 17, 22, 24, 25, 38, 43, 44, 46, 47,
 56, 58 and 62 were re-verified against the M018/M019 code, and item 65 was
-added by the same pass.
+added by the same pass. **Re-derived 2026-10-24** (the 0.2.10 interrogation
+passes): items 66-96 had been silently dropped from this table by a
+re-derivation pass and were restored, items 97-108 were added, and the
+corpus's citations, counts and per-platform census were re-derived from the
+source in the same passes.
 
 Items 3-6 are re-verified as of the Phase-11 and Phase-12 closures (all of
 C018/C019/C021-C025 are now closed). Their findings were real when recorded and
 each is now closed by shipped code; the deep dives that carry them were updated in
 the same pass, so these rows point at completed work rather than at a plan.
 
-**Sixty-five** findings are recorded here. The count is re-derivable: it is the
-number of numbered rows in the table below.
+**One hundred and eight** findings are recorded here. The count is re-derivable:
+it is the number of numbered rows in the table below.
 
 | # | Finding | Status |
 |---|---|---|
@@ -949,11 +943,11 @@ each. As of this pass `plans/` contains:
 
 | Artifact | Count | Notes |
 |---|---:|---|
-| ADRs | 8 | 001, 002, 003, 004 (with an amendment), 006, and 007 are accepted; **005 and 008 are proposed, not accepted** |
+| ADRs | 9 | 001, 002, 003, 004 (with an amendment), 006, 007, 008 and 009 are accepted; **005 is proposed, not accepted** |
 | Numbered milestone plans | 29 | `001`…`013` across the two subsystems |
-| `M`-prefixed milestone plans | 4 | M014–M017 |
-| Corrective plans | 35 | C001–C034 plus C036. **C035 is absent on purpose** — it is superseded and must not be merged; it stays as the record of the rejected mechanism. |
-| Closure records | 68 | one `*-status.md` per plan, in `plans/closure/` |
+| `M`-prefixed milestone plans | 7 | M014–M020 |
+| Corrective plans | 45 | C001–C046, less **C035 — which is absent on purpose**: it is superseded and must not be merged; it stays as the record of the rejected mechanism. |
+| Closure records | 82 | one `*-status.md` per plan in `plans/closure/`, plus the seven `r0NN` release receipts; five plans have no record yet (C010, C033, C034, C036, C041) |
 
 The load-bearing decisions are:
 
@@ -972,7 +966,15 @@ The load-bearing decisions are:
 - **ADR 007 — scoped proof is the default.** The proof boundary is the selected
   scope (anchor / explicit roots / `--full`); out-of-boundary unprovables are
   reported, never blocking. It deliberately *reserves* whole-system fail-closed
-  for `clean --full`.
+  for `clean --full` — a reservation **ADR 008 later withdrew**.
+- **ADR 008 — the canonical Full spelling and a proof-scoped Full gate.** The
+  Full cleanup is `cargo cleanme --full` at the root, and `clean --full` is a
+  hidden alias; the ROOT positional lives at the root, and `cargo cleanme .` is
+  a bounded cleanup. The Full cleanup's proof boundary is the **learned root**,
+  not the platform root.
+- **ADR 009 — the working directory joins the maintenance scope.** The
+  working directory is *added* to the routine scope, never substituted for it,
+  so a bare run cleans what is under where you are standing.
 
 The project's own summary of its recurring lesson (from `plans/registry.md`) is
 worth carrying into any review: *a green test proves only that its own premises

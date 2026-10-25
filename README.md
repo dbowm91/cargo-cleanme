@@ -105,7 +105,7 @@ field list and scheduler integration.
 
 | Command | What it does | Runs `cargo clean`? |
 |---|---|---|
-| `cargo cleanme` | Cleanup anchored at the working directory (Execute) | yes |
+| `cargo cleanme` | Cleanup of the maintenance scope, anchored at the working directory (Execute) | yes |
 | `cargo cleanme --dry-run` | Simulation: every gate runs, nothing is removed | **never**, not even preview |
 | `cargo cleanme -i` / `--interactive` | Choose cleanup units from a terminal list, then clean | yes |
 | `cargo cleanme ROOT` | Cleanup of one bounded root (Execute by default) | yes |
@@ -130,12 +130,14 @@ a directory. So `cargo cleanme .` is a bounded cleanup of `.`.
 
 The **maintenance scope** is a configured legacy `scan.root` when one is set
 (exclusive), otherwise bounded seed roots under your home plus active learned
-roots. Bare `cargo cleanme` and `clean --known` keep only the units anchored at
-the working directory; `cargo cleanme ROOT` and `cargo cleanme --full` keep
-every resolved unit, because their roots already bound the scope. Ownership is
-proven across the whole resolved universe *before* the anchor narrows anything,
-so a target shared with a project elsewhere stays shared and stays
-inventory-only.
+roots **plus the working directory** — the workspace that encloses it and the
+directory itself. The scope only ever *grows*: the working directory is added to
+the roots, never substituted for them. Bare `cargo cleanme` and `clean --known`
+keep only the units anchored at the working directory; `cargo cleanme ROOT` and
+`cargo cleanme --full` keep every resolved unit, because their roots already
+bound the scope. Ownership is proven across the whole resolved universe
+*before* the anchor narrows anything, so a target shared with a project
+elsewhere stays shared and stays inventory-only.
 
 → [docs/USAGE.md](docs/USAGE.md) for the full command and flag reference, the
 discovery model, and the cleanup safety model.

@@ -190,14 +190,13 @@ as skipped. `--stats` shows this as `active_skipped=N`.
 ### Cleanup
 
 ```sh
-cargo cleanme                                     # cleanup anchored at $PWD (Execute)
-cargo cleanme --dry-run                           # same selection, zero cargo clean
+cargo cleanme                                     # the maintenance scope, anchored at $PWD (Execute)
+cargo cleanme --dry-run                           # the same selection, simulated — zero cargo clean
 cargo cleanme -i                                  # choose units interactively, then clean
 cargo cleanme -i --dry-run                        # choose units, simulate, clean nothing
 cargo cleanme ~/projects                          # explicit root (Execute)
 cargo cleanme ~/projects --dry-run                # simulation, no cargo clean
 cargo cleanme ~/projects --cargo-preview          # Cargo's own dry-run, after the same proof
-cargo cleanme --dry-run                           # the maintenance scope, simulated
 cargo cleanme --full --dry-run                    # reconcile Full, then simulate
 cargo cleanme ~/projects --min-reclaimable-bytes 104857600
 cargo cleanme --older-than 2592000 --exclude '**/archived'

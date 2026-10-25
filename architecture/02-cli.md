@@ -922,51 +922,51 @@ including helpers).
 
 | Test | Line | What it pins |
 |---|---|---|
-| `the_root_full_flag_resolves_to_the_full_scope` | 809 | M019: `cargo cleanme --full` → `CleanupScope::Full` — the canonical Full spelling |
-| `the_clean_alias_still_resolves_and_is_hidden_from_the_help` | 832 | M019: `clean` is hidden from the help and still parses to the same intent |
-| `the_policy_overrides_work_at_the_root` | 871 | M019: the seven policy overrides are accepted at the root and reach `CleanupOverrides` |
-| `the_root_positional_resolves_to_the_bounded_root_scope` | 918 | M019: `cargo cleanme ROOT` → `CleanupScope::Root(root)` |
-| `a_subcommand_wins_over_a_positional_of_the_same_shape` | 943 | M019: a directory named `scan` is read as the `scan` subcommand |
-| `the_dot_positional_is_a_bounded_cleanup_and_not_a_usage_error` | 964 | M019: `cargo cleanme .` is a bounded cleanup of `.` — it used to be a usage error |
-| `the_known_alias_is_not_orphaned_by_the_hiding` | 986 | M019: `clean --known` still reaches the maintenance scope after the hiding |
-| `the_root_help_names_the_canonical_full_cleanup_spelling` | 1002 | M019: the root `long_about` names `cargo cleanme --full` as the canonical spelling |
-| `the_root_and_the_alias_resolve_to_the_same_intent` | 1022 | M019: `cargo cleanme ROOT` and `cargo cleanme clean ROOT` are the same `CleanupRequest` |
-| `a_cleanup_flag_on_a_read_only_subcommand_is_a_usage_error` | 1052 | M019: `--full` / ROOT / a policy override handed to `scan`, `config` or `update` is a usage error, never a discarded flag |
-| `the_same_override_at_both_levels_is_a_usage_error` | 1078 | M019: the same override at the root and on `clean` is a usage error |
-| `a_root_level_override_wins_over_the_alias` | 1126 | M019: a root-level override wins over the alias's, and the alias's is used when the root gave none |
-| `bare_invocation_is_routine_execute_maintenance_not_scan` | 1138 | `cargo-cleanme` with no argv → `Cleanup(Maintenance, Execute)`. Its comment names the pre-M012A dispatch it replaces |
-| `bare_dry_run_is_simulate_and_the_legacy_alias_maps_to_it` | 1152 | `--dry-run` and `--dryrun` both → Simulate; the two spellings cannot be combined |
-| `a_dry_run_before_the_subcommand_is_still_a_dry_run` | 1171 | root `--dry-run`/`--dryrun` **before** `clean ROOT` → `Simulate`, not the `Execute` it silently fell through to; the post-subcommand and no-flag spellings are unchanged |
-| `a_dry_run_before_update_is_still_a_dry_run` | 1221 | root `--dry-run`/`--dryrun` before `update` → `Update { dry_run: true }`; bare `update` stays `false` |
-| `a_root_dry_run_wins_over_cargo_preview_because_it_spawns_nothing` | 1244 | root `--dry-run` + `clean --cargo-preview` → `Simulate`; `clean --cargo-preview` alone is still `CargoPreview` |
-| `scan_scope_selection_is_full_explicit_or_maintenance` | 1277 | bare `scan` is a **parse error**; `--all`, `-a`, and the hidden `--full` all → Full; `ROOT` → Explicit; `--known` → Maintenance |
-| `the_interactive_flag_is_declared_advertised_and_not_implied` | 1313 | `-i`/`--interactive` appears in the long help, parses, is not implied by an ordinary invocation, reaches the cleanup intent, and does **not** pre-empt the anchor |
-| `interactive_without_a_terminal_still_means_human_format_only` | 1368 | the flag coexists with all three output formats; the machine-format refusal is a runtime guard in `main`, not a parse-time one |
-| `maintenance_spellings_anchor_selection_to_the_working_directory` | 1385 | bare, `clean`, and `clean --known` anchor to the working directory; `clean ROOT` and `clean --full` stay `All` |
-| `unresolved_working_directory_anchor_selects_nothing` | 1426 | an unresolved `WorkingDirectory` anchor admits **nothing** — fail-closed against a caller that forgets to resolve it |
-| `scan_scope_conflicts_fail_at_invocation_time` | 1437 | all six bad `scan` pairs are parse errors, before any traversal |
-| `hidden_full_alias_is_not_advertised_in_scan_help` | 1454 | `scan --help` renders `--known` and never `--full` |
-| `clean_scope_selectors_stay_mutually_exclusive` | 1481 | `ROOT`/`--known`/`--full` map to three `CleanupScope`s; bare `clean` equals bare invocation; all three bad pairs are errors |
-| `the_full_cleanup_alias_still_resolves_after_the_root_moved` | 1525 | M019: `clean --full` still resolves to the Full scope after the canonical spelling moved to the root |
-| `cleanup_modes_default_to_execute_and_expose_cargo_preview` | 1535 | no mode flag → Execute; `--dry-run`/cargo-preview/`--yes`/`--dryrun` map correctly; **all six** mode pairs are parse errors |
-| `compatibility_aliases_are_hidden_but_accepted` | 1588 | `clean --help` shows `--dry-run` and `--cargo-preview` and hides `--yes`/`--dryrun` |
-| `partitioned_flag_is_gone_scoped_proof_is_the_only_behavior` | 1633 | `--partitioned` is a usage error at the root and on `clean`; removal is total (ADR 007) |
-| `update_keeps_its_own_dry_run_meaning` | 1646 | `update --dry-run` still parses into `Invocation::Update { dry_run: true }` |
-| `format_log_parses_globally` | 1656 | `--format log` is accepted before and after a subcommand and through the external form; `log` is opt-in; `--format yaml` is an error |
-| `config_command_parses` | 1686 | `config path`/`edit` ok; `config init` err; `config show` → `Invocation::Config(Show)` |
-| `root_parses` | 1699 | `scan /tmp` → `ScanIntent::Explicit("/tmp")` |
-| `cleanup_policy_options_are_repeatable_and_mode_independent` | 1708 | two `--include` values accumulate, `--exclude` lands, `--min-reclaimable-bytes`/`--older-than` land, and the whole set travels **inside** the `CleanupRequest`; `--profile`+`--package` is an error |
-| `orchestration_roots_are_mutually_exclusive_and_external_forms_match` | 1768 | direct vs external `invocation()` equality for `--known`/`--full`; **the only caller of `try_parse_normalized_from`** in this file |
-| `direct_argv_is_unchanged` | 1789 | no-arg and `scan /x` argv returned byte-identical |
-| `cargo_external_argv_strips_exactly_one_documented_token` | 1801 | one token removed for `cleanme`, `cleanme scan`, `cleanme config show`, `cleanme clean /x --yes` |
-| `later_literal_cleanme_values_are_preserved` | 1821 | `scan cleanme`, `cleanme scan cleanme`, `clean ./cleanme --yes` — the literal survives at every position ≥ 2 |
-| `help_and_version_forms_normalize` | 1837 | `--help`, `--version`, `clean --help` all normalize identically |
-| `direct_and_external_forms_parse_equivalently` | 1853 | six direct/external pairs, compared on `invocation()` |
-| `config_init_is_removed_and_edit_parses` | 1891 | re-asserts `config init` err, `config edit` ok |
-| `absolute_root_is_stable` | 1897 | `absolutize_root` returns an absolute path unchanged (POSIX and Windows spellings) |
-| `relative_root_becomes_absolute` | 1907 | `./project` → `cwd/project`; three `absolutize_relative` `..` cases: `c/../d` → `/a/b/d`, `../outside` → `/a/outside`, `../../x` from `/a` → `/x` (root saturation) |
-| `no_progress_flag_parses_globally` | 1921 | global before the subcommand, default false, legal with **no** subcommand — where it now means a Routine cleanup |
-| `stats_flag_parses_globally_in_direct_and_external_forms` | 1935 | global before the subcommand; combinable with `--no-progress`; accepted after `clean` in all three modes and in external form |
+| `the_root_full_flag_resolves_to_the_full_scope` | 1013 | M019: `cargo cleanme --full` → `CleanupScope::Full` — the canonical Full spelling |
+| `the_clean_alias_still_resolves_and_is_hidden_from_the_help` | 1036 | M019: `clean` is hidden from the help and still parses to the same intent |
+| `the_policy_overrides_work_at_the_root` | 1075 | M019: the seven policy overrides are accepted at the root and reach `CleanupOverrides` |
+| `the_root_positional_resolves_to_the_bounded_root_scope` | 1122 | M019: `cargo cleanme ROOT` → `CleanupScope::Root(root)` |
+| `a_subcommand_wins_over_a_positional_of_the_same_shape` | 1147 | M019: a directory named `scan` is read as the `scan` subcommand |
+| `the_dot_positional_is_a_bounded_cleanup_and_not_a_usage_error` | 1168 | M019: `cargo cleanme .` is a bounded cleanup of `.` — it used to be a usage error |
+| `the_known_alias_is_not_orphaned_by_the_hiding` | 1190 | M019: `clean --known` still reaches the maintenance scope after the hiding |
+| `the_root_help_names_the_canonical_full_cleanup_spelling` | 1206 | M019: the root `long_about` names `cargo cleanme --full` as the canonical spelling |
+| `the_root_and_the_alias_resolve_to_the_same_intent` | 1226 | M019: `cargo cleanme ROOT` and `cargo cleanme clean ROOT` are the same `CleanupRequest` |
+| `a_cleanup_flag_on_a_read_only_subcommand_is_a_usage_error` | 1671 | M019: `--full` / ROOT / a policy override handed to `scan`, `config` or `update` is a usage error, never a discarded flag |
+| `the_same_override_at_both_levels_is_a_usage_error` | 1697 | M019: the same override at the root and on `clean` is a usage error |
+| `a_root_level_override_wins_over_the_alias` | 1946 | M019: a root-level override wins over the alias's, and the alias's is used when the root gave none |
+| `bare_invocation_is_routine_execute_maintenance_not_scan` | 1958 | `cargo-cleanme` with no argv → `Cleanup(Maintenance, Execute)`. Its comment names the pre-M012A dispatch it replaces |
+| `bare_dry_run_is_simulate_and_the_legacy_alias_maps_to_it` | 1972 | `--dry-run` and `--dryrun` both → Simulate; the two spellings cannot be combined |
+| `a_dry_run_before_the_subcommand_is_still_a_dry_run` | 1991 | root `--dry-run`/`--dryrun` **before** `clean ROOT` → `Simulate`, not the `Execute` it silently fell through to; the post-subcommand and no-flag spellings are unchanged |
+| `a_dry_run_before_update_is_still_a_dry_run` | 2041 | root `--dry-run`/`--dryrun` before `update` → `Update { dry_run: true }`; bare `update` stays `false` |
+| `a_root_dry_run_wins_over_cargo_preview_because_it_spawns_nothing` | 2064 | root `--dry-run` + `clean --cargo-preview` → `Simulate`; `clean --cargo-preview` alone is still `CargoPreview` |
+| `scan_scope_selection_is_full_explicit_or_maintenance` | 2097 | bare `scan` is a **parse error**; `--all`, `-a`, and the hidden `--full` all → Full; `ROOT` → Explicit; `--known` → Maintenance |
+| `the_interactive_flag_is_declared_advertised_and_not_implied` | 2133 | `-i`/`--interactive` appears in the long help, parses, is not implied by an ordinary invocation, reaches the cleanup intent, and does **not** pre-empt the anchor |
+| `interactive_without_a_terminal_still_means_human_format_only` | 2188 | the flag coexists with all three output formats; the machine-format refusal is a runtime guard in `main`, not a parse-time one |
+| `maintenance_spellings_anchor_selection_to_the_working_directory` | 2205 | bare, `clean`, and `clean --known` anchor to the working directory; `clean ROOT` and `clean --full` stay `All` |
+| `unresolved_working_directory_anchor_selects_nothing` | 2247 | an unresolved `WorkingDirectory` anchor admits **nothing** — fail-closed against a caller that forgets to resolve it |
+| `scan_scope_conflicts_fail_at_invocation_time` | 2258 | all six bad `scan` pairs are parse errors, before any traversal |
+| `hidden_full_alias_is_not_advertised_in_scan_help` | 2275 | `scan --help` renders `--known` and never `--full` |
+| `clean_scope_selectors_stay_mutually_exclusive` | 2318 | `ROOT`/`--known`/`--full` map to three `CleanupScope`s; bare `clean` equals bare invocation; all three bad pairs are errors |
+| `the_full_cleanup_alias_still_resolves_after_the_root_moved` | 2362 | M019: `clean --full` still resolves to the Full scope after the canonical spelling moved to the root |
+| `cleanup_modes_default_to_execute_and_expose_cargo_preview` | 2372 | no mode flag → Execute; `--dry-run`/cargo-preview/`--yes`/`--dryrun` map correctly; **all six** mode pairs are parse errors |
+| `compatibility_aliases_are_hidden_but_accepted` | 2425 | `clean --help` shows `--dry-run` and `--cargo-preview` and hides `--yes`/`--dryrun` |
+| `partitioned_flag_is_gone_scoped_proof_is_the_only_behavior` | 2470 | `--partitioned` is a usage error at the root and on `clean`; removal is total (ADR 007) |
+| `update_keeps_its_own_dry_run_meaning` | 2483 | `update --dry-run` still parses into `Invocation::Update { dry_run: true }` |
+| `format_log_parses_globally` | 2493 | `--format log` is accepted before and after a subcommand and through the external form; `log` is opt-in; `--format yaml` is an error |
+| `config_command_parses` | 2523 | `config path`/`edit` ok; `config init` err; `config show` → `Invocation::Config(Show)` |
+| `root_parses` | 2536 | `scan /tmp` → `ScanIntent::Explicit("/tmp")` |
+| `cleanup_policy_options_are_repeatable_and_mode_independent` | 2545 | two `--include` values accumulate, `--exclude` lands, `--min-reclaimable-bytes`/`--older-than` land, and the whole set travels **inside** the `CleanupRequest`; `--profile`+`--package` is an error |
+| `orchestration_roots_are_mutually_exclusive_and_external_forms_match` | 2605 | direct vs external `invocation()` equality for `--known`/`--full`; **the only caller of `try_parse_normalized_from`** in this file |
+| `direct_argv_is_unchanged` | 2626 | no-arg and `scan /x` argv returned byte-identical |
+| `cargo_external_argv_strips_exactly_one_documented_token` | 2638 | one token removed for `cleanme`, `cleanme scan`, `cleanme config show`, `cleanme clean /x --yes` |
+| `later_literal_cleanme_values_are_preserved` | 2661 | `scan cleanme`, `cleanme scan cleanme`, `clean ./cleanme --yes` — the literal survives at every position ≥ 2 |
+| `help_and_version_forms_normalize` | 2680 | `--help`, `--version`, `clean --help` all normalize identically |
+| `direct_and_external_forms_parse_equivalently` | 2754 | six direct/external pairs, compared on `invocation()` |
+| `config_init_is_removed_and_edit_parses` | 2792 | re-asserts `config init` err, `config edit` ok |
+| `absolute_root_is_stable` | 2798 | `absolutize_root` returns an absolute path unchanged (POSIX and Windows spellings) |
+| `relative_root_becomes_absolute` | 2808 | `./project` → `cwd/project`; three `absolutize_relative` `..` cases: `c/../d` → `/a/b/d`, `../outside` → `/a/outside`, `../../x` from `/a` → `/x` (root saturation) |
+| `no_progress_flag_parses_globally` | 2822 | global before the subcommand, default false, legal with **no** subcommand — where it now means a Routine cleanup |
+| `stats_flag_parses_globally_in_direct_and_external_forms` | 2836 | global before the subcommand; combinable with `--no-progress`; accepted after `clean` in all three modes and in external form |
 
 (Two helpers, `maintenance(..)` and `cleanup(..)`, construct a `CleanupRequest`
 with default overrides, and `argv(..)` builds an `OsString` vector; they are not
@@ -984,13 +984,13 @@ failure grouping, and the interactive TTY.
 | `the_staged_binary_is_the_external_subcommand_cargo_will_run` | 75 | **The premise of the external-form cases, as its own test.** Copies the built binary into a temp dir, prepends it to `PATH`, isolates `CARGO_HOME`, asserts via `assert_staged_is_resolved` (`tests/cli_contract.rs:58`) that the staged file is the first `cargo-cleanme<EXE_SUFFIX>` Cargo would resolve, *then* asserts `cargo cleanme --version` stdout == direct `--version` stdout |
 | `cargo_external_subcommand_help_matches_direct_help` | 115 | `direct_stdout == external_stdout` for `--help`, and the output contains `cargo-cleanme` |
 | `cargo_external_config_edit_help_matches_direct` | 149 | same equality for `config edit --help`, plus the text contains `edit` |
-| `json_scan_is_one_versioned_document_and_stats_stay_on_stderr` | 172 | drives `--config <path> --no-progress [--stats] --format json scan <root>`; asserts `schema_version == 1`, `operation == "scan"`, `scope == "explicit"`, `--stats` leaves stdout byte-identical, stderr contains `scan stats:`, and stdout is exactly **one** newline |
-| `json_scope_label_follows_the_resolved_scope_not_the_cli_flags` | 214 | with a configured `scan.root`, `scan --known` reports `scope == "explicit"` and `scan ROOT` still does. M012A note: the configured-root case moved to `--known` because rootless `scan` is now a usage error |
-| `scan_scope_conflicts_are_rejected_before_any_traversal` | 664 | exit `2`, **empty stdout**, clap's `cannot be used with` on stderr, for all three bad pairs |
-| `json_cleanup_emits_the_requested_mode_and_machine_summary` | 696 | `clean <root> --dry-run --format json` → `json["mode"] == "simulate"` and `result.summary.simulated == 0` |
-| `json_scope_block_is_emitted_with_nonzero_exit_status` | 735 | an invalid `Cargo.toml` gives `status.code() == Some(1)` together with `result.scope_blocked == true` |
+| `json_scan_is_one_versioned_document_and_stats_stay_on_stderr` | 463 | drives `--config <path> --no-progress [--stats] --format json scan <root>`; asserts `schema_version == 1`, `operation == "scan"`, `scope == "explicit"`, `--stats` leaves stdout byte-identical, stderr contains `scan stats:`, and stdout is exactly **one** newline |
+| `json_scope_label_follows_the_resolved_scope_not_the_cli_flags` | 505 | with a configured `scan.root`, `scan --known` reports `scope == "explicit"` and `scan ROOT` still does. M012A note: the configured-root case moved to `--known` because rootless `scan` is now a usage error |
+| `scan_scope_conflicts_are_rejected_before_any_traversal` | 955 | exit `2`, **empty stdout**, clap's `cannot be used with` on stderr, for all three bad pairs |
+| `json_cleanup_emits_the_requested_mode_and_machine_summary` | 987 | `clean <root> --dry-run --format json` → `json["mode"] == "simulate"` and `result.summary.simulated == 0` |
+| `json_scope_block_is_emitted_with_nonzero_exit_status` | 1026 | an invalid `Cargo.toml` gives `status.code() == Some(1)` together with `result.scope_blocked == true` |
 | `json_unattended_yes_executes_through_cargo_and_emits_typed_result` (`#[cfg(unix)]`) | 782 | against a `#!/bin/sh` Cargo stub: `--yes --profile dev` → `reason_code == "cleaned"`, `selector_kind == "profile"`, exactly **one** `clean` logged; `--dryrun` → `outcome == "simulated"`, count still 1; `--min-reclaimable-bytes 1 --yes` with a profile → `selector_unsupported`; `--package missing-package` → `selector_invalid`; `--package fixture` with `CARGO_VERSION=1.97.0` → `selector_unsupported`; `--package fixture@0.1.0` → `cleaned`, count reaching 2 |
-| `config_edit_uses_fake_editor_process_and_keeps_invalid_edits` | 1106 | exit `17` when the editor fails; non-zero exit plus stderr containing `is invalid` on a malformed edit, and the bad file is *not* reverted; success plus `edited` on stdout when valid; a no-op edit leaves `recency_seconds == 42` |
+| `config_edit_uses_fake_editor_process_and_keeps_invalid_edits` | 1468 | exit `17` when the editor fails; non-zero exit plus stderr containing `is invalid` on a malformed edit, and the bad file is *not* reverted; success plus `edited` on stdout when valid; a no-op edit leaves `recency_seconds == 42` |
 | `working_directory_anchor_selects_without_narrowing_the_ownership_universe` (`#[cfg(unix)]`) | 1478 | the M014 anchor: from an unrelated cwd the unit is discovered, classified `private`, and reported as `skipped_outside_selection`; from inside it, the same unit is `simulated` — ownership is still proven across the complete universe |
 | `interactive_without_a_terminal_is_a_usage_error_that_names_the_reason` (`#[cfg(unix)]`) | 1534 | `-i` with no terminal exits `2` **and names the reason** — a test that only checked "it failed" would pass against an unrelated crash |
 | `interactive_refuses_the_machine_output_formats` (`#[cfg(unix)]`) | 1571 | `-i` with `--format json` or `--format log` is refused: a terminal session cannot be carried by an automation contract |
@@ -1005,20 +1005,20 @@ failure grouping, and the interactive TTY.
 | `every_accepted_simulation_spelling_reaches_simulate_and_spawns_no_cargo_clean` (`#[cfg(unix)]`) | 2270 | every accepted simulation spelling reaches `simulate` **and** spawns no `cargo clean`; `--cargo-preview` is included because it is the one accepted combination that means two different things at once |
 | `the_cargo_plugin_simulation_spelling_also_spawns_no_cargo_clean` (`#[cfg(unix)]`) | 2364 | the same guarantee through the Cargo plugin entry point, with the staged-binary premise asserted rather than assumed |
 | `clean_rejects_simulate_and_cargo_preview_together_at_parse_time` (`#[cfg(unix)]`) | 2402 | `clean --dry-run --cargo-preview` exits `2` with clap's `cannot be used with`, spawns nothing, and leaves the artifact in place |
-| `update_dry_run_reaches_the_same_non_mutating_path_from_either_spelling` | 2438 | both `--dry-run update` and `update --dry-run` resolve to a non-mutating updater request, through the production `try_parse_normalized_from` path |
+| `update_dry_run_reaches_the_same_non_mutating_path_from_either_spelling` | 2800 | both `--dry-run update` and `update --dry-run` resolve to a non-mutating updater request, through the production `try_parse_normalized_from` path |
 | `known_scan_resolves_routine_without_a_configured_root_and_explicit_with_one` (`#[cfg(unix)]`) | 2464 | `$HOME/projects/<fixture>` → `scope == "routine"` **and** `discovered_manifests == 1` (so the label is not vacuously right); the same fixture with a configured root → `explicit` |
-| `json_scan_within_an_empty_root_is_a_successful_zero_result_report` | 2526 | platform-neutral zero-result scan: exit `0`, `groups == []`, `group_count == 0` |
+| `json_scan_within_an_empty_root_is_a_successful_zero_result_report` | 2971 | platform-neutral zero-result scan: exit `0`, `groups == []`, `group_count == 0` |
 | `json_and_human_output_are_unchanged_by_log_mode` (`#[cfg(unix)]`) | 3035 | M012B §8: adding `--format log` changes neither the JSON nor the human rendering |
-| `log_is_an_explicit_value_and_invalid_formats_still_fail_closed` | 3081 | `--format jsonl` exits `2` with empty stdout — an invalid format is not a silently-accepted typo |
-| `scan_emits_exactly_one_json_document` | 3116 | the one-document-per-invocation invariant a `clean --full` could break; asserted at the source-guard level, because the suite keeps every case bounded and cannot run a platform walk |
-| `json_update_refusal_emits_no_document_and_exits_non_zero` | 3260 | a mutating update over forbidden provenance refuses **before** asking the registry anything: no document on stdout, non-zero exit, hermetic |
-| `the_json_update_branch_prints_only_the_tested_seam` | 3311 | the JSON branch of `run_update` prints exactly the library stream and nothing else |
+| `log_is_an_explicit_value_and_invalid_formats_still_fail_closed` | 3526 | `--format jsonl` exits `2` with empty stdout — an invalid format is not a silently-accepted typo |
+| `scan_emits_exactly_one_json_document` | 3561 | the one-document-per-invocation invariant a `clean --full` could break; asserted at the source-guard level, because the suite keeps every case bounded and cannot run a platform walk |
+| `json_update_refusal_emits_no_document_and_exits_non_zero` | 3733 | a mutating update over forbidden provenance refuses **before** asking the registry anything: no document on stdout, non-zero exit, hermetic |
+| `the_json_update_branch_prints_only_the_tested_seam` | 3784 | the JSON branch of `run_update` prints exactly the library stream and nothing else |
 | `the_machine_contract_is_identical_with_and_without_verbose` (`#[cfg(unix)]`) | 4630 | M020: `--verbose` is global and changes the *human* surface only — the `json` and `log` documents are byte-identical with and without it, and so is the exit code |
 | `a_bounded_cleanup_names_its_directories_relative_to_the_scope_root` (`#[cfg(unix)]`) | 4660 | M020: the human surface names cleaned directories relative to the scope root, so the absolute root does not leak into it |
 | `the_quiet_human_surface_is_a_row_per_cleaned_directory_and_one_tally` (`#[cfg(unix)]`) | 4691 | M020: the default human surface is quiet — one row per cleaned directory plus the tally, and none of the verbose surface's census or per-unit detail |
-| `a_duplicate_override_is_a_usage_error` | 4735 | M019: the same policy override at the root and on `clean` exits `2` with a diagnostic naming the flag — the discarded-flag failure mode ADR 008 §3 exists to prevent |
-| `a_scope_selector_on_a_read_only_subcommand_is_a_usage_error` | 4785 | M019: `--full` or a ROOT positional handed to `scan`/`config`/`update` exits `2` and names the subcommand that cannot accept it |
-| `a_policy_override_on_a_read_only_subcommand_is_a_usage_error` | 4826 | M019: a policy override handed to `scan`/`config`/`update` exits `2` and names the flag |
+| `a_duplicate_override_is_a_usage_error` | 5220 | M019: the same policy override at the root and on `clean` exits `2` with a diagnostic naming the flag — the discarded-flag failure mode ADR 008 §3 exists to prevent |
+| `a_scope_selector_on_a_read_only_subcommand_is_a_usage_error` | 5270 | M019: `--full` or a ROOT positional handed to `scan`/`config`/`update` exits `2` and names the subcommand that cannot accept it |
+| `a_policy_override_on_a_read_only_subcommand_is_a_usage_error` | 5311 | M019: a policy override handed to `scan`/`config`/`update` exits `2` and names the flag |
 
 ### 7.3 What is not covered
 

@@ -2,7 +2,7 @@
 
 > Component deep dive · part of the [architecture overview](overview.md)
 
-Module under review: `src/cleanup.rs`, 12174 lines (4417 production, 7757 lines
+Module under review: `src/cleanup.rs`, 12174 lines (4536 production, 7638 lines
 of test code, 138 `#[test]` functions). It is the largest module in the crate
 and the densest concentration of safety logic. Every other module decides *what
 to look at*; this one decides *what may be destroyed*, proves the decision

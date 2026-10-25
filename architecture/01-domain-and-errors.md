@@ -436,7 +436,7 @@ everything else qualifies the path inline.
 | Type | Qualified `domain::` refs | Consuming modules |
 |---|---:|---|
 | `DiagnosticCategory` | 13 | `main.rs`, `output.rs`, `cleanup.rs` |
-| `elapsed_nanos` | 8 | `workspace.rs`, `cleanup.rs`, `main.rs` |
+| `elapsed_nanos` | 353 | `workspace.rs`, `cleanup.rs`, `main.rs` |
 | `ScanReport` | 3 | `output.rs`, `main.rs` |
 | `EffectiveScanPolicy` | 3 | `cleanup.rs` |
 | `DiscoveryFilters` | 3 | `cleanup.rs` |

@@ -2,7 +2,7 @@
 
 > Component deep dive · part of the [architecture overview](overview.md)
 
-`src/progress.rs` — 1002 lines, 541 production (`progress.rs:542` opens the test
+`src/progress.rs` — 1002 lines, 542 production (`progress.rs:542` opens the test
 module), 16 `#[test]` functions.
 
 ## 1. Responsibility
@@ -603,21 +603,21 @@ at `progress.rs:519-520`. The table cites each test's `fn` line.
 
 | # | Test | Line | Protects |
 |---|---|---|---|
-| 1 | `noop_observer_is_free_and_hidden_renderer_emits_nothing` | `:574` | Hidden short-circuit; `NoopObserver` total no-op |
-| 2 | `coordinated_renderer_owns_exactly_one_bar_on_one_draw_target` | `:600` | One bar + shared draw target |
-| 3 | `in_memory_frame_contains_exactly_one_progress_line_naming_the_phase` | `:617` | One-line frame; the phase is on it; the fraction is on it |
-| 4 | `the_verbose_surface_adds_counters_to_the_same_single_line` | `:667` | Verbose counters ride the same line |
-| 5 | `the_quiet_surface_carries_no_counters` | `:707` | Quiet surface carries no counters |
-| 6 | `renderer_caps_the_observed_candidates_at_five_largest_first` | `:732` | Top-5 truncation + descending sort of the *observed* candidates |
-| 7 | `test_observer_records_semantic_events` | `:744` | `TestObserver` bookkeeping |
-| 8 | `should_show_progress_respects_flag_and_dumb_term` | `:768` | Gate conditions 1 and 2 |
-| 9 | `renderer_refresh_bounded_independently_of_entry_count` | `:800` | Zero refreshes when hidden |
-| 10 | `discovery_begins_indeterminate_then_analysis_determinate` | `:813` | Indeterminate→determinate switch; `group_measured` does not advance |
-| 11 | `unit_events_rescope_totals_on_a_phase_change_without_an_explicit_phase_call` | `:839` | M8: event-carried phase re-scopes |
-| 12 | `phase_total_resets_so_cleanup_cannot_reuse_analysis_counts` | `:858` | Phase change zeroes total and done |
-| 13 | `sizes_render_in_top_rows_and_clear_before_report` | `:874` | Candidate list; `format_bytes`; idempotent clear |
-| 14 | `renderer_error_falls_back_without_failing_scan` | `:887` | Hidden fallback is a no-op |
-| 15 | `finish_and_clear_leaves_no_live_bar_for_a_later_error_or_drop` | `:945` | The clear leaves no live bar and no redraw for a later error |
+| 574 | `noop_observer_is_free_and_hidden_renderer_emits_nothing` | `:574` | Hidden short-circuit; `NoopObserver` total no-op |
+| 600 | `coordinated_renderer_owns_exactly_one_bar_on_one_draw_target` | `:600` | One bar + shared draw target |
+| 617 | `in_memory_frame_contains_exactly_one_progress_line_naming_the_phase` | `:617` | One-line frame; the phase is on it; the fraction is on it |
+| 667 | `the_verbose_surface_adds_counters_to_the_same_single_line` | `:667` | Verbose counters ride the same line |
+| 707 | `the_quiet_surface_carries_no_counters` | `:707` | Quiet surface carries no counters |
+| 732 | `renderer_caps_the_observed_candidates_at_five_largest_first` | `:732` | Top-5 truncation + descending sort of the *observed* candidates |
+| 744 | `test_observer_records_semantic_events` | `:744` | `TestObserver` bookkeeping |
+| 768 | `should_show_progress_respects_flag_and_dumb_term` | `:768` | Gate conditions 1 and 2 |
+| 800 | `renderer_refresh_bounded_independently_of_entry_count` | `:800` | Zero refreshes when hidden |
+| 813 | `discovery_begins_indeterminate_then_analysis_determinate` | `:813` | Indeterminate→determinate switch; `group_measured` does not advance |
+| 839 | `unit_events_rescope_totals_on_a_phase_change_without_an_explicit_phase_call` | `:839` | M8: event-carried phase re-scopes |
+| 858 | `phase_total_resets_so_cleanup_cannot_reuse_analysis_counts` | `:858` | Phase change zeroes total and done |
+| 874 | `sizes_render_in_top_rows_and_clear_before_report` | `:874` | Candidate list; `format_bytes`; idempotent clear |
+| 887 | `renderer_error_falls_back_without_failing_scan` | `:887` | Hidden fallback is a no-op |
+| 945 | `finish_and_clear_leaves_no_live_bar_for_a_later_error_or_drop` | `:945` | The clear leaves no live bar and no redraw for a later error |
 
 `TestObserver` (`progress.rs:64-80`) records semantic events: phase sequence and
 totals in `Mutex<Vec<_>>`, counters in `AtomicU64`, the full reportable list in

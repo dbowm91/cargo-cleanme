@@ -1598,17 +1598,17 @@ contract (§7).
 
 | Test | Line | Covers |
 |---|---|---|
-| `report_escapes_control_bytes_in_paths` | 187 | ESC/BEL in a UTF-8 name escaped, never raw |
-| `report_escapes_non_utf8_paths` | 200 | raw `\xff` → U+FFFD; no control survives |
-| `report_ordering_and_zero_report` | 221 | zero-state wording **and** path tie-break |
-| `zero_state_uses_the_same_inventory_wording_as_results` | 230 | "inventory estimate" in both states; never "reclaimable" |
-| `format_bytes_scales_to_eib_and_promotes_rounded_units` | 241 | whole ladder incl. `u64::MAX` and the 1024.00 promotion |
-| `groups_render_every_group_with_ownership_and_deduped_total` | 252 | ordering, all three labels, every group printed, no "recovered" |
-| `groups_total_does_not_double_count_equal_roots` | 281 | duplicate physical paths counted once; singular "1 group" |
-| `a_bounded_scope_spells_its_paths_relative_to_the_scope_root` | 298 | a path under the scope root is relative; one under no root stays absolute |
-| `a_full_scope_spells_its_paths_absolutely` | 322 | a Full scope's paths keep their absolute form |
-| `a_one_component_path_is_qualified_with_the_scope_root_name` | 339 | `my-app/target`, not a bare `target` |
-| `the_scope_root_itself_is_spelled_with_its_own_name` | 355 | the scope root names itself instead of rendering as an empty column |
+| `report_escapes_control_bytes_in_paths` | 209 | ESC/BEL in a UTF-8 name escaped, never raw |
+| `report_escapes_non_utf8_paths` | 222 | raw `\xff` → U+FFFD; no control survives |
+| `report_ordering_and_zero_report` | 243 | zero-state wording **and** path tie-break |
+| `zero_state_uses_the_same_inventory_wording_as_results` | 252 | "inventory estimate" in both states; never "reclaimable" |
+| `format_bytes_scales_to_eib_and_promotes_rounded_units` | 263 | whole ladder incl. `u64::MAX` and the 1024.00 promotion |
+| `groups_render_every_group_with_ownership_and_deduped_total` | 274 | ordering, all three labels, every group printed, no "recovered" |
+| `groups_total_does_not_double_count_equal_roots` | 303 | duplicate physical paths counted once; singular "1 group" |
+| `a_bounded_scope_spells_its_paths_relative_to_the_scope_root` | 320 | a path under the scope root is relative; one under no root stays absolute |
+| `a_full_scope_spells_its_paths_absolutely` | 344 | a Full scope's paths keep their absolute form |
+| `a_one_component_path_is_qualified_with_the_scope_root_name` | 361 | `my-app/target`, not a bare `target` |
+| `the_scope_root_itself_is_spelled_with_its_own_name` | 377 | the scope root names itself instead of rendering as an empty column |
 
 The first two are `#[cfg(unix)]` (raw `OsString::from_vec`). The last four are
 M020's, and they are the tests that make the relative-path rule a contract rather
@@ -1623,14 +1623,14 @@ assertions:
 
 | Test | Line | Covers |
 |---|---|---|
-| `execution_reports_observed_decrease_deduped` | 6290 | the Execute tally says `reclaimed` and never "would be reclaimed"; the **verbose** surface keeps the `observed decrease` phrase |
-| `final_report_lists_all_groups_and_deduped_total` | 6765 | the verbose surface lists every group and the deduplicated total |
-| `the_quiet_cleanup_report_lists_only_what_the_run_acted_on` | 10263 | the quiet surface lists the acted-on unit, omits the skipped ones, and keeps their count as `(3 skipped)` |
-| `the_quiet_tally_states_the_space_saved` | 10293 | the tally's byte figure and "2 directories", and the absence of the verbose surface's scope census |
-| `execute_and_simulation_words_their_tallies_differently` | 10320 | Execute says `reclaimed`, Simulate says `would be reclaimed` and says that no `cargo clean` was invoked |
-| `a_failed_unit_is_always_listed` | 10355 | a `Failed` unit is a row and a `(1 failed)` count, and its bytes are not counted as reclaimed |
-| `the_verbose_surface_restores_the_skipped_rows_and_the_census` | 10386 | `--verbose` brings back the skipped rows, the `combined scope:` line, and the `CleanupUnit(s)` census |
-| `the_safety_disclosures_survive_the_quiet_surface` | 10407 | the ADR 007 disclosures are present on the **quiet** shape as well as the verbose one |
+| `execution_reports_observed_decrease_deduped` | 7552 | the Execute tally says `reclaimed` and never "would be reclaimed"; the **verbose** surface keeps the `observed decrease` phrase |
+| `final_report_lists_all_groups_and_deduped_total` | 8218 | the verbose surface lists every group and the deduplicated total |
+| `the_quiet_cleanup_report_lists_only_what_the_run_acted_on` | 12017 | the quiet surface lists the acted-on unit, omits the skipped ones, and keeps their count as `(3 skipped)` |
+| `the_quiet_tally_states_the_space_saved` | 12047 | the tally's byte figure and "2 directories", and the absence of the verbose surface's scope census |
+| `execute_and_simulation_words_their_tallies_differently` | 12074 | Execute says `reclaimed`, Simulate says `would be reclaimed` and says that no `cargo clean` was invoked |
+| `a_failed_unit_is_always_listed` | 12109 | a `Failed` unit is a row and a `(1 failed)` count, and its bytes are not counted as reclaimed |
+| `the_verbose_surface_restores_the_skipped_rows_and_the_census` | 12140 | `--verbose` brings back the skipped rows, the `combined scope:` line, and the `CleanupUnit(s)` census |
+| `the_safety_disclosures_survive_the_quiet_surface` | 12161 | the ADR 007 disclosures are present on the **quiet** shape as well as the verbose one |
 
 Note the direction of the last one: it is the *quiet* surface that is the
 adversary here. A shorter report that dropped the disclosures would read as

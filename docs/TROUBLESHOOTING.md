@@ -11,6 +11,11 @@ action.
 
 | If you are on | Check | Fixed in |
 |---|---|---|
+| **0.2.10 and earlier** | An output root **inside another package's directory** was classified private and cleaned — deleting that package's **checked-in files** and reporting the space as reclaimed | **0.2.11** (C044 D1; a covering root nested inside a package directory is never a cleanup target) |
+| **0.2.10 and earlier** | A direct `cargo cleanme cleanme` **silently discarded your ROOT**: the Cargo-injected token was stripped by spelling, and since the ROOT positional moved to the root the two are spelled alike. The scope label changed from `explicit` to `routine` and your project trees joined the selected roots | **0.2.11** (the injected token is identified by launch context, not by spelling) |
+| **0.2.10 and earlier** | A command-line `--exclude` **spelled through a symlink protected nothing** — the configured patterns were canonicalised and the command line's were not, so the tree you asked to keep was deleted | **0.2.11** (one canonicaliser serves both) |
+| **0.2.10 and earlier** | A root `--profile` **silently discarded a `clean --package`**, and the run exited `0` after doing a *different* destructive action | **0.2.11** (the cross-level pair is a usage error) |
+| **0.2.10 and earlier** | Two human surfaces wrote **path text raw**, so a directory name carrying a control byte could rewrite the line you were reading | **0.2.11** (every human surface routes through the shared escaper) |
 | **0.2.9 and earlier** | A bare `cargo cleanme` in a directory the machine's known roots do not reach did **nothing** — it reported a clean result over an empty scope, because the working directory was a filter over a universe that did not contain it | **0.2.10** (ADR 009; the working directory joins the maintenance scope) |
 | **0.2.9 and earlier** | `cargo cleanme -i` with nothing to select was refused as a **configuration error** (exit `2`), while the same scope without `-i` exited `0` — two spellings of one scope disagreed | **0.2.10** (both now say `Nothing to clean.` and exit `0`) |
 | **0.2.8 and earlier** | A manifest **outside** the selected scope that Cargo could not resolve **blocked the whole scope** — bare `cargo cleanme` refused to clean units it had already proved, and reported the out-of-scope manifest as the reason | **0.2.9** (M017 / ADR 007; the proof boundary is now the selected scope) |
@@ -29,6 +34,29 @@ success and exiting `0`. There is no honest description of 0.2.0 that also says
 "everything else was fine", so it is yanked. Existing installations and
 lockfiles are unaffected — a yank stops new resolution, it does not break what
 you already have.
+
+### If you are on 0.2.10 or earlier: an output root inside a package's tree was deleted
+
+The tool deletes only what it can prove it owns, and the proof is a *physical*
+one: the target directory must belong to the package under cleanup and to
+nothing else. Until 0.2.11, a covering root nested **inside** another package's
+directory was classified `PrivateBounded` and cleaned — so a `target/`
+directory that sat under a second project's source tree was treated as the
+first project's exclusive property. The run then deleted the second project's
+**checked-in files** and reported the space it had reclaimed as a successful
+cleanup.
+
+The rule that was broken is the repository's first one: *nothing is deleted on
+the strength of a timestamp; every candidate must first prove exclusive
+ownership of its physical bytes.* A timestamp — the target directory's mtime —
+was enough.
+
+A covering root nested inside a package directory is now refused during
+resolution and re-proved at the spawn, so the second pass cannot be fooled by
+state that changed between the two. If you ran 0.2.10 or earlier over a tree
+where one project's build directory sat under another's sources, check that
+project's working tree; the tool's report will say `would-clean` for units it
+now refuses to touch.
 
 ### If you are on 0.2.3 or earlier: a deleted learned location aborts bare cleanup
 

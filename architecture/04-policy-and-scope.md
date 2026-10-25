@@ -336,7 +336,7 @@ Returns `home.join(name)` for this exact ordered list of 13 names
 
 | Position | Name | Position | Name | Position | Name |
 |---:|---|---:|---|---:|---|
-| 1 | `Projects` | 6 | `code` | 11 | `github` |
+| 196 | `Projects` | 6 | `code` | 11 | `github` |
 | 2 | `projects` | 7 | `src` | 12 | `workspace` |
 | 3 | `Developer` | 8 | `repos` | 13 | `workspaces` |
 | 4 | `dev` | 9 | `Repos` | — | — |

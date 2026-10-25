@@ -1117,23 +1117,23 @@ what is removable.
 
 | # | Test | Line | What it pins |
 |---|---|---|---|
-| 1 | `unresolved_and_cache_manifests_never_create_routine_roots` | `:642` | An unresolved manifest and a cache/transient-location project create no learned root, while `projects` still keeps all four manifests. |
-| 2 | `system_and_transient_locations_never_create_routine_roots` | `:703` | C030: platform caches, the download drop zone, and system software locations never become learned roots, while a durable developer location still does. |
-| 3 | `shared_temp_aliases_are_non_maintainable` | `:779` | `/private/tmp/app`, `/tmp/app`, `/var/tmp/app` are non-maintainable with `home: None`. |
-| 4 | `v1_migrates_in_memory_and_newer_schema_is_rejected` | `:788` | v1 loads, `schema_version` becomes `CURRENT_SCHEMA`, `resolution` defaults to `Resolved`; v99 → `UnsupportedNewer`. |
-| 5 | `state_load_classifies_absent_invalid_newer_and_unavailable_paths` | `:805` | All five `StateLoad` outcomes, including a directory-as-file → `Unavailable` and `u64::MAX` → `UnsupportedNewer`. |
-| 6 | `supported_schema_with_invalid_structure_is_recoverable` | `:829` | Current version + structurally invalid record → `RecoverableInvalid`. |
-| 7 | `full_reconciliation_recovers_invalid_only_after_complete_scan` | `:841` | `replacing_invalid == true`; `complete=false` → `NoPublication` **and the corrupt bytes survive** (`:895`); then recovery to v2. |
-| 8 | `full_reconciliation_never_selects_newer_or_unavailable_state_for_publication` | `:877` | `full_reconciliation_prior` → `None` for `UnsupportedNewer` and `Unavailable`; the `"future"` field's bytes are preserved verbatim. |
-| 9 | `full_reconciliation_creates_missing_and_migrates_v1_state` | `:891` | First run and v1 run both publish; `replacing_invalid == false`; `last_full_at == Some(10)`. |
-| 10 | `unique_temp_attempts_replace_existing_state` | `:923` | A colliding `.{name}.{pid}.0.tmp` is skipped, not clobbered; the destination is replaced. |
-| 11 | `localized_uncertainty_retains_intersecting_roots_and_publishes_positives` | `:944` | Uncertain root retained, expired root dropped, `ManifestObservedUnresolved` recorded — from a complete scan. |
-| 12 | `zero_retention_disables_expiration_and_nested_roots_collapse` | `:995` | **Does not demonstrate what its name says** — see the coverage finding below. The assertion is `learned_roots.is_empty()`. |
-| 13 | `complete_certain_full_prunes_only_positively_absent_learned_roots` | `:1096` | **Does not discriminate the rule it names** — see the coverage finding below. Both fixture roots are pruned, but by the C030 rule, not by the C028 absence probe. |
-| 14 | `uncertainty_containment_is_symmetric` | `:1235` | Containment both directions; `/workspace/a` correctly does not match. |
-| 15 | `failed_replacement_preserves_existing_destination_and_cleans_temp` | `:1244` | A failed replace leaves the destination intact **and** removes the temp file. |
-| 16 | `duplicate_observations_for_one_workspace_fold_into_one_learned_root` | `:1270` | N members of one workspace contribute N observations that fold into one root. |
-| 17 | `filesystem_root_workspace_is_never_a_learned_root` | `:1307` | M-7: a workspace at `/` is never learned. |
+| 642 | `unresolved_and_cache_manifests_never_create_routine_roots` | `:642` | An unresolved manifest and a cache/transient-location project create no learned root, while `projects` still keeps all four manifests. |
+| 703 | `system_and_transient_locations_never_create_routine_roots` | `:703` | C030: platform caches, the download drop zone, and system software locations never become learned roots, while a durable developer location still does. |
+| 779 | `shared_temp_aliases_are_non_maintainable` | `:779` | `/private/tmp/app`, `/tmp/app`, `/var/tmp/app` are non-maintainable with `home: None`. |
+| 788 | `v1_migrates_in_memory_and_newer_schema_is_rejected` | `:788` | v1 loads, `schema_version` becomes `CURRENT_SCHEMA`, `resolution` defaults to `Resolved`; v99 → `UnsupportedNewer`. |
+| 805 | `state_load_classifies_absent_invalid_newer_and_unavailable_paths` | `:805` | All five `StateLoad` outcomes, including a directory-as-file → `Unavailable` and `u64::MAX` → `UnsupportedNewer`. |
+| 829 | `supported_schema_with_invalid_structure_is_recoverable` | `:829` | Current version + structurally invalid record → `RecoverableInvalid`. |
+| 841 | `full_reconciliation_recovers_invalid_only_after_complete_scan` | `:841` | `replacing_invalid == true`; `complete=false` → `NoPublication` **and the corrupt bytes survive** (`:895`); then recovery to v2. |
+| 877 | `full_reconciliation_never_selects_newer_or_unavailable_state_for_publication` | `:877` | `full_reconciliation_prior` → `None` for `UnsupportedNewer` and `Unavailable`; the `"future"` field's bytes are preserved verbatim. |
+| 891 | `full_reconciliation_creates_missing_and_migrates_v1_state` | `:891` | First run and v1 run both publish; `replacing_invalid == false`; `last_full_at == Some(10)`. |
+| 923 | `unique_temp_attempts_replace_existing_state` | `:923` | A colliding `.{name}.{pid}.0.tmp` is skipped, not clobbered; the destination is replaced. |
+| 944 | `localized_uncertainty_retains_intersecting_roots_and_publishes_positives` | `:944` | Uncertain root retained, expired root dropped, `ManifestObservedUnresolved` recorded — from a complete scan. |
+| 995 | `zero_retention_disables_expiration_and_nested_roots_collapse` | `:995` | **Does not demonstrate what its name says** — see the coverage finding below. The assertion is `learned_roots.is_empty()`. |
+| 1096 | `complete_certain_full_prunes_only_positively_absent_learned_roots` | `:1096` | **Does not discriminate the rule it names** — see the coverage finding below. Both fixture roots are pruned, but by the C030 rule, not by the C028 absence probe. |
+| 1235 | `uncertainty_containment_is_symmetric` | `:1235` | Containment both directions; `/workspace/a` correctly does not match. |
+| 1244 | `failed_replacement_preserves_existing_destination_and_cleans_temp` | `:1244` | A failed replace leaves the destination intact **and** removes the temp file. |
+| 1270 | `duplicate_observations_for_one_workspace_fold_into_one_learned_root` | `:1270` | N members of one workspace contribute N observations that fold into one root. |
+| 1307 | `filesystem_root_workspace_is_never_a_learned_root` | `:1307` | M-7: a workspace at `/` is never learned. |
 
 The count and the split agree with [the overview](overview.md) §3.1, which is the
 source of truth for module line counts. The module has exactly one `saturating_sub`
