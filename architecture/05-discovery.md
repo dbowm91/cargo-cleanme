@@ -674,36 +674,36 @@ a macOS run 41 and a Windows run 33.
 | `synthetic_wide_and_deep_manifest_set_is_stable_across_worker_caps` | `:1530` | 288-leaf + deep + hidden + unignore + symlink fixture is identical across 6×2×2 configurations; `top_level_entries` sums to `visited_entries` |
 | `manifest_name_is_matched_case_insensitively_where_the_volume_is` | `:1679` | case-insensitive manifest match (macOS/Windows) |
 | `non_utf8_directory_still_matches_a_broad_ignore_pattern` | `:1699` | L4: a non-UTF-8 name cannot escape `*` (Linux) |
-| `directories_visited_counts_directories_not_files` | `:1725` | L6: 4 directories vs 8 entries |
-| `symlinked_scan_root_is_refused_instead_of_scanning_nothing` | `:1743` | L7: a symlinked root yields an `Error` diagnostic, not a silent empty scan |
-| `symlinked_scan_root_with_trailing_slash_is_refused` | `:1775` | B1: the trailing `/` and `/.` spellings are refused too |
-| `discovers_real_manifest_and_prunes_target` | `:1803` | `target/` descent refused and a nested `target/` manifest excluded |
-| `global_attribution_is_unallocated_when_not_requested` | `:1819` | `attribution = false` leaves the map empty while manifests and counters are unchanged |
-| `verification_pass_attributes_coverage_to_the_root_that_failed` | `:1845` | M018: `verify_root_coverage` re-walks each root as its own walk root, and the failure is attributed to the root that produced it — the readable sibling root stays complete |
-| `a_real_traversal_produces_the_code_the_gate_judges` | `:1912` | M018: a real traversal produces the coverage codes the Full gate judges (`complete`, `error_events`, `permission_denied`, `vanished`) |
-| `manifest_discovery_finds_project_without_target` | `:1975` | a project with no `target/` is still a candidate |
-| `manifest_discovery_prunes_target_children` | `:1991` | a nested `target/` manifest is excluded |
-| `manifest_discovery_prunes_cargo_home_registry` | `:2018` | `$CARGO_HOME/registry/src` sources are not user projects |
-| `ignored_subtree_never_invokes_cargo_manifest_count_zero_for_pruned` | `:2058` | an ignored tree contributes prunes and zero manifests |
-| `discovery_reaches_unignored_project_without_entering_ignored_sibling` | `:2084` | the `/*` half of the unignore mechanism, against canonical spellings |
-| `discovery_rejects_symlink_target` | `:2116` | a symlinked `target` does not stop manifest discovery (eligibility is decided later) |
-| `filters_ignored_parent_keeps_exception_route` | `:2137` | the re-enable path in `Filters` |
-| `literal_ignored_ancestor_becomes_pass_through_and_not_inherited_by_siblings` | `:2167` | the disposition state model: `PassThrough` / `Pruned` / `ReIncluded` |
-| `disposition_of_a_recursive_ignore_pattern_is_still_pass_through` | `:2217` | the documented `/**` workaround still reaches the exception |
-| `literal_ignored_ancestor_does_not_readmit_ignored_siblings` | `:2242` | C019's premise negative |
-| `pass_through_directory_manifest_itself_stays_excluded` | `:2269` | H-1: a manifest directly under a `PassThrough` directory is excluded |
-| `explicit_walk_respects_explicit_flag_for_pass_through_manifest` | `:2292` | H-1's explicit half: `explicit = true` bypasses ignore entirely |
-| `user_ignore_prune_counts_only_the_subtrees_the_walk_refused` | `:2366` | the prune-counter contract: the pass-through ancestor and the re-included directory are not skips |
-| `wildcard_and_recursive_ignore_patterns_keep_their_documented_behavior` | `:2397` | `*` and `**` admit only the exception |
-| `several_exceptions_under_one_ignored_ancestor_are_each_reachable` | `:2420` | multiple and nested exceptions, at both levels |
-| `a_deeply_nested_exception_never_visits_a_pruned_siblings_subtree` | `:2447` | the refused siblings' subtrees are never read |
-| `an_exact_unignore_reincludes_the_whole_subtree_at_its_root` | `:2483` | re-inclusion covers the subtree at the exception root |
-| `an_explicit_root_still_bypasses_a_literal_ignore_entirely` | `:2505` | a named root means it |
-| `an_exact_unignore_does_not_reopen_an_internal_prune` | `:2521` | internal prunes are decided before the user filters |
-| `an_exact_unignore_does_not_reopen_a_symlinked_directory` | `:2555` | a symlinked directory stays refused even when unignored by name |
-| `a_broad_ignored_region_is_pruned_before_its_siblings_are_read` | `:2582` | 200 refused siblings, each refused exactly once |
-| `an_explicit_unignore_of_the_scan_root_prunes_the_whole_root_visibly` | `:2615` | a root refused by an inherited ignore is counted at `depth == 0` (global path) |
-| `an_empty_policy_includes_everything` | `:2636` | the explicit-scope case has no exclusion to inherit and nothing to re-include |
+| `directories_visited_counts_directories_not_files` | `:1732` | L6: 4 directories vs 8 entries |
+| `symlinked_scan_root_is_refused_instead_of_scanning_nothing` | `:1750` | L7: a symlinked root yields an `Error` diagnostic, not a silent empty scan |
+| `symlinked_scan_root_with_trailing_slash_is_refused` | `:1782` | B1: the trailing `/` and `/.` spellings are refused too |
+| `discovers_real_manifest_and_prunes_target` | `:1810` | `target/` descent refused and a nested `target/` manifest excluded |
+| `global_attribution_is_unallocated_when_not_requested` | `:1826` | `attribution = false` leaves the map empty while manifests and counters are unchanged |
+| `verification_pass_attributes_coverage_to_the_root_that_failed` | `:1852` | M018: `verify_root_coverage` re-walks each root as its own walk root, and the failure is attributed to the root that produced it — the readable sibling root stays complete |
+| `a_real_traversal_produces_the_code_the_gate_judges` | `:1919` | M018: a real traversal produces the coverage codes the Full gate judges (`complete`, `error_events`, `permission_denied`, `vanished`) |
+| `manifest_discovery_finds_project_without_target` | `:1982` | a project with no `target/` is still a candidate |
+| `manifest_discovery_prunes_target_children` | `:1998` | a nested `target/` manifest is excluded |
+| `manifest_discovery_prunes_cargo_home_registry` | `:2025` | `$CARGO_HOME/registry/src` sources are not user projects |
+| `ignored_subtree_never_invokes_cargo_manifest_count_zero_for_pruned` | `:2065` | an ignored tree contributes prunes and zero manifests |
+| `discovery_reaches_unignored_project_without_entering_ignored_sibling` | `:2091` | the `/*` half of the unignore mechanism, against canonical spellings |
+| `discovery_rejects_symlink_target` | `:2123` | a symlinked `target` does not stop manifest discovery (eligibility is decided later) |
+| `filters_ignored_parent_keeps_exception_route` | `:2144` | the re-enable path in `Filters` |
+| `literal_ignored_ancestor_becomes_pass_through_and_not_inherited_by_siblings` | `:2174` | the disposition state model: `PassThrough` / `Pruned` / `ReIncluded` |
+| `disposition_of_a_recursive_ignore_pattern_is_still_pass_through` | `:2224` | the documented `/**` workaround still reaches the exception |
+| `literal_ignored_ancestor_does_not_readmit_ignored_siblings` | `:2249` | C019's premise negative |
+| `pass_through_directory_manifest_itself_stays_excluded` | `:2276` | H-1: a manifest directly under a `PassThrough` directory is excluded |
+| `explicit_walk_respects_explicit_flag_for_pass_through_manifest` | `:2299` | H-1's explicit half: `explicit = true` bypasses ignore entirely |
+| `user_ignore_prune_counts_only_the_subtrees_the_walk_refused` | `:2373` | the prune-counter contract: the pass-through ancestor and the re-included directory are not skips |
+| `wildcard_and_recursive_ignore_patterns_keep_their_documented_behavior` | `:2404` | `*` and `**` admit only the exception |
+| `several_exceptions_under_one_ignored_ancestor_are_each_reachable` | `:2427` | multiple and nested exceptions, at both levels |
+| `a_deeply_nested_exception_never_visits_a_pruned_siblings_subtree` | `:2454` | the refused siblings' subtrees are never read |
+| `an_exact_unignore_reincludes_the_whole_subtree_at_its_root` | `:2490` | re-inclusion covers the subtree at the exception root |
+| `an_explicit_root_still_bypasses_a_literal_ignore_entirely` | `:2512` | a named root means it |
+| `an_exact_unignore_does_not_reopen_an_internal_prune` | `:2528` | internal prunes are decided before the user filters |
+| `an_exact_unignore_does_not_reopen_a_symlinked_directory` | `:2562` | a symlinked directory stays refused even when unignored by name |
+| `a_broad_ignored_region_is_pruned_before_its_siblings_are_read` | `:2589` | 200 refused siblings, each refused exactly once |
+| `an_explicit_unignore_of_the_scan_root_prunes_the_whole_root_visibly` | `:2622` | a root refused by an inherited ignore is counted at `depth == 0` (global path) |
+| `an_empty_policy_includes_everything` | `:2643` | the explicit-scope case has no exclusion to inherit and nothing to re-include |
 
 **Not covered — the gaps a reader should worry about.**
 
@@ -711,7 +711,7 @@ a macOS run 41 and a Windows run 33.
    `:879-922``): its per-root drain, its `coverage_complete = false`, and its
    `sort_by_key` ordering. The sequential path's equivalent *is* tested
    (`:4`). This is the branch `main.rs:1485-1489` depends on. M018's
-   `verification_pass_attributes_coverage_to_the_root_that_failed` (`:1845`)
+   `verification_pass_attributes_coverage_to_the_root_that_failed` (`:1852`)
    covers the *per-root attribution* of the same failures through the
    verification pass, not the platform walk's own drain.
 2. **`root_is_usable`'s "unavailable" branch is untested** (`:481-494`, the

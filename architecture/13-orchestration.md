@@ -1351,40 +1351,40 @@ changed. Verified line numbers:
 | `the_staged_binary_is_the_external_subcommand_cargo_will_run` | 75 | `cargo cleanme --version` (external) byte-identical to direct — i.e. the argv normalization in `parse_normalized` (`:15`) is correct; plus a premise guard that the staged binary is the one Cargo resolves |
 | `cargo_external_subcommand_help_matches_direct_help` | 115 | `--help` exits 0, identical both forms |
 | `cargo_external_config_edit_help_matches_direct` | 149 | `config edit --help` exits 0, identical both forms |
-| `json_scan_is_one_versioned_document_and_stats_stay_on_stderr` | 463 | `schema_version == 1`, `operation == "scan"`, `scope == "explicit"`; **`plain.stdout == with_stats.stdout`** — `--stats` cannot perturb stdout; stderr contains `scan stats:`; **exactly one `\n`** |
-| `json_scope_label_follows_the_resolved_scope_not_the_cli_flags` | 505 | a **configured** `scan.root` under `scan --known` reports `"explicit"` — the regression for the flag-derived label (§8) |
-| `scan_scope_conflicts_are_rejected_before_any_traversal` | 955 | parser-level rejection, asserted on clap's conflict error rather than "the command failed" |
-| `json_cleanup_emits_the_requested_mode_and_machine_summary` | 987 | `schema_version == 1`, `operation == "clean"`, `mode == "simulate"` (`--dryrun` → `CleanMode::Simulate`), `summary.simulated == 0`, one `\n` |
-| `json_scope_block_is_emitted_with_nonzero_exit_status` | 1026 | **`status.code() == Some(1)`** with `result.scope_blocked == true` — pins the `:635-639`` exit rule |
+| `json_scan_is_one_versioned_document_and_stats_stay_on_stderr` | 468 | `schema_version == 1`, `operation == "scan"`, `scope == "explicit"`; **`plain.stdout == with_stats.stdout`** — `--stats` cannot perturb stdout; stderr contains `scan stats:`; **exactly one `\n`** |
+| `json_scope_label_follows_the_resolved_scope_not_the_cli_flags` | 510 | a **configured** `scan.root` under `scan --known` reports `"explicit"` — the regression for the flag-derived label (§8) |
+| `scan_scope_conflicts_are_rejected_before_any_traversal` | 960 | parser-level rejection, asserted on clap's conflict error rather than "the command failed" |
+| `json_cleanup_emits_the_requested_mode_and_machine_summary` | 992 | `schema_version == 1`, `operation == "clean"`, `mode == "simulate"` (`--dryrun` → `CleanMode::Simulate`), `summary.simulated == 0`, one `\n` |
+| `json_scope_block_is_emitted_with_nonzero_exit_status` | 1031 | **`status.code() == Some(1)`** with `result.scope_blocked == true` — pins the `:635-639`` exit rule |
 | `json_unattended_yes_executes_through_cargo_and_emits_typed_result` | 782 (`#[cfg(unix)]`) | six invocations against a `/bin/sh` cargo stub: `summary.cleaned == 1`, `units[0].reason_code == "cleaned"`, `selector_kind/value == "profile"/"dev"`; `before_bytes` and `selector_estimate_bytes` both `null` under a selector while `output_union_before_bytes >= 4096`; `units[0].outcome == "simulated"` under `--dryrun`; `reason_code == "selector_unsupported"` + `policy_disposition == "selector_estimate_unavailable"`; `selector_kind == "package"` with `fixture@0.1.0` |
-| `config_edit_uses_fake_editor_process_and_keeps_invalid_edits` | 1468 | **`status.code() == Some(1)`** — the editor status is reported in prose and collapsed to 1 (`:305``); an invalid edit exits non-zero with `is invalid` in stderr and leaves the bad content in place |
-| `working_directory_anchor_selects_without_narrowing_the_ownership_universe` | 1840 | the M014/ADR 006 anchor: selection narrows, the ownership universe does not |
-| `interactive_without_a_terminal_is_a_usage_error_that_names_the_reason` | 1896 | the terminal precondition is checked before the listing (`:606-615``) |
-| `interactive_refuses_the_machine_output_formats` | 1933 | `--format json`/`--format log` are refused for `-i` (`:594-600``) |
-| `interactive_dry_run_still_requires_a_terminal` | 1985 | the refusal is a property of the *session*, not of the mode |
-| `bare_invocation_executes_routine_cleanup_and_is_not_a_scan` | 2003 | **the M012A default.** `operation == "clean"`, `units` is an array where a scan would have `groups`, `mode == "execute"`, `scope == "explicit"`, and — the discriminating assertion — `clean_calls() == 1` with the artifact gone |
-| `bare_dry_run_simulates_with_zero_cargo_clean_processes` | 2040 | `mode == "simulate"`, `simulated == 1 && cleaned == 0`, **`clean_calls() == 0`**, artifact still present, and Cargo *was* used for resolution — so this is a simulation, not a skip |
-| `bare_cleanup_with_no_known_roots_is_a_successful_no_op` | 2264 | exit 0, `scope == "routine"`, `mode == "execute"`, `units == []` — the `:526-16`` short circuit through the binary |
-| `bare_cleanup_with_unresolved_ownership_blocks_and_runs_no_cargo_clean` | 2304 | blocked bare invocation, exit 1, no `cargo clean` |
-| `blocked_human_cleanup_report_names_manifests_and_json_stays_one_object` | 2344 | the blocked-scope human surface and the one-document JSON surface coexist |
-| `advanced_cleanup_defaults_to_execute_and_cargo_preview_is_explicit` | 2521 | `clean ROOT` with no mode flag executes; `--cargo-preview` gives `mode == "preview"` |
-| `hidden_compatibility_aliases_map_exactly_to_the_canonical_modes` | 2579 | `--dryrun`/`--yes` map onto `Simulate`/default `Execute` |
-| `every_accepted_simulation_spelling_reaches_simulate_and_spawns_no_cargo_clean` | 2632 | six accepted `--dry-run` spellings, none of which spawns `cargo clean` |
-| `known_scan_resolves_routine_without_a_configured_root_and_explicit_with_one` | 2826 | `scan --known` is `routine` with no configured root, `explicit` with one |
-| `json_scan_within_an_empty_root_is_a_successful_zero_result_report` | 2971 | the bounded-zero-result scan document |
+| `config_edit_uses_fake_editor_process_and_keeps_invalid_edits` | 1473 | **`status.code() == Some(1)`** — the editor status is reported in prose and collapsed to 1 (`:305``); an invalid edit exits non-zero with `is invalid` in stderr and leaves the bad content in place |
+| `working_directory_anchor_selects_without_narrowing_the_ownership_universe` | 1845 | the M014/ADR 006 anchor: selection narrows, the ownership universe does not |
+| `interactive_without_a_terminal_is_a_usage_error_that_names_the_reason` | 1901 | the terminal precondition is checked before the listing (`:606-615``) |
+| `interactive_refuses_the_machine_output_formats` | 1938 | `--format json`/`--format log` are refused for `-i` (`:594-600``) |
+| `interactive_dry_run_still_requires_a_terminal` | 1990 | the refusal is a property of the *session*, not of the mode |
+| `bare_invocation_executes_routine_cleanup_and_is_not_a_scan` | 2008 | **the M012A default.** `operation == "clean"`, `units` is an array where a scan would have `groups`, `mode == "execute"`, `scope == "explicit"`, and — the discriminating assertion — `clean_calls() == 1` with the artifact gone |
+| `bare_dry_run_simulates_with_zero_cargo_clean_processes` | 2045 | `mode == "simulate"`, `simulated == 1 && cleaned == 0`, **`clean_calls() == 0`**, artifact still present, and Cargo *was* used for resolution — so this is a simulation, not a skip |
+| `bare_cleanup_with_no_known_roots_is_a_successful_no_op` | 2269 | exit 0, `scope == "routine"`, `mode == "execute"`, `units == []` — the `:526-16`` short circuit through the binary |
+| `bare_cleanup_with_unresolved_ownership_blocks_and_runs_no_cargo_clean` | 2309 | blocked bare invocation, exit 1, no `cargo clean` |
+| `blocked_human_cleanup_report_names_manifests_and_json_stays_one_object` | 2349 | the blocked-scope human surface and the one-document JSON surface coexist |
+| `advanced_cleanup_defaults_to_execute_and_cargo_preview_is_explicit` | 2526 | `clean ROOT` with no mode flag executes; `--cargo-preview` gives `mode == "preview"` |
+| `hidden_compatibility_aliases_map_exactly_to_the_canonical_modes` | 2584 | `--dryrun`/`--yes` map onto `Simulate`/default `Execute` |
+| `every_accepted_simulation_spelling_reaches_simulate_and_spawns_no_cargo_clean` | 2637 | six accepted `--dry-run` spellings, none of which spawns `cargo clean` |
+| `known_scan_resolves_routine_without_a_configured_root_and_explicit_with_one` | 2831 | `scan --known` is `routine` with no configured root, `explicit` with one |
+| `json_scan_within_an_empty_root_is_a_successful_zero_result_report` | 2987 | the bounded-zero-result scan document |
 | `log_mode_routine_execute_is_one_bounded_line_and_a_silent_stderr` … `log_is_an_explicit_value_and_invalid_formats_still_fail_closed` | 2632-3081 | the M012B log cases, via a shared `assert_bounded_log_line` (`tests/cli_contract.rs:2592`): one line, bounded, silent stderr; `simulate` vs `preview` distinguishable; blocked carries a typed reason and exit 1; failed cleanup is `status=failed`; zero-result maintenance is `status=ok`; scan reports the resolved scope; `--stats` stays opt-in on stderr and leaves the one line alone; the human diagnostic fan-out is suppressed; a fatal error is **one bounded stderr line and empty stdout**, exit 2, carrying a typed code and *not* the config path or parse error; JSON and human are unchanged by log mode's existence; an unknown format still fails closed |
-| `scan_emits_exactly_one_json_document` | 3561 | the one-document-per-invocation invariant, and — at source-text level only — that the `EmitReport` guard still exists (§4) |
-| `the_json_update_branch_prints_only_the_tested_seam` | 3784 | reads `src/main.rs` as text and asserts `run_update` has exactly one `print!(` and that it calls `update_json_stream` (§8) |
-| `stale_learned_root_is_omitted_and_bare_routine_execute_cleans_the_sibling` | 4073 | C028 premise-negative regression, direct and staged-plugin: exit 0, `scope == "routine"`, `cleaned == 1`, one Cargo clean, stale path absent from `selected_roots` |
-| `stale_learned_root_simulate_agrees_with_execute_and_spawns_no_cargo_clean` | 4129 | C028 Simulate/Execute parity: `simulated == 1`, zero clean spawns, artifact kept |
-| `missing_explicit_roots_stay_fatal_with_zero_cargo_clean_spawns` | 4202 | C028 negative control: missing configured `scan.root` and missing `clean ROOT` both exit 2 with zero spawns |
-| `all_automatic_roots_missing_is_a_successful_empty_no_op` | 4242 | C028: all-missing automatic scope exits 0 with `units == []` and zero spawns of any kind |
-| `automatic_file_root_is_omitted_and_symlink_root_blocks_without_traversal` | 4269 | C028 decision table at the CLI: file omitted (sibling cleaned), symlink-to-dir and broken link block with exit 1 and zero metadata calls |
-| `out_of_anchor_poison_does_not_block_bare_routine_cleanup` | 4345 | **ADR 007.** A poisoned learned root *outside* the anchor does not block: exit 0, `cleaned == 1`, `scope_blocked == false`, one Cargo clean, and the poison is counted in the machine summary |
-| `unreadable_automatic_root_blocks_instead_of_omitting` | 4384 | C028: `0o000` automatic root blocks with exit 1; premise-checked skip when the process can still read (e.g. root) |
-| `incomplete_discovery_reports_actual_resolution_counts_and_spawns_no_clean` | 4417 | **ADR 007, in-boundary.** An unreadable in-boundary root blocks with exit 1 and *real* resolution counts (`discovered_manifests == 1`, `resolved_workspaces == 1`, `units_considered == 1`) — the block is not allowed to report zero |
-| `stale_and_blocked_automatic_roots_keep_the_bounded_log_contract` | 4453 | C028 machine contract: one bounded ASCII log line, no paths, exit 0 on omission and `status=blocked` with exit 1 on the symlink block |
-| `json_format_config_is_rejected_not_emitted_as_non_json` | 4488 | `--format json config path/show` exits 2, names the unsupported combination, and puts **no** JSON on stdout (§8) |
+| `scan_emits_exactly_one_json_document` | 3577 | the one-document-per-invocation invariant, and — at source-text level only — that the `EmitReport` guard still exists (§4) |
+| `the_json_update_branch_prints_only_the_tested_seam` | 3800 | reads `src/main.rs` as text and asserts `run_update` has exactly one `print!(` and that it calls `update_json_stream` (§8) |
+| `stale_learned_root_is_omitted_and_bare_routine_execute_cleans_the_sibling` | 4089 | C028 premise-negative regression, direct and staged-plugin: exit 0, `scope == "routine"`, `cleaned == 1`, one Cargo clean, stale path absent from `selected_roots` |
+| `stale_learned_root_simulate_agrees_with_execute_and_spawns_no_cargo_clean` | 4145 | C028 Simulate/Execute parity: `simulated == 1`, zero clean spawns, artifact kept |
+| `missing_explicit_roots_stay_fatal_with_zero_cargo_clean_spawns` | 4218 | C028 negative control: missing configured `scan.root` and missing `clean ROOT` both exit 2 with zero spawns |
+| `all_automatic_roots_missing_is_a_successful_empty_no_op` | 4258 | C028: all-missing automatic scope exits 0 with `units == []` and zero spawns of any kind |
+| `automatic_file_root_is_omitted_and_symlink_root_blocks_without_traversal` | 4285 | C028 decision table at the CLI: file omitted (sibling cleaned), symlink-to-dir and broken link block with exit 1 and zero metadata calls |
+| `out_of_anchor_poison_does_not_block_bare_routine_cleanup` | 4361 | **ADR 007.** A poisoned learned root *outside* the anchor does not block: exit 0, `cleaned == 1`, `scope_blocked == false`, one Cargo clean, and the poison is counted in the machine summary |
+| `unreadable_automatic_root_blocks_instead_of_omitting` | 4400 | C028: `0o000` automatic root blocks with exit 1; premise-checked skip when the process can still read (e.g. root) |
+| `incomplete_discovery_reports_actual_resolution_counts_and_spawns_no_clean` | 4433 | **ADR 007, in-boundary.** An unreadable in-boundary root blocks with exit 1 and *real* resolution counts (`discovered_manifests == 1`, `resolved_workspaces == 1`, `units_considered == 1`) — the block is not allowed to report zero |
+| `stale_and_blocked_automatic_roots_keep_the_bounded_log_contract` | 4469 | C028 machine contract: one bounded ASCII log line, no paths, exit 0 on omission and `status=blocked` with exit 1 on the symlink block |
+| `json_format_config_is_rejected_not_emitted_as_non_json` | 4504 | `--format json config path/show` exits 2, names the unsupported combination, and puts **no** JSON on stdout (§8) |
 
 ### `tests/end_to_end.rs` — 840 lines, 4 tests
 

@@ -780,14 +780,17 @@ added by the same pass. **Re-derived 2026-10-24** (the 0.2.10 interrogation
 passes): items 66-96 had been silently dropped from this table by a
 re-derivation pass and were restored, items 97-108 were added, and the
 corpus's citations, counts and per-platform census were re-derived from the
-source in the same passes.
+source in the same passes. **Added 2026-10-25** (the 0.2.11 release candidate):
+items 109 and 110 record what the hosted macOS and Windows lanes found — three
+cases that asserted a path spelling only Linux produces, and the fact that a
+lane failing early never reaches the later test targets at all.
 
 Items 3-6 are re-verified as of the Phase-11 and Phase-12 closures (all of
 C018/C019/C021-C025 are now closed). Their findings were real when recorded and
 each is now closed by shipped code; the deep dives that carry them were updated in
 the same pass, so these rows point at completed work rather than at a plan.
 
-**One hundred and eight** findings are recorded here. The count is re-derivable:
+**One hundred and ten** findings are recorded here. The count is re-derivable:
 it is the number of numbered rows in the table below.
 
 | # | Finding | Status |
@@ -900,6 +903,8 @@ it is the number of numbered rows in the table below.
 | 106 | **Fifteen citations in this register pointed at the wrong lines.** The entries named a file and a line, but the line did not carry the claim — including two that pointed at the *same* line twice for two different error paths, and one that cited a function's own definition as the place its behaviour lives. | **Fixed.** Each is re-derived against the source and each was checked to land on the content the sentence claims. The register's own rows are not exempt from the rule they state: the citations in items 62, 63 and 64 now resolve to the code they describe. |
 | 107 | **The published module sizes and test census were stale.** `architecture/overview.md` §3 and §3.1 publish the module sizes, and `architecture/14-testing-and-verification.md` publishes the per-file distribution and the per-platform census. The figures in them described a much earlier tree: `cleanup.rs` was published as 11,163 lines with 126 tests when it carried 12,174 with 138, and the census was published as 531 declared when it was 602. | **Fixed.** The figures are recomputed from `src/` and the three measures the corpus uses are now named apart: `overview.md` §3.1's `prod` is everything outside *every* `#[cfg(test)]` scope, while the per-file table's `mod tests opens at` is the `mod … {` line the attribute gates. The census is **602 declared / 600 Linux / 547 Windows / 596 macOS**, and the Windows figure is build-verified rather than asserted: the three test binaries cross-compiled for `x86_64-pc-windows-gnu` carry exactly the 547 derived test names and none of the 55 excluded ones. |
 | 108 | **`plans/output-schema-v1.md` described the path escaping wrongly.** It said that an undecodable byte was dropped from the path, so a reader would expect the machine document to carry a shorter spelling than the filesystem has. | **Fixed.** The schema now states what actually happens: each undecodable byte becomes the Unicode replacement character `U+FFFD`, so the spelling is lossless in length and a reader can tell it apart from a path that was genuinely shorter. |
+| 109 | **Three cases asserted a path spelling that only holds on Linux.** The product reports a root by its *canonical* spelling — the deepest existing ancestor canonicalised and the rest re-appended — but three cases compared that against the caller's own spelling. Where the temporary directory does not resolve to itself, the two differ and the case fails for a reason it does not name: macOS's `/var` is a symlink to `/private/var`, and Windows canonicalises to a `\\?\` verbatim path. A fourth case wrote a literal `my-app/target` where the renderer joins with the platform's separator. | **Fixed.** Each compares against the same resolution the product uses, or builds the expected spelling the way the renderer builds it. The defect was found by the hosted macOS and Windows lanes of the 0.2.11 release candidate, and it is reproduced on Linux by pointing `TMPDIR` at a symlink: the four cases fail without the fix and pass with it, and the whole suite is green under that `TMPDIR`. |
+| 110 | **The hosted lanes never reached the integration suites.** The library's own failures abort `cargo test --all-targets`, so the two failing cases in the library meant the contract suite and the end-to-end suite never ran on macOS or Windows at all — and two further cases in the contract suite were waiting behind them with the same defect. | **Fixed.** The four cases are fixed and the whole suite is green under a symlinked `TMPDIR`, which is the condition that reproduces macOS. The lesson is recorded rather than fixed: a lane that fails early reports only the first failure, so a green lane is the only evidence that the later targets ran. |
 ### 10.1 Dead public API, recorded not removed
 
 `cargo_cleanme` is published on crates.io, so dropping `pub` is a semver-visible

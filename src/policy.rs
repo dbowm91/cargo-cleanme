@@ -1654,12 +1654,19 @@ mod tests {
             vec![outer.clone(), inner.clone()],
             std::slice::from_ref(&inner),
         );
+        // The collapse reports each root by its *canonical* spelling, which is
+        // not the caller's spelling wherever the temp root does not resolve to
+        // itself — macOS's `/var` is a symlink to `/private/var`, and Windows
+        // canonicalises to a `\\?\` verbatim path. Compare against the same
+        // resolution the collapse uses, or the case fails on every host whose
+        // temporary directory is a symlink and passes only where it is not.
+        let resolved = |p: &std::path::Path| crate::traverse::resolve_root(p).spelling;
         assert!(
-            collapsed.contains(&inner),
+            collapsed.contains(&resolved(&inner)),
             "the protected root must survive: {collapsed:?}"
         );
         assert!(
-            collapsed.contains(&outer),
+            collapsed.contains(&resolved(&outer)),
             "the ancestor must still be there: {collapsed:?}"
         );
     }

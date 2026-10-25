@@ -1703,10 +1703,17 @@ mod tests {
         use std::os::unix::ffi::OsStringExt;
         let d = tempdir().unwrap();
         let p = d.path().join("keep");
-        let odd = p.join(OsString::from_vec(b"weird-\xff".to_vec()));
+        fs::create_dir_all(&p).unwrap();
+        // The walker descends from the *resolved* root, so the directory it
+        // visits is spelled under the canonical prefix — not under the
+        // caller's. Building the fixture there is what makes the pattern and
+        // the path comparable; a temp root that is a symlink (macOS's `/var`)
+        // otherwise makes them differ, and the case fails for that reason
+        // rather than for the one it names.
+        let canonical = fs::canonicalize(&p).unwrap();
+        let odd = canonical.join(OsString::from_vec(b"weird-\xff".to_vec()));
         fs::create_dir_all(&odd).unwrap();
         fs::write(odd.join("Cargo.toml"), "").unwrap();
-        let canonical = fs::canonicalize(&p).unwrap();
         let filters = Filters::new(&[format!("{}/*", canonical.display())], &[]).unwrap();
         assert!(
             filters.directly_ignored(&odd),

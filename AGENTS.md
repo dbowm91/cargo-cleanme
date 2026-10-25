@@ -67,7 +67,7 @@ a file that is being rewritten rots immediately.
 | 7 | The cleanup pipeline | What happens on `clean`, end to end |
 | 8 | Cross-cutting invariants | The eight rules that span modules — read before changing any of them |
 | 9 | Tooling and verification surfaces | The gates, and what each one actually proves |
-| 10 | Findings from the deep dives | 108 known defects and their dispositions — **check here before adding a new one** |
+| 10 | Findings from the deep dives | 110 known defects and their dispositions — **check here before adding a new one** |
 | 11 | How the code got this way | The plan corpus |
 | 12 | Index of deep dives | The sixteen deep dives |
 | 13 | Reading order | If you read one thing, read this |
@@ -240,9 +240,12 @@ against `src/`, fix the overview first, then align the deep dives.
 
 The same rule applies to **per-platform test counts**, which have disagreed
 across three documents: they are 602 declared, 600 on Linux, 547 on Windows,
-596 on macOS. Derive them with a brace-tracking parser that evaluates each
+596 on macOS. Those three figures count `src/` — the **lib target and the bin
+target together** — while a CI lane prints one number per target, so the Linux
+lane's library line reads 588 and the Windows lane's 536. Derive them with a
+brace-tracking parser that evaluates each
 test's *effective* gate set against `rustc --print cfg --target <triple>`, and
-cross-check against `cargo test --lib -- --list`. **Count the tests a gate
+cross-check against `cargo test --lib --bins -- --list`. **Count the tests a gate
 excludes, not the gates.** A naive "the `#[cfg(unix)]` immediately above a
 `#[test]`" grep finds 38 of the **50** tests a `#[cfg(unix)]` gate actually
 excludes, because Rust allows `#[test]` to precede the gate — twelve of the

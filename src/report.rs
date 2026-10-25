@@ -365,7 +365,15 @@ mod tests {
             &mut r,
             &HumanOptions::quiet(vec![PathBuf::from("/projects/my-app")]),
         );
-        assert!(text.contains("my-app/target"), "{text}");
+        // The renderer joins with the platform's separator, so the expected
+        // spelling is built the same way rather than written out: a literal
+        // "my-app/target" passes on Linux and fails on Windows, where the
+        // same qualification reads "my-app\target".
+        let qualified = PathBuf::from("my-app").join("target");
+        assert!(
+            text.contains(qualified.to_string_lossy().as_ref()),
+            "{text}"
+        );
         assert!(!text.contains("/projects/my-app/target"), "{text}");
     }
 

@@ -240,8 +240,8 @@ decision logic. Eight fakes are defined in-module: `FakeCleanupRunner` `:4755`,
 `RaceRunner` `:8857`, `BuildChangingRunner` `:9113` (function-local),
 `StagedCargo` `:9609`, `ParallelProbeRunner` `:9875`, `MetadataMutationRunner`
 `:9914`. Two tests drive the real `SystemCleanupRunner` against real Cargo:
-`real_temp_project_preview_and_execute_with_redirected_target` `:8268` and
-`real_cargo_package_selector_preserves_sibling_workspace_artifacts` `:8461`.
+`real_temp_project_preview_and_execute_with_redirected_target` `:8274` and
+`real_cargo_package_selector_preserves_sibling_workspace_artifacts` `:8467`.
 A third name says "real" and means it — `scan_analysis_total_is_determinate_through_real_path`
 `:9532` — but it drives `FakeCleanupRunner` over a real path.
 
@@ -371,9 +371,9 @@ This matches three independent sources: `config.toml:35-36` ("authorization
 never manufactures ownership proof and cannot promote ExternalUnproven to
 private (ADR 001, C002)"); the crate-wide invariant in `overview.md`; ADR 001
 `:132-133`. Tests close it from both sides:
-`external_unproven_outside_root_never_authorized_by_allowed_root` (`:7375`)
+`external_unproven_outside_root_never_authorized_by_allowed_root` (`:7381`)
 asserts `!is_authorized` with and without an allowed root, and
-`external_outside_root_allowed_via_configured_root` (`:8605`) runs the *real*
+`external_outside_root_allowed_via_configured_root` (`:8611`) runs the *real*
 Cargo path and asserts `Skipped` in both cases.
 
 **One naming trap.** The test at `:2060` is named
@@ -434,7 +434,7 @@ root — legal for a member manifest whose workspace root is an ancestor — the
 `allowed_output_roots` becomes the only route to cleanability. The code
 anticipates this: the error at `:1474-1479` tells the user to "add a
 `cleanup.allowed_output_roots` entry or use a clean ROOT that contains it".
-`missing_and_file_allowed_roots_authorize_nothing_but_are_not_fatal` (`:7725`)
+`missing_and_file_allowed_roots_authorize_nothing_but_are_not_fatal` (`:7731`)
 covers the *negative* branches of the allowed-root validation, but I found no
 end-to-end test of the positive path — a `PrivateBounded` group with covering
 roots outside every clean root becoming `Cleaned` once an allowed root is
@@ -522,7 +522,7 @@ re-resolve failure — fail-closed. Peak concurrency lands in
 
 This apparatus is an efficiency concern the project tracked explicitly, not a
 safety mechanism: it keeps the *cost* of proving linear. Pinned by
-`final_proof_cost_is_linear_in_the_number_of_workspaces` (`:11026`), which
+`final_proof_cost_is_linear_in_the_number_of_workspaces` (`:11032`), which
 asserts the proof spawn count grows linearly, not quadratically.
 
 ### `ExecutionProof` field by field
@@ -663,17 +663,17 @@ module:
 
 | Test | Lines | Assertion |
 | --- | --- | --- |
-| `unresolved_scope_note_is_reported_without_blocking_any_mode` | `:5968` | All three modes; a reported in-boundary note never blocks and no clean runs. |
-| `initial_shared_overlap_is_decided_conservatively_without_proof` | `:10712` | `proof_workspaces_refreshed == 0` — the gate blocks before any ownership proof. |
-| `fresh_size_policy_rejects_shrunk_output_before_any_cargo_clean` | `:9264` | All three modes; policy rejection precedes any clean. |
-| `fresh_source_and_output_age_policy_rejects_before_any_cargo_clean` | `:9314` | All three modes. |
-| `preview_is_default_and_simulate_invokes_no_clean` | `:5924` | Simulate: no clean call. |
-| `simulation_parity_valid_private_reaches_cleanable_with_zero_clean_calls` | `:8761` | Simulate reaches cleanable with zero clean calls. |
-| `combined_roots_share_one_ownership_proof_and_simulation_never_cleans` | `:11153` | Two roots, one shared universe proof; zero cleans. |
-| `simulation_parity_missing_and_invalid_markers_both_skip` | `:8701` | Marker failures skip identically in Simulate and CargoPreview. |
-| `the_listing_never_spawns_a_clean` | `:5811` | The interactive listing never spawns a clean. |
-| `metadata_failure_blocks_boundary_with_zero_spawns` | `:6762` | A metadata failure inside the boundary blocks with zero spawns. |
-| `nested_outputs_skip_at_unit_gate_with_zero_spawns` | `:6723` | A nested output is rejected at the unit gate with zero spawns. |
+| `unresolved_scope_note_is_reported_without_blocking_any_mode` | `:5974` | All three modes; a reported in-boundary note never blocks and no clean runs. |
+| `initial_shared_overlap_is_decided_conservatively_without_proof` | `:10718` | `proof_workspaces_refreshed == 0` — the gate blocks before any ownership proof. |
+| `fresh_size_policy_rejects_shrunk_output_before_any_cargo_clean` | `:9270` | All three modes; policy rejection precedes any clean. |
+| `fresh_source_and_output_age_policy_rejects_before_any_cargo_clean` | `:9320` | All three modes. |
+| `preview_is_default_and_simulate_invokes_no_clean` | `:5930` | Simulate: no clean call. |
+| `simulation_parity_valid_private_reaches_cleanable_with_zero_clean_calls` | `:8767` | Simulate reaches cleanable with zero clean calls. |
+| `combined_roots_share_one_ownership_proof_and_simulation_never_cleans` | `:11159` | Two roots, one shared universe proof; zero cleans. |
+| `simulation_parity_missing_and_invalid_markers_both_skip` | `:8707` | Marker failures skip identically in Simulate and CargoPreview. |
+| `the_listing_never_spawns_a_clean` | `:5817` | The interactive listing never spawns a clean. |
+| `metadata_failure_blocks_boundary_with_zero_spawns` | `:6768` | A metadata failure inside the boundary blocks with zero spawns. |
+| `nested_outputs_skip_at_unit_gate_with_zero_spawns` | `:6729` | A nested output is rejected at the unit gate with zero spawns. |
 
 **Precision required:** "zero-spawn" here means **zero `clean` invocations**, not
 zero processes. `cargo locate-project` and `cargo metadata` still run during
@@ -966,7 +966,7 @@ aborts.** `boundary_discovery_diagnostics > 0` raises
 `ScopeBlockReason::IncompleteDiscovery` and returns early (`:1898-1908`);
 `blocking_unresolved > 0` raises `ScopeBlockReason::OwnershipUnproven` and
 returns early (`:1911-1926`). Neither proceeds partially. Pinned by
-`scope_note_does_not_block_in_boundary_execute` (`:6433`) and its Simulate /
+`scope_note_does_not_block_in_boundary_execute` (`:6439`) and its Simulate /
 CargoPreview twins, `metadata_failure_blocks_boundary_with_zero_spawns`
 (`:6729`), and `symlinked_output_produces_no_unit_while_sibling_cleans`
 (`:6765`).
@@ -988,9 +988,9 @@ diagnostic count (`:1424-1429`). The count of out-of-boundary unprovables
 travels to the report as `out_of_scope_unresolved` (`:1878`) and is rendered as
 one bounded human line (`:737-742`) so "the boundary is clean" can never read as
 "the system is clean". The flagship twin is
-`out_of_anchor_poison_does_not_block_anchor` (`:6531`), which fails against the
+`out_of_anchor_poison_does_not_block_anchor` (`:6537`), which fails against the
 old whole-scope rule by construction; the twin
-`scope_note_in_second_root_does_not_block_first_root` (`:11274`) covers the
+`scope_note_in_second_root_does_not_block_first_root` (`:11280`) covers the
 cross-root case.
 
 **(c) Incomplete at *proof* time → the transaction aborts.** The hoisted
@@ -999,7 +999,7 @@ makes `hoisted.get()` (`:2212`) fail for *every* candidate, and the engine
 raises a typed `ScopeBlock` and returns (`:2213-2219`) rather than emitting N
 skipped rows. This is the M-2 correction: an unprovable universe is a scope
 block (exit 1), not a run of silent per-unit skips. Pinned by
-`universe_workspace_that_cannot_reresolve_fails_closed` (`:10666`).
+`universe_workspace_that_cannot_reresolve_fails_closed` (`:10672`).
 
 **(d) The zero-unit edge.** A run that proves zero units while anything is
 unproven proves nothing: `units.is_empty() && unselected.is_empty() &&
@@ -1043,7 +1043,7 @@ Mechanically, in `clean_with_roots_policy_selector_guarded` (`:1833`):
    fresh in-boundary `MergeAll` invalidates the refresh. H-2 rediscovery stays
    combined (mid-run change detection is not poison reporting) — see
    `universe_manifests_stable` (`:2657`) and
-   `mid_run_manifest_growth_blocks_remaining_scope` (`:6228`).
+   `mid_run_manifest_growth_blocks_remaining_scope` (`:6234`).
 4. The output environment is re-verified before every unit dispatch
    (`output_env_matches` `:564`, against a snapshot taken at `:551`); any
    mismatch blocks the remaining units before any further spawn, in every mode
@@ -1057,8 +1057,8 @@ and out-of-boundary poison travels in `diagnostics` as `out_of_scope`
 (`DiagnosticCategory::OutOfScope`, `domain.rs`). Exit aggregation is
 untouched: `scope_blocked` stays set, so exit 1 falls out structurally.
 `-i` lists the selected units and refuses on a boundary block exactly as before
-(`list_cleanup_candidates` `:2692`, `listing_offers_rows_with_no_block` `:7127`,
-`listing_refuses_blocked_boundary` `:7153`).
+(`list_cleanup_candidates` `:2692`, `listing_offers_rows_with_no_block` `:7133`,
+`listing_refuses_blocked_boundary` `:7159`).
 
 **What M015/M016 left behind.** The M015 proof-island certificate and the M016
 `--partitioned` flag were removed before publication; the flag and the `islands`
@@ -1091,20 +1091,20 @@ The candidate is skipped; the run continues to the next unit.
 | Marker invalid | `:3723` → `:3994-4023` | "Cargo CACHEDIR.TAG marker is missing…" |
 
 Covered by `RaceRunner`-based tests: `race_target_replacement_skips_before_clean`
-`:8938`, `race_covering_root_disappears_skips` `:9209`,
-`race_output_becomes_recent_skips` `:9224`,
-`race_source_becomes_recent_skips` `:9246`,
-`race_marker_disappears_and_changes_skip` `:9440`,
-`race_covering_becomes_symlink_skips_and_changes_classification` `:9470`.
+`:8938`, `race_covering_root_disappears_skips` `:9215`,
+`race_output_becomes_recent_skips` `:9230`,
+`race_source_becomes_recent_skips` `:9252`,
+`race_marker_disappears_and_changes_skip` `:9446`,
+`race_covering_becomes_symlink_skips_and_changes_classification` `:9476`.
 The cross-workspace variants use `StagedCargo` instead:
-`cross_workspace_overlap_race_into_target_skips_candidate` `:10482`,
-`cross_workspace_overlap_race_into_distinct_build_skips_candidate` `:10526`,
-`candidate_target_or_build_change_still_skips` `:10751`.
+`cross_workspace_overlap_race_into_target_skips_candidate` `:10488`,
+`cross_workspace_overlap_race_into_distinct_build_skips_candidate` `:10532`,
+`candidate_target_or_build_change_still_skips` `:10757`.
 `BuildChangingRunner` covers the build-dir capability flip (Equal → Distinct) in
-`simulation_parity_changed_build_dir_and_unsupported_capability_both_skip` `:9101`.
+`simulation_parity_changed_build_dir_and_unsupported_capability_both_skip` `:9107`.
 `MetadataMutationRunner` covers a workspace-root change, a newly added member,
 and malformed metadata JSON from the second metadata call onward, in
-`direct_metadata_refresh_detects_workspace_root_and_member_changes` `:8998`.
+`direct_metadata_refresh_detects_workspace_root_and_member_changes` `:9004`.
 
 ### Are two units sharing physical bytes prevented from racing?
 
@@ -1115,7 +1115,7 @@ and malformed metadata JSON from the second metadata call onward, in
    `unit_block_reason_roots:946` for every unit that touches it.
 2. **Initial-graph decision.** Overlap present in the *initial* complete graph is
    decided conservatively from that graph alone, before any proof work —
-   `initial_shared_overlap_is_decided_conservatively_without_proof` (`:10712`)
+   `initial_shared_overlap_is_decided_conservatively_without_proof` (`:10718`)
    asserts `proof_workspaces_refreshed == 0`, i.e. the gate blocks before the
    proof is even built. A shared pair cannot reach a spawn via either unit.
 3. **Fresh re-check.** Proof step 7 (`:3929-385`) re-derives the graph and
@@ -1157,7 +1157,7 @@ Killed during `cargo clean`: the observable state is a partially emptied target
 directory, which Cargo treats as a cache miss and rebuilds; no workspace *sources*
 are damaged, because a source tree used as an output root is classified
 `Uncertain` upstream and can never be a cleanup target
-(`workspace.rs:1498-1501`; test `source_tree_as_output_root_is_never_cleaned` `:10970`). Killed after the spawn but before `measure_union` (`:4517`): the
+(`workspace.rs:1498-1501`; test `source_tree_as_output_root_is_never_cleaned` `:10976`). Killed after the spawn but before `measure_union` (`:4517`): the
 cleanup happened but no `after_bytes`/`observed_decrease` is reported —
 under-reporting, never over-reporting.
 
@@ -1182,12 +1182,12 @@ code says so.**
 | `measure_union:3723-3741` | Post-clean measurement refuses a path that changed type or became a symlink (`:4490-4492`). |
 | Pre-spawn `:2024-2028` | The covering-root proof is re-run at the last moment, immediately before the spawn. |
 
-Tests: `symlink_allowed_root_rejected_and_shared_forbidden` `:7434`,
-`symlink_build_identity_skips_entire_unit` `:10283`,
-`cross_workspace_symlink_into_candidate_output_fails_closed` `:10565`,
-`cross_workspace_symlinked_ancestor_into_candidate_output_fails_closed` `:10639`,
-`race_covering_becomes_symlink_skips_and_changes_classification` `:9470`,
-`prove_covering_roots_refuses_symlink_swap_with_change_code` `:7660`. The
+Tests: `symlink_allowed_root_rejected_and_shared_forbidden` `:7440`,
+`symlink_build_identity_skips_entire_unit` `:10289`,
+`cross_workspace_symlink_into_candidate_output_fails_closed` `:10571`,
+`cross_workspace_symlinked_ancestor_into_candidate_output_fails_closed` `:10645`,
+`race_covering_becomes_symlink_skips_and_changes_classification` `:9476`,
+`prove_covering_roots_refuses_symlink_swap_with_change_code` `:7666`. The
 honest limit is `:1995-1997`: between the symlink check and the child's own
 `open()` there is a window, minimized rather than eliminated. Closing it entirely
 would require `cargo clean` to re-verify, outside this design.
@@ -1208,7 +1208,7 @@ belief is safe, which it does by proving the union before the spawn and freezing
 the target via two independent mechanisms. And `build` output is a distinct root
 from `target` inside the same unit (`:4245-4265`), covered by the same
 workspace-root rule, with the union deduplicated so an equal build==target counts
-once (`equal_and_nested_target_build_are_one_unit_and_one_invocation` `:10440`).
+once (`equal_and_nested_target_build_are_one_unit_and_one_invocation` `:10446`).
 
 ### Is the exit-code behaviour correct?
 
@@ -1400,19 +1400,19 @@ statically. Does that risk exist here? **Partly, in a narrower form.**
 9. **`min_reclaimable_bytes` is checked twice on different numbers** — scan bytes
    at `:2132`, fresh proof bytes at `:1879`. Removing the second check would let a
    unit that *shrank* between scan and spawn pass a size policy.
-   `fresh_size_policy_rejects_shrunk_output_before_any_cargo_clean` (`:9264`)
+   `fresh_size_policy_rejects_shrunk_output_before_any_cargo_clean` (`:9270`)
    covers exactly this.
 10. **`frozen_env` (`:4230`) is the only thing between an inherited
     `CARGO_BUILD_BUILD_DIR` and a silent redirect.** Both refusal branches
     (`:4233-4240`, `:3871-3880`) are load-bearing; covered by
-    `frozen_env_sets_target_and_build_dir` (`:7511`) and the M5/M9 test
+    `frozen_env_sets_target_and_build_dir` (`:7517`) and the M5/M9 test
     (`:10016`). Likewise `--offline --locked` (`:3899-3900`) are unconditional
     and must not become conditional; a networked cleanup path is a behaviour
     change, not a fix.
 11. **Post-clean measurement failure must not fabricate bytes.** The `Err` branch
     at `:2526-2545` sets `after_bytes: None`, increments `diagnostics`, and keeps
     `outcome: Cleaned` with `MeasurementFailed`. Guarded by
-    `post_clean_measurement_uncertainty_fabricates_no_decrease` (`:10830`).
+    `post_clean_measurement_uncertainty_fabricates_no_decrease` (`:10836`).
 12. **Adding a filesystem deletion to this module would be a contract-level
     regression.** There is none in production (`:4504-938`) and ADR 001
     `:188-220` forbids it. Any `fs::remove_*` in cleanup.rs production code
@@ -1420,7 +1420,7 @@ statically. Does that risk exist here? **Partly, in a narrower form.**
 13. **The parallelism cap (`:3335`) and the meter's honesty.** If
     `ProofRefreshMeter` stops counting, `proof_metadata_peak_concurrency` becomes
     a fiction while the refresh still works.
-    `proof_refresh_parallelism_is_bounded_and_results_stay_deterministic` (`:11340`)
+    `proof_refresh_parallelism_is_bounded_and_results_stay_deterministic` (`:11346`)
     asserts meter-equals-reported.
 14. **Determinism under parallel refresh is load-bearing for report ordering.**
     The refresh sorts by root; `render()` re-sorts by size then path.

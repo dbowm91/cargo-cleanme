@@ -425,16 +425,21 @@ fn a_direct_cleanme_root_stays_a_bounded_scope() {
         json["scope"], "explicit",
         "a direct `cleanme` must stay a bounded scope: {json}"
     );
+    // A resolved root is reported by its canonical spelling, which is not the
+    // caller's spelling wherever the temp root is a symlink (macOS's `/var`
+    // is, and its canonical form is `/private/var`). Compare against the same
+    // spelling, or the case fails on that host for a reason it does not name.
+    let named_canonical = named.canonicalize().unwrap();
     assert_eq!(
         json["result"]["selected_roots"],
-        serde_json::json!([named.to_str().unwrap()]),
+        serde_json::json!([named_canonical.to_str().unwrap()]),
         "the operator named one directory: {json}"
     );
     let units = json["result"]["units"].as_array().unwrap();
     assert_eq!(units.len(), 1, "only the named root is a candidate: {json}");
     assert_eq!(
         units[0]["workspace_root"],
-        named.to_str().unwrap(),
+        named_canonical.to_str().unwrap(),
         "the sibling must not be selected: {json}"
     );
     assert!(
@@ -2952,7 +2957,18 @@ fn a_relative_root_names_the_same_directory_in_the_scan_and_the_cleanup_path() {
         Some(2),
         "the cleanup path must refuse the same root: {cleanup:?}"
     );
-    let lexical = real.join("x").display().to_string();
+    // The tool names the root resolved as far as the filesystem allows: the
+    // deepest existing ancestor is canonicalised and the rest is re-appended.
+    // A temp root that is a symlink (macOS's `/var`) otherwise makes the two
+    // spellings differ, and the case fails for that reason rather than for
+    // the one it names.
+    let lexical = base
+        .canonicalize()
+        .unwrap()
+        .join("real")
+        .join("x")
+        .display()
+        .to_string();
     let scan_err = String::from_utf8_lossy(&scan.stderr);
     let cleanup_err = String::from_utf8_lossy(&cleanup.stderr);
     assert!(

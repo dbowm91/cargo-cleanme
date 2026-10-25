@@ -5519,8 +5519,14 @@ mod tests {
             "the unproven root's own unit is excluded with the typed reason: {:?}",
             report.results
         );
+        // A unit reports its root by the root's *canonical* spelling, which is
+        // not the caller's spelling wherever the temp root is a symlink
+        // (macOS's `/var` → `/private/var`). Compare against the same
+        // resolution the unit uses, or the case fails on every host whose
+        // temporary directory is a symlink.
+        let resolved = |p: &std::path::Path| crate::traverse::resolve_root(p).spelling;
         assert!(
-            excluded[0].display_path.starts_with(&unproven),
+            excluded[0].display_path.starts_with(resolved(&unproven)),
             "the excluded unit must be the unproven root's own: {:?}",
             excluded[0].display_path
         );
@@ -5528,7 +5534,7 @@ mod tests {
         let survivor = report
             .results
             .iter()
-            .find(|row| row.display_path.starts_with(&readable))
+            .find(|row| row.display_path.starts_with(resolved(&readable)))
             .expect("the readable root's unit is in the report");
         assert_ne!(
             survivor.reason_code,

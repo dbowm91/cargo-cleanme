@@ -1608,7 +1608,7 @@ contract (§7).
 | `a_bounded_scope_spells_its_paths_relative_to_the_scope_root` | 320 | a path under the scope root is relative; one under no root stays absolute |
 | `a_full_scope_spells_its_paths_absolutely` | 344 | a Full scope's paths keep their absolute form |
 | `a_one_component_path_is_qualified_with_the_scope_root_name` | 361 | `my-app/target`, not a bare `target` |
-| `the_scope_root_itself_is_spelled_with_its_own_name` | 377 | the scope root names itself instead of rendering as an empty column |
+| `the_scope_root_itself_is_spelled_with_its_own_name` | 382 | the scope root names itself instead of rendering as an empty column |
 
 The first two are `#[cfg(unix)]` (raw `OsString::from_vec`). The last four are
 M020's, and they are the tests that make the relative-path rule a contract rather
@@ -1623,14 +1623,14 @@ assertions:
 
 | Test | Line | Covers |
 |---|---|---|
-| `execution_reports_observed_decrease_deduped` | 7552 | the Execute tally says `reclaimed` and never "would be reclaimed"; the **verbose** surface keeps the `observed decrease` phrase |
-| `final_report_lists_all_groups_and_deduped_total` | 8218 | the verbose surface lists every group and the deduplicated total |
-| `the_quiet_cleanup_report_lists_only_what_the_run_acted_on` | 12017 | the quiet surface lists the acted-on unit, omits the skipped ones, and keeps their count as `(3 skipped)` |
-| `the_quiet_tally_states_the_space_saved` | 12047 | the tally's byte figure and "2 directories", and the absence of the verbose surface's scope census |
-| `execute_and_simulation_words_their_tallies_differently` | 12074 | Execute says `reclaimed`, Simulate says `would be reclaimed` and says that no `cargo clean` was invoked |
-| `a_failed_unit_is_always_listed` | 12109 | a `Failed` unit is a row and a `(1 failed)` count, and its bytes are not counted as reclaimed |
-| `the_verbose_surface_restores_the_skipped_rows_and_the_census` | 12140 | `--verbose` brings back the skipped rows, the `combined scope:` line, and the `CleanupUnit(s)` census |
-| `the_safety_disclosures_survive_the_quiet_surface` | 12161 | the ADR 007 disclosures are present on the **quiet** shape as well as the verbose one |
+| `execution_reports_observed_decrease_deduped` | 7558 | the Execute tally says `reclaimed` and never "would be reclaimed"; the **verbose** surface keeps the `observed decrease` phrase |
+| `final_report_lists_all_groups_and_deduped_total` | 8224 | the verbose surface lists every group and the deduplicated total |
+| `the_quiet_cleanup_report_lists_only_what_the_run_acted_on` | 12023 | the quiet surface lists the acted-on unit, omits the skipped ones, and keeps their count as `(3 skipped)` |
+| `the_quiet_tally_states_the_space_saved` | 12053 | the tally's byte figure and "2 directories", and the absence of the verbose surface's scope census |
+| `execute_and_simulation_words_their_tallies_differently` | 12080 | Execute says `reclaimed`, Simulate says `would be reclaimed` and says that no `cargo clean` was invoked |
+| `a_failed_unit_is_always_listed` | 12115 | a `Failed` unit is a row and a `(1 failed)` count, and its bytes are not counted as reclaimed |
+| `the_verbose_surface_restores_the_skipped_rows_and_the_census` | 12146 | `--verbose` brings back the skipped rows, the `combined scope:` line, and the `CleanupUnit(s)` census |
+| `the_safety_disclosures_survive_the_quiet_surface` | 12167 | the ADR 007 disclosures are present on the **quiet** shape as well as the verbose one |
 
 Note the direction of the last one: it is the *quiet* surface that is the
 adversary here. A shorter report that dropped the disclosures would read as
