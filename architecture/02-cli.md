@@ -147,7 +147,7 @@ what "the root is the front door" means: `cargo cleanme --full` and
 | `--package <SPEC>` | — | `Option<String>` | `None` | `CleanupOverrides::package` (`src/cli.rs:550`) |
 | `--cargo-preview` | — | `bool` | `false` | `CleanMode::CargoPreview` (`src/cli.rs:1271-1272`); conflicts with the root's own `--dry-run` / `--dryrun` (`src/cli.rs:1271`) |
 | `--help` / `-h` | `-h` | clap built-in | — | clap help path |
-| `--version` / `-V` | `-V` | clap built-in (from `version`, `src/cli.rs:19`) | — | `cargo-cleanme 0.2.10` |
+| `--version` / `-V` | `-V` | clap built-in (from `version`, `src/cli.rs:19`) | — | `cargo-cleanme 0.2.11` |
 
 **`--verbose` is a rendering shape, not a mode.** It is `global = true`
 (`src/cli.rs:62`), so every report-producing subcommand honours it, and it

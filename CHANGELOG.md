@@ -6,6 +6,147 @@ All notable changes to cargo-cleanme are documented here. The format follows
 stance: the `0.x` line may make breaking changes in any release, and the
 command-line, JSON, and release-asset contracts are the stable surface.
 
+## [0.2.11] - 2026-10-25
+
+### Changed — BREAKING
+
+The canonical spellings move to the root, and the Full cleanup's proof
+boundary moves from the platform to the learned root. No published spelling is
+removed: every one of them still parses and still means what it meant.
+
+| 0.2.10 | 0.2.11 |
+|---|---|
+| `cargo cleanme --full` was accepted; `clean --full` was the advertised spelling | `cargo cleanme --full` is the canonical spelling; `clean --full` remains accepted, hidden |
+| `cargo cleanme clean ~/projects` was the bounded-root spelling | `cargo cleanme ~/projects` is the canonical spelling; `cargo cleanme clean ~/projects` remains accepted, hidden |
+| `cargo cleanme .` was a usage error (exit `2`) | `cargo cleanme .` is a bounded cleanup of `.` |
+| a Full cleanup whose platform walk did not finish refused the whole run | each learned root is judged on its own traversal; the proven ones are cleaned, the rest are reported, and the run exits `1` |
+
+- **`cargo cleanme --full` is now the canonical Full-cleanup spelling, and the
+  ROOT positional lives at the root.** This is [ADR 008][adr008], accepted
+  2026-10-21. `cargo cleanme --full` and `cargo cleanme ROOT` are the two
+  spellings a human should type; `cargo cleanme clean --full` and
+  `cargo cleanme clean ROOT` continue to parse, hidden from the help, and
+  resolve to exactly the same intent. `cargo cleanme --known` still resolves
+  to the bare invocation, and `scan --full` remains a hidden alias of
+  `scan --all`.
+
+  The reason is that the two-level spelling had become a trap. A flag written
+  at the root and the same flag written on `clean` are now *the same flag*, so
+  the two spellings cannot disagree about what was asked for; the cross-level
+  pairs are refused as usage errors instead of one of them silently winning.
+- **The Full cleanup's proof boundary is the learned root, not the platform
+  root.** This is [M018][m018], and it is the one place where the *rule*
+  changes rather than the spelling.
+
+  Until now, a Full reconciliation whose platform walk did not finish refused
+  the whole cleanup: the run exited `2` and nothing was cleaned, because an
+  incomplete walk was read as "every learned root is unproven". That inference
+  is wrong. An incomplete walk is evidence that *the walk* did not finish, not
+  that every root under it is unmeasured. The Full cleanup now re-walks each
+  learned root **as its own walk root** and judges it on its own traversal: a
+  root that proves is cleaned, a root that does not is reported as unproven,
+  and the run exits `1` because the cleanup was partial.
+
+  Two things did not change. A reconciliation that produced **no fresh
+  generation at all** still refuses outright, with the same message, because
+  there is nothing to prove against. And a *missing* per-root coverage verdict
+  still fails closed — an unmeasured root is an unproven root.
+- **`cargo cleanme .` is a bounded cleanup of `.`.** It was a usage error
+  (exit `2`) because `.` was indistinguishable from the hidden `clean` alias.
+  It is now the bounded-root spelling for the current directory, and it is
+  spelled `cargo cleanme .` rather than `cargo cleanme clean .`.
+
+### Fixed
+
+Seventy-six defects from three interrogations of the 0.2.10 tree, each pinned
+by a regression test that fails before the fix and passes after it. The ones a
+user could hit:
+
+- **An output root inside another package's directory was cleaned.** This one
+  broke the repository's first rule — *nothing is deleted on the strength of a
+  timestamp; every candidate must first prove exclusive ownership of its
+  physical bytes* — and it did so silently: the tool deleted a package's
+  **checked-in files** and reported the space it had reclaimed. A covering
+  root nested inside a package directory is now never a cleanup target, and
+  the cleanup engine re-proves it at the spawn.
+- **A direct `cargo cleanme` silently discarded the operator's ROOT.** The
+  Cargo-injected token was stripped by *spelling*, and since the ROOT
+  positional moved to the root the two are spelled identically:
+  `cargo-cleanme cleanme` lost its own root and became a machine-wide Routine
+  cleanup — the scope label changed from `explicit` to `routine` and the
+  operator's project trees joined the selected roots. The token is now
+  identified by launch *context*: Cargo exports `CARGO` to the external
+  subcommand it runs, and a direct invocation does not.
+- **A CLI `--exclude` spelled through a symlink protected nothing.** The
+  configured patterns were canonicalised and the command line's were not, so
+  the tree the operator asked to keep was deleted. One canonicaliser now
+  serves both.
+- **Two human surfaces wrote path text raw.** A directory name carrying a
+  control byte could rewrite the line the operator was reading. The scan's
+  non-Cargo diagnostics and the binary's own `config path` / `config edit` /
+  combined-roots messages all route through the shared escaper now.
+- **The cleanup engine's authorization verdict was a prose substring match**
+  on a human-readable message, so a directory named `cleanup authorization
+  root` flipped the run's exit code. The verdict is a typed `BlockReason`
+  now; the message renders the verdict rather than being it.
+- **The interactive preconditions were checked after the scope resolution**, so
+  a refused `-i` still spawned `cargo metadata` across every resolved root —
+  the very work the refusal exists to avoid. They are checked before the scope
+  is resolved now.
+- **The shared symlink predicate trimmed a trailing backslash on Unix**,
+  where `\` is an ordinary filename character, so a real directory named
+  `link\` was re-spelled as `link` and the predicate answered about a
+  *different* path; and its spelling arithmetic went through
+  `to_string_lossy`, so a name that is not valid UTF-8 became a path that does
+  not exist. Every caller treats a true answer as "this is a symlink". The
+  predicate had no test in the module that owns it; the full matrix now lives
+  there.
+- **A root `--profile` silently discarded a `clean --package`**, and the run
+  exited `0` after doing a *different* destructive action. The pair is
+  checked before either is merged, and the cross-level combination is a
+  usage error.
+- **`before_bytes` contradicted the row's own `detail`** on the fresh-size
+  skip: the published size was not the size the decision used. The size the
+  decision used is published now, and the wording says "current size".
+- **A stale `VISUAL` hid a usable `$EDITOR`.** An explicit path must be
+  *runnable*, not merely present.
+- **`learned_root_retention_days` was truncated with `as u16`.** The window is
+  carried as a `u32` end to end, so the truncation is inexpressible.
+- The `--full` alias is no longer advertised in `scan --help`'s usage line or
+  in the shell completions; a scope-conflict message names the two flags that
+  actually collide; the staging directory is created owner-only, at creation;
+  a staging-cleanup failure now claims "the executable was replaced" only
+  when the receipt says it was; `UpdateError::Receipt` carries the retained
+  backup's path and the rollback failure instead of dropping them; the
+  log surface's `diagnostics` and `unresolved` fields agree with the JSON's;
+  and the marker memo records both answers, so every source directory is no
+  longer read twice.
+
+### Documentation
+
+- **The architecture corpus's citations were re-derived against the source.**
+  The explicit (`file.rs:N`) and bare (`:N`) citation forms had drifted
+  across the sixteen deep dives: the published module sizes, the
+  per-platform test census, and the `architecture/overview.md` §10 register's
+  own references were all stale. Each is re-derived from the source rather
+  than shifted arithmetically, and the counts are now **602 declared / 600
+  Linux / 547 Windows / 596 macOS** — the Windows figure build-verified
+  again, by cross-compiling the three test binaries for `x86_64-pc-windows-gnu`
+  and confirming they carry exactly the 547 derived test names and none of
+  the 55 excluded ones.
+- **Findings 66-96 are restored to the §10 register.** They had been dropped
+  by an earlier re-derivation pass. A record that silently loses half its
+  entries is worse than a record that was never written.
+- The register now holds **108 findings**, each with its disposition.
+- The README, `docs/USAGE.md` and `docs/AUTOMATION.md` describe the scope as
+  it is: the working directory *joins* the maintenance scope, and the scope
+  only ever grows.
+- `plans/output-schema-v1.md` no longer describes a path-escaping behaviour
+  the code does not have.
+
+[adr008]: plans/adr/008-accepted-canonical-full-cleanup-spelling-and-proof-scoped-full-gate.md
+[m018]: plans/implementation/artifact-discovery-cleanup/m018-proof-scoped-full-cleanup-gate.md
+
 ## [0.2.10] - 2026-10-20
 
 ### Changed — BREAKING

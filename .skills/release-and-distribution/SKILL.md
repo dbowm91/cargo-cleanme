@@ -140,7 +140,7 @@ run it as a routine check.
 
 **Eighteen** releases are published, `v0.1.0` through `v0.2.10`. **`v0.2.0` is
 yanked**; the other seventeen are installable. The current source version is
-`0.2.10`, **published**.
+`0.2.11`, **unpublished**.
 
 Two ways to get this wrong, both of which have shipped as bugs in this
 repository's own docs: saying "seventeen releases are published" (that is the
