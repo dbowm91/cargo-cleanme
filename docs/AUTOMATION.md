@@ -273,9 +273,12 @@ one bounded line, load-aware timing, and never root for a developer home.**
 - A Full cleanup (`cargo cleanme --full`) will not clean a learned root it
   could not prove. The proof boundary is the **learned root**: each one is
   re-walked as its own walk root and judged on its own traversal, and a root
-  whose coverage could not be proven is dropped from the candidate set, named on
-  stderr, and reported per unit with the reason code
-  `skipped_incomplete_coverage`. The run exits `1` when **at least one** learned
+  whose coverage could not be proven is dropped from the candidate set and
+  reported per unit with the reason code `skipped_incomplete_coverage`. That
+  code is a **machine** field: it appears in the JSON envelope's
+  `units[].reason_code`. The human surface names the same fact in prose —
+  the root, the cause, and the alternative — and does not print the code
+  itself. The run exits `1` when **at least one** learned
   root was unproven, even if every root that could be proven was cleaned — a
   partial Full cleanup must not read as a complete one. When **no** learned root
   could be proven, the scope is blocked with the typed unproven-ownership block

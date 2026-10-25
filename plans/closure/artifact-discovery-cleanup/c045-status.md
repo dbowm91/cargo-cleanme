@@ -1,12 +1,12 @@
 # C045 — the `clean` alias's single source of truth — closure record
 
 Plan: `plans/implementation/artifact-discovery-cleanup/c045-clean-alias-single-source-of-truth-corrective.md`
-Status: **closing** — implemented and ladder-green. **Not published**: no tag,
-no release, no crates.io publication. Publication is owner-gated, and nothing
-in this record asks for it.
+Status: **closed — shipped in v0.2.11** (tag `v0.2.11` at `1d679833ae62`, GitHub release published 2026-10-25T17:23:10Z and immutable with a valid attestation, crates.io sha256 `96298f83…`, automatic smoke `40216211513` green on five targets). Receipt:
+`plans/closure/distribution-release-update/r031-status.md`.
 Corrects: **M019** (`plans/implementation/artifact-discovery-cleanup/m019-canonical-full-cleanup-spelling-and-root-front-door.md`;
 closure record `plans/closure/artifact-discovery-cleanup/m019-status.md`,
-status **closing**, unpublished).
+status **closing**, unpublished when this record was written; M019 and this
+corrective both shipped in **v0.2.11**).
 Baseline: `main` at `22bbfd2` (0.2.10, unpublished).
 Date: 2026-10-22.
 

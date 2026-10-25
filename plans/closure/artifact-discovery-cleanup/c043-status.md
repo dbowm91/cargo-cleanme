@@ -1,9 +1,8 @@
 # C043 — the interactive frame's geometry — closure record
 
 Plan: `plans/implementation/artifact-discovery-cleanup/c043-interactive-frame-geometry-corrective.md`
-Status: **closing** — implemented and ladder-green. **Not published**: no tag,
-no release, no crates.io publication. Publication is owner-gated, and nothing
-in this record asks for it.
+Status: **closed — shipped in v0.2.11** (tag `v0.2.11` at `1d679833ae62`, GitHub release published 2026-10-25T17:23:10Z and immutable with a valid attestation, crates.io sha256 `96298f83…`, automatic smoke `40216211513` green on five targets). Receipt:
+`plans/closure/distribution-release-update/r031-status.md`.
 Commits: `30bcff5` (the fix), `05f8cd7` (the documents).
 Baseline: `main` at `1d5f1e8` (0.2.10, unpublished).
 Date: 2026-10-22.

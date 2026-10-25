@@ -1,9 +1,8 @@
 # C046 — the MSRV lane asserts a rendering the qualified-host case never produces — closure record
 
 Plan: `plans/implementation/artifact-discovery-cleanup/c046-msrv-lane-test-assertion-corrective.md`
-Status: **closing** — implemented and verified; the MSRV lane exits 0. **Not published**: no tag,
-no release, no crates.io publication. Publication is owner-gated, and nothing in this
-record asks for it.
+Status: **closed — shipped in v0.2.11** (tag `v0.2.11` at `1d679833ae62`, GitHub release published 2026-10-25T17:23:10Z and immutable with a valid attestation, crates.io sha256 `96298f83…`, automatic smoke `40216211513` green on five targets). Receipt:
+`plans/closure/distribution-release-update/r031-status.md`.
 Closes: `architecture/overview.md` §10 finding **70**.
 Baseline: `main` at `48cba7a` (0.2.10, unpublished).
 Date: 2026-10-22.
@@ -101,6 +100,9 @@ symlinks or `TMPDIR`, and the platform-specific fixtures are unchanged, but
 
 ## Open
 
-- **Not published.** The change is in the working tree; no tag, no release,
-  no crates.io publication. Publication is owner-gated.
+- **None.** The change shipped in **v0.2.11** (tag `v0.2.11` at `1d679833ae62`,
+  GitHub release immutable and attested, crates.io sha256 `96298f83…`,
+  automatic smoke `40216211513` green on five targets; receipt
+  `plans/closure/distribution-release-update/r031-status.md`). The MSRV lane
+  was green before publication and is green now.
 - **The hosted lanes remain outstanding**, as above.

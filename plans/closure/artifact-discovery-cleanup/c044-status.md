@@ -1,9 +1,8 @@
 # C044 — the post-0.2.10 defect sweep — closure record
 
 Plan: `plans/implementation/artifact-discovery-cleanup/c044-post-0-2-10-defect-sweep-corrective.md`
-Status: **closing** — implemented and ladder-green. **Not published**: no tag,
-no release, no crates.io publication. Publication is owner-gated, and nothing
-in this record asks for it.
+Status: **closed — shipped in v0.2.11** (tag `v0.2.11` at `1d679833ae62`, GitHub release published 2026-10-25T17:23:10Z and immutable with a valid attestation, crates.io sha256 `96298f83…`, automatic smoke `40216211513` green on five targets). Receipt:
+`plans/closure/distribution-release-update/r031-status.md`.
 Baseline: `main` at `cf4a6a0` (0.2.10, unpublished).
 Date: 2026-10-22.
 

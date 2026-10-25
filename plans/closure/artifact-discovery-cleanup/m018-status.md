@@ -1,8 +1,7 @@
 # M018 — Proof-Scoped Full Cleanup Gate: closure record
 
-Status: **closing — implemented and verified in the working tree; not yet
-published.** The milestone stays **open**: publication is not closure, and no
-release has carried this change yet.
+Status: **closed — shipped in v0.2.11** (tag `v0.2.11` at `1d679833ae62`, GitHub release published 2026-10-25T17:23:10Z and immutable with a valid attestation, crates.io sha256 `96298f83…`, automatic smoke `40216211513` green on five targets). Receipt:
+`plans/closure/distribution-release-update/r031-status.md`.
 
 Plan: `plans/implementation/artifact-discovery-cleanup/m018-proof-scoped-full-cleanup-gate.md`
 

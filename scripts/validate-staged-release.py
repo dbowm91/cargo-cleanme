@@ -7,8 +7,9 @@ published. Nothing here publishes; it only inspects and reports.
 Checks, in order:
 
 1. **Exact inventory.** The draft must contain the five contracted binaries,
-   five `.sha256` sidecars, `release-manifest.json`, and the two exact-release
-   bootstrap installers. A missing or extra asset is a hard failure, because
+   five `.sha256` sidecars, `release-manifest.json`, and the four installer
+   wrappers (the two exact-release bootstrap installers and the two public
+   wrappers). A missing or extra asset is a hard failure, because
    "exactly the required qualified inventory" is a publication precondition.
 2. **Sidecar integrity.** Every sidecar must name its own asset and its digest
    must match the bytes actually served.
@@ -49,6 +50,11 @@ CONTRACT = ROOT / "release/eggpack/distribution.toml"
 INSTALL_SH = ROOT / "packaging/install.sh"
 FIXTURE_SERVER = ROOT / "packaging/tests/fixture_server.py"
 TEST_INSTALLERS = ROOT / "packaging/tests/test_installers.py"
+
+# The release's non-binary inventory, named once so the check and the summary
+# can never disagree about it.
+MANIFEST_ASSET = "release-manifest.json"
+INSTALLER_ASSETS = ("install-exact.sh", "install-exact.ps1", "install.sh", "install.ps1")
 
 errors: list[str] = []
 notes: list[str] = []
@@ -169,11 +175,8 @@ def main() -> int:
         # Eggpack exact-release bootstrap evidence, so all four installers are
         # part of the required inventory.
         required = set(expected) | {f"{a}.sha256" for a in expected} | {
-            "release-manifest.json",
-            "install-exact.sh",
-            "install-exact.ps1",
-            "install.sh",
-            "install.ps1",
+            MANIFEST_ASSET,
+            *INSTALLER_ASSETS,
         }
         missing = sorted(required - set(present))
         extra = sorted(set(present) - required)
@@ -181,7 +184,14 @@ def main() -> int:
             fail(f"required asset is missing from the draft: {name}")
         for name in extra:
             fail(f"unexpected asset in the draft: {name}")
-        note(f"{len(expected)} contracted binaries + {len(expected)} sidecars + manifest + 2 installers")
+        # The composition is DERIVED, never written out: a hardcoded count
+        # here once said "2 installers" while the inventory it describes has
+        # four, and the wrong number was quoted in a release record as if the
+        # tool had printed it.
+        note(
+            f"{len(expected)} contracted binaries + {len(expected)} sidecars"
+            f" + manifest + {len(INSTALLER_ASSETS)} installers"
+        )
 
         print("\n[2/6] sidecar integrity")
         digests: dict[str, str] = {}

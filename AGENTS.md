@@ -10,10 +10,10 @@ Cargo**, never by deleting directories. One binary over one library of 16
 modules, 18 source files, 43,057 lines in `src/`. No async runtime of its own.
 `cargo metadata` is the only binary dependency that matters for safety.
 
-The working tree is **0.2.11, which is not published**; `CHANGELOG.md` has no
-`[Unreleased]` section. Eighteen releases are published (v0.1.0 through v0.1.6,
+The working tree is **0.2.11, the published version**; `CHANGELOG.md` has no
+`[Unreleased]` section. Nineteen releases are published (v0.1.0 through v0.1.6,
 then 0.2.0, 0.2.1, 0.2.2, 0.2.3, 0.2.4, 0.2.5, 0.2.6, 0.2.7, 0.2.8, 0.2.9,
-0.2.10). **v0.2.0 is yanked; the other seventeen are not.** Bumping `Cargo.toml` is not a publication — see
+0.2.10, 0.2.11). **v0.2.0 is yanked; the other eighteen are not.** Bumping `Cargo.toml` is not a publication — see
 `docs/RELEASING.md` and `scripts/release-check.sh`.
 
 ## Read this before your first change

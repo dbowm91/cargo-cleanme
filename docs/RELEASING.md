@@ -325,8 +325,9 @@ Check each of these:
   Note the exit code: an incomplete traversal no longer refuses the whole
   operation, but it does make the run exit `1` — a learned root whose coverage
   could not be proven is skipped with the reason code
-  `skipped_incomplete_coverage`, named on stderr, and the exit code says the
-  boundary was not fully cleaned.
+  `skipped_incomplete_coverage` (a machine field: the JSON envelope's
+  `units[].reason_code`; the human surface names the root and the cause
+  instead), and the exit code says the boundary was not fully cleaned.
 - `update --dry-run` reports already-current rather than offering a downgrade.
 
 A binary installed by Cargo must be **refused**, not updated. `cargo cleanme

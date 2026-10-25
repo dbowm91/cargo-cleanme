@@ -1,9 +1,10 @@
 # M019 — Canonical Full Cleanup Spelling and the Root Cleanup Front Door: closure record
 
-Status: **closing — implemented and verified in the working tree; not yet
-published.** The milestone stays **open**: publication is not closure, and no
-release has carried this change yet. M019 may not be published before M018 has
-shipped (ADR 008's acceptance record).
+Status: **closed — shipped in v0.2.11** (tag `v0.2.11` at `1d679833ae62`, GitHub release published 2026-10-25T17:23:10Z and immutable with a valid attestation, crates.io sha256 `96298f83…`, automatic smoke `40216211513` green on five targets). Receipt:
+`plans/closure/distribution-release-update/r031-status.md`.
+
+The ordering constraint ADR 008 recorded — M019 may not be published before M018 has
+shipped — is satisfied: both shipped in this release.
 Date: 2026-10-21.
 Plan: `plans/implementation/artifact-discovery-cleanup/m019-canonical-full-cleanup-spelling-and-root-front-door.md`
 Repository baseline: `main` at `8b96f86` (0.2.10 published).
