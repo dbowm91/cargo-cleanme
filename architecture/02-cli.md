@@ -823,14 +823,14 @@ clap uses for a usage error.
    (`.github/workflows/ci.yml:96-108`) runs
    `cargo run --quiet --features dev-tools --bin generate-docs -- --check`,
    comparing regenerated output against the checked-in `man/` and
-   `completions/` trees. `xtask/src/main.rs:96` builds the model from
+   `completions/` trees. `xtask/src/main.rs:98` builds the model from
    `cargo_cleanme::cli::Cli::command()`, wrapped in a synthetic `cargo` parent
-   (`xtask/src/main.rs:109-113`) so completions offer the typeable
+   (`xtask/src/main.rs:104-107`) so completions offer the typeable
    `cargo cleanme` spelling. **Any flag add, rename, or doc-comment edit fails
    this job until `man/*.1` and `completions/*` are regenerated.**
    *The root manpage **does** carry `src/cli.rs`'s `long_about`: the generator
    uses the model's own `long_about`, falling back to `about`, as the page
-   base (`xtask/src/main.rs:156-164`). That is why the stale `long_about`
+   base (`xtask/src/main.rs:151-167`). That is why the stale `long_about`
    sentence at `src/cli.rs:27-28` never reached a generated artifact and no
    drift gate ever saw it — and why C040's rewrite of the `long_about` had to
    regenerate the manpage with it.*
@@ -1064,7 +1064,7 @@ failure grouping, and the interactive TTY.
    doc-comment edit changes `man/*.1` and `completions/*`, and
    `.github/workflows/ci.yml:96-108` fails the build without it. The comparison
    model comes from `cargo_cleanme::cli::Cli::command()` at
-   `xtask/src/main.rs:96`.
+   `xtask/src/main.rs:98`.
 2. **Does the flag work in both invocation forms?** Add it to
    `direct_and_external_forms_parse_equivalently` (`src/cli.rs:1853`), or use
    the production `try_parse_normalized_from` path as `src/cli.rs:370` does. A

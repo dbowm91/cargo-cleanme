@@ -67,7 +67,7 @@ a file that is being rewritten rots immediately.
 | 7 | The cleanup pipeline | What happens on `clean`, end to end |
 | 8 | Cross-cutting invariants | The eight rules that span modules — read before changing any of them |
 | 9 | Tooling and verification surfaces | The gates, and what each one actually proves |
-| 10 | Findings from the deep dives | 110 known defects and their dispositions — **check here before adding a new one** |
+| 10 | Findings from the deep dives | 111 known defects and their dispositions — **check here before adding a new one** |
 | 11 | How the code got this way | The plan corpus |
 | 12 | Index of deep dives | The sixteen deep dives |
 | 13 | Reading order | If you read one thing, read this |

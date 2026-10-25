@@ -781,16 +781,17 @@ passes): items 66-96 had been silently dropped from this table by a
 re-derivation pass and were restored, items 97-108 were added, and the
 corpus's citations, counts and per-platform census were re-derived from the
 source in the same passes. **Added 2026-10-25** (the 0.2.11 release candidate):
-items 109 and 110 record what the hosted macOS and Windows lanes found — three
-cases that asserted a path spelling only Linux produces, and the fact that a
-lane failing early never reaches the later test targets at all.
+items 109, 110 and 111 record what the hosted macOS and Windows lanes found —
+three cases that asserted a path spelling only Linux produces, the fact that a
+lane failing early never reaches the later test targets at all, and a
+generated-artifact gate that compared line endings as if they were content.
 
 Items 3-6 are re-verified as of the Phase-11 and Phase-12 closures (all of
 C018/C019/C021-C025 are now closed). Their findings were real when recorded and
 each is now closed by shipped code; the deep dives that carry them were updated in
 the same pass, so these rows point at completed work rather than at a plan.
 
-**One hundred and ten** findings are recorded here. The count is re-derivable:
+**One hundred and eleven** findings are recorded here. The count is re-derivable:
 it is the number of numbered rows in the table below.
 
 | # | Finding | Status |
@@ -905,6 +906,7 @@ it is the number of numbered rows in the table below.
 | 108 | **`plans/output-schema-v1.md` described the path escaping wrongly.** It said that an undecodable byte was dropped from the path, so a reader would expect the machine document to carry a shorter spelling than the filesystem has. | **Fixed.** The schema now states what actually happens: each undecodable byte becomes the Unicode replacement character `U+FFFD`, so the spelling is lossless in length and a reader can tell it apart from a path that was genuinely shorter. |
 | 109 | **Three cases asserted a path spelling that only holds on Linux.** The product reports a root by its *canonical* spelling — the deepest existing ancestor canonicalised and the rest re-appended — but three cases compared that against the caller's own spelling. Where the temporary directory does not resolve to itself, the two differ and the case fails for a reason it does not name: macOS's `/var` is a symlink to `/private/var`, and Windows canonicalises to a `\\?\` verbatim path. A fourth case wrote a literal `my-app/target` where the renderer joins with the platform's separator. | **Fixed.** Each compares against the same resolution the product uses, or builds the expected spelling the way the renderer builds it. The defect was found by the hosted macOS and Windows lanes of the 0.2.11 release candidate, and it is reproduced on Linux by pointing `TMPDIR` at a symlink: the four cases fail without the fix and pass with it, and the whole suite is green under that `TMPDIR`. |
 | 110 | **The hosted lanes never reached the integration suites.** The library's own failures abort `cargo test --all-targets`, so the two failing cases in the library meant the contract suite and the end-to-end suite never ran on macOS or Windows at all — and two further cases in the contract suite were waiting behind them with the same defect. | **Fixed.** The four cases are fixed and the whole suite is green under a symlinked `TMPDIR`, which is the condition that reproduces macOS. The lesson is recorded rather than fixed: a lane that fails early reports only the first failure, so a green lane is the only evidence that the later targets ran. |
+| 111 | **The generated-artifact gate compared bytes exactly, and the hosted Windows lane checks out with CRLF.** The renderer emits LF and git stores LF, but a checkout with `core.autocrlf=true` — which the Windows runner has — puts CRLF in the working tree, so the comparison reported **all thirteen** artifacts as stale, and only there. The `generated-docs` CI job runs on Ubuntu, and the xtask test that mirrors the check runs on every lane, so the gate was green where it was run and red where it was not. | **Fixed.** The comparison is made over the normalised text, so it still fails when the clap model changed and the artifact was not regenerated — which is what it is for — and no longer fails because of the checkout's line endings. The write path deliberately does not normalise, so a CRLF artifact is rewritten as LF rather than kept. A `.gitattributes` (`* text=auto eol=lf`) fixes the root cause as well. The defect is reproduced on Linux by cloning with `core.autocrlf=true`: the check fails against the old comparison and passes against the new one. |
 ### 10.1 Dead public API, recorded not removed
 
 `cargo_cleanme` is published on crates.io, so dropping `pub` is a semver-visible

@@ -1608,7 +1608,7 @@ contract (§7).
 | `a_bounded_scope_spells_its_paths_relative_to_the_scope_root` | 320 | a path under the scope root is relative; one under no root stays absolute |
 | `a_full_scope_spells_its_paths_absolutely` | 344 | a Full scope's paths keep their absolute form |
 | `a_one_component_path_is_qualified_with_the_scope_root_name` | 361 | `my-app/target`, not a bare `target` |
-| `the_scope_root_itself_is_spelled_with_its_own_name` | 382 | the scope root names itself instead of rendering as an empty column |
+| `the_scope_root_itself_is_spelled_with_its_own_name` | 385 | the scope root names itself instead of rendering as an empty column |
 
 The first two are `#[cfg(unix)]` (raw `OsString::from_vec`). The last four are
 M020's, and they are the tests that make the relative-path rule a contract rather

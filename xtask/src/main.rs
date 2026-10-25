@@ -54,7 +54,10 @@ fn run(check_only: bool) -> Result<(), String> {
         let path = root.join(relative);
         if check_only {
             let existing = std::fs::read(&path).ok();
-            if existing.as_deref() != Some(bytes.as_slice()) {
+            if !existing
+                .as_deref()
+                .is_some_and(|existing| same_content(existing, bytes))
+            {
                 stale.push(relative.clone());
             }
         } else {
@@ -178,6 +181,42 @@ fn render_node(command: &clap::Command, pages: &mut Vec<(String, Vec<u8>)>) -> R
     Ok(())
 }
 
+/// Compare a generated artifact with the file on disk.
+///
+/// The renderer emits LF, and LF is what git stores. A checkout that converts
+/// line endings — `core.autocrlf=true`, which the hosted Windows lane has —
+/// puts CRLF in the working tree, and a byte-exact comparison then reports
+/// *every* artifact as stale on that lane and nowhere else. The comparison is
+/// therefore made over the normalised text: it still fails when the model
+/// changed and the artifact was not regenerated, which is what it is for.
+///
+/// The *write* path deliberately does not normalise: there, LF is what the
+/// artifact must end up as, so a CRLF file is rewritten rather than kept.
+fn same_content(existing: &[u8], generated: &[u8]) -> bool {
+    normalise_line_endings(existing) == normalise_line_endings(generated)
+}
+
+/// CRLF and lone CR become LF; every other byte is left alone.
+fn normalise_line_endings(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\r' {
+            if bytes.get(index + 1) == Some(&b'\n') {
+                out.push(b'\n');
+                index += 2;
+                continue;
+            }
+            out.push(b'\n');
+            index += 1;
+            continue;
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    out
+}
+
 fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if let Ok(existing) = std::fs::read(path)
         && existing == bytes
@@ -227,7 +266,10 @@ mod tests {
         let mut stale = Vec::new();
         for (relative, bytes) in &pending {
             let existing = std::fs::read(root.join(relative)).ok();
-            if existing.as_deref() != Some(bytes.as_slice()) {
+            if !existing
+                .as_deref()
+                .is_some_and(|existing| same_content(existing, bytes))
+            {
                 stale.push(relative.clone());
             }
         }
@@ -236,6 +278,34 @@ mod tests {
             "the generated artifacts are stale: {}. \
              Run: cargo run --quiet --features dev-tools --bin generate-docs",
             stale.join(", ")
+        );
+    }
+
+    /// A checkout that converted the line endings is not a stale artifact.
+    ///
+    /// The hosted Windows lane checks out with `core.autocrlf=true`, so every
+    /// artifact in its working tree carries CRLF while the renderer emits LF.
+    /// The byte-exact comparison this replaced reported *all thirteen*
+    /// artifacts as stale there, and only there — the gate was green on every
+    /// other lane and red on the one it was supposed to hold.
+    ///
+    /// *Fails if:* the comparison stops tolerating a CRLF checkout, or starts
+    /// tolerating a *changed* artifact.
+    #[test]
+    fn a_crlf_checkout_is_not_reported_as_a_stale_artifact() {
+        let generated = b".TH CARGO-CLEANME 1\n.SH DESCRIPTION\n";
+        let checked_out = b".TH CARGO-CLEANME 1\r\n.SH DESCRIPTION\r\n";
+        assert!(
+            same_content(checked_out, generated),
+            "a CRLF checkout holds the same artifact"
+        );
+        assert!(
+            !same_content(b".TH CARGO-CLEANME 2\r\n.SH DESCRIPTION\r\n", generated),
+            "a changed artifact is still stale"
+        );
+        assert!(
+            !same_content(b"", generated),
+            "a missing artifact is still stale"
         );
     }
 }

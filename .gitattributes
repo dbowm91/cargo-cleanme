@@ -1,0 +1,9 @@
+# The generated artifacts — five shell completions and eight man pages — are
+# compared against what the clap model renders, and the renderer emits LF. A
+# checkout that converts line endings (`core.autocrlf=true`, which the hosted
+# Windows lane has) would put CRLF in the working tree: every artifact would
+# differ from the model, and a shell completion carrying CRLF is a broken
+# completion rather than a cosmetic one.
+#
+# `text=auto` lets git detect binary files, so this only affects text.
+* text=auto eol=lf
