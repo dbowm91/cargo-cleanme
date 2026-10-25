@@ -26,9 +26,10 @@ removed: every one of them still parses and still means what it meant.
   2026-10-21. `cargo cleanme --full` and `cargo cleanme ROOT` are the two
   spellings a human should type; `cargo cleanme clean --full` and
   `cargo cleanme clean ROOT` continue to parse, hidden from the help, and
-  resolve to exactly the same intent. `cargo cleanme --known` still resolves
-  to the bare invocation, and `scan --full` remains a hidden alias of
-  `scan --all`.
+  resolve to exactly the same intent. `--known` does not move to the root:
+  `cargo cleanme --known` is a usage error (exit `2`), because the root has no
+  `--known`; `cargo cleanme clean --known` still resolves to the bare
+  invocation. `scan --full` remains a hidden alias of `scan --all`.
 
   The reason is that the two-level spelling had become a trap. A flag written
   at the root and the same flag written on `clean` are now *the same flag*, so
