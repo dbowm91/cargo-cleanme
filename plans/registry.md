@@ -171,8 +171,8 @@ here that a future release must discharge to unblock anything.
 
 ## Published state
 
-**Sixteen** releases are published as GitHub releases and on crates.io.
-**v0.2.0 is yanked**; the other fifteen are not.
+**Eighteen** releases are published as GitHub releases and on crates.io.
+**v0.2.0 is yanked**; the other seventeen are not.
 
 Rechecked live against the crates.io API on 2026-10-07, after publishing
 **v0.2.3**: `max_version: 0.2.3`, `total: 11`, and `yanked` is `true` for
@@ -194,9 +194,16 @@ for the v0.2.7/v0.2.8 releases; publication is attested by tag + GitHub
 release + crates.io record + automatic smoke below. Writing the missing
 receipts is distribution-line debt.
 
+**Rechecked live on 2026-10-25, before publishing v0.2.11**: `max_version:
+0.2.10`, `newest_version: 0.2.10`, **eighteen** versions listed, and `yanked`
+is `true` for `0.2.0` alone. The crates.io API answers `404` for `0.2.11`, so
+that version does not exist on the registry yet.
+
 | Release | crates.io sha256 | GitHub release | Automatic smoke |
 |---|---|---|---|
-| `v0.2.8` (current) | `c24152a3fed8d3565251043e30d6c937bce59bbac1ad82843ef110721b9e43e5` | tag `v0.2.8` at `0a5a6e6`, released 2026-10-15 | `38683755836` — green |
+| `v0.2.10` (current) | `0f2e471bcdf53b4c108b0ed0c1532fa30277b38bdb88854493f5b6da9248cd0b` | tag `v0.2.10` at `270cceb`, released 2026-10-21, immutable | `39522277814` — green on all five targets |
+| `v0.2.9` | `9c1461bcf6806f6511bee89a20cf16c472e4849f825b426315fab29b0d923d7d` | tag `v0.2.9` at `8c95c2b` | `39319974151` — green on all five targets |
+| `v0.2.8` | `c24152a3fed8d3565251043e30d6c937bce59bbac1ad82843ef110721b9e43e5` | tag `v0.2.8` at `0a5a6e6`, released 2026-10-15 | `38683755836` — green |
 | `v0.2.7` | `a62c0ecb8b6672af02b4d1b5fd8c83b126de7df732df347a2ec159dda6c14dd7` | tag `v0.2.7` at `59b9d19` | `38454264585` — green |
 | `v0.2.6` | `bcc4e42e870b9653f178fca4950e34082a953158048ecd8937c15c49f2d60100` | `immutable: true`, id `410964339` | `38303253453` — green on all five targets |
 | `v0.2.5` | `4466f06336d81a24d256c7321139f686098ecc37facd38a9e191ad9631da30b9` | `immutable: true`, id `408326919` | `37988595432` — green on all five targets |

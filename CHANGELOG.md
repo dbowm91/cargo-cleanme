@@ -58,9 +58,11 @@ removed: every one of them still parses and still means what it meant.
 
 ### Fixed
 
-Seventy-six defects from three interrogations of the 0.2.10 tree, each pinned
-by a regression test that fails before the fix and passes after it. The ones a
-user could hit:
+**Fifty findings were added to the repository's own defect register**
+(`architecture/overview.md` §10) while this release was prepared — it grew from
+sixty-one entries at the 0.2.10 baseline (`8b96f86`) to **one hundred and
+eleven**. Every fix among them is pinned by a regression test that fails before
+the fix and passes after it. The ones a user could hit:
 
 - **An output root inside another package's directory was cleaned.** This one
   broke the repository's first rule — *nothing is deleted on the strength of a
@@ -121,6 +123,34 @@ user could hit:
   log surface's `diagnostics` and `unresolved` fields agree with the JSON's;
   and the marker memo records both answers, so every source directory is no
   longer read twice.
+- **Three cases asserted a path spelling only Linux produces.** The product
+  reports a root by its *canonical* spelling — the deepest existing ancestor
+  canonicalised and the rest re-appended — but three cases compared that
+  against the caller's own spelling. Where the temporary directory does not
+  resolve to itself the two differ: macOS's `/var` is a symlink to
+  `/private/var`, and Windows canonicalises to a `\\?\` verbatim path. A fourth
+  case wrote a literal `my-app/target` where the renderer joins with the
+  platform's separator. The product's behaviour is correct and deliberate in
+  all four cases; the expectations were Linux-shaped. Each now compares
+  against the same resolution the product uses.
+- **The hosted lanes never reached the integration suites.** The library's own
+  failures abort `cargo test --all-targets`, so the failing cases meant the
+  contract suite and the end-to-end suite never ran on macOS or Windows at
+  all — and two further cases in the contract suite were waiting behind them
+  with the same defect. The four cases are fixed and the whole suite is green
+  under a symlinked `TMPDIR`, which is the condition that reproduces macOS.
+  The lesson is recorded rather than fixed: a lane that fails early reports
+  only the first failure, so a green lane is the only evidence that the later
+  targets ran.
+- **The generated-artifact gate compared bytes exactly, and the hosted Windows
+  lane checks out with CRLF.** The renderer emits LF and git stores LF, but a
+  checkout with `core.autocrlf=true` — which the Windows runner has — puts
+  CRLF in the working tree, so the comparison reported **all thirteen**
+  artifacts as stale, and only there. The comparison is made over the
+  normalised text now, so it still fails when the clap model changed and the
+  artifact was not regenerated — which is what it is for — and no longer
+  fails because of the checkout's line endings. A `.gitattributes`
+  (`* text=auto eol=lf`) fixes the root cause as well.
 
 ### Documentation
 
@@ -137,7 +167,7 @@ user could hit:
 - **Findings 66-96 are restored to the §10 register.** They had been dropped
   by an earlier re-derivation pass. A record that silently loses half its
   entries is worse than a record that was never written.
-- The register now holds **108 findings**, each with its disposition.
+- The register now holds **111 findings**, each with its disposition.
 - The README, `docs/USAGE.md` and `docs/AUTOMATION.md` describe the scope as
   it is: the working directory *joins* the maintenance scope, and the scope
   only ever grows.
