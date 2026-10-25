@@ -89,6 +89,18 @@ release was still a draft and read back before the draft was flipped public.
 The placeholder body ("Draft binary release staged by Eggpack…") is a staging
 artefact, not release notes.
 
+**The notes were corrected once after publication.** The first draft of the
+notes repeated the `--known` claim that §2.1 had already corrected in the
+changelog — "`cargo cleanme --known` still resolves to the bare invocation" —
+and the same false claim was therefore published in the release body. It was
+caught by reading the published body back against the built binary, and
+corrected with `gh release edit`. An **immutable** release locks the tag and
+the assets; the release *body* remains editable, which is what made the
+correction possible at all. The published body now says what the changelog
+says: `--known` does not move to the root, `cargo cleanme --known` is a usage
+error, and `cargo cleanme clean --known` still resolves to the bare
+invocation.
+
 ### 2.3 The `Changed — BREAKING` heading
 
 The changelog section is headed `Changed — BREAKING`, because the canonical
