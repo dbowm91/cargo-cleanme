@@ -218,6 +218,13 @@ The root is the **single cleanup front door** (`src/cli.rs:539-623`):
 (`src/cli.rs:284`, `src/cli.rs:513-517`). `clean` is *hidden*, not removed:
 `man/cargo-cleanme-clean.1` still ships and still documents a working
 spelling, and it is generated from the same clap model, so it cannot drift.
+The **five generated completions advertise it too** — `clap_complete`
+enumerates every subcommand, hidden ones included, and has no way to suppress
+one — so `cargo cleanme <TAB>` offers `clean` beside `scan`, `config` and
+`update`. That is a recorded decision (C036 D49): the alias works, and
+excluding it from the completions would mean either removing it from the clap
+model, which breaks the single-model property C045 established, or editing the
+generated text per shell.
 `cargo cleanme .` is a bounded cleanup of `.`.
 
 Two rules make the alias safe, and both are **usage errors (exit 2)**:

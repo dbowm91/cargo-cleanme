@@ -1,7 +1,9 @@
 # C041 — Update-Path Candidate Spawn Can Fail With ETXTBSY: corrective
 
-Status: **proposed** — found by the v0.2.10 release gate. The mechanism is
-narrowed but not yet proven; not implemented.
+Status: **open** — found by the v0.2.10 release gate. The product's window is
+**mitigated** as of v0.2.11 (a bounded retry — see the amendment of
+2026-10-27), but the mechanism is still not proven and this plan's acceptance
+criteria are **unmet**.
 
 Repository baseline: `main` at `270cceb` (v0.2.10, published).
 
@@ -273,3 +275,89 @@ staging helpers are in scope for the pattern**, even where the specific
 window is already closed. The upstream `eggup-core` work in §"Required work"
 is unchanged.
 
+
+## Amendment 2026-10-27 — the product's window was mitigated in v0.2.11, and this plan's "not a retry" non-goal was overridden by what shipped
+
+The plan's status line said "not implemented" for eight months, and the
+decision record repeated it: `architecture/overview.md` §10 finding **61**
+carried the disposition "Open — tracked as C041", and finding **96** said
+flatly that "the product's window is unfixed". **Both claims were false
+against the tree they described.** The mitigation landed on **2026-10-22** in
+`a7191a8` — "fix(safety): an output root that holds sources is never a
+cleanup target", a sweep commit whose last bullet reads *"A candidate
+execution the kernel refused with `ETXTBSY` is retried: the condition says
+the machine was busy, not that the candidate is wrong."* That commit is an
+ancestor of the v0.2.11 tag (`1d67983`), and the retry is **absent** from
+v0.2.10 (`270cceb`), which is the tree the v0.2.10 release gate failed on.
+So the failure this plan records **predates** the mitigation, and the
+mitigation **shipped** in the release that followed.
+
+### What shipped
+
+`src/update.rs` now carries the retry:
+
+- `is_text_file_busy` (`:1218`) recognises the kernel's `ETXTBSY` (errno 26)
+  in the error the spawn produced, and nothing else.
+- `retry_while_busy` (`:1237`) repeats **only** that failure — bounded by
+  `CANDIDATE_EXECUTION_ATTEMPTS` (`:1203`, five attempts) with a backoff that
+  doubles per attempt (`CANDIDATE_EXECUTION_BACKOFF`, `:1206`, 20 ms). Every
+  other failure is reported at once, because repeating it would only delay
+  the report.
+- `RetryingCandidateValidator` (`:1265`) wraps the identity check, and
+  `execute()` builds it at `:1420` — the call the failing path goes through.
+
+**The retry is on the failing path, not beside it.** The v0.2.10 failure was
+raised by `run_bounded` inside `ExactIdentityValidator::validate`, which
+`execute()` reaches through the wrapper at `:1420`; the test that failed,
+`a_staging_cleanup_failure_is_reported_not_swallowed`, drives `run()` →
+`execute()`, so it exercises the same path. The retry's own regression test
+is `a_busy_executable_is_retried_and_a_real_failure_is_not` (`:2705`): the
+busy execution is retried, and a real failure is not.
+
+The transaction's shape, its error reporting and the ownership proof are
+**unchanged**: the retry sits inside the validator, before the commit, and a
+transaction that exhausts its attempts still aborts and still reports.
+
+### Why the non-goal was overridden
+
+§"Non-goals" says: **"Not a retry. A retry would mask a race rather than find
+it."** That is still the right rule *for a fix*: a retry that ships as the
+fix would close this plan without ever naming the mechanism, and the defect
+would be declared solved on the strength of a mitigation.
+
+What shipped is **not** that. It was landed by a different corrective, on a
+different rationale — that the condition says the machine was busy, not that
+the candidate is wrong — and it shipped in a release, so the product's
+user-visible failure was reachable in v0.2.10 and is no longer reachable in
+v0.2.11. The plan's non-goal is therefore **overridden by what shipped**, and
+recorded here rather than pretended away: the sweep's authors did not adopt
+this plan's rule, and this plan does not now pretend they did.
+
+The plan's *purpose* is unaffected. A mitigation is not a fix: it reduces the
+probability of the failure, and it does so without naming the mechanism.
+
+### What remains open
+
+The plan's acceptance criteria are **unmet**, and this plan stays open:
+
+1. **A deterministic reproduction** that fails against the current code.
+   The retry makes the current code *pass* the flake, so the reproduction the
+   plan asks for must be built against the pre-retry behaviour or against the
+   mechanism itself.
+2. **The named descriptor** — which descriptor holds the staged file open, and
+   in which process. Until that is known, the fix is a guess, and the retry
+   is a mitigation of a guess.
+3. **Evidence under load**: "the gate is green over at least 50 whole-suite
+   runs" is not evidence on an idle host (see the amendment of 2026-10-23).
+   The retry's effect under contention is **not yet measured**.
+4. **The upstream question**: if the holder is in `eggup-core`, the fix is
+   upstream's, and 0.1.3 does not carry it (§"Upstream `eggup-core` 0.1.3 does
+   not fix this"). The retry is a workaround, not a pin.
+
+### One completeness gap this amendment records rather than closes
+
+The **0.2.11 changelog's** Fixed section does not list the mitigation: the
+section was written for the release's headline changes and this sweep item
+was not among them. The section is **published** — it is in the crate
+tarball on crates.io — and this repository has no precedent for amending a
+published section, so the gap is recorded here instead of being written over.

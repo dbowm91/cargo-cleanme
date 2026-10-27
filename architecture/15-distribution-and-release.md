@@ -73,7 +73,7 @@ verification ladder — is inventoried in
 
 `Provenance` (`src/update.rs:166-181`) has exactly four variants, and each
 channel maps to one of them. The classification is computed by
-`classify_provenance_in` (`src/update.rs:403`), which is a positive-evidence
+`classify_provenance_in` (`src/update.rs:462`), which is a positive-evidence
 decision: it never infers ownership from a filename or a directory shape.
 
 | Channel | Mechanism | Platforms | Install location | `Provenance` |
@@ -115,13 +115,13 @@ The load-bearing property is therefore **distinguishability**, and it holds with
 four outcomes rather than two. Self-update is entitled to replace only a
 `VerifiableSelfManaged` installation, and only after re-proving the destination
 by its exact prior digest under the mutation lock
-(`src/update.rs:172-175`; `LiveDigestVerifier` at `src/update.rs:219-222`, and
+(`src/update.rs:172-175`; `LiveDigestVerifier` at `src/update.rs:241-244`, and
 its `verify` implementation at `src/update.rs:224-238`). A `CargoManaged`
 installation must be refused with the corrective command printed instead —
 `cargo install cargo-cleanme --locked --force`
 (`src/update.rs:197-199`) — because replacing it in place would make
 `cargo install --list` and Cargo's uninstall bookkeeping lie. `UnprovableOwnership`
-is refused too, with its own remediation (`src/update.rs:203-206`).
+is refused too, with its own remediation (`src/update.rs:225-228`).
 
 That distinction is not cosmetic. The `v0.1.3 → v0.1.4` rehearsal (C017) found a
 `CargoManaged` binary that was misdetected and silently replaced, and it shipped

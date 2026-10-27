@@ -7,7 +7,7 @@ the one architecture deep dive your change touches.
 
 A single Rust crate that finds Cargo build output and cleans it **through
 Cargo**, never by deleting directories. One binary over one library of 16
-modules, 18 source files, 43,057 lines in `src/`. No async runtime of its own.
+modules, 18 source files, 43,085 lines in `src/`. No async runtime of its own.
 `cargo metadata` is the only binary dependency that matters for safety.
 
 The working tree is **0.2.11, the published version**; `CHANGELOG.md` has no

@@ -86,11 +86,11 @@ is a complete, allocation-free implementation.
 | `active_skipped()` | — | Group or workspace skipped: protected by source activity (`workspace.rs:1703`, `1864`) | `Analysis` |
 | `group_measured(u64)` | bytes | A group finished sizing (`workspace.rs:1876`) | `Analysis` |
 | `reportable_group(&Path, u64)` | path, bytes | A group qualifies for the report (`workspace.rs:1905`, `cleanup.rs:2567`) | `Analysis`, cleanup |
-| `units_total(ScanPhase, u64)` | phase, total | Announce the unit count for a phase | `Analysis` (`workspace.rs:1619`), cleanup (`cleanup.rs:1722`) |
-| `unit_completed(ScanPhase)` | phase | One unit finished | `Analysis` (`workspace.rs:1805-1877`), cleanup (19 sites, `cleanup.rs:1796-2245`) |
+| `units_total(ScanPhase, u64)` | phase, total | Announce the unit count for a phase | `Analysis` (`workspace.rs:1797`), cleanup (`cleanup.rs:1722`) |
+| `unit_completed(ScanPhase)` | phase | One unit finished | `Analysis` (`workspace.rs:1784-1856`), cleanup (19 sites, `cleanup.rs:1796-2245`) |
 
 `active_skipped` is deliberately counted per **workspace** at
-`workspace.rs:1703` and per **group** at `workspace.rs:1864`; the source comment
+`workspace.rs:1881` and per **group** at `workspace.rs:2094`; the source comment
 at `workspace.rs:1699-1702` records why the workspace count must not be added to
 the group counter.
 
@@ -140,13 +140,13 @@ trigger** — the renderer discards its `bytes` argument entirely
 (`progress.rs:491-493`) and never touches `determinate_done`; `active_skipped` is
 likewise draw-only (`progress.rs:486-490`). Asserted at `progress.rs:778-779`:
 after `group_measured(100)`, `determinate_done_value()` is still `0`; only
-`unit_completed` moves it (`progress.rs:780-781`).
+`unit_completed` moves it (`progress.rs:829-830`).
 
 **`Send + Sync` (`progress.rs:39`) is a contract, and today no call site
 exercises it across a thread.** The observer is threaded as a
 `&dyn ProgressObserver` (`main.rs:1413`, `discovery.rs:331`, `workspace.rs:464`),
 but every observer call in the crate happens on the calling thread. The
-`dua_core::walk_roots` pool (`discovery.rs:706`) is handed the *descend filter*
+`dua_core::walk_roots` pool (`discovery.rs:685`) is handed the *descend filter*
 closure (`discovery.rs:715`), not the observer; the observer is called from the
 consumer loop at `discovery.rs:762`. The bounded-parallel Cargo resolution
 (`workspace.rs:488-503`) likewise keeps the observer out of its workers. So
@@ -161,7 +161,7 @@ counters, `Mutex` for the candidate list, the phase, and the draw timestamp
 `NoopObserver` (152 references across `src/` and `tests/`; `cleanup.rs` alone
 names it 81 times) and with
 `TestObserver` for event assertions (`cleanup.rs:8407`, `:8002`, `:8566`;
-`workspace.rs:4797`, `:5209`); without a trait every one of those tests would need
+`workspace.rs:5426`, `:5838`); without a trait every one of those tests would need
 a real terminal or a global renderer hook. **Multiple independent producers, one
 renderer:** the scan and cleanup paths each build a single `IndicatifRenderer`
 (`main.rs:476`, `main.rs:1410`) and never learn about one another — none of
@@ -188,7 +188,7 @@ need: degradation happens once, at construction, via the caller's boolean.
 
 **Indeterminate: `Discovery`, `Resolution`, `Reporting`.** No `units_total` is ever
 emitted for these. `Discovery` cannot have one without a pre-scan
-(`progress.rs:765-769` asserts the total must be `0`, with the reason in the assert
+(`progress.rs:814-818` asserts the total must be `0`, with the reason in the assert
 message). `Resolution` has no cheap cardinality — one subprocess per manifest,
 failures unknown until run. `Reporting` is never left on screen.
 
@@ -214,11 +214,11 @@ are distinct operations:
 The second reset is idempotent (same phase, so the `if` at `progress.rs:328` does
 not fire) and exists as defence in depth: `units_total` re-scopes on the phase
 carried *by the event itself*, not only on an explicit `phase()` call. That is the
-M8 fix named at `progress.rs:505-507`, tested at `progress.rs:784-801`.
+M8 fix named at `progress.rs:505-507`, tested at `progress.rs:833-850`.
 
 **User-visible meaning:** a phase change makes the fraction vanish from the line
 rather than carrying a partial count into unrelated work. Asserted at
-`progress.rs:809-812` (`Analysis` at 1/5, then `CleanupSimulate` → total `0`,
+`progress.rs:858-861` (`Analysis` at 1/5, then `CleanupSimulate` → total `0`,
 done `0`).
 
 ## 5. Deciding whether to show progress
@@ -367,7 +367,7 @@ renders as `130/100` in the text while the bar's own position stops at 100%.
 **`refresh_count`, `determinate_total_value`, `determinate_done_value`,
 `top_groups`, `is_hidden`, `coordinated_bar_count`, `has_shared_draw_target` all
 have no production caller** — they are consumed only by the module's own tests
-(`progress.rs:531-539`, `:552-554`, `:687-690`, `:755`, `:766-781`, `:841`,
+(`progress.rs:576-584`, `:552-554`, `:687-690`, `:755`, `:766-781`, `:841`,
 `:926-938`). Grep across `src/` and `tests/` finds no use of any of them outside
 `src/progress.rs`. They are `pub` rather than `#[cfg(test)]` so an out-of-crate
 consumer could assert on them.
@@ -466,7 +466,7 @@ screen a defined frame and has no production counterpart.
 `ProgressBar::new_spinner()` (`progress.rs:271`) and never becomes a length bar:
 `maybe_draw` sets a *position* only when a total is known
 (`progress.rs:410-414`), and the determinate fraction is carried by the
-**message** (`progress.rs:370-374`), not by the bar's own template. So the bar
+**message** (`progress.rs:390-394`), not by the bar's own template. So the bar
 spins in both modes and the numbers live in the text — which is exactly why the
 fraction is visible at all under `{spinner} {msg}`.
 
@@ -521,14 +521,14 @@ run used is debugging information rather than a result.
 **Are the observer calls cheap enough for a hot loop? Mostly yes, one exception.**
 The trait doc requires *"Implementations MUST NOT allocate per visited entry;
 directory counters are aggregated in batches"* (`progress.rs:30-31`), and producers
-honour it: `discovery.rs:799-801` batches `dirs_visited` at 512 entries,
-`discovery.rs:864-866` batches `dirs_pruned` at 64. Per-call cost is one relaxed
+honour it: `discovery.rs:778-780` batches `dirs_visited` at 512 entries,
+`discovery.rs:843-845` batches `dirs_pruned` at 64. Per-call cost is one relaxed
 `fetch_add` (`progress.rs:460`, `:464`).
 
 The exception: **`unit_completed` takes a `Mutex` on every call** —
 `reset_totals_for_phase` locks `current_phase` (`progress.rs:327`) before checking
 whether the phase changed. That lock is taken by every `unit_completed` (19 sites
-in `cleanup.rs:1796-2245`, 5 in `workspace.rs:1805-1877`) and every `units_total`.
+in `cleanup.rs:1796-2245`, 5 in `workspace.rs:1784-1856`) and every `units_total`.
 Bounded by group and unit count, not entry count, so not a hot-loop problem — but
 an uncontended lock per progress unit that a `load`/`store` on an `AtomicU8` phase
 tag would avoid.
@@ -552,7 +552,7 @@ are independent values fed by independent increments. The bar's `visited` counts
 files (`discovery.rs:793`) — while `ScanCounters.directories_visited` counts
 **directories only**: *"`directories_visited` counts directories only; `visited`
 keeps counting every entry (files included) as the traversal total (L6)"*
-(`discovery.rs:795-796`). So one run shows "visited N" on the bar and a different,
+(`discovery.rs:774-775`). So one run shows "visited N" on the bar and a different,
 smaller visited-entries number in the report (`main.rs:1642`), and neither labels
 the other. The hardcoded `analyzing` label that used to compound this is gone:
 `phase_label` (`progress.rs:348-358`) names the real phase, so a `CleanupExecute`
@@ -599,7 +599,7 @@ frames and the prompt resumes mid-frame with no newline — and a `Drop` impl on
 ## 9. Testing
 
 **Real numbers:** 15 `#[test]` functions, confirmed by grep. The test module opens
-at `progress.rs:519-520`. The table cites each test's `fn` line.
+at `progress.rs:509-510`. The table cites each test's `fn` line.
 
 | # | Test | Line | Protects |
 |---|---|---|---|
@@ -676,14 +676,14 @@ regressed, because error handling has no runtime surface; its comment
 (`progress.rs:834-835`) concedes as much. And
 `renderer_refresh_bounded_independently_of_entry_count` (`progress.rs:746`) has a
 comment (`progress.rs:747-750`) claiming it asserts "that visible construction does
-not allocate per entry", but the body (`progress.rs:751-755`) only ever constructs
+not allocate per entry", but the body (`progress.rs:800-804`) only ever constructs
 a **hidden** renderer: the visible 10 Hz throttle is never measured, and the test
 proves `0 == 0`.
 
 **Platform risk.** The only environment-sensitive test is
 `should_show_progress_respects_flag_and_dumb_term` (`progress.rs:711-728`), which
 mutates the process-global `TERM` via `unsafe { std::env::set_var }`
-(`progress.rs:721`, `:726`) — correctly wrapped, which edition 2024 /
+(`progress.rs:721`, `:790`) — correctly wrapped, which edition 2024 /
 `rust-version = "1.89"` requires (`Cargo.toml:4-5`). It asserts only the flag and
 `TERM=dumb` branches, so it is **not** TTY-dependent and is safe on CI and
 Windows. But `TERM` is process-global and `cargo test` runs tests in parallel
@@ -708,9 +708,9 @@ directly). Not covered by `tests/cli_contract.rs` either, which always passes
    `stderr_is_terminal` (`progress.rs:189-192`) inspects fd 2 and never fd 1.
    Adding a stdout check would suppress progress for `cleanme scan | jq` — the
    case the separation exists to support.
-3. **The format gate at `main.rs:1408-1409` and `main.rs:474-475` is duplicated,
+3. **The format gate at `main.rs:1861-1862` and `main.rs:474-475` is duplicated,
    not shared.** Both must be edited together or `scan` and `clean` will disagree;
-   the `!show` inversion at `main.rs:1410` / `main.rs:476` is easy to drop, and
+   the `!show` inversion at `main.rs:1410` / `main.rs:578` is easy to drop, and
    so is the second argument — `options.verbose` must be threaded to both, or the
    two paths render different surfaces. Adding a fourth `OutputFormat` variant
    means touching both, and a variant added without them would silently inherit
@@ -728,7 +728,7 @@ directly). Not covered by `tests/cli_contract.rs` either, which always passes
    scale. Note that the *message* is not clamped either (`progress.rs:370-374`),
    so it will still read `130/100` — the guard covers the bar, not the text.
 7. **The bar's counters and the report's already disagree.** Bar `visited` counts
-   all entries (`discovery.rs:793`); `ScanCounters.directories_visited` counts
+   all entries (`discovery.rs:772`); `ScanCounters.directories_visited` counts
    directories only (`discovery.rs:795-796`). The `analyzing` literal is gone —
    the label comes from `phase_label` (`progress.rs:348-358`) — but the duplicated
    counter set is not. Fixing that means sharing one counter set, not patching

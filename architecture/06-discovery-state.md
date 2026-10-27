@@ -240,7 +240,7 @@ Both `Missing` and `Unavailable` fail to produce a usable prior, but only
 | `UnsupportedNewer` | `None` | **No** |
 | `Unavailable(_)` | `None` | **No** |
 
-The boolean is `replacing_invalid`. `main.rs:1296-1301` uses it to print
+The boolean is `replacing_invalid`. `main.rs:1737-1742` uses it to print
 "replaced unusable discovery state after successful Full reconciliation" — an
 operator-visible acknowledgement that stale bytes were clobbered, so the
 replacement is never silent.
@@ -745,7 +745,7 @@ Three honest limits:
   `$HOME` either.
 - It is a *conservative-in-the-right-direction* heuristic, not an authority. The
   real containment guarantee for the Routine walk is
-  `canonical_dedup_roots` in `policy.rs:804-846`, not this function.
+  `canonical_dedup_roots` in `policy.rs:838-880`, not this function.
 
 ## 6. Publication
 
@@ -803,7 +803,7 @@ There is no `set_permissions` call anywhere in the module (verified by grep).
 file with the process umask, i.e. typically `0644` on unix — **world-readable**.
 The file contains the canonical path of every Rust project on the machine, which
 is a mild but real information disclosure on a shared host. This is consistent
-with `config.rs:494-497`, which uses the identical temp+`create_new` pattern for
+with `config.rs:497-500`, which uses the identical temp+`create_new` pattern for
 `config.toml` and also sets no permissions, so it reads as an existing repo
 convention rather than an oversight in this module. It is still worth a decision.
 
@@ -818,7 +818,7 @@ failure as a warning, never as a scan failure:
   `!observed.is_empty()` so an empty scan performs no write at all.
 
 `NoPublication` prints `"discovery state was not reconciled: {reason}"`
-(`main.rs:1562-1565`), and a `None` prior prints the `StateLoad::diagnostic()`
+(`main.rs:2023-2026`), and a `None` prior prints the `StateLoad::diagnostic()`
 message plus "; Full state reconciliation was skipped" (`main.rs:1567-1573`).
 Both Full-branch notices are collected into `pending_notices` and fanned out to
 stderr only after the progress renderer has been cleared (`main.rs:1477-1481`) —
@@ -855,7 +855,7 @@ result.
 
 **Confirmed in code.** The scan pipeline's own results — `manifests`,
 `counters`, `diagnostics`, `workspaces` (`main.rs:1464`), `groups`
-(`main.rs:1597`), `physical` (`main.rs:1613`), `report` (`main.rs:1625-1644`) —
+(`main.rs:1597`), `physical` (`main.rs:1613`), `report` (`main.rs:2454-2473`) —
 are computed and rendered independently of `discovery_state`. The state write
 happens at `main.rs:1243-1337`, strictly *between* workspace resolution and
 grouping, and its result feeds only `full_state`, `publish_ok`, and stderr text.
@@ -882,8 +882,8 @@ it. Persistent targeted retirement remains decision-gated by proposed ADR 005.
 | Consumer | Call site | Reads | Notes |
 |---|---|---|---|
 | `policy::routine_roots` | `policy.rs:648` | `load_default()` | Routine scan root set. |
-| `policy::routine_roots_from_state` | `policy.rs:663-693` | `StateLoad`, `learned_roots`, `last_project_seen_at`, `now_seconds()` | Re-implements the retention filter independently at `policy.rs:679-685` (same three clauses as `discovery_state.rs:92-95`, plus its own `now < r.last_project_seen_at` future-timestamp clause) and applies C030's maintainability check at `policy.rs:680`. Seeds are always unioned in first (`policy.rs:668-671`); a non-`Loaded` load falls back to seeds + one warning (`policy.rs:643-644`). |
-| `policy::routine_cleanup_candidates` | `policy.rs:616` | `StateLoad`, `learned_roots`, `last_project_seen_at`, `now_seconds()` | C028: the cleanup-only variant. Same age filter (`policy.rs:633-638`), but raw paths with provenance and no canonicalization, so classification (`policy.rs:256`) sees a symlink before any collapse could resolve it. |
+| `policy::routine_roots_from_state` | `policy.rs:663-693` | `StateLoad`, `learned_roots`, `last_project_seen_at`, `now_seconds()` | Re-implements the retention filter independently at `policy.rs:679-685` (same three clauses as `discovery_state.rs:92-95`, plus its own `now < r.last_project_seen_at` future-timestamp clause) and applies C030's maintainability check at `policy.rs:680`. Seeds are always unioned in first (`policy.rs:670-673`); a non-`Loaded` load falls back to seeds + one warning (`policy.rs:643-644`). |
+| `policy::routine_cleanup_candidates` | `policy.rs:618` | `StateLoad`, `learned_roots`, `last_project_seen_at`, `now_seconds()` | C028: the cleanup-only variant. Same age filter (`policy.rs:633-638`), but raw paths with provenance and no canonicalization, so classification (`policy.rs:256`) sees a symlink before any collapse could resolve it. |
 | `clean --full` roots | `policy.rs:549`, `main.rs:772` | `learned_roots[].path` of the in-memory generation | C028: `full_cleanup_roots` consumes the generation the just-finished reconciliation proved — never a disk reload — then `admit_automatic` (`main.rs:773`) classifies before collapsing. A missing generation or non-zero reconciliation refuses cleanup. |
 | `clean --full` / maintenance generation | `main.rs:963-968`, `main.rs:1010-1015` | `last_full_at` | `Option<u64>` → `state_generation`. |
 | `run_scan`, Full branch | `main.rs:1252-1320` | everything | `load_default`, `full_reconciliation_prior`, `now_seconds`, `ProjectObservation`, `reconcile_full`, `publish`. Returns the proven generation in `ScanOutcome::full_state` (`main.rs:1533`) even when the save fails, so `clean --full` never falls back to a stale disk generation. |
@@ -1309,7 +1309,7 @@ question should be reviewed against the code, not against its test count.
    (`:1244``). A truncate-in-place regression would leave `last_full_at`
    corruptible.
 6. **Has anything besides the module's own temp file become deletable?**
-   `discovery_state.rs:547` and `:585`` are the only production `remove_file`
+   `discovery_state.rs:549` and `:587`` are the only production `remove_file`
    calls in the file, and `:587`` is scoped to the current pid and to files over
    an hour old. The sweep must never widen to another publisher's temps.
 7. **Is `observed_at` still `now.max(prior.last_full_at.unwrap_or(0))`?**

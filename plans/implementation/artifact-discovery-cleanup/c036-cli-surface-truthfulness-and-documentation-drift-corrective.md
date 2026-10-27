@@ -13,7 +13,7 @@ Related: `plans/adr/008-accepted-canonical-full-cleanup-spelling-and-proof-scope
 
 Make every user-visible statement about the CLI **true**, and make the
 repository's operational documentation match the behaviour the code actually
-has. **Forty-eight** defects are in scope (D1–D48); all are documentation-,
+has. **Fifty** defects are in scope (D1–D50); all are documentation-,
 message-, or evidence-level. **No production behaviour change is authorised by
 this plan**, with one exception: D8 adds a bounded *diagnostic* to the
 bare-invocation path, which changes no exit code and no cleanup behaviour
@@ -22,8 +22,18 @@ bare-invocation path, which changes no exit code and no cleanup behaviour
 D2, D5, D14–D23, D26, and D28 were resolved by the documentation-and-skills
 re-derivation pass of 2026-10-19, which re-derived the eight skills, `AGENTS.md`,
 `README.md`, and all six `docs/` files against the current source. They are
-retained in the table for the record. **Fifteen defects remain open**
-(D3, D4, D6, D7, D8, D9, D10, D11, D12, D13, D24, D25, D27, D29, D36).
+retained in the table for the record. **Sixteen defects remain open**
+(D3, D4, D6, D7, D8, D9, D10, D11, D12, D13, D24, D25, D27, D29, D36, D50).
+
+**D49–D50 were added on 2026-10-27**, by a re-reading of the v0.2.11 release
+report's own "worth flagging" list. D49 is a CLI-surface truthfulness defect:
+the hidden `clean` alias is advertised in **all five** generated completions,
+and the only record of it called it a bash-only leak. D50 is the recurrence of
+D34 that D34 predicted: the architecture corpus's citations were re-derived on
+2026-10-25 against the **v0.2.10** tree, which the post-0.2.10 sweep has left
+10,218 insertions behind. D49 is **resolved** by recording the decision and
+correcting the characterisation; D50 is **partly corrected** — the
+content-identical citations are re-derived, the rewritten ones are open.
 
 **D47–D48 were added on 2026-10-25**, by the human inspection of the v0.2.11
 release candidate's staged-release validation output and by the external smoke
@@ -104,6 +114,91 @@ same `long_about` rather than from a generator-side block — so the two
 surfaces can no longer drift. D2 was discharged with it. D1 is retained in
 the table for the record.
 
+## The 2026-10-27 citation re-derivation
+
+D50's mechanism, in numbers.
+
+### What was wrong with the 2026-10-25 pass
+
+That pass's own title says it: *"re-derive the architecture corpus against
+the **0.2.10** tree"*. The corpus describes the **working tree**, not a
+released one. The v0.2.10 tag (`270cceb`, 2026-10-20) is the tree the
+post-0.2.10 sweep then moved away from — `a7191a8` (2026-10-22), `3df22cd`,
+`4687765` and `570b6f4` (2026-10-25) between them added **10,218 lines** and
+removed **1,606** across **all sixteen** modules. So the corpus's citations
+were left pointing at the *previous release's* line numbers, and a reader
+following a pointer landed on unrelated code — which is D34's defect,
+recurring exactly as D34 predicted (*"the accumulated cost of the rule in
+`AGENTS.md` §6"*).
+
+The evidence is two lines that are easy to check:
+
+| Claim | v0.2.10 | now | corpus cited |
+|---|---|---|---|
+| `Provenance::CargoManaged { .. } => "cargo_managed"` | `src/update.rs:187` | `src/update.rs:198` | `187` |
+| `.with_integrity(IntegrityRequirement::Sha256(*manifest.digest()))` | `src/update.rs:1175` | `src/update.rs:1374` | `1175` |
+
+### The method
+
+Every citation in the corpus was measured against the current tree by asking
+one question: **does the cited range still carry what the sentence names?**
+The identifier the sentence names is the *anchor*; a citation is stale when
+its range no longer contains it. A stale citation is then re-derived from the
+source — never shifted arithmetically — by one of two routes:
+
+- **MAP.** The cited block's content is preserved verbatim in the current
+  file. Its new home is found by aligning a candidate baseline revision
+  (`v0.2.10`, `a7191a8`, `3df22cd`, `4687765`, `570b6f4`, `38f2759`) with the
+  current one, and the proposal is accepted only when the two blocks are
+  **identical** — the same standard the 2026-10-21 pass used — *and* the
+  citation was correct against that baseline.
+- **ANCHOR.** The block was rewritten by the sweep, so its old content no
+  longer exists. The anchor is located by its *definition* in the current
+  file, and the proposal is accepted only when exactly one definition exists
+  and the new range carries the anchor.
+
+Each citation keeps its **form**: a bare `:N` stays bare, an explicit
+`file.rs:N` stays explicit.
+
+### What was done, and what was not
+
+**552 citations** were re-derived by the MAP route — 32 in
+`01-domain-and-errors.md`, 17 in `02-cli.md`, 14 in
+`03-config-and-editor.md`, 108 in `04-policy-and-scope.md`, 7 in
+`05-discovery.md`, 9 in `06-discovery-state.md`, 14 in `07-workspace.md`, 36
+in `08-traverse.md`, 26 in `09-cleanup.md`, 23 in `10-reporting.md`, 23 in
+`11-progress.md`, 121 in `12-self-update.md`, 27 in `13-orchestration.md`, 30
+in `14-testing-and-verification.md`, 3 in `15-distribution-and-release.md`,
+14 in `16-interactive.md` and 48 in `overview.md`. The pass changed
+**citation numbers only**: of 523 changed line pairs, 520 differ only inside a
+citation, and the 3 that differ in prose are the deliberate amendments in D49,
+D50 and register rows 61 and 96.
+
+**2,744 citations remain unverified** and are **open**:
+
+| Count | What they are |
+|---|---|
+| 561 | an anchor places them unambiguously, but the *range* needs a human's confirmation — the anchor names the item, not the block |
+| 1,577 | need hand review: the block was rewritten, the anchor is ambiguous, or several anchors compete |
+| 547 | carry no code anchor to re-derive from, so nothing can place them mechanically |
+| 47 | name a line that no longer exists in the target file |
+| 12 | name a vendored dependency (`dua-core-4.1.0`, `eggup-core-0.1.2`, `filesize-0.2.0`) rather than this repository, so this repository's tree cannot place them |
+
+The tool is **not checked in**: it is a one-shot re-derivation, not a gate,
+and `scripts/` holds gates (see `architecture/14-testing-and-verification.md`
+§5). The method above is reproducible without it.
+
+### The gate gap is still the real defect
+
+D34's disposition — *"the gate gap is not fixed"* — still holds, and this
+section is the second recurrence of it. `scripts/check-doc-citations.py`
+resolves `file.rs:N` and checks that the line is **in range**; it never checks
+that the line still *says* what the sentence claims, and it covers
+`architecture/` only. A sweep that adds a thousand lines to a module
+invalidates every citation past that point while the prose keeps reading as
+true, and nothing notices. **WP-10** — a checked-in citation manifest and a
+content check — remains the fix, and remains unbuilt.
+
 ## Non-goals
 
 - Changing the canonical Full cleanup spelling. That is a durable decision and
@@ -169,7 +264,8 @@ a non-root Linux workstation, unless stated otherwise.
 | D45 | **A source comment described a mechanism the code does not use.** The H-2 re-discovery comment in `src/cleanup.rs` said the post-proof refresh *"only re-resolves **self**"*, which reads as a per-candidate re-resolution. The re-discovery is in fact a **whole-scope** manifest walk over **every** root, run **once per unit**, because the claimant set is global: a manifest appearing under any root after one unit's proof must block the units that follow. The comment understated the check, and a reader reasoning from it would conclude that a manifest planted under *another* root during one unit's cleanup was invisible to the next. | `src/cleanup.rs`; `architecture/09-cleanup.md`. **Corrected 2026-10-23**: the comment now states what the walk does and why the scope is global. The *shape* is load-bearing and is pinned by a regression test, so it is unchanged. |
 | D46 | **Source comments named the pre-M019 hidden spelling as if it were the current one.** ADR 008 §4b made the root the canonical cleanup front door: the bounded-root spelling is `cargo cleanme ROOT` and the Full spelling is `cargo cleanme --full`. Forty-five comment lines across `src/cli.rs`, `src/cleanup.rs` and `src/main.rs` still presented `clean ROOT` and `clean --full` as the current way to express those operations. A reader would have looked for a subcommand spelling that the help output no longer advertises. | `src/cli.rs`, `src/cleanup.rs`, `src/main.rs`; `plans/adr/008-accepted-canonical-full-cleanup-spelling-and-proof-scoped-full-gate.md`. **Corrected 2026-10-23**: the comments that present an alias as the current spelling now name the canonical one. The comments that are *about* the alias — its hiding, its conflicts, its published-spelling compatibility — were deliberately left alone, because they are true as written. `clean --known` was also left alone: `--known` lives on the alias and has no root-level spelling, so `clean --known` is still the only way to write it. |
 | D47 | **The staged-release validator summarised its own inventory as "2 installers" while the inventory it checks has four.** `scripts/validate-staged-release.py` builds the required asset set from five contracted binaries, five `.sha256` sidecars, `release-manifest.json` and **four** installer wrappers — `install-exact.sh`, `install-exact.ps1`, `install.sh`, `install.ps1` — and then printed a summary note with the installer count written out as the literal `2`. The *check* was correct and passed on every release; only the human-readable line was wrong, and it is the line the publication gate asks a human to read. The number came from the module docstring, which described only the two exact-release bootstrap installers and did not mention the two public wrappers. The **v0.2.10 release record** quoted the line as "4 installers" — it corrected the tool's output in prose rather than recording what the tool printed, so the wrong number survived in the tool *and* in the record that quoted it. | `scripts/validate-staged-release.py`; the v0.2.11 validator log (run `40216008270`), whose `[1/6]` note read "… + 2 installers" against a 15-asset inventory. **Corrected 2026-10-25**: the installer names are now a named constant and the summary note **derives** its count from that set, so the composition it states cannot disagree with the inventory it checks; the module docstring states all four wrappers. The fix landed *after* v0.2.11 was published, because the staged bytes bind the release manifest to the tagged source revision and re-staging for a summary label would have voided a valid, fully validated candidate — the v0.2.11 receipt quotes the line as it printed. **The gate is still not built**: a note that states a count instead of deriving it is a count no tool checks. |
-| D48 | **Two user-facing documents placed a *machine* reason code on stderr, where no reason code is ever printed.** `docs/RELEASING.md` said a learned root whose coverage could not be proven is skipped "with the reason code `skipped_incomplete_coverage`, **named on stderr**", and `docs/AUTOMATION.md` said the same. The reason code is a field of the JSON envelope's `units[].reason_code`; the human surface renders the unit's **detail** in prose and never prints the code — a check of a real Full cleanup's stdout and stderr on this host found `simulated`, `skipped_marker_invalid`, `skipped_incomplete_coverage`, `skipped_outside_selection` and `cleaned` **all absent** from both streams. The machine contract was never in doubt: `docs/USAGE.md` and `docs/TROUBLESHOOTING.md` describe the same code correctly, without claiming a surface. | `docs/RELEASING.md` (the external-smoke checklist); `docs/AUTOMATION.md` (the Full-cleanup section); `src/output.rs` — `reason_code` is emitted at `:176` and nowhere else, and `src/report.rs` never mentions it. **Corrected 2026-10-25**: both documents now say the code is a machine field carried by the JSON envelope's `units[].reason_code`, and that the human surface names the root and the cause in prose instead. The behaviour is unchanged. |
+| D49 | **The hidden `clean` alias is advertised in all five generated completions, and the only record of it called it a bash-only leak.** `clean` is hidden in `--help` (`#[command(hide = true)]`, `src/cli.rs:270-271`) precisely so the root stays the only advertised cleanup front door, and the alias's own doc comment says it keeps every published spelling working *"without advertising a second front door"* (`src/cli.rs:271-275`). But `clap_complete` enumerates `cmd.get_subcommands()`, which includes hidden subcommands, and offers no way to suppress one — so every generated completion offers `clean`: bash `opts="… scan config clean update"` (twice), zsh `'clean:Preview or execute cleanup…'`, fish `__fish_seen_subcommand_from scan config clean update`, PowerShell `[CompletionResult]::new('clean', 'clean', …)`, Elvish `cand clean '…'`. The **v0.2.11 release report described this as a bash leak**; it is all five. The hidden *flags* are handled per shell and inconsistently: bash offers `--dryrun`, fish does not. | `completions/` (all five); `src/cli.rs:270-275`; `clap_complete` 4.6.11's `aot/shells/*.rs`; `plans/closure/artifact-discovery-cleanup/m019-status.md` §4. **Corrected 2026-10-27**: the release report's characterisation is corrected here — the v0.2.11 receipt never mentioned the alias, and it is **closed** in any case, so it is not amended. The **decision** is recorded rather than an artefact changed: the alias keeps its generated artefacts, exactly as M019 decided for its man page — the alias works, it is regenerated from the same clap model, so it cannot drift. Excluding it from the completions is *possible* but not free: it would require either removing the alias from the clap model — which breaks the single-model property C045 established, since the binary, the tests and the generated artefacts must see the same surface — or per-shell text surgery in `xtask`, which the generator's own design forbids ("nothing here restates command syntax"). The owner may direct the surgery; the tool has no way to suppress a hidden subcommand. |
+| D50 | **The architecture corpus's citations describe the v0.2.10 tree, not the current one — a second recurrence of D34, and the re-derivation of 2026-10-25 was aligned to the wrong baseline.** Measured on 2026-10-27: the corpus's line numbers are the **v0.2.10** ones (`270cceb`), which is **10,218 insertions and 1,606 deletions** behind the current `src/` — the post-0.2.10 sweep (`a7191a8`, `3df22cd`, `4687765`, `570b6f4`) changed **all sixteen** modules. A reader following a pointer lands on unrelated code: `Provenance::CargoManaged { .. } => "cargo_managed"` is at `src/update.rs:187` in the 0.2.10 tree and at `:198` now, and the corpus cites 187; `.with_integrity(IntegrityRequirement::Sha256(*manifest.digest()))` is at `:1175` in the 0.2.10 tree and at `:1374` now, and the corpus cites 1175. The pass of 2026-10-25 was titled *"re-derive the architecture corpus against the 0.2.10 tree"* — the wrong tree. **D34 predicted this**: it recorded the drift as *"the accumulated cost of the rule in `AGENTS.md` §6"* and left the gate unbuilt, so nothing noticed the sweep that followed it. | **Partly corrected 2026-10-27; the rest is open.** Every citation whose cited block is **content-identical** in a candidate baseline and in the current tree was re-derived — the same standard the 2026-10-21 pass used (*"each accepted only when the mapped lines carried identical content"*), never shifted arithmetically — and the re-derivation touched citation numbers only, no prose. The remainder — citations whose block was **rewritten** by the sweep, and citations with no code anchor to re-derive from — are **open** and need the hand review D34's pass needed. The method and the counts are recorded in this plan's "The 2026-10-27 citation re-derivation" section below. The v0.2.11 receipt is **closed** and is therefore not amended. **The gate gap is still not built**: `scripts/check-doc-citations.py` checks that a cited line is *in range*, not that it still *says* what the sentence claims, so this will recur after the next sweep. |
 
 
 **D2 is already resolved** by the architecture documentation pass of 2026-10-19:

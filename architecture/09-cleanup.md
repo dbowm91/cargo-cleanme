@@ -2,7 +2,7 @@
 
 > Component deep dive · part of the [architecture overview](overview.md)
 
-Module under review: `src/cleanup.rs`, 12174 lines (4536 production, 7638 lines
+Module under review: `src/cleanup.rs`, 12180 lines (4536 production, 7644 lines
 of test code, 138 `#[test]` functions). It is the largest module in the crate
 and the densest concentration of safety logic. Every other module decides *what
 to look at*; this one decides *what may be destroyed*, proves the decision
@@ -24,16 +24,16 @@ post-clean accounting (`measure_union` `:4517`), and the human report
 It explicitly does **not** own:
 
 - **Activity measurement.** `traverse::workspace_member_activity`
-  `traverse.rs:411`, `traverse::measure_single_target` `traverse.rs:107`. This
+  `traverse.rs:411`, `traverse::measure_single_target` `traverse.rs:352`. This
   module consumes timestamps; it never turns them into eligibility. See
   [Traverse](08-traverse.md).
 - **Grouping and classification.** Every physical-group decision is delegated to
   `workspace.rs`: `resolve_workspaces_with_coverage` `workspace.rs:738`,
-  `build_groups` `workspace.rs:1381`, `analyze_groups_detailed`
+  `build_groups` `workspace.rs:1516`, `analyze_groups_detailed`
   `workspace.rs:1606`, `build_cleanup_units` `workspace.rs:2070`,
   `refresh_workspace_from_root_manifest` `workspace.rs:59`,
-  `map_workspace_groups` `workspace.rs:1976`, `outermost` `workspace.rs:1304`,
-  `workspace_member_roots` `workspace.rs:1552`.
+  `map_workspace_groups` `workspace.rs:1976`, `outermost` `workspace.rs:1439`,
+  `workspace_member_roots` `workspace.rs:1730`.
 - **Manifest discovery** — `discovery::discover_manifests`, called at `:1695`,
   `:2057`, and `:3149`.
 - **JSON rendering** — `output::cleanup` `output.rs:161` maps `CleanReport` to
@@ -47,12 +47,12 @@ Actual crate imports (`cleanup.rs:15-21`): `discovery`, `domain::*`,
 `crate::report::format_bytes` (`:818`, `:915`, `:924`, `:1024`, `:1032`, `:1037-1039`),
 `crate::domain::{EffectiveScanPolicy, ScanScope, DiscoveryFilters, elapsed_nanos}`
 (`:1739-1742`, `:1778`, `:2323-2326`, `:3093-3096`, `:3625`, `:3649`),
-`crate::progress::NoopObserver` (`:1397`, `:2138`, `:3252`, `:3349`, `:3383`).
+`crate::progress::NoopObserver` (`:1542`, `:2330`, `:3393`, `:3490`, `:3525`).
 Line `:1015` re-exports
 `workspace::{ProcessOutput, SystemCargoRunner}` so tests can inject I/O through
 this module's own seam.
 
-**The "one-way edge" is test-only.** `workspace.rs:4389` and `workspace.rs:4475`
+**The "one-way edge" is test-only.** `workspace.rs:4825` and `workspace.rs:5104`
 call `crate::cleanup::covering_is_authorized`, but both lines sit inside
 `workspace.rs`'s own `#[cfg(test)] mod tests`, which begins at
 `workspace.rs:2161`. There is no production edge from `workspace.rs` into
@@ -197,7 +197,7 @@ pub trait CleanupRunner: Sync {
 `refresh_proof_universe_with_limit` (`:3485-3572`): one `&dyn CleanupRunner` is
 shared across up to `PROOF_REFRESH_CONCURRENCY_CAP = 4` threads (`:3012`).
 `CargoRunner` has no such bound because `resolve_workspaces_with_coverage` is
-sequential and cached (`workspace.rs:738`).
+sequential and cached (`workspace.rs:778`).
 
 **What `SystemCleanupRunner` executes.** `run_with_env` (`:1043-1060`) builds
 `Command::new("cargo").args(args).current_dir(cwd)`, applies each `(k, v)` with
@@ -230,7 +230,7 @@ branches: a parent `CARGO_BUILD_BUILD_DIR` with an unprovable build dir
 clean *with a frozen env*. `CleanupRunner` is the richer trait, so
 `WorkspaceCleanupAdapter` (`:2934-2945`) is the widening direction: it copies
 all four `ProcessOutput` fields (`workspace.rs:22-26`) and drops the env, which
-resolution calls do not need. Constructed at `:2622`, `:3162`, `:3053`.
+resolution calls do not need. Constructed at `:2880`, `:3162`, `:3053`.
 Production therefore makes every Cargo call through one injected seam regardless
 of phase.
 
@@ -265,11 +265,11 @@ a real target tree.
 | `Simulate` | `simulate` | `--dry-run` (hidden alias `--dryrun`) | Identical gate set; the unit reached the spawn point. | No `cargo clean` of any kind, and no Cargo process for the clean at all. Reported as `Simulated`, never as recovered space (`:327-332`). |
 | `CargoPreview` | `preview` | `--cargo-preview` | Every gate through the final proof ran; Cargo itself reported what it *would* remove. | Nothing removed by us — but Cargo *was* spawned. |
 
-The mapping lives in `cli::clean_mode` (`cli.rs:349-361`): `--dry-run` (or the
+The mapping lives in `cli::clean_mode` (`cli.rs:432-444`): `--dry-run` (or the
 hidden `--dryrun`) ⇒ `Simulate`; `--cargo-preview` ⇒ `CargoPreview`; no mode
 flag ⇒ `Execute`. Clap makes the three flags mutually exclusive
 (`cli.rs:151-164`), and `clean_mode` carries a `debug_assert!` that the
-conflicting pair never reaches it (`cli.rs:350-353`). The `clean` subcommand
+conflicting pair never reaches it (`cli.rs:433-436`). The `clean` subcommand
 resolves the same way at `cli.rs:401-405`, and a root-level `--dry-run` is
 honoured on the bare front door too (`cli.rs:334`), so
 `cargo cleanme --dry-run clean ROOT` never silently falls back to Execute.
@@ -300,7 +300,7 @@ admission→validation race: a fatal `InvalidRoot` over an automatic scope
 triggers one fresh reclassification, and only a now-proven-omittable offender
 rebuilds the universe from scratch (`main.rs:733-771`); anything else becomes a
 typed block, never a sibling cleanup against a stale proof.
-`cleanup.rs:3120` applies `collapse_roots` again and re-validates the collapsed
+`cleanup.rs:3292` applies `collapse_roots` again and re-validates the collapsed
 set at `:1713-1715` with the comment at `:1711-1712` that collapsing only
 narrows the set, so survivors still need checking. The roots are validated
 *before* any observable work at `:1698-1703`, so a malformed root can neither
@@ -310,7 +310,7 @@ traversing anything.
 
 ### The admission premise and its late recheck (C028)
 
-`AdmissionPremise` (`cleanup.rs:1500`) carries the safely omitted automatic
+`AdmissionPremise` (`cleanup.rs:1645`) carries the safely omitted automatic
 roots alongside the admitted set. The engine re-examines the premise with
 fresh `symlink_metadata` — no timers, sleeps, or cached metadata — at two
 moments: before the first candidate reaches final proof (`cleanup.rs:2280-2284`)
@@ -401,7 +401,7 @@ every group the invocation can affect, ownership must be `PrivateBounded`
 (`:1459-1469`) then `covering_is_authorized_roots` must return `Ok(true)` for that
 group alone (`:1470-1484`); (c) every group must have `measured.is_some()`
 (`:1485-1494`), otherwise the fail-fast verdict and its `GroupSkipReason::detail()`
-(`workspace.rs:1572`) become the reason. The doc comment `:906-916` states the
+(`workspace.rs:1750`) become the reason. The doc comment `:906-916` states the
 C003 invariant — every affected group qualifies independently, and "No Cargo
 process is spawned for any subset of a unit" — which is what stops a
 `PrivateBounded` target smuggling an `ExternalUnproven` sibling build group into
@@ -419,11 +419,11 @@ infrastructure path raises `scope_blocked` and exits 1 (`:2155-2162`,
 **Is `allowed_output_roots` actually redundant?** `config.toml:37-38` claims it
 is "currently operationally redundant because PrivateBounded output is normally
 workspace-contained." **Assessment: consistent with the code, with a caveat.** The
-reason is the classification rule at `workspace.rs:1497-1511`:
+reason is the classification rule at `workspace.rs:1667-1681`:
 `PrivateBounded` means "every covering root **strictly below the workspace
 root**"; `ExternalUnproven` means "output **outside workspace root**."
 Classification depends on the *workspace root*, not on the clean root or allowed
-roots — `build_groups` (`workspace.rs:1381`) takes only `&[ResolvedWorkspace]`. So
+roots — `build_groups` (`workspace.rs:1516`) takes only `&[ResolvedWorkspace]`. So
 a `PrivateBounded` group's covering roots are always beneath the workspace root
 and are already authorized by the `canonical_clean` branch at `:1279-1284` whenever
 the workspace root is inside a clean root. That is the ordinary case.
@@ -443,7 +443,7 @@ configured. An under-verified property, not a defect.
 **A separate divergence.** ADR 001 `:7` defines `PrivateBounded` as "every
 destructive output path is contained by an *authorized cleanup boundary*" — a
 predicate over authorization roots. The code defines it over the *workspace root*
-(`workspace.rs:1497-1503`). Reconciled by the argument above, but not the same
+(`workspace.rs:1667-1673`). Reconciled by the argument above, but not the same
 predicate, and the ADR's phrasing cannot be read literally alongside
 `workspace.rs`.
 
@@ -794,7 +794,7 @@ from any other root is in-boundary and blocks.
 **The removal has a reason of its own.** `exclusion_reason`
 (`cleanup.rs:511-530`) returns the typed reason a unit was removed, when the
 removal has one: `CleanupReasonCode::SkippedIncompleteCoverage`
-(`cleanup.rs:444`, spelled `skipped_incomplete_coverage` at `cleanup.rs:444`).
+(`cleanup.rs:474`, spelled `skipped_incomplete_coverage` at `cleanup.rs:474`).
 Every other variant returns `None`, and the report then uses the ordinary
 `SkippedOutsideSelection`. The two facts are deliberately not conflated: one
 says "you did not ask for this", the other says "this could not be proven".
@@ -869,7 +869,7 @@ non-zero `min_reclaimable_bytes` skips the unit with
 `SelectorEstimateUnavailable` (`:485-491`), because `before_bytes` is the whole
 output union, not the selector's share. There is also a runtime capability gate:
 `runtime_clean_capabilities` (`:4419`) parses `cargo --version` and asks
-`workspace::clean_capabilities_from_version` (`workspace.rs:146`); an
+`workspace::clean_capabilities_from_version` (`workspace.rs:160`); an
 unsupported runtime yields `SelectorUnsupported` before the unit is considered
 (`:2067-2095`).
 
@@ -1196,10 +1196,10 @@ would require `cargo clean` to re-verify, outside this design.
 
 **No, and the code is stricter than the ADR's framing.** ADR 001 `:131-132` defines
 `PrivateBounded` relative to "authorized cleanup boundaries". The implementation
-is narrower: `workspace.rs:1497-1503` requires every covering root to be **strictly
+is narrower: `workspace.rs:1667-1673` requires every covering root to be **strictly
 below the workspace root**, disjoint from every member source root, with every
 universe root represented in the graph. Anything outside the workspace root is
-`ExternalUnproven` (`workspace.rs:1510`) and inventory-only, permanently (§5).
+`ExternalUnproven` (`workspace.rs:1680`) and inventory-only, permanently (§5).
 
 Two secondary facts: the *invocation* is still
 `cargo clean --manifest-path <workspace root>`, so what Cargo removes is whatever
@@ -1240,8 +1240,11 @@ safety hole.
 ## 10. Testing
 
 **Numbers (verified by grep):** 138 `#[test]` functions; the test module opens at
-`cleanup.rs:4418` (`#[cfg(test)]`), so production is lines 1–4417 (4417 lines)
-and the test region is 4418–12174 (7757 lines, 64% of the file). No fixture
+`cleanup.rs:4542` (`#[cfg(test)]` at 4541), so production is everything outside
+every `#[cfg(test)]` scope — 4536 lines — and the test module runs 4542–12180
+(7639 lines, 63% of the file). One earlier item is test-only but is *not* the
+module: the `#[cfg(test)]` helper `runtime_clean_capabilities` at 4418–4421.
+No fixture
 files are needed: workspaces are built on disk and mtimes backdated so recency
 gates run without sleeping.
 

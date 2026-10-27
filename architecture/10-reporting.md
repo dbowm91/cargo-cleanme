@@ -9,7 +9,7 @@
 > today** (G1-G6), including two contract gaps in the JSON DTOs that no schema
 > document covers.
 
-Covers `src/report.rs` (387 lines, 190 production) and `src/output.rs` (1113
+Covers `src/report.rs` (395 lines, 190 production) and `src/output.rs` (1113
 lines, 272 production) together. They are two projections of the same data, and
 the contrast is the point: the human renderer predates the machine contract; the
 DTO layer exists to protect it. `output.rs` now carries a third surface — the
@@ -63,8 +63,8 @@ The `update` document is the one exception, and it became one deliberately in
 C022 rather than by accident. It is not an envelope (an update resolves no scope
 and runs no cleanup mode), so it is assembled as a literal object map and
 encoded inside the module at `output.rs:903`, returning the document alone;
-`update_json_stream` (`output.rs:941`) appends the single newline, and `main.rs`
-prints exactly that (`main.rs:198-201`) with `print!`. The reason it lives in the
+`update_json_stream` (`output.rs:988`) appends the single newline, and `main.rs`
+prints exactly that (`main.rs:209-212`) with `print!`. The reason it lives in the
 library at all is testability: `update_json` used to be a private function of the
 binary, which meant the only way to assert anything about this surface was to run
 a live update against crates.io. The seam lets the contract tests hold the exact
@@ -251,7 +251,7 @@ rounded onto exactly `1024.00` and promotes the unit rather than printing
 Rendering is two decimal places via `format!("{}.{:02}", hundredths / 100,
 hundredths % 100)` (`report.rs:125`) — integer division. **There is no `as f64`
 anywhere in the function**, so the `u64 → f64 → string` precision hazard does not
-apply. `u64::MAX` renders as `16.00 EiB` (`report.rs:249`): the ladder saturates
+apply. `u64::MAX` renders as `16.00 EiB` (`report.rs:271`): the ladder saturates
 at `EiB`, and 2^64 bytes is exactly 16 EiB, so the top of the range is shown at
 16.00 rather than overflowing the unit list. The `unit + 1 < UNITS.len()` guards
 on both passes mean `UNITS[unit]` at `report.rs:126` can never be out of bounds.
@@ -294,8 +294,8 @@ list plus one summary line:
 
 1. One line per group: the path (spelled per the relative-path rule above),
    two spaces, `format_bytes` (width 6), two spaces, `[ownership-label]`
-   (`report.rs:152-159`). The path column is width-aligned across the whole table
-   (`report.rs:146-151`), so the sizes line up.
+   (`report.rs:271-278`). The path column is width-aligned across the whole table
+   (`report.rs:265-270`), so the sizes line up.
 2. Blank line, then `"{total} inventory estimate across {n} inactive Cargo
 output groups\n"` (`report.rs:162-166`).
 
@@ -307,14 +307,14 @@ deterministic, pinned at `report.rs:227`. What changed is the **column order** �
 the path now comes first — and the **path spelling**, which is relative when the
 scope is bounded.
 
-The total is a `fold` with `saturating_add` over group bytes (`report.rs:140-143`),
+The total is a `fold` with `saturating_add` over group bytes (`report.rs:155-158`),
 so it cannot wrap. It is *not* re-derived from `physical_paths`: a group listing
 the same canonical path twice is counted once, because grouping deduplicated it
 before `bytes` was measured. That is the "deduplicated total" checked at
 `report.rs:281-291`.
 
 **Diagnostics are not rendered at all** — `render` uses only `report.groups`.
-Diagnostics reach the user from `main.rs:1680-1768` on **stderr**. The shape of
+Diagnostics reach the user from `main.rs:1771-1859` on **stderr**. The shape of
 that fan-out has changed twice and is no longer "a count, the first 10, and
 `… N more`": Cargo-resolution failures are now grouped by cause (at most eight
 distinct causes — `main.rs:1733` — each with up to three example paths —
@@ -340,7 +340,7 @@ the phrase *"N inactive Cargo output groups"* in the summary line, backed by
 `tests/end_to_end.rs:197-198` (a freshly built project is absent).
 
 **What the user reads to decide whether to run `clean`:** the `[ownership]`
-label. Per `cleanup.rs:1125-1127` and `cleanup.rs:1259-1267`, only `PrivateBounded`
+label. Per `cleanup.rs:1164-1166` and `cleanup.rs:1259-1267`, only `PrivateBounded`
 is ever eligible; `ExternalUnproven`, `Shared`, and `Uncertain` are inventory-only
 under any authorization-root configuration. A `[private]` row is a candidate; any
 other label is informational. This invariant is *not* restated in the report's
@@ -377,7 +377,7 @@ workspace it belongs to (`cleanup.rs:723-731`), spelled per the relative-path ru
 above. When a unit has several output roots they are joined with `, `; when it has
 none, the workspace path is shown instead. **The size** is the observed decrease
 for a `Cleaned` row and the before-size otherwise (`cleanup.rs:732-739`), rendered
-as `—` when neither is known. The columns are aligned (`cleanup.rs:743-756`).
+as `—` when neither is known. The columns are aligned (`cleanup.rs:781-794`).
 
 **The tally** (`cleanup.rs:771-851`) is one line:
 
@@ -510,10 +510,10 @@ configured legacy `scan.root` wins as an Explicit override and the label is
 `"explicit"` (`main.rs:797-816`). `"known"` is no longer emitted on any path.
 
 **One more envelope that is not an envelope.** `update_json`
-(`output.rs:903-931`) builds a hand-rolled `serde_json::Map` with
+(`output.rs:950-978`) builds a hand-rolled `serde_json::Map` with
 `schema_version: 1` (`output.rs:905`) and `operation: "update"`
 (`output.rs:910`) — but **no `scope`, no `mode`, and a different `result` shape**
-(`output.rs:912-929`). It shares the version number without sharing the envelope
+(`output.rs:959-976`). It shares the version number without sharing the envelope
 (§8, D8). Since C022 it lives in this module rather than in the binary, which
 is what made it testable at all.
 
@@ -837,7 +837,7 @@ behaviour matches; the helper is simply where a seventh variant would fail
 visibly in the contract layer, which is arguably the point.
 
 **The reason-code set is twenty-one, not twenty.** `CleanupReasonCode`
-(`cleanup.rs:306-341`) gained `SkippedOutsideSelection` with M014: the unit was
+(`cleanup.rs:313-348`) gained `SkippedOutsideSelection` with M014: the unit was
 discovered, resolved, sized and proven, but the operator's selection removed it
 from the candidate set. It is deliberately *not* an ownership or safety code —
 it exists so that a selection can never produce a silent no-op the way a
@@ -1321,7 +1321,7 @@ re-parse the free-text `reason` — and the domain type explicitly warns against
 exactly that, at `domain.rs:178-179`: the capability is *"re-parsed from message
 text: a copy-edit to a diagnostic must not silently reclassify an unknown from
 merging to non-merging."* The code itself only parses `reason` to recover a
-refused manifest's *named workspace* (`workspace.rs:426`), never its capability.
+refused manifest's *named workspace* (`workspace.rs:459`), never its capability.
 `reason` is also the one field the schema document says a consumer must not
 match on. The human report has the same gap — it names the manifest and the
 reason but not the capability (`cleanup.rs:578-620`).
@@ -1408,7 +1408,7 @@ doc rot**: a consumer written from the old lines 16 and 25 would implement
 `selector_estimate_bytes` handling and disposition enums that did not match the
 tool. Both are closed in the document now; the code never broke its promise, the
 document had not been kept in step. Second, **`update_json`
-(`output.rs:903-931`) reuses `schema_version: 1` without the envelope** — no
+(`output.rs:950-978`) reuses `schema_version: 1` without the envelope** — no
 `scope`, no `mode`, different `result` shape. The document scopes itself to the
 scan/cleanup surfaces, so this is not a violation as written, but a consumer
 treating `schema_version == 1` as "the envelope in this document" will mis-parse
@@ -1452,7 +1452,7 @@ resolved scope. Valid, and asserted at `tests/cli_contract.rs:731`.
 - *Scope-blocked cleanup* — the two early returns leave `results` **empty** while
 `units_considered` is set from the live `units` vector at `cleanup.rs:1650`:
 the incomplete-discovery block at `cleanup.rs:1666-1677` and the
-ownership-unproven block at `cleanup.rs:1679-1694` both report the live
+ownership-unproven block at `cleanup.rs:1824-1839` both report the live
 counts. A consumer can therefore see `units_considered: N, units: []` with
 `scope_blocked: true` — structurally valid, semantically surprising, and not
 warned about in the document.
@@ -1499,7 +1499,7 @@ JSON.
 (`report.rs:126`), bounded to `[0, 6]` by the `unit + 1 < UNITS.len()` guards at
 `report.rs:115` and `121`. There is no division by a possibly-zero value — the only
 divisors are the constants `1024` and `100`. No unwrap, no arithmetic overflow
-(`saturating_add`, `report.rs:143`), no slice range. An empty group list yields
+(`saturating_add`, `report.rs:158`), no slice range. An empty group list yields
 `"\n0.00 B inventory estimate across 0 inactive Cargo output groups\n"`, asserted
 at `report.rs:223`. `u128::from(n) * 100` at `report.rs:113` cannot overflow:
 `u64::MAX * 100` ≈ 1.8e21, far below `u128::MAX`.
@@ -1546,7 +1546,7 @@ never prints `detail` either.
 One number, two representations; a textual diff will not match them. Log mode
 prints a third representation, the raw `u64` (`output.rs:343`).
 3. **Diagnostic completeness** — JSON has all of them, human stderr groups and
-caps them (`main.rs:1680-1768`); log mode shows neither and carries
+caps them (`main.rs:1771-1859`); log mode shows neither and carries
 `diagnostics=N` only (`output.rs:344`, `401-404`).
 4. **Scope-block identity** — human prints the block's prose message
 (`cleanup.rs:667`), JSON carries that prose in `scope_reason`, and log
@@ -1576,7 +1576,7 @@ caller-supplied `String` with no validation — nothing in `output.rs` would rej
 a wrong value, so the guarantee is entirely the caller's. `scan ROOT` reports
 `"explicit"` (`main.rs:1380`, `1167`). The four scan scope selectors — `root`,
 `known`, `all`, `full` — are mutually exclusive and exactly one is required, by
-a single clap `ArgGroup` (`cli.rs:139`); `scan ROOT --full` is therefore rejected
+a single clap `ArgGroup` (`cli.rs:244`); `scan ROOT --full` is therefore rejected
 rather than resolved, and `--full` is a hidden alias (`cli.rs:155-156`) for the
 rootless Full form.
 
@@ -1649,12 +1649,12 @@ visible because `tests/cli_contract.rs` happens to run the selector path end to
 end.
 
 The fifteen log tests are real, and they test the right things: the canonical `ok`
-shapes are asserted as exact strings (`output.rs:585-588`, `605-608`), so field
+shapes are asserted as exact strings (`output.rs:588-591`, `605-608`), so field
 order and field names are pinned rather than merely "contains". Two are
 premise-negative in the sense this repository values — one proves an overlong
 optional value is dropped *whole* and never truncated
 (`output.rs:771-798`), the other proves the structural head fits at the worst
-case with `u64::MAX` in every numeric field (`output.rs:800-814`). The
+case with `u64::MAX` in every numeric field (`output.rs:847-861`). The
 ASCII/bound/no-quote/no-newline invariants are factored into one helper
 (`output.rs:566-579`) and applied to every line, so a future line that violates
 them fails loudly. The two premise-negative tests are labelled as such in their
@@ -1662,7 +1662,7 @@ own doc comments (`output.rs:768-770`, `800-801`), which is the discipline §4 o
 [overview](overview.md) asks for.
 
 **One log test is a contract test, not a formatting test.**
-`cleanup_json_result_key_set_is_stable` (`output.rs:663-693`) serialises a real
+`cleanup_json_result_key_set_is_stable` (`output.rs:710-740`) serialises a real
 `EnvelopeV1<CleanupV1>` and asserts the **exact set of fourteen `result` keys**,
 sorted. It is the only place in the crate where the shape of a DTO is pinned
 wholesale, and its doc comment records why it exists: the M015 → M016 → M017
@@ -1686,7 +1686,7 @@ moved it into `output.rs` specifically to give it a testable seam, and it now
 has four contract cases at `output.rs:969`, `995`, `1009`, `1048` (the last of
 which asserts the *whole* stream — newline included — parses as exactly one JSON
 document). `main.rs` calls it from one place (`main.rs:198-201`), and
-`UpdatePlan` is defined at `update.rs:247` and tested inside `update.rs`'s own
+`UpdatePlan` is defined at `update.rs:269` and tested inside `update.rs`'s own
 module.
 
 The document remains the only machine-readable surface that bypasses
@@ -1776,7 +1776,7 @@ that code is unverified end to end.
 written against the implementation, with no assertion that the implementation
 still matches the document. The cheapest high-value fix is to extend the
 `cleanup_json_result_key_set_is_stable` pattern
-(`output.rs:662-693`) to the other nine DTOs, and a second one to read the field
+(`output.rs:709-740`) to the other nine DTOs, and a second one to read the field
 names from `plans/output-schema-v1.md` and assert each appears in a real
 document.
 

@@ -20,7 +20,7 @@
 > *"`cargo cleanme scan` with no ROOT is the full read-only machine
 > reconciliation"* — since M014 that shape is a **usage error**, `scan`
 > requiring one of ROOT / `--known` / `--all` (`src/cli.rs:139`). The
-> `long_about` at `src/cli.rs:21-38` now says that `scan` **needs a scope**,
+> `long_about` at `src/cli.rs:104-121` now says that `scan` **needs a scope**,
 > and that `--all` is the full read-only machine reconciliation
 > (`src/cli.rs:34-37`). The manpage is generated from the same `long_about`,
 > so the help output and the manpage can no longer disagree. See §2.1.
@@ -132,7 +132,7 @@ what "the root is the front door" means: `cargo cleanme --full` and
 | `--config <CONFIG>` | — | `Option<PathBuf>` | `None` | `ConfigPathResolver::new` → `main.rs:73` |
 | `--no-progress` | — | `bool` | `false` | `progress::should_show_progress(..)` → `main.rs:1435`, `main.rs:475` |
 | `--stats` | — | `bool` | `false` | `discover_manifests_with_attribution(.., options.stats)` `main.rs:1448`; the `eprintln!` blocks at `main.rs:1796`, `main.rs:512` |
-| `--format <FORMAT>` | — | `OutputFormat` (value enum) | `human` | selects `output::scan` / `output::cleanup` / `report::render` → `main.rs:1688`, `main.rs:1189`, `main.rs:1700-1701`; the bounded `output::log::*` line → `main.rs:1697`, `main.rs:1199` |
+| `--format <FORMAT>` | — | `OutputFormat` (value enum) | `human` | selects `output::scan` / `output::cleanup` / `report::render` → `main.rs:1688`, `main.rs:1619`, `main.rs:1700-1701`; the bounded `output::log::*` line → `main.rs:1697`, `main.rs:1199` |
 | `--verbose` | — | `bool` | `false` | the detailed human surface → `report::HumanOptions::verbose()` at `main.rs:1266`, chosen by `human_options` (`main.rs:1261-1271`); the JSON document and the log line are identical with and without it (`src/cli.rs:55-61`) |
 | `--dry-run` | — | `bool` | `false` | `CleanMode::Simulate` for a bare invocation *and* for `clean` / `update`, whichever side of the subcommand it was given on |
 | `--dryrun` (hidden) | — | `bool` | `false` | same, as a compatibility alias |
@@ -147,7 +147,7 @@ what "the root is the front door" means: `cargo cleanme --full` and
 | `--package <SPEC>` | — | `Option<String>` | `None` | `CleanupOverrides::package` (`src/cli.rs:550`) |
 | `--cargo-preview` | — | `bool` | `false` | `CleanMode::CargoPreview` (`src/cli.rs:1271-1272`); conflicts with the root's own `--dry-run` / `--dryrun` (`src/cli.rs:1271`) |
 | `--help` / `-h` | `-h` | clap built-in | — | clap help path |
-| `--version` / `-V` | `-V` | clap built-in (from `version`, `src/cli.rs:19`) | — | `cargo-cleanme 0.2.11` |
+| `--version` / `-V` | `-V` | clap built-in (from `version`, `src/cli.rs:102`) | — | `cargo-cleanme 0.2.11` |
 
 **`--verbose` is a rendering shape, not a mode.** It is `global = true`
 (`src/cli.rs:62`), so every report-producing subcommand honours it, and it
@@ -160,7 +160,7 @@ what the run acted on.
 **It changes the *human* format only.** The flag is lifted into `RunOptions`
 (`main.rs:78`) and consumed at the human render call sites
 (`main.rs:1236-1253`, `main.rs:1700-1701`) and by the progress renderer
-(`main.rs:476`, `main.rs:605`, `main.rs:1436`); it never reaches
+(`main.rs:476`, `main.rs:605`, `main.rs:1527`); it never reaches
 `output::scan`, `output::cleanup`, or `output::log::*`. The JSON document and
 the log line are byte-identical with and without it — pinned by
 `the_machine_contract_is_identical_with_and_without_verbose`
@@ -188,7 +188,7 @@ guards: before M012A, `Cli::command` being `None` sent `main.rs` to
 
 > **The root `long_about` was rewritten (C040).** It used to advertise
 > "`cargo cleanme scan` with no ROOT is the full read-only machine
-> reconciliation". The `ArgGroup` at `src/cli.rs:139` makes that shape a usage
+> reconciliation". The `ArgGroup` at `src/cli.rs:244` makes that shape a usage
 > error, and `scan --all` (`src/cli.rs:152`) is the canonical Full spelling.
 > The text now says that `scan` **needs a scope** (`cli.rs:392-395`), so the
 > help output, the manpage, and the parser agree. This discharges C036's D1;
@@ -232,7 +232,7 @@ reconciliation command by accident — `policy::resolve` returns
 turns the three shapes into `ScanIntent::Full` / `Explicit(root)` /
 `Maintenance` at `src/cli.rs:252-263`.
 
-### 2.3 `config` (`src/cli.rs:42-45`) → `ConfigCommand` (`src/cli.rs:229-315`)
+### 2.3 `config` (`src/cli.rs:125-128`) → `ConfigCommand` (`src/cli.rs:229-315`)
 
 A container with no options of its own, only a required nested subcommand.
 
@@ -251,7 +251,7 @@ There is no `config init`: the variant does not exist. Asserted twice —
 ### 2.4 `clean` — now a hidden alias (`src/cli.rs:648-699`)
 
 > **M019 / ADR 008 §4b.** The `clean` subcommand is **hidden**
-> (`#[command(hide = true)]` at `src/cli.rs:168`) and the **root is the
+> (`#[command(hide = true)]` at `src/cli.rs:273`) and the **root is the
 > canonical spelling**. `cargo cleanme` is the maintenance scope,
 > `cargo cleanme ROOT` is a bounded root, `cargo cleanme --full` is the Full
 > cleanup. `cargo cleanme clean …` remains accepted and produces the same
@@ -270,8 +270,8 @@ modes are disjoint sets by construction.
 | `--older-than <SECONDS>` | `Option<u64>` (hidden) | `None` → `config.cleanup.policy.min_inactive_seconds` | — | `CleanupPolicy.min_inactive_seconds` via `.or(configured…)` → `main.rs:359` |
 | `--include <GLOB>` | `Vec<String>`, repeatable (hidden) | empty → `config.cleanup.policy.include` | — | `CleanupPolicy.include` → `main.rs:360-364` |
 | `--exclude <GLOB>` | `Vec<String>`, repeatable (hidden) | empty → `config.cleanup.policy.exclude` | — | `CleanupPolicy.exclude` → `main.rs:365-369` |
-| `--profile <NAME>` | `Option<String>`, `NonEmptyStringValueParser` (hidden) | `None` | `--package` | `CleanupSelector::Profile` → `main.rs:371-380` |
-| `--package <SPEC>` | `Option<String>`, `NonEmptyStringValueParser` (hidden) | `None` | `--profile` | `CleanupSelector::Package` → `main.rs:371-380` |
+| `--profile <NAME>` | `Option<String>`, `NonEmptyStringValueParser` (hidden) | `None` | `--package` | `CleanupSelector::Profile` → `main.rs:467-476` |
+| `--package <SPEC>` | `Option<String>`, `NonEmptyStringValueParser` (hidden) | `None` | `--profile` | `CleanupSelector::Package` → `main.rs:467-476` |
 | *(no mode flag)* | — | — | — | `CleanMode::Execute` |
 | `--dry-run` | `bool` (visible) | `false` | `--cargo-preview`, `--yes`, `--dryrun` | `CleanMode::Simulate` |
 | `--cargo-preview` | `bool` (hidden) | `false` | `--dry-run`, `--yes`, `--dryrun` | `CleanMode::CargoPreview` |
@@ -409,7 +409,7 @@ states its mode in full.
 
 Exactly one option: `--dry-run` (`bool`) → `update::update(dry_run)` at
 `main.rs:102`, which also selects between the `update_json` document and the
-human lines at `main.rs:194-207`. Its long doc comment (`src/cli.rs:214-221`)
+human lines at `main.rs:205-218`. Its long doc comment (`src/cli.rs:214-221`)
 is the provenance/safety contract — registry is the version authority, the tag
 is constructed not scraped, `.sha256` must verify, the binary must self-identify
 as the target version, and a Cargo-managed install is refused. That comment is
@@ -726,7 +726,7 @@ canonicalizes. Its first act is a *different* operation:
   test covers the disagreement.
 
 **Where `collapse_roots` runs.** It is **not** a `run_cleanup` step any more.
-`collapse_roots` is defined at `main.rs:1327-1341` and is called *inside*
+`collapse_roots` is defined at `main.rs:1340-1354` and is called *inside*
 `resolve_cleanup_roots`, on the admitted root set of each scope: the explicit
 arm at `main.rs:896`, the configured-root arm at `main.rs:984`, the
 explicit-roots arm at `main.rs:1007`, and the automatic (Routine/Full) arm at
@@ -804,7 +804,7 @@ that point.
 
 ### 5.3 `Invocation::UsageError` is a deliberate dead end
 
-`Invocation` has five variants (`src/cli.rs:326-344`): `Cleanup`, `Scan`,
+`Invocation` has five variants (`src/cli.rs:409-427`): `Cleanup`, `Scan`,
 `Config`, `Update`, and `UsageError(String)`. The last one is **unreachable
 through the parser** — `scan`'s `ArgGroup` guarantees one of ROOT / `--known` /
 `--all` — and its doc comment (`src/cli.rs:333-341`) says why it exists: the
@@ -852,7 +852,7 @@ clap uses for a usage error.
    `cleanme clean -- --yes` treats `--yes` as the `ROOT` path, not as a mode
    flag. (Derived from the absence of those attributes rather than an executed
    run; no test pins `--`.) The one `ArgGroup` in the file is the `scan-scope`
-   group at `src/cli.rs:139`, and it constrains `scan`'s selectors only.
+   group at `src/cli.rs:244`, and it constrains `scan`'s selectors only.
 5. **Unknown flags fail closed.** Clap rejects them at parse time with exit 2
    before any filesystem or config access. No prefix-matching or
    suggestion-suppression is configured, so clap's did-you-mean output is
@@ -890,7 +890,7 @@ clap uses for a usage error.
    reach the JSON shape implicitly.
 9. **One mode, one definition site.** Adding a fourth cleanup mode must touch
    `cleanup::CleanMode` (`src/cleanup.rs:30-47`) and **both** mapping functions:
-   `cli::clean_mode` (`src/cli.rs:349-361`) for the single-level case and
+   `cli::clean_mode` (`src/cli.rs:432-444`) for the single-level case and
    `cli::merged_clean_mode` (`src/cli.rs:621-631`) for the root-plus-alias case.
    A new mode that is reachable from `clean` but not from the bare front door —
    or vice versa — is a safety bug, because those two functions are the only
@@ -1071,7 +1071,7 @@ failure grouping, and the interactive TTY.
    `Vec` or `PathBuf` value is where an order-sensitive mismatch appears.
 3. **Is `normalize_cargo_argv` still correct after your change?** Its whole
    safety argument is that no valid command can have `cleanme` at argv[1]
-   (`src/cli.rs:698-708`). If a new subcommand or positional could produce that
+   (`src/cli.rs:2136-2146`). If a new subcommand or positional could produce that
    shape, the shim must change with it;
    `later_literal_cleanme_values_are_preserved` (`src/cli.rs:1821`) encodes the
    current position rule.
@@ -1081,7 +1081,7 @@ failure grouping, and the interactive TTY.
    just the binding. Decide whether the new flag **replaces** or **merges**
    with the config value: `--include`/`--exclude` replace (`main.rs:360-369`)
    while `--min-reclaimable-bytes`/`--older-than` fall back
-   (`main.rs:356-359`). A field added to `Command::Clean` must also appear in
+   (`main.rs:473-476`). A field added to `Command::Clean` must also appear in
    `CleanupOverrides` (`src/cli.rs:281-315`) or it will not reach the engine.
 5. **Are you adding a mode or a spelling?** A *new spelling* belongs in
    `clean_mode` (`src/cli.rs:349-446`) and `merged_clean_mode`
@@ -1120,7 +1120,7 @@ failure grouping, and the interactive TTY.
     silently rots. And when you add one, check what input makes it fail: a test
     that cannot fail for the right reason is decoration.
 11. **Does the help text say anything the parser does not do?** The root
-    `long_about` at `src/cli.rs:21-38` was the standing counter-example: it
+    `long_about` at `src/cli.rs:104-121` was the standing counter-example: it
     described a rootless `scan` that the `ArgGroup` at `src/cli.rs:392` rejects.
     C040 rewrote it *and* made the manpage render from `long_about`, so the
     two surfaces can no longer drift — but the question stands for the next

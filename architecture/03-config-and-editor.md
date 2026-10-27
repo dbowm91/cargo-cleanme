@@ -13,7 +13,7 @@ repository-root `config.toml` (48 lines), and `src/editor.rs` (292 lines,
 (`load`, `src/config.rs:90-210`); first-use creation from an embedded template
 (`create_initial`, `src/config.rs:456-609`); which config file an invocation
 means (`ConfigPathResolver`, `src/config.rs:70-89`); the `config show`
-projection (`show`, `src/config.rs:610-612`); editor resolution
+projection (`show`, `src/config.rs:613-615`); editor resolution
 (`editor::resolve_editor`, `src/editor.rs:7-37`).
 
 **Does not own** — any policy *decision* (`config.rs` validates shape and range;
@@ -64,7 +64,7 @@ unit — at `src/cleanup.rs:1789` and `:1477`, and the skip reasons say so
 ("cleanup policy: workspace root is not included"). The physical output root is
 not what these two lists select on, and the `globset` is compiled per run from
 the merged list (`src/cleanup.rs:1613-1614`, `compile_policy_globs`,
-`:2153-2163`).
+`:2774-2784`).
 
 ### `scan.root` — an exclusive override, and Full outranks it
 
@@ -166,7 +166,7 @@ glob-free prefix through `canonical_pattern_prefix` (`src/config.rs:353-403`,
 applied at `:155-187`). The rewrite is conservative: it stops at the first
 `* ? [ {` (`:354`) and leaves the pattern alone if the prefix ends in a
 **dangling escape** (`dangling_trailing_escape`, `:314-316`, refused at
-`:358-360` — splitting there would land inside an escape sequence), if the
+`:361-363` — splitting there would land inside an escape sequence), if the
 prefix is relative (`:363-366`), or if `fs::canonicalize` fails (a non-existent
 path still means what it says — it matches nothing); trailing separators are
 structural and preserved around the canonicalized name (`:363`, `:372`). Without
@@ -185,12 +185,12 @@ Windows-only refusals removed, and each was found by running the lane rather tha
 by reading the code.
 
 **The canonical spelling is escaped, because it is a path and not a pattern.**
-`escape_glob_literal` (`src/config.rs:293-312`) bracket-escapes `* ? [ ]`. A
+`escape_glob_literal` (`src/config.rs:281-300`) bracket-escapes `* ? [ ]`. A
 directory named `real[abc]`, reached through a symlink, used to splice in as a
 character class: the rule stopped excluding the tree the user named and started
 excluding two they never wrote down.
 
-The spelling is also `glob_spelling` (`src/config.rs:237-255`) — `/`-normalized
+The spelling is also `glob_spelling` (`src/config.rs:225-243`) — `/`-normalized
 — before it is escaped, and the order is load-bearing in both directions. A `\` in
 the canonical name is what made the whole rewrite a no-op on Windows: every
 canonical path there contains one, and `escape_glob_literal` used to reject it,
@@ -200,7 +200,7 @@ first would double the separator into a path component that does not exist.
 `cfg!`, so the Windows answer is asserted on a Unix lane (C024).
 
 **A Win32 verbatim prefix is stripped before that (`dereference`,
-`src/config.rs:270-278`), and the hosted Windows lane is why it is there.**
+`src/config.rs:258-266`), and the hosted Windows lane is why it is there.**
 `fs::canonicalize` answers `\\?\C:\…` whenever the path it was given was already
 verbatim, and can answer it for paths that were not. The prefix is an API
 artefact rather than part of the path, and it is actively harmful in a pattern
@@ -219,7 +219,7 @@ at. `\` is no longer in that set: after normalization it is a character of a
 escape character. That arm is unreachable on Windows because no file name there
 may contain a backslash, and it is tested individually on Unix
 (`a_backslash_in_a_canonical_directory_name_is_spliced_as_a_escape`).
-`PatternKind` (`src/config.rs:214-222`) keeps `scan.unignore` out of this: it is a
+`PatternKind` (`src/config.rs:202-210`) keeps `scan.unignore` out of this: it is a
 literal path by design, so escaping it would corrupt the path it names — and its
 separators are the filesystem's own, not `/`.
 
@@ -270,7 +270,7 @@ migration shim.
 file is missing, then `load`s it. It never overwrites: a malformed file stays
 malformed and stays on disk (`:406-407` — creation is attempted only when the
 file is absent; `malformed_config_is_not_replaced_automatically`,
-`:1238-1249`). Used by `scan` (`src/main.rs:1372`), `clean` (`src/main.rs:338`)
+`:1286-1297`). Used by `scan` (`src/main.rs:1372`), `clean` (`src/main.rs:338`)
 and `config show` (`src/main.rs:257`).
 
 `ensure_exists` (`:428-433`), documented at `:421` as "Ensure a config editor
@@ -281,11 +281,11 @@ where `load_or_create` would refuse to show them the file they need to fix.
 
 ### `create_initial` — atomic, verbatim, never overwriting
 
-`src/config.rs:456-609`: `create_dir_all` the parent (`:457-461`, re-checked at
+`src/config.rs:456-609`: `create_dir_all` the parent (`:460-464`, re-checked at
 `:467-472`); write to `<file_name>.tmp.<pid>.<nonce>.<attempt>` in the **same
 directory** (`:489-493`, so publication stays on one volume) opened
 `create_new(true)` (`:494-497`); `write_all` the template verbatim and `sync_all`
-it (`:519-522`); publish with `fs::hard_link(&temp, path)` (`:526`) then
+it (`:522-525`); publish with `fs::hard_link(&temp, path)` (`:526`) then
 `remove_file(&temp)` (`:565-570`). Linking is atomic and **cannot overwrite**. A
 regular file already at the destination means a racer published first, which is
 success (`:590-592`). After 100 attempts: `AppError::Config("could not create a
@@ -362,7 +362,7 @@ config.
 ### `show` — a projection, not a file dump
 
 `show(&Config) -> Result<String, AppError>` is `toml::to_string_pretty`
-(`src/config.rs:610-612`), serializing the **in-memory, validated, normalized**
+(`src/config.rs:613-615`), serializing the **in-memory, validated, normalized**
 config. Comments and original formatting are gone; `scan.ignore` and friends
 appear in canonicalized spelling rather than the spelling the user typed; absent
 optionals are omitted rather than written as null (TOML has no null, and the
@@ -555,7 +555,7 @@ What must remain true for this surface to stay safe:
    `hard_link` (`:526`); a malformed config is never replaced (`:1238-1249`).
 5. **`allowed_output_roots` is authorization, not ownership proof.** It must
    never be read as a way to make an unproven class actionable (`config.toml:33-36`;
-   `src/cleanup.rs:1069-1074`; [overview invariant
+   `src/cleanup.rs:1569-1574`; [overview invariant
    2](overview.md#8-cross-cutting-invariants)). "Operationally redundant"
    (`config.toml:37-38`) does not mean unvalidated — it is still absoluteness-
    checked at `:125-127`.
@@ -597,7 +597,7 @@ consumed elsewhere, update that consumer (`src/policy.rs`, `src/discovery.rs`,
 | `--config` points at a directory | `load` reads it and fails `cannot read …`; creation refuses to replace a non-file (`src/config.rs:595-600`) |
 | `--config` with no file name | `file_name()` yields the last component; the fallback name is literally `config.toml` (`:473-476`) |
 | Config file is not valid UTF-8 | `fs::read_to_string` fails → `cannot read …` (`:91-93`) |
-| Non-UTF-8 directory name during glob matching | Matched through `to_string_lossy` in discovery, so a broad `*` cannot be escaped (`src/discovery.rs:38-43`) |
+| Non-UTF-8 directory name during glob matching | Matched through `to_string_lossy` in discovery, so a broad `*` cannot be escaped (`src/discovery.rs:43-48`) |
 | Symlinked config file | `path.exists()` follows symlinks, so creation is skipped and the target's contents load |
 
 ## 8. Testing
@@ -660,7 +660,7 @@ three failure modes) and `tests/cli_contract.rs:148-169` (the
 
 1. Did any change make the repository `config.toml` loadable at runtime (a CWD
    lookup, a bare `config.toml` path)? The only legitimate readers are
-   `CONFIG_TEMPLATE` (`src/config.rs:12`) and its test comparison (`:1188-1196`).
+   `CONFIG_TEMPLATE` (`src/config.rs:12`) and its test comparison (`:1236-1244`).
 2. Does a new or moved field still match between the struct, its serde default,
    `impl Default for ScanConfig` (`:53-63`) and the template (`config.toml:12-48`)?
    `checked_in_template_parses_and_matches_defaults` (`:1218`) is the guard.

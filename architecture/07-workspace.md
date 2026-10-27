@@ -43,14 +43,14 @@ fully-qualified `crate::domain::elapsed_nanos` uses (`workspace.rs:604`,
 
 **The workspace → cleanup edge is one-way, and in this file it is test-only.**
 The production half of `workspace.rs` contains *zero* references to
-`crate::cleanup`. The two calls are at `workspace.rs:4389` and `:4475`
+`crate::cleanup`. The two calls are at `workspace.rs:4825` and `:5104`
 (`crate::cleanup::covering_is_authorized`), both inside the test module,
 asserting that source-overlapping groups are refused even by the most
 permissive caller.
 So the dependency direction that [the overview](overview.md) calls out is
 `cleanup → workspace` in production (`cleanup.rs:2710` resolves,
 `cleanup.rs:2752` groups, `cleanup.rs:2757` analyses, `cleanup.rs:2767` builds
-units, `cleanup.rs:3103` refreshes a root manifest, `cleanup.rs:3589` re-maps
+units, `cleanup.rs:3103` refreshes a root manifest, `cleanup.rs:3617` re-maps
 groups, `cleanup.rs:3621` reduces the covering union, `cleanup.rs:3700` reads
 member roots) plus a test-only back-reference. There is no cycle and no
 production import from `workspace` into `cleanup`.
@@ -421,10 +421,10 @@ in a workspace when it's not` stays an unresolved participant — and under ADR
 007 it is an **out-of-boundary** participant that is reported, never blocking;
 an in-boundary one blocks the boundary. Withholding it from `unresolved` would
 narrow the block without ADR cover, which is exactly what
-M015's non-goals forbid (`src/workspace.rs:1043-1051`). What M015 adds is a
+M015's non-goals forbid (`src/workspace.rs:1076-1084`). What M015 adds is a
 pure decision function over the failure classes,
 `attribute_unknown` (`src/workspace.rs:419-438`), returning
-`UnknownDisposition` (`src/workspace.rs:399-409`): only `RefusedByCargo`
+`UnknownDisposition` (`src/workspace.rs:432-442`): only `RefusedByCargo`
 unknowns (Cargo ran and refused the manifest, so it owns no bytes) avoid the
 merge — as a passenger of the island Cargo named
 (`believed_workspace_manifest`, `src/workspace.rs:372-387`) when that
@@ -435,7 +435,7 @@ classified, never re-parsed from message text. The one narrow parse of a Cargo
 *message* lives in `believed_workspace_manifest` (`:390-440`) — the last one in
 the module — and it **fails closed**: when the parse returns `None` (wrong
 class, or a truncated reason) the disposition is `ScopeNote`, never a passenger
-of an unproven island (`:466-471`, `:426-436`).
+of an unproven island (`:446-451`, `:426-436`).
 Permission, transport, parse,
 and metadata failures are untouched. Pinned by
 `misconfigured_member_with_resolved_parent_still_blocks_but_attributes_as_passenger`
@@ -449,11 +449,11 @@ and `misconfigured_member_with_unresolved_parent_still_blocks`
 `attribute_unknown_with_unresolved_named_parent_is_scope_note_not_passenger`
 (`src/workspace.rs:4050`),
 `attribute_unknown_truncated_believed_reason_is_scope_note`
-(`src/workspace.rs:4066`), and the resolution-level capability pins
+(`src/workspace.rs:4502`), and the resolution-level capability pins
 `resolution_records_refused_capability_for_cargo_refused_locate`
 (`src/workspace.rs:4085`) and
 `resolution_records_unproven_capability_for_metadata_failure`
-(`src/workspace.rs:4130`). Enforcement of the passenger shape arrived with
+(`src/workspace.rs:4566`). Enforcement of the passenger shape arrived with
 M016 under the accepted ADR 004 amendment and became the default under
 M017/ADR 007: a refused passenger rides along while staying named in
 `unresolved_ownership` (never a unit row); see [Cleanup](09-cleanup.md)
@@ -779,7 +779,7 @@ surely as the owner's own; consulting only the owner's `members` ratified exactl
 the shape the check exists to refuse — an outer workspace whose output directory
 was not literally named `target`, containing a real nested project, lost four
 files with exit 0 and no diagnostic. The preflight proof closes the same gap
-independently at `cleanup.rs:3653-3673`.
+independently at `cleanup.rs:3797-3817`.
 
 **Stage 4 — deep sizing (`:1776-1793`).** One bounded pool, one call:
 `traverse::measure_many_targets` over `(survivor_position, covering_path)` pairs.
@@ -992,7 +992,7 @@ unioned. Equal and ancestor–descendant roots therefore cannot straddle a group
 boundary, which is what makes "counted and acted on exactly once" true, and what
 ADR §5 (`plans/adr/001-workspace-output-ownership-and-cleanup-authorization.md:76-86`) requires. Three ways a byte can still count
 twice: **hard links** between two target directories (the walker sums
-`file_real_size_fast` per path, `traverse.rs:267`, so each name counts);
+`file_real_size_fast` per path, `traverse.rs:527`, so each name counts);
 **mount points** inside a target tree (`dua_core` descends into them; nothing here
 or in `traverse.rs` checks for a mount boundary); and **case-insensitive
 aliasing**, defended only by the single `fs::canonicalize` per root at `:550`,
@@ -1085,8 +1085,8 @@ link. From there: `build_groups` contributes no node and marks the workspace
 uncertain (`:1639-1643`); `map_workspace_groups` skips it (`:2206`);
 `build_cleanup_units` skips it for both the mapped *and* the `unmapped` list
 (`:2396-2398`); and `traverse` never follows links either
-(`traverse.rs:7-8`, `symlink_metadata` guards at `traverse.rs:109`, `136`,
-`202`, `244`, plus `Options::default()` with no follow flag at `traverse.rs:79` — I
+(`traverse.rs:7-8`, `symlink_metadata` guards at `traverse.rs:354`, `136`,
+`202`, `244`, plus `Options::default()` with no follow flag at `traverse.rs:300` — I
 read this module's usage, not dua-core's default). Consequences worth naming: a
 workspace whose *only* output is a symlink produces **no groups and no
 diagnostic** — `symlink_output_is_uncertain` (`:5373`) asserts exactly
@@ -1247,7 +1247,7 @@ inside `has_artifact_entries` itself is still unpinned.
 4. **Never canonicalize a symlink.** `output_root` (`:307-375`) checks
    `symlink_metadata` *before* `canonicalize`; reordering those two lines would
    turn a refused root into a followed one. Also keep `traverse`'s
-   `symlink_metadata` guards (`traverse.rs:109`, `136`, `202`, `244`).
+   `symlink_metadata` guards (`traverse.rs:354`, `136`, `202`, `244`).
 5. **Record the stage and capability where the diagnostic is pushed**, not by
    parsing the message back. Every new failure branch needs its own
    `unresolved_stage.insert(..)` entry (`:857`, `:869-872`, `:884`, `:897`,
@@ -1275,6 +1275,6 @@ inside `has_artifact_entries` itself is still unpinned.
     qualification with a *configured* `build.target`; unknown versions stay
     `false` (tests `cleanup.rs:4534-4549`).
 12. **New real-Cargo tests need a premise assertion, not a stub.** Follow
-    `:5962-5965` (the case ran) and `:5991-5999` (cargo is present and
+    `:7424-7427` (the case ran) and `:5991-5999` (cargo is present and
     responded) — and check the new file against
     `scripts/check-fixture-portability.py`.

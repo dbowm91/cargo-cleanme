@@ -36,7 +36,7 @@
 - **Workspaces, manifests, ownership, authorization.** No knowledge of Cargo,
    `Cargo.toml`, or who owns what.
 - **Progress reporting.** It holds no observer. The `observer.group_measured` /
-   `unit_completed` calls bracketing a measurement live in the caller (`workspace.rs:1876-1877`,
+   `unit_completed` calls bracketing a measurement live in the caller (`workspace.rs:2106-2107`,
     `:1738`, `:1774`, `:1785`, `:1798`) — which is what lets this stay a leaf.
 - **Cleanup.** The post-clean measurement referenced in the module doc
    (`:3-4`) is a re-measurement *supplied to* `cleanup.rs`; nothing here deletes.
@@ -77,18 +77,18 @@ pub fn workspace_member_activity(member_root: &Path, output_roots: &[PathBuf],
     -> Result<SourceActivity, ()>;                                      // :411
 ```
 
-### `worker_threads()` — `traverse.rs:72-76`
+### `worker_threads()` — `traverse.rs:293-297`
 
 Derivation, in order: `std::thread::available_parallelism()`, `map_or(1, ..)` on error, then
   `.clamp(1, 8)` — **available parallelism, hard-capped at 8, floor 1**. There is **no environment
   override on this function**; the crate does have `CARGO_CLEANME_PROFILE_THREADS`
-  (`discovery.rs:554`) but that feeds discovery's profiling pool only. `discovery.rs:555` then
+  (`discovery.rs:533`) but that feeds discovery's profiling pool only. `discovery.rs:555` then
   applies `.min(GLOBAL_DISCOVERY_WORKER_CAP /* 8 */)` on top, redundant with the clamp already
   inside. Because this is a leaf, `discovery.rs` reaches it for its own walks (`:534`, `:1024`,
   `:1320`, `:1374`) — the single worker-count policy really is shared crate-wide, as
   `traverse.rs:67-71` claims.
 
-### `TargetStats` — `traverse.rs:85-91`
+### `TargetStats` — `traverse.rs:302-308`
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -98,10 +98,10 @@ Derivation, in order: `std::thread::available_parallelism()`, `map_or(1, ..)` on
 | `uncertain` | `bool` | `true` if any walk, metadata, or sizing step failed. Contract: "callers must treat the candidate as ineligible rather than promoting a partial measurement" (`:256-258`). |
 
 `Default` is derived, so an all-zero `TargetStats` is indistinguishable from a genuinely empty
-  directory. Callers must read `uncertain` to tell them apart — `workspace.rs:1817-1831` does
+  directory. Callers must read `uncertain` to tell them apart — `workspace.rs:2003-2017` does
   exactly that, treating a *missing* map entry as uncertain too.
 
-### `SourceActivity` — `traverse.rs:294-302`
+### `SourceActivity` — `traverse.rs:554-562`
 
 | Variant | Payload | Caller should |
 |---|---|---|
@@ -111,7 +111,7 @@ Derivation, in order: `std::thread::available_parallelism()`, `map_or(1, ..)` on
 `Err(())` is a third, implicit outcome: any walk or metadata failure is conservative
   (`traverse.rs:354`, `:454`). `cleanup.rs:3713-3718` turns it into a hard block;
   `workspace.rs:1708-1717` into a workspace-level uncertainty that later becomes
-  `GroupSkipReason::UncertainSource` (`:1679-1682`).
+  `GroupSkipReason::UncertainSource` (`:1753-1756`).
 
 ### Private helpers worth explaining
 
@@ -133,7 +133,7 @@ Derivation, in order: `std::thread::available_parallelism()`, `map_or(1, ..)` on
   `start_pool` at `lib.rs:784`).
 
 - **How many threads:** `worker_threads()`, i.e. ≤ 8, independent of candidate
-   count — one pool for the whole batch, the point of `traverse.rs:183-184` and the property
+   count — one pool for the whole batch, the point of `traverse.rs:431-432` and the property
     asserted by `traverse.rs:570-584` (32 roots, pool still ≤ 8).
 - **How work is distributed:** a **work-stealing pool**, not chunking.
    `PoolShared` (`dua-core lib.rs:283-301`) holds a crossbeam `Injector<Job>` plus per-worker
@@ -143,7 +143,7 @@ Derivation, in order: `std::thread::available_parallelism()`, `map_or(1, ..)` on
     `traverse.rs`.
 - **`Order::ParentFirst`** on all four walks (`:318`, `:429`, `:541`, `:648`),
    so a parent always precedes its descendants. The engine's `Order::Completion` is used by
-    `discovery.rs` in profiling mode (`discovery.rs:220-224`) and by the qualification example
+    `discovery.rs` in profiling mode (`discovery.rs:225-229`) and by the qualification example
     (`examples/traversal-qualification.rs:78`); no walk in this module uses it.
 - **Not chunked because roots are not partitioned:** every root enters one
    shared queue, so a 40 GB `target/` cannot starve nine 4 KB ones.
@@ -151,7 +151,7 @@ Derivation, in order: `std::thread::available_parallelism()`, `map_or(1, ..)` on
 ### Order preservation — definitive answer
 
 **The returned `Vec` is in ascending-`usize` order, not completion order.** `traverse.rs:287-290`
-  rebuilds the output by iterating `ordered` (stable-sorted by index at `:186-187`) and looking
+  rebuilds the output by iterating `ordered` (stable-sorted by index at `:439-440`) and looking
   each index up in `stats_by_index`. The engine's arrival order is discarded entirely. This
   satisfies the doc contract at `traverse.rs:180` ("Results are returned in input order") *only
   because* callers pass ascending indices.
@@ -198,7 +198,7 @@ Root guard → `dua_core::walk` with `Order::ParentFirst` and a constant `|_| tr
 ### The cases that make a naive walk wrong
 
 **Symlinks — not followed, and no loop detection is needed.** Two independent guards.
-  `traverse.rs:109-115` rejects a root whose `symlink_metadata` says symlink, and the engine never
+  `traverse.rs:354-360` rejects a root whose `symlink_metadata` says symlink, and the engine never
   follows symlinks during descent (`dua-core lib.rs:432`, `:894`: *"Walk `root` without following
   symlinks"*). The mechanism is structural: descent is gated on `entry.file_type.is_dir()`
   (`dua-core lib.rs:1288`), and on Unix a symlink's `d_type` reports `is_symlink()`, not
@@ -216,7 +216,7 @@ Root guard → `dua_core::walk` with `Order::ParentFirst` and a constant `|_| tr
 **Sparse files — allocated size, not apparent size.** `bytes` comes from
   `filesize::file_real_size_fast` (`:360`), which on Unix is literally `metadata.blocks() * 512`
   (`filesize-0.2.0/src/lib.rs:68-73`). A 1 GiB file with one 4 KiB block reports ~4 KiB — the
-  correct number for a reclaimable-bytes estimate, and why `workspace.rs:1879-1888` labels the
+  correct number for a reclaimable-bytes estimate, and why `workspace.rs:2109-2118` labels the
   metric `SizeMetric::Allocated` on unix/windows.
 
 **Unreadable entries — the information is genuinely lost, and that is the architectural cost of
@@ -263,7 +263,7 @@ Sequence: copy + stable-sort by index (`:186-187`) → drop repeated indices, th
   stream, and `PathBuf` is the wrong key: the same physical output root can be a `covering` entry
   of several groups, and `workspace.rs` emits one entry per *group position*, not per path. The
   `usize` lets the caller address results positionally while the engine addresses them by root id.
-  `workspace.rs:1776-1780` produces indices with `.enumerate()`, which is why index order equals
+  `workspace.rs:1962-1966` produces indices with `.enumerate()`, which is why index order equals
   input order there. **The index must be unique** — the engine asserts it — and this module now
   enforces that itself rather than inheriting the engine's panic; see §8.
 
@@ -307,7 +307,7 @@ The recency rule is `time >= cutoff || time > start` (`:532`). Both clauses matt
   the inactivity window, and `time > start` catches **future-dated** timestamps (clock skew, a
   restored backup, a deliberately touched file). Production constructs `start` as
   `SystemTime::now()` (`cleanup.rs:3680`); the `+1s` future-clock that keeps the future
-  test live exists only in test (`cleanup.rs:10252`) alongside `traverse.rs:614-616`.
+  test live exists only in test (`cleanup.rs:10252`) alongside `traverse.rs:989-991`.
 
 Evidence is the **maximum** mtime over *non-excluded* entries, with early exit at the first recent
   one (`:595-598`). Excluded from evidence, including their own boundary mtime (`:357-369` and
@@ -350,7 +350,7 @@ Consequence: **backdating a workspace's files is not sufficient to make it eligi
   fixture does this correctly (`tests/end_to_end.rs:50-70` backdates the project directory and
   `src/`, `target/`, and `target/debug/` alongside the files, with the comment "The workspace
   directory's own mtime is part of the recency verdict"), and the portable in-repo helper that
-  does it is `workspace.rs:4876-4977` (`set_path_modified` plus `backdate_tree`).
+  does it is `workspace.rs:5505-5606` (`set_path_modified` plus `backdate_tree`).
 
 > **Known defect (C036 D4, proposed — not fixed).** `README.md:138-140` tells a user whose scan
 > reports zero groups to "backdate the sources", which is incomplete advice: the guard also keys
@@ -374,7 +374,7 @@ Structurally identical; the only differences are (a) one output root becomes N (
 ### Which function is actually live
 
 **`source_activity` has no production caller.** A repo-wide grep returns the definition
-  (`traverse.rs:311`) and exactly one call site: the inline test at `:947`. Production reaches
+  (`traverse.rs:575`) and exactly one call site: the inline test at `:947`. Production reaches
    source activity only through `workspace_member_activity`, via `workspace.rs:2152` and
    `cleanup.rs:3701`. `measure_single_target` *is* live in production (`cleanup.rs:3727`,
    `:3734`). `source_activity` is `pub`, so nothing warns about it; it is recorded as
@@ -476,7 +476,7 @@ One Windows-specific hazard, verifiable and worth stating: that path calls `std:
 
 | Cost | Where | Note |
 |---|---|---|
-| **Two metadata syscalls per entry.** The engine collects `entry.metadata()` eagerly because `skip_metadata` is off (`dua-core lib.rs:776`), then `traverse.rs:136`/`:244` throws it away and re-`stat`s. | `:78-80` + `:136` | The single largest avoidable cost in the module. `discovery.rs:711` uses `.skip_metadata()`; `traverse.rs` cannot, because it needs the `modified()` value — but it does not need the *rest* of the metadata. |
+| **Two metadata syscalls per entry.** The engine collects `entry.metadata()` eagerly because `skip_metadata` is off (`dua-core lib.rs:776`), then `traverse.rs:353`/`:461` throws it away and re-`stat`s. | `:78-80` + `:353` | The single largest avoidable cost in the module. `discovery.rs:711` uses `.skip_metadata()`; `traverse.rs` cannot, because it needs the `modified()` value — but it does not need the *rest* of the metadata. |
 | `PathBuf` allocated per entry. `entry.path()` joins parent + filename and returns an owned `PathBuf` (`dua-core lib.rs:748`). | `:330`, `:442` | O(entries) heap allocations. Unavoidable given the re-stat design. |
 | **Double directory read in source activity.** The descend closure and the entry classification used to ask the same question of the same directory, each costing a `fs::read_dir`. | `:557` + `:622`, and `:445` + `:492` | **Fixed.** One definition, `contains_vcs_marker` (`:31-39`), behind a `NestedRepoMarkers` memo (`:49-65`) shared by both. Only *positives* are recorded, so the memo is bounded by the number of nested repositories rather than by the size of the tree, and a miss costs exactly what it cost before — the entry loop degrades to the old behaviour rather than to a wrong answer. |
 | O(entries) with two passes for roots. `symlink_metadata` runs once in the batch pre-pass and again per entry inside the walk. | `:408`, `:454` | |
@@ -506,7 +506,7 @@ Hot spots for a whole-machine scan, in order: the double `stat` per entry; and �
 
 **Does thread count change measured values, or only how fast they arrive?** **Only the speed.**
   `worker_threads()` (`:246-250`) reaches the engine as `threads` and nothing else; it appears in no
-  accumulator, no threshold, no comparison. `traverse.rs:570-584` asserts the *pool* does not grow
+  accumulator, no threshold, no comparison. `traverse.rs:918-932` asserts the *pool* does not grow
   with candidate count, and `traverse.rs:507-526` asserts single/batch agreement — but neither
   runs the same measurement at two different thread counts. The
   `sequential_and_parallel_refreshes_produce_the_same_workspace_graph_and_disposition` test
@@ -583,7 +583,7 @@ Otherwise: no `unwrap`, no `expect`, no slicing, and no integer casts in the pro
   layer up: `cleanup.rs:3675-3743` re-runs `workspace_member_activity` *and*
   `measure_single_target` immediately before deletion and converts any `Recent` verdict, any fresh
   `newest`, and any `uncertain` into a hard `Err` that blocks the transaction
-  (`cleanup.rs:3702-3707`, `:3384-3389`, `:3399-3404`, `:3405-3410`). That is invariant 3 in [the
+  (`cleanup.rs:4496-4501`, `:4062-4067`, `:4077-4082`, `:3547-3552`). That is invariant 3 in [the
   overview](overview.md) implemented, and it is the reason this module can be as trusting as it
   is.
 
@@ -604,7 +604,7 @@ Otherwise: no `unwrap`, no `expect`, no slicing, and no integer casts in the pro
 `tests/end_to_end.rs` and `tests/cli_contract.rs` give indirect end-to-end coverage:
   `end_to_end.rs:205-210` asserts a real artifact is *sized* through the JSON contract (`bytes >= 8192`, and the human formatter agrees), and `end_to_end.rs:50-70` backdates both files and
   directories — with a `windows`-specific helper, because directory mtime is part of the verdict
-  (`workspace.rs:4876-4977`).
+  (`workspace.rs:5505-5606`).
 
 `scripts/release-benchmark.py` is a genuine indirect gate: `COUNTER_KEYS` (`:230-240`) includes
   `groups_measured`, `reportable`, and `bytes`, and `TIMING_KEYS` (`:212-223`) includes
@@ -670,28 +670,28 @@ Filesystem measurement is the easiest thing in this project to test against a fi
    return a `TargetStats` without `uncertain` being set is a safety regression:
     `traverse.rs:13-14` promises no partial scan is presented as complete, and `cleanup.rs:3728`
       turns `uncertain` into a block.
-2. **`traverse.rs:191` + `:198-200`** — the dedup guard that keeps caller indices unique before
-   `walk_roots` (`:426-432`) can assert uniqueness (`dua-core lib.rs:659`). If you add a second
+2. **`traverse.rs:191` + `:415-417`** — the dedup guard that keeps caller indices unique before
+   `walk_roots` (`:473-479`) can assert uniqueness (`dua-core lib.rs:659`). If you add a second
      producer of indices, keep the dedup — and remember that the *first* occurrence of an index
      wins, so a repeated index now silently drops the second path rather than measuring it.
 3. **`traverse.rs:186-187` vs `:180`** — the doc promises "input order", the
    code delivers "index-sorted order". They agree only because `workspace.rs:1776-1780` uses
      `.enumerate()`. Either fix the doc or document the uniqueness + ascending precondition.
-4. **`traverse.rs:136` + `:244`** — the re-`stat` that duplicates the engine's
+4. **`traverse.rs:353` + `:461`** — the re-`stat` that duplicates the engine's
    eager `entry.metadata()` (`dua-core lib.rs:776`). This is the module's largest avoidable
      syscall cost, and it exists for a stated reason (`traverse.rs:9-12`). If anyone "optimises"
      it away by reading `entry.metadata()`, the allocated-bytes metric and the error-conservatism
      guarantee both move.
-5. **`workspace.rs:1879-1888` vs `filesize-0.2.0/src/lib.rs:58-126`**
+5. **`workspace.rs:2109-2118` vs `filesize-0.2.0/src/lib.rs:58-126`**
    — the `SizeMetric` label is a second, hand-maintained statement about which platform branch of
      a dependency actually ran. Change one cfg, change both.
 6. **`traverse.rs:330-348` vs `:382-402`** (and `:429-449` vs `:473-493`) —
    the exclusion rule is written twice per function, once for descent and once for evidence. Any
      change to one copy must be made to the other, and nothing enforces it.
-7. **`traverse.rs:370` vs `:136`** — `fs::metadata` (follows symlinks) in the
+7. **`traverse.rs:638` vs `:381`** — `fs::metadata` (follows symlinks) in the
    activity path against `fs::symlink_metadata` (does not) in the sizing path. The asymmetry is
      documented at `traverse.rs:309-310`; confirm it is still wanted rather than inherited.
-8. **`traverse.rs:127-130`, `:138-141`, `:145-148`, `:167-170`** — the four
+8. **`traverse.rs:372-375`, `:383-386`, `:390-393`, `:415-418`** — the four
    `uncertain` sites in the single path. They discard the error, so the diagnostic a user can
      eventually see (`workspace.rs:1835-1839`) names the group but not the cause. If the project
      ever wants actionable "permission denied on X", this is the place to thread it.

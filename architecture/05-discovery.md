@@ -2,7 +2,7 @@
 
 > Component deep dive · part of the [architecture overview](overview.md)
 
-`src/discovery.rs` — 2646 lines; production code ends at `:1125`, the inline
+`src/discovery.rs` — 2653 lines; production code ends at `:1125`, the inline
 `#[cfg(test)]` module opens at `:1126` and holds 42 `#[test]` functions. It is
 step 3 of the scan pipeline: given the scope decided by
 [`policy.rs`](04-policy-and-scope.md), walk it for `Cargo.toml` files and report
@@ -280,7 +280,7 @@ Every skip the code implements, with the reason it is auditable:
 
 | Reason | Rule | Global path | Sequential path | Counter | Diagnostic |
 |---|---|---|---|---|---|
-| Platform system dir | `global_only_prunes` (`policy.rs:736-746`) | descend `:597`, count `:679` | **not applied** | `platform_system_prunes` | none |
+| Platform system dir | `global_only_prunes` (`policy.rs:713-723`) | descend `:597`, count `:679` | **not applied** | `platform_system_prunes` | none |
 | Platform system dir (hardcoded) | `system_prune` (`:134-147`) | **not applied** | descend `:134`, count `:134` | — (the sequential literal has no such field) | none |
 | Cargo home `registry`/`git` | `cargo_home_prunes()` (`:185`) | descend `:185`, count `:185` | descend `:185`, count `:185` | `cargo_home_prunes` | none |
 | Rustup home (managed tool) | `managed_tool_prunes` (`:373-379`) | descend `:586`, count `:586` | **not applied** | `rustup_home_prunes` | none |
@@ -353,7 +353,7 @@ sites are derived from one disposition rather than two predicates.
 
 **Explicit scope bypasses `scan.ignore` at three levels.** `explicit ||`
 short-circuits the descend predicate (`:1030``) *and* the counter condition repeats
-`!explicit` (`:3079`); in addition `policy.rs:42` hands `ScanScope::Explicit` the
+`!explicit` (`:3079`); in addition `policy.rs:43` hands `ScanScope::Explicit` the
 `DiscoveryFilters::Bypassed` variant, which becomes empty slices at `:366``.
 
 ---
@@ -402,7 +402,7 @@ roots, not by the number of errors: the test
 pins 1001 errors into one record.
 
 Unknown-location loss fails closed. `coverage_complete` is set `false` at the
-moment the error is observed (`:745`, `:1037`), so `main.rs:1485-1489` refuses to
+moment the error is observed (`:745`, `:1037`), so `main.rs:1576-1580` refuses to
 treat the walk as complete, `discovery_state.rs:220-222` refuses to publish a
 Full generation from it, and `main.rs:1674` with `main.rs:1845` makes
 `scan --full` exit 1. An incomplete walk is positive inventory only.
@@ -449,7 +449,7 @@ no child path — only the root index — so a subtree's incompleteness *cannot*
 attributed below the root that contains it. The comment at `:890-893` says so
 explicitly.
 
-**`verify_root_coverage` (`discovery.rs:586-622`) is the measurement.** It
+**`verify_root_coverage` (`discovery.rs:565-601`) is the measurement.** It
 re-walks each root as its **own** walk root, so the existing per-walk-root
 attribution decides — per root — whether that root's subtree was fully read.
 It is a *coverage measurement*, not a second discovery: it collects no
@@ -546,7 +546,7 @@ parameter, which is why no lock appears.
 **Work division.** Directory reads are pool jobs; each finished read schedules
 its subdirectories into the shared queue and other workers steal them
 (`dua-core lib.rs:3-6`). `traverse::worker_threads()` is
-`available_parallelism().clamp(1, 8)` (`traverse.rs:72-76`) — a budget *shared
+`available_parallelism().clamp(1, 8)` (`traverse.rs:293-297`) — a budget *shared
 with* the measurement traversal, capped at 8.
 
 **One pool for all roots, in the global path** (`:473``): N roots share ≤8
@@ -656,9 +656,9 @@ diagnostic.** (Contrast `policy.rs:32-41`, where an unusable *root* is a fatal
 ## 9. Testing
 
 42 `#[test]` functions (verified `grep -c '#\[test\]' src/discovery.rs`), all in
-`discovery.rs:1126-2646`. Nine are compile-time platform-gated — `:1146``
+`discovery.rs:1126-2653`. Nine are compile-time platform-gated — `:1146``
 (`unix`), `:1678`` (`macos`/`windows`), `:1698`` (`linux`), and `:1742``, `:1774``,
-`:1844``, `:1911``, `:2115``, `:2554`` (all `unix`) — so a Linux run executes 40,
+`:1844``, `:1911``, `:2121``, `:2560`` (all `unix`) — so a Linux run executes 40,
 a macOS run 41 and a Windows run 33.
 
 | Test | Line | Invariant protected |

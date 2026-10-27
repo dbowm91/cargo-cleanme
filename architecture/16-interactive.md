@@ -43,7 +43,7 @@ decision at all: it prints `Nothing to clean.` on stdout and exits 0
 
 ## 2. The shape: one pure machine, one thin terminal
 
-`Session` (`src/interactive.rs:204-233`) owns mode, cursor, filter, selection,
+`Session` (`src/interactive.rs:251-280`) owns mode, cursor, filter, selection,
 and the geometry, and renders itself to a `Vec<String>`. It performs no IO,
 reads no clock, and holds no terminal. Every method is a total function of
 `self` and the key pressed.
@@ -52,7 +52,7 @@ Two vocabularies sit on top of it. `Mode` (`src/interactive.rs:46-49`) is
 `Normal` or `Insert`, labelled `NOR` and `INS` in the status line. `Key`
 (`src/interactive.rs:68-89`) is the normalization point: the state machine
 consumes it rather than `crossterm::event::KeyEvent`, and `normalize`
-(`src/interactive.rs:1245-1274`) maps onto it as a *total* function: a key with
+(`src/interactive.rs:1751-1780`) maps onto it as a *total* function: a key with
 no binding becomes `Key::Ignored`, never an error. An unknown escape sequence
 is a normal terminal event, not a failure. `Ctrl-C` is recognised before any
 other examination, so it quits from either mode; every other control
@@ -77,9 +77,9 @@ driver re-measures before every frame (`src/interactive.rs:1148`), so a resize
 mid-session re-lays-out instead of painting over itself, and the non-key
 events crossterm delivers (resize, focus, mouse, paste) need no handling of
 their own — they normalize to `Key::Ignored`, and the next frame is already
-measured again (`src/interactive.rs:1265`).
+measured again (`src/interactive.rs:1771`).
 
-`render_to_string` (`src/interactive.rs:1301-1306`) flattens a frame for tests
+`render_to_string` (`src/interactive.rs:1807-1812`) flattens a frame for tests
 and diagnostics; the driver uses `Session::frame` line by line.
 
 ## 3. Why the listing is not a second proof
@@ -91,7 +91,7 @@ the engine refuses, or a unit the engine would consider could be absent from the
 list the operator chose from.
 
 So there is exactly one pipeline. `cleanup::discover_and_resolve_universe`
-(`src/cleanup.rs:1503-1594`) is called by both the destructive engine and
+(`src/cleanup.rs:1648-1739`) is called by both the destructive engine and
 `cleanup::list_cleanup_candidates` (`src/cleanup.rs:2393-2468`). The extraction
 exists for no other reason: it is what makes "the list is the engine's unit set"
 a structural property rather than a promise.
@@ -127,7 +127,7 @@ remove within the anchor.
 is built with `.excluding(resolved.unproven_roots.clone())`
 (`src/main.rs:625-628`), so a workspace under a learned root whose coverage
 could not be proven is not offered — and the non-interactive path gets the same
-narrowing (`src/main.rs:578-587`). The exclusion is applied to the *declared
+narrowing (`src/main.rs:680-689`). The exclusion is applied to the *declared
 selection*, after ownership classification, so it can only ever remove
 candidates: a shared output between a proven root and an unproven one stays
 `Shared` and stays inventory-only.
@@ -257,11 +257,11 @@ that failed first:
 - **`q` quits from NOR and types in INS** (`src/interactive.rs:1498-1528`).
   INS is a text field; every printable key inserts. `Ctrl-C` is the only key that
   quits from inside it.
-- **Space is a filter character in INS** (`src/interactive.rs:408-438`).
+- **Space is a filter character in INS** (`src/interactive.rs:466-496`).
   `normalize` maps `Char(' ')` onto `Key::Space` in every mode, so treating it as
   a no-op would make any workspace path containing a space impossible to filter
   for. `a_filter_can_contain_a_space_because_paths_can`
-  (`src/interactive.rs:1473-1486`) pins it against a path that contains one.
+  (`src/interactive.rs:1979-1992`) pins it against a path that contains one.
 - **Enter on an empty selection does not commit** (`src/interactive.rs:551-568`).
   Closing the session there would look exactly like one that cleaned nothing —
   the M012A shape, a run that reports a success it never performed.
@@ -270,7 +270,7 @@ that failed first:
   identifies it (§7), but the filter still matches the whole path, because a
   filter that only matched the displayed name would silently stop finding
   workspaces. `filtering_is_case_insensitive_and_matches_the_full_path`
-  (`src/interactive.rs:1583-1608`) pins both halves.
+  (`src/interactive.rs:2089-2114`) pins both halves.
 
 Two more are deliberate defaults: **nothing is checked initially**, because a
 selection UI whose default is "delete all of it" is a trap wearing a checkbox
@@ -328,9 +328,9 @@ visible width (`src/interactive.rs:1026-1034`). The test
 `the_frame_is_bounded_and_never_overflows_the_width`
 (`src/interactive.rs:1702-1725`) pins the geometry across four sizes,
 `the_frame_does_not_grow_with_the_candidate_count`
-(`src/interactive.rs:1727-1754`) pins the boundedness, and
+(`src/interactive.rs:2491-2518`) pins the boundedness, and
 `a_long_display_name_is_truncated_from_the_left_not_the_right`
-(`src/interactive.rs:1773-1785`) pins the truncation.
+(`src/interactive.rs:2539-2551`) pins the truncation.
 
 ### A row is named, not spelled out
 
@@ -371,7 +371,7 @@ duplicating them here is how a listing starts disagreeing with the run.
 
 The surface is the only place in the crate that renders colour, and the colour
 is opt-out: `NO_COLOR` disables it and so does `TERM=dumb`
-(`src/interactive.rs:1100-1116`). The decision is made in the driver, not in
+(`src/interactive.rs:1545-1561`). The decision is made in the driver, not in
 `Session`, so the state machine stays a pure function of its own state
 (`src/interactive.rs:265-269`).
 
@@ -411,7 +411,7 @@ minus the escapes (`src/interactive.rs:2356-2372`).
   (CJK) characters can paint past the right edge even though the frame-length
   assertion still holds.
 - **An empty candidate list is a plain negative result.** `run_interactive` settles
-  an empty list before the terminal precondition (`src/interactive.rs:1282-1284`)
+  an empty list before the terminal precondition (`src/interactive.rs:1788-1790`)
   and returns `SessionResult::NothingToClean`; the orchestrator maps that to
   `SelectionOutcome::NothingToClean` (`src/main.rs:644-657`) and prints one line,
   `Nothing to clean.`, on stdout, exiting 0. The same scope without `-i` reports
@@ -443,7 +443,7 @@ The dependency is used in this module and nowhere else in the crate
 (`src/interactive.rs:1176-1274`). The module's own production dependencies are
 two: `cleanup` for the candidate type (`src/interactive.rs:38`) and `report` for
 byte formatting (`src/interactive.rs:39`). Its `domain` reference is test-only
-(`src/interactive.rs:1315`).
+(`src/interactive.rs:1821`).
 
 C039 added **no** dependency. The reference surface it was modelled on uses
 `ratatui` and `inquire`; neither was adopted, because the layout is a fixed set

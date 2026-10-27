@@ -99,18 +99,18 @@ from `src/`, never copied between documents.
 
 | File | `#[test]` | `mod tests` opens at | Total lines | Lines in test module |
 |---|---:|---:|---:|---:|
-| `src/cleanup.rs` | 138 | 4542 | 12174 | 7633 |
+| `src/cleanup.rs` | 138 | 4542 | 12180 | 7639 |
 | `src/workspace.rs` | 87 | 2420 | 6930 | 4511 |
 | `src/interactive.rs` | 76 | 1819 | 3606 | 1788 |
 | `src/update.rs` | 54 | 1501 | 3342 | 1842 |
 | `src/cli.rs` | 61 | 982 | 2874 | 1893 |
-| `src/discovery.rs` | 42 | 1127 | 2646 | 1520 |
-| `src/policy.rs` | 26 | 827 | 1666 | 840 |
+| `src/discovery.rs` | 42 | 1127 | 2653 | 1527 |
+| `src/policy.rs` | 26 | 827 | 1673 | 847 |
 | `src/output.rs` | 22 | 274 (`path_tests`), 513 (`tests`), 993 (`update_tests`) | 1113 | 840 |
 | `src/config.rs` | 21 | 618 | 1547 | 930 |
 | `src/discovery_state.rs` | 18 | 638 | 1335 | 698 |
 | `src/progress.rs` | 16 | 543 (`test_env`), 570 (`tests`) | 1002 | 460 |
-| `src/report.rs` | 11 | 192 | 387 | 196 |
+| `src/report.rs` | 11 | 192 | 395 | 204 |
 | `src/main.rs` | 12 | 2010 | 2513 | 504 |
 | `src/traverse.rs` | 12 | 772 | 1098 | 327 |
 | `src/editor.rs` | 5 | 162 | 292 | 131 |
@@ -159,15 +159,15 @@ allocation is correct, and it is the one place the pyramid is emphatically *not*
 ### The structural observation: the testing is inverted
 
 The convention is a separate `tests/` tree beside a lean `src/`. This crate does the
-opposite. `cleanup.rs` is 12,174 lines of which **7,638 are test code** — 63% of that file is
+opposite. `cleanup.rs` is 12,180 lines of which **7,644 are test code** — 63% of that file is
 fake-Cargo runners and assertion bodies. `workspace.rs` is 6930 lines, 4512 of them tests.
-`report.rs` runs the other way: its test module opens at line 191, halfway down its 387
+`report.rs` runs the other way: its test module opens at line 191, halfway down its 395
 lines, so the rendering tests sit *below* about half of the production code they exercise.
 
 The consequence for review is concrete. Opening `src/cleanup.rs` to understand the pre-spawn
-decision puts 7,757 lines of `FakeCleanupRunner` variants (`cleanup.rs:4418`–`12174`) between
+decision puts 7,639 lines of `FakeCleanupRunner` variants (`cleanup.rs:4542`–`12180`) between
 the reader and nearly all production code. Locate the boundary first — `mod tests {` at
-`cleanup.rs:4418` — and read upward. Do not infer "few tests" from a file's position in the
+`cleanup.rs:4542` — and read upward. Do not infer "few tests" from a file's position in the
 tree, and do not count `cleanup.rs` as production code when estimating where complexity
 lives.
 
@@ -183,7 +183,7 @@ Two process seams keep almost all of the 602 declared tests from spawning a real
 - **`CleanupRunner`** — declared in `src/cleanup.rs` for the destructive step, so cleanup is exercised while `cargo clean` is a no-op returning recorded bytes.
 
 Three test sites reach past the seam and drive the real `cargo` deliberately:
-`workspace.rs:5572` (`a_relative_root_resolves_the_same_workspaces_as_its_absolute_spelling`),
+`workspace.rs:6201` (`a_relative_root_resolves_the_same_workspaces_as_its_absolute_spelling`),
 `cleanup.rs:7558` (`real_temp_project_preview_and_execute_with_redirected_target`)
 and `cleanup.rs:7697` (both inside
 `real_cargo_package_selector_preserves_sibling_workspace_artifacts`).
@@ -202,8 +202,8 @@ Two further seams remove the remaining side effects:
 ### Catalogue of fakes
 
 Production impls, for contrast: `SystemCargoRunner` (`workspace.rs:78`),
-`SystemCleanupRunner` (`cleanup.rs:1009`, impls `CargoRunner` at `:698` and `CleanupRunner` at
-`:710`), `WorkspaceCleanupAdapter<'_>` (`cleanup.rs:2790`), `ProofRefreshMeter<'_>`
+`SystemCleanupRunner` (`cleanup.rs:1009`, impls `CargoRunner` at `:1091` and `CleanupRunner` at
+`:1103`), `WorkspaceCleanupAdapter<'_>` (`cleanup.rs:3404`), `ProofRefreshMeter<'_>`
 (`cleanup.rs:3061`), `HttpEnvironment` (`update.rs:854`), `IndicatifRenderer`
 (`progress.rs:213`), `NoopObserver` (`progress.rs:57`).
 
@@ -215,16 +215,16 @@ Production impls, for contrast: `SystemCargoRunner` (`workspace.rs:78`),
 | `TwoWsRunner` | `workspace.rs:3987` (impl 3993) | Two independent workspaces; pins *two locates, two metadatas* — no cross-workspace reuse |
 | `FailFirstRunner` | `workspace.rs:4056` (impl 4060) | One workspace's locate fails; proves the failure does not poison an unrelated one |
 | `RecordingRunner` | `workspace.rs:6134` (impl 6138) | Records `(cwd, args)` so a test asserts argument *construction*, not the fake's result |
-| `FixtureEnvironment` | `update.rs:1511` (impl 1681) | Replaces network, `curl` discovery, process globals; drives `staging` and a fixed `version`. Records **its own** staging paths (`created_staging`, `update.rs:1316`) so leak evidence is invocation-scoped rather than a scan of the temp directory — see [§7](#7-the-false-green-problem) |
+| `FixtureEnvironment` | `update.rs:1511` (impl 1681) | Replaces network, `curl` discovery, process globals; drives `staging` and a fixed `version`. Records **its own** staging paths (`created_staging`, `update.rs:1526`) so leak evidence is invocation-scoped rather than a scan of the temp directory — see [§7](#7-the-false-green-problem) |
 | `TestObserver` | `progress.rs:65` (impl 107) | Records semantic events (`phases`, `visited`, `pruned`, `manifests`, `workspaces`, `cargo_failures`) — deliberately not refresh counts, which are renderer-side |
 | `FakeCleanupRunner` | `cleanup.rs:4755` (impls 4765 / 4788 / 4871) | The workhorse. Records every call; `remove_on_execute` and `unresolved_manifest` toggle Execute's delete and the unresolved-manifest block |
-| `ChangingTargetRunner` | `cleanup.rs:7758` (impls 7764 / 7784) | `target` changes between calls — the first-generation race |
-| `PerPathFailRunner` | `cleanup.rs:7905` (impls 7909 / 7952) | One manifest path fails to locate; proves the *entire* selected scope is blocked, not just the failing unit |
-| `RaceRunner` | `cleanup.rs:8857` (impls 8867 / 8893 / 8956) | Mutates the filesystem on the *second* `metadata` call — between scan and final proof; `clean_calls` proves no clean was staged |
-| `BuildChangingRunner` | `cleanup.rs:9113` (impls 9119 / 9164) | Swaps `build/<hash>` between resolution passes; targets marker-qualification revalidation |
-| `StagedCargo` | `cleanup.rs:9609` (impls 9637 / 9747 / 9757 / 9850) | Returns `"mock cargo clean success"` — a clean that succeeds *without deleting*, so the test asserts the call, not the filesystem |
-| `ParallelProbeRunner` | `cleanup.rs:9875` (impls 9880 / 9893) | Tracks peak concurrent `metadata` calls; proves the parallel fan-out is real |
-| `MetadataMutationRunner` | `cleanup.rs:9914` (impls 9920 / 9965) | Wraps `StagedCargo`, mutating emitted metadata (`MetadataMutation` at `cleanup.rs:8562`: `WorkspaceRoot`, `AddMember`, `Malformed`) after the inner call |
+| `ChangingTargetRunner` | `cleanup.rs:7764` (impls 7764 / 7784) | `target` changes between calls — the first-generation race |
+| `PerPathFailRunner` | `cleanup.rs:7911` (impls 7909 / 7952) | One manifest path fails to locate; proves the *entire* selected scope is blocked, not just the failing unit |
+| `RaceRunner` | `cleanup.rs:8863` (impls 8867 / 8893 / 8956) | Mutates the filesystem on the *second* `metadata` call — between scan and final proof; `clean_calls` proves no clean was staged |
+| `BuildChangingRunner` | `cleanup.rs:9119` (impls 9119 / 9164) | Swaps `build/<hash>` between resolution passes; targets marker-qualification revalidation |
+| `StagedCargo` | `cleanup.rs:9615` (impls 9637 / 9747 / 9757 / 9850) | Returns `"mock cargo clean success"` — a clean that succeeds *without deleting*, so the test asserts the call, not the filesystem |
+| `ParallelProbeRunner` | `cleanup.rs:9881` (impls 9880 / 9893) | Tracks peak concurrent `metadata` calls; proves the parallel fan-out is real |
+| `MetadataMutationRunner` | `cleanup.rs:9920` (impls 9920 / 9965) | Wraps `StagedCargo`, mutating emitted metadata (`MetadataMutation` at `cleanup.rs:8562`: `WorkspaceRoot`, `AddMember`, `Malformed`) after the inner call |
 | `MetadataOnly` | `tests/end_to_end.rs:73` (impl 75) | Integration-suite Cargo stub — the only fake outside `src/` |
 
 Two deserve a note. `RecordingRunner` carries a comment (`workspace.rs:6124-6131`) stating
@@ -264,7 +264,7 @@ prevent, with the premise stated in the test's own doc comment.
   unreachable from the tests — reverting it leaves every test green, because the bar only
   draws on an attended terminal — and that pinning it needs a pty harness and a new
   dev-dependency that do not yet exist.
-- **`update_json` (`output.rs:903-940`)** *was* the sharpest single gap, and C022 closed the
+- **`update_json` (`output.rs:950-987`)** *was* the sharpest single gap, and C022 closed the
   test half of it. The only machine-readable output path that does **not** go through
   `EnvelopeV1`; it hand-builds a `serde_json::Map` with its own `json!(1)` at `output.rs:905`
   and a bespoke `result` object. It now has four contract cases (`output.rs:969`, `:995`,
@@ -281,7 +281,7 @@ in a top-level `mod update_tests` (`output.rs:945-1065`) for the `update` JSON d
 is the module's one non-envelope contract and previously had no test anywhere. They cover what
 the log line newly made risky and previously untested: one-line bounded ASCII output
 (`scan_line_is_one_bounded_ascii_line`, `output.rs:581`, against the `assert_ascii_and_bounded`
-helper at `output.rs:566`), byte-limit truncation that drops an overlong optional whole rather
+helper at `output.rs:569`), byte-limit truncation that drops an overlong optional whole rather
 than mid-token (`output.rs:771`), the structural head fitting at the worst case
 (`output.rs:802`), field-order determinism across calls (`output.rs:816`), and the status
 triage for ok / blocked / failed (`output.rs:600`, `:630`, `:695`). One of them is worth
@@ -305,18 +305,18 @@ that walks the entire filesystem — parallel size and recency measurement, syml
 parallel-probe machinery has a dedicated counting fake in `cleanup.rs`
 (`ParallelProbeRunner`, `cleanup.rs:8520`); `traverse.rs` has nothing comparable.
 
-`source_activity` is declared at `src/traverse.rs:311` and has exactly one call site in the
-crate: `src/traverse.rs:619`, inside the test module opening at 495. **There is no
-production caller** — production uses `workspace_source_activity` (`src/workspace.rs:2143`,
-called from `src/workspace.rs:1692`) instead. So `traverse::source_activity` is a `pub`
+`source_activity` is declared at `src/traverse.rs:575` and has exactly one call site in the
+crate: `src/traverse.rs:994`, inside the test module opening at 495. **There is no
+production caller** — production uses `workspace_source_activity` (`src/workspace.rs:2373`,
+called from `src/workspace.rs:1870`) instead. So `traverse::source_activity` is a `pub`
 function with no production consumer whose sole exercise is its own test. That test proves
 the function works and nothing about the system's behaviour: a coverage claim that looks green
 and is empty, and a milder cousin of the C009–C013 incidents.
 
 And the test does not discriminate what its own name claims.
-`source_scan_short_circuits_recent_files` (`src/traverse.rs:611`) writes one fresh file into a
+`source_scan_short_circuits_recent_files` (`src/traverse.rs:986`) writes one fresh file into a
 freshly created temp directory and then walks *that directory* as the project root. The walk
-is `ParentFirst` (`src/traverse.rs:328`), and the root's own mtime is fresh, so
+is `ParentFirst` (`src/traverse.rs:596`), and the root's own mtime is fresh, so
 `SourceActivity::Recent` is returned on the **directory** before the file is ever examined.
 The case would still pass if `fresh.rs` were deleted, or if the per-file guard were removed
 altogether. It is a true statement about a directory, wearing the name of a statement about a
@@ -330,7 +330,7 @@ third-largest inline test suite in the crate and gives it more tests than `disco
 and `policy.rs` combined (18 + 26).
 
 The shape is worth recording because it is the one place the project chose a *pure* seam over
-a process seam: `Session` (`src/interactive.rs:204`) is a state machine that owns mode, cursor,
+a process seam: `Session` (`src/interactive.rs:251`) is a state machine that owns mode, cursor,
 filter, and selection and renders itself to a `Vec<String>` with no terminal in scope, while
 everything that touches a real terminal lives behind the `Terminal` trait
 (`src/interactive.rs:120`, whose `restore` is at `src/interactive.rs:127`). The consequence is
@@ -842,7 +842,7 @@ Now guarded:
 | Docs/completions drift | `generated-docs` job |
 | Documentation citing lines that no longer exist | `check-doc-citations.py`, in `ci.yml` `checks` |
 | **Documentation inventory that silently lost a script** | `check-doc-citations.py` §5 parity rule — added by C021 |
-| **A test whose observation surface is wider than its subject** | C021's fixture-owned staging evidence (`leaked_staging`, `src/update.rs:1415`) plus the foreign-path concurrency control at `src/update.rs:2686` |
+| **A test whose observation surface is wider than its subject** | C021's fixture-owned staging evidence (`leaked_staging`, `src/update.rs:1625`) plus the foreign-path concurrency control at `src/update.rs:2686` |
 | Performance regression | `benchmark` job vs `release/baseline-benchmark.json` |
 
 **Residual risks in the present tree.**
@@ -869,7 +869,7 @@ changed what `--profile dev` selects, or moved the version floor, nothing in the
 gates would notice; the hosted matrix would, but not immediately.
 
 **R3 — The `update` machine-output surface is pinned, but only at the seam and in the failing
-direction.** `update_json` (`output.rs:903`) is the one machine-readable surface bypassing
+direction.** `update_json` (`output.rs:950`) is the one machine-readable surface bypassing
 `EnvelopeV1`. C022 moved it out of `main.rs` into `output.rs` and gave it four cases
 (`output.rs:969`) pinning `schema_version`, `operation`, dry-run/`changed` semantics, every
 identity field, and all four provenance codes, plus a stream case asserting one document and
@@ -885,7 +885,7 @@ source-string guard, and it is the weakest link in this surface's evidence: it w
 a change that broke the stream inside the library. C016 and C017 both lived on this path.
 
 **R4 — `traverse::source_activity` is test-only, and `traverse.rs` is thin.** `source_activity`
-(`src/traverse.rs:311`) has one call site, in its own test module (`src/traverse.rs:619`). A
+(`src/traverse.rs:575`) has one call site, in its own test module (`src/traverse.rs:619`). A
 `pub` function with no production consumer whose only exercise is its own assertion is a
 coverage entry reporting capability the system does not use — a mild instance of a formally
 registered class. `traverse.rs` has 6 tests for the module that walks the whole filesystem.
@@ -919,7 +919,7 @@ test can report another actor's behaviour as its own.**
 and production code inside that path shells out to the real one to learn the
 host's version: `runtime_clean_capabilities` (`src/cleanup.rs:3944`) reads
 `cargo --version` and feeds it to `clean_capabilities_from_version`
-(`src/workspace.rs:146`), which enables `profile_selector` for exactly nine
+(`src/workspace.rs:160`), which enables `profile_selector` for exactly nine
 exact versions (1.89.0, 1.90.0, 1.91.1, 1.92.0, 1.93.1, 1.94.1, 1.95.0,
 1.98.1, 1.99.0), with `1.99.1` explicitly excluded and asserted as excluded at
 `src/cleanup.rs:4542`. The case's profile-selector step asserted
@@ -955,7 +955,7 @@ on a host where the selector was wrongly refused *and* on a host where it was
 wrongly offered. The premise is derived from the runtime table rather than the
 policy file, and the chain is still sound because
 `workspace::tests::runtime_allowlist_agrees_with_the_selector_qualification_policy`
-(`src/workspace.rs:2213`) independently asserts that the table agrees with
+(`src/workspace.rs:2471`) independently asserts that the table agrees with
 `release/selector-qualification.json` — exhaustively, over every
 `major.minor.patch` in `0..3 × 0..110 × 0..3`. A table that drifts from the
 policy fails there; a gate that stops consulting the table fails in the
@@ -984,14 +984,14 @@ lines in this file did not move.
 **R8 — Two tests whose names promise more than their assertions deliver.** This is the C012
 shape in its quietest form: a green case that cannot fail for the reason its name states.
 
-- `traverse::tests::source_scan_short_circuits_recent_files` (`src/traverse.rs:611`) writes one
+- `traverse::tests::source_scan_short_circuits_recent_files` (`src/traverse.rs:986`) writes one
   fresh file into a freshly created temp directory and then walks **that directory** as the
   project root. The walk is parent-first, and the directory's own mtime is fresh, so
   `SourceActivity::Recent` is returned on the directory before the file is examined. The case
   would still pass if the file were deleted, or if the per-file guard were removed. It is a true
   statement about a directory wearing the name of a statement about a file.
 - `discovery_state::tests::zero_retention_disables_expiration_and_nested_roots_collapse`
-  (`src/discovery_state.rs:993`) no longer demonstrates either half of its name. Its only
+  (`src/discovery_state.rs:995`) no longer demonstrates either half of its name. Its only
   assertion is `assert!(state.learned_roots.is_empty())` (`src/discovery_state.rs:1029`), which
   holds because the fixture lives under the host's temporary directory and temporary roots are
   deliberately excluded from automatic maintenance learning — not because retention was zero and
@@ -1004,14 +1004,14 @@ it, deleting it changes nothing.
 - The C028 narrow-absence rule (`src/discovery_state.rs:362-371`) prunes a learned root that a
   complete, certain Full pass positively confirmed nonexistent. The only test that reaches this
   code, `complete_certain_full_prunes_only_positively_absent_learned_roots`
-  (`src/discovery_state.rs:1036`), uses a tempdir path — and that path is already pruned by the
+  (`src/discovery_state.rs:1096`), uses a tempdir path — and that path is already pruned by the
   earlier `automatic_root_is_maintainable` guard at `src/discovery_state.rs:352`, which runs
   first. The absence probe is therefore never the deciding branch in the case that claims to
   cover it: delete it, and every assertion in that case is still satisfied by the earlier
   guard. The "uncertainty vetoes absence" half of the same case
   (`src/discovery_state.rs:1093-1097`) asserts that the root is *retained*, which is also what
   the rule's absence would produce.
-- `discovery_state::sweep_own_stale_temps` (`src/discovery_state.rs:560`) — the routine that
+- `discovery_state::sweep_own_stale_temps` (`src/discovery_state.rs:562`) — the routine that
   removes this process's own stale `.{name}.{pid}.{attempt}.tmp` litter older than an hour —
   has **no test at all**. Its only references are the call site
   (`src/discovery_state.rs:537`) and its own definition.
@@ -1067,7 +1067,7 @@ and the hosted workflow is what asks them automatically. It is still the one scr
 reference tree; `release-benchmark.py` re-measures and fails on a configurable regression
 percentage, run by the `benchmark` job. The regression it catches is the class no correctness
 test notices: a change that keeps every answer right but makes the scan substantially slower.
-With `cleanup.rs` at 12,174 lines and the parallel probe fan-out a live optimisation surface
+With `cleanup.rs` at 12,180 lines and the parallel probe fan-out a live optimisation surface
 (`ParallelProbeRunner` exists precisely to assert the fan-out), that is a realistic and
 otherwise invisible failure mode. The trade-off is inherent: a wall-clock threshold is flaky on
 shared runners, so this gate is the one most likely to be loosened — itself a thing to watch in
@@ -1079,19 +1079,19 @@ review.
 
 | Module | Lines | Tests | Tests / prod. lines | Verdict |
 |---|---:|---:|---:|---|
-| `cleanup.rs` | 12174 | 138 | 138 / 4536 | Appropriate. Most safety-critical module has the most tests; the race fakes show the hard cases were found and pinned — and it is also the module that carried the long-standing red, R7, now corrected by C037 |
+| `cleanup.rs` | 12180 | 138 | 138 / 4536 | Appropriate. Most safety-critical module has the most tests; the race fakes show the hard cases were found and pinned — and it is also the module that carried the long-standing red, R7, now corrected by C037 |
 | `workspace.rs` | 6930 | 87 | 87 / 2418 | Appropriate, and the fakes are argument-focused rather than result-focused — the right instinct |
 | `update.rs` | 3342 | 54 | 54 / 1499 | Reasonable unit coverage, but this is the module whose defects (C011, C016, C017) escaped to production. Unit tests cannot see a transport that cannot reach its authority. Its transaction-hygiene evidence was briefly a false green too — see R6 |
 | `interactive.rs` | 3606 | 76 | 76 / 1817 | Good for a new module, and the only one that put the terminal behind a pure seam. Its *surface* — a real selection session — is covered nowhere outside the module, because the integration suite has no terminal |
-| `discovery.rs` | 2646 | 42 | 42 / 1125 | Permission traversal has a premise-checked Unix fixture; 1,001 synthetic errors prove per-root aggregation stays bounded |
+| `discovery.rs` | 2653 | 42 | 42 / 1125 | Permission traversal has a premise-checked Unix fixture; 1,001 synthetic errors prove per-root aggregation stays bounded |
 | `cli.rs` | 2874 | 61 | 61 / 980 | Good |
 | `output.rs` | 1113 | 22 | 22 / 543 | **Split verdict, and the split is the finding.** The in-file tests cover bounded log output and update JSON; the envelope layer has exactly **one** direct test — `cleanup_json_result_key_set_is_stable` (`output.rs:710`) pins the cleanup envelope's `result` key set — and the *scan* envelope has none |
 | `config.rs` | 1547 | 21 | 21 / 616 | Good for its surface |
 | `progress.rs` | 1002 | 16 | 16 / 542 | Thin relative to size. Terminal-capability detection is mostly untested, and integration tests force `--no-progress` (`cli_contract.rs:273`), excluding the renderer from end-to-end coverage by construction |
 | `discovery_state.rs` | 1335 | 18 | 18 / 636 | Candidate provenance and cache/runtime exclusion are pinned alongside C028 absence handling — but see R9: the absence rule itself and `sweep_own_stale_temps` are not discriminated by any case |
-| `policy.rs` | 1666 | 26 | 26 / 825 | Adequate for the module deciding the Routine/Full scope boundary: decision table, symlink refusal, premise recheck, Full-generation freshness, and raw-candidate identity are pinned |
+| `policy.rs` | 1673 | 26 | 26 / 825 | Adequate for the module deciding the Routine/Full scope boundary: decision table, symlink refusal, premise recheck, Full-generation freshness, and raw-candidate identity are pinned |
 | `traverse.rs` | 1098 | 12 | 12 / 770 | **Still thin for the module that walks the whole filesystem.** No test double for traversal-scale error attribution; `source_activity` (`traverse.rs:575`) has no production caller, and its one test does not discriminate what it claims (R8) |
-| `report.rs` | 387 | 11 | 11 / 190 | **Unusually good for its size.** Covers control-character and non-UTF-8 path escaping, zero-state wording, the full `format_bytes` ladder including `u64::MAX`, group ordering with the path tie-break, and total de-duplication across equal physical roots. Two are `#[cfg(unix)]` (`report.rs:207`, `:220`) because they use `OsString::from_vec` |
+| `report.rs` | 395 | 11 | 11 / 190 | **Unusually good for its size.** Covers control-character and non-UTF-8 path escaping, zero-state wording, the full `format_bytes` ladder including `u64::MAX`, group ordering with the path tie-break, and total de-duplication across equal physical roots. Two are `#[cfg(unix)]` (`report.rs:207`, `:220`) because they use `OsString::from_vec` |
 | `editor.rs` | 292 | 5 | 5 / 160 | Low, but the process-exec behaviour is covered end to end at `cli_contract.rs:1468`, the right place for it |
 | `domain.rs` | 500 | 1 | 1 / 471 | Defensible. Pure data, exercised transitively, with one well-premised test for the saturating counter conversion. Semantic *rules* live in the modules that interpret the types |
 | `error.rs` | 16 | 0 | — | Defensible |

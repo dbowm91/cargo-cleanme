@@ -226,7 +226,7 @@ structural change and it is the right one: it makes "what did the user ask for" 
 pure function of argv, testable without a subprocess, and it removes the
 `None`-falls-through-to-scan fallthrough that used to live here.
 
-**`Invocation` now has five variants** (`src/cli.rs:326-342`). The fifth,
+**`Invocation` now has five variants** (`src/cli.rs:409-425`). The fifth,
 `UsageError(String)`, exists because the compiler cannot see clap's invariant
 that `scan` always carries a scope selector. Its two alternatives were both
 wrong: defaulting to Full would silently run the machine-wide reconciliation the
@@ -249,7 +249,7 @@ path` fail with exit 2 before reaching their arms.
 | `scan ROOT` | `Scan(Explicit(root))` | `src/cli.rs:396` |
 | `scan --known` | `Scan(Maintenance)` | `src/cli.rs:397` |
 | `scan --all` (or hidden `--full`) | `Scan(Full)` | `src/cli.rs:401` |
-| `scan` (bare) | clap usage error → exit 2 | `src/cli.rs:139`, `src/cli.rs:403-406` |
+| `scan` (bare) | clap usage error → exit 2 | `src/cli.rs:244`, `src/cli.rs:403-406` |
 | `config path/show/edit` | `Config(*)` | `src/cli.rs:412` |
 | `update [--dry-run]` | `Update { dry_run }` | `src/cli.rs:418-425` |
 | `clean …` (hidden alias) | `Cleanup(<scope>, <mode>, <overrides>)` | `src/cli.rs:444-462` |
@@ -260,7 +260,7 @@ Five of those rows are worth calling out:
   `CleanupScope::Maintenance` with `CleanMode::Execute`, i.e. a Routine
   maintenance run that will actually delete eligible artifacts. It is *not* a
   read-only scan. The root `command` doc string says so in prose
-  (`src/cli.rs:20-38`) and the enum comment names the intent
+  (`src/cli.rs:103-121`) and the enum comment names the intent
   (`src/cli.rs:235-258`).
 - **The root is the cleanup front door (M019).** `cargo cleanme ROOT` is a
   bounded cleanup of `ROOT`, and `cargo cleanme --full` is the Full cleanup
@@ -279,14 +279,14 @@ Five of those rows are worth calling out:
   those arms run. A discarded flag would look exactly like a honoured one.
 - **A bare `scan` is no longer a thing.** M014 made the scope selector
   mandatory: `scan` requires exactly one of ROOT / `--known` / `--all`,
-  expressed as a required `ArgGroup` (`src/cli.rs:139`) so that the requiredness
+  expressed as a required `ArgGroup` (`src/cli.rs:244`) so that the requiredness
   and the mutual exclusion cannot drift apart. The machine-wide Full
   reconciliation is now `scan --all`, one explicit flag away, rather than the
   zero-argument default it was. `scan --full` survives as a hidden alias
   (`src/cli.rs:155-156`).
 
 Mode resolution is a free function rather than inline matching
-(`src/cli.rs:349-361`): `dry_run || dryrun_legacy` → `Simulate`, else
+(`src/cli.rs:432-444`): `dry_run || dryrun_legacy` → `Simulate`, else
 `cargo_preview` → `CargoPreview`, else `Execute`. **Execute is the default.** The
 hidden compatibility aliases (`--dryrun`, `--yes`) are folded into the same two
 canonical modes; `--yes` is deliberately never bound (`src/cli.rs:426-429`),
@@ -340,12 +340,12 @@ plainly: a user who types `cargo cleanme` in a project directory gets bytes
 deleted, not a report. If that is ever contentious it is a one-line change at
 `src/cli.rs:332-338`, and `main.rs` would not need to move.
 
-**The `about` text is the user-facing statement of that default.** `src/cli.rs:20-33`
+**The `about` text is the user-facing statement of that default.** `src/cli.rs:103-116`
 describes the bare invocation correctly (`src/cli.rs:22-26`), and **the false
 sentence is gone**: the `long_about` now says that `scan` **needs a scope** and
 that `--all` is the full read-only machine reconciliation
-(`src/cli.rs:34-37`). M014 made a bare `scan` a clap usage error
-(`src/cli.rs:139`), and C040 rewrote the text to match — the manpage is rendered
+(`src/cli.rs:117-120`). M014 made a bare `scan` a clap usage error
+(`src/cli.rs:244`), and C040 rewrote the text to match — the manpage is rendered
 from that same `long_about`, so the help output and the manpage cannot drift
 apart again. The same drift **does** survive one file over, in the comment at
 `src/main.rs:1373`, which still opens "*Rootless `scan` is Full*" — the
@@ -452,7 +452,7 @@ production guard is untested at the integration level.
 `run_scan` takes `emit_report: EmitReport` (`src/main.rs:1416-1856`, passed at
 `:90`). `Invocation::Scan` passes `EmitReport::Yes` (`:90`); the Full
 reconciliation `cargo cleanme --full` runs to prove a fresh generation before
-consuming it (`:1029`) passes `EmitReport::No`.
+consuming it (`:1038`) passes `EmitReport::No`.
 
 That parameter is not a formatting convenience. It is the only thing standing
 between `clean --full` and a **double stdout document**, and the JSON envelope is
@@ -696,7 +696,7 @@ Without `-i` it is trivial: `request.selection.resolved()?` (`:594``). The
 `Ancestry(PathBuf)`, and `Roots(Vec<PathBuf>)` — and `resolved()`
 (`src/cleanup.rs:154`) turns `WorkingDirectory` into `Ancestry`, failing closed
 if the working directory cannot be read. `All` selects everything;
-`WorkingDirectory` selects nothing until resolved (`src/cleanup.rs:96`), so a
+`WorkingDirectory` selects nothing until resolved (`src/cleanup.rs:97`), so a
 caller that forgets to resolve it cleans nothing rather than everything. This
 split exists because `cli.rs` resolves argv but must not perform IO.
 
@@ -767,11 +767,11 @@ alone (`:1279-1281``). The JSON and log branches are untouched by `--verbose`.
 **Exit code** (`:572-576``): `1` if `report.failed > 0 || report.scope_blocked.is_some()`.
 `failed > 0` means at least one `CleanOutcome::Failed`, counted in
 `CleanReport::render` — the verbose shape's `failed` counter
-(`src/cleanup.rs:914-916`) and the quiet shape's (`src/cleanup.rs:792`), which
+(`src/cleanup.rs:952-954`) and the quiet shape's (`src/cleanup.rs:792`), which
 renders it as a "N failed" note on the tally line (`src/cleanup.rs:808-810`).
 `scope_blocked.is_some()` means the scan boundary itself was refused and no work
-was attempted; the block is a typed `ScopeBlock` (`src/cleanup.rs:494-500`) whose
-`message` is what renders (`src/cleanup.rs:496-500`). Pinned by
+was attempted; the block is a typed `ScopeBlock` (`src/cleanup.rs:524-530`) whose
+`message` is what renders (`src/cleanup.rs:526-530`). Pinned by
 `tests/cli_contract.rs:735` (`Some(1)`, `scope_blocked == true`).
 
 **`--stats`** (`:1626-530``) goes to **stderr** via `eprintln!`, consistent with
@@ -799,7 +799,7 @@ copy will be looking for.
 **The boundary is the selection, not the machine.** An unprovable participant
 *inside* the selected scope blocks the run; one *outside* it is reported and
 never blocks. The `CleanReport` carries the two apart in two distinct fields
-(`src/cleanup.rs:523-536`): `scope_blocked` / `unresolved_ownership` for the
+(`src/cleanup.rs:742-755`): `scope_blocked` / `unresolved_ownership` for the
 boundary-relevant case, and `out_of_scope_unresolved` for the count of
 manifests that did not resolve outside it. The human report renders the latter
 as one bounded line (`src/cleanup.rs:657-661`) so that "boundary clean" cannot
@@ -1156,7 +1156,7 @@ Two sites, inconsistent: `:1722`` and `:1250`` map to
 wrong *variant* — the user sees `cargo-cleanme: configuration error: cannot
 serialize JSON report: …`, sending them to `config.toml` when the fault is in
 report serialization (it does at least match the existing habit: `config::show`
-does the same at `src/config.rs:610-612`).
+does the same at `src/config.rs:613-615`).
 
 In practice `serde_json::to_string` on these DTOs cannot fail — `EnvelopeV1` is
 owned primitives, strings and `Option`s, with no map keys and no `f64`
@@ -1187,7 +1187,7 @@ version bump.
 
 ### Ordering divergence between the two cleanup projections
 
-**Confirmed.** `CleanReport::render` takes `&self` (`src/cleanup.rs:682`) and
+**Confirmed.** `CleanReport::render` takes `&self` (`src/cleanup.rs:720`) and
 therefore **cannot** reorder its own data. Since M020 it is also a **dispatcher**:
 it picks `render_verbose` (`:934``) or `render_quiet` (`:771``) from
 `options.verbose` (`:730``). Each shape builds its own local
@@ -1206,7 +1206,7 @@ it, and `tests/cli_contract.rs` only ever indexes `units[0]` — order-independe
 in its fixtures.
 
 The **scan** side is the opposite and self-consistent: `report::render` takes
-`&mut ScanReport` (`src/report.rs:134`) and sorts `report.groups` **in place**
+`&mut ScanReport` (`src/report.rs:149`) and sorts `report.groups` **in place**
 (`src/report.rs:135-139`), which `run_scan` relies on by passing `&mut report`
 (`:1731``). The asymmetry between the two `render` signatures — `&self` + local
 copy for cleanup, `&mut self` + in-place sort for scan — is the root of the
@@ -1433,7 +1433,7 @@ not — they are pinned only from the outside.** The four `update_tests`
 (`src/output.rs:945-1065`) assert the real serialised bytes of
 `update_json_stream` field by field, including that `changed` and `dry_run` are
 the *only* two fields allowed to differ between the dry-run and mutating
-documents (`src/output.rs:1000-1001`) — a discriminating assertion, not a
+documents (`src/output.rs:1047-1048`) — a discriminating assertion, not a
 smoke test. `EnvelopeV1<ScanV1>` and `EnvelopeV1<CleanupV1>` have no such
 direct coverage; their output is pinned by name, value and type only by
 subprocess tests in `tests/cli_contract.rs`.
@@ -1479,7 +1479,7 @@ to a module are the ones with no coverage.
 ## 11. Review checklist
 
 1. **The `out_of_scope_unresolved` zeros in `main.rs` are unmeasured in two of
-   four sites.** `src/main.rs:737` and `:762` build a `CleanReport` after the
+   four sites.** `src/main.rs:737` and `:771` build a `CleanReport` after the
    engine returned `Err`, so the engine's own out-of-scope count was discarded
    and the field is set to 0. The human report then says nothing about
    out-of-scope poison on a path that *did* traverse. The other two sites
@@ -1499,7 +1499,7 @@ to a module are the ones with no coverage.
 3. **The `update` JSON surface is a third copy of the envelope.** The two benign
    `update` outcomes hand-build `serde_json::json!` documents in the binary
    (`src/main.rs:118-133`, `:159-174``) while the mutating path uses the tested
-   `output::update_json_stream` seam (`src/main.rs:200-203`). C022 pinned the
+   `output::update_json_stream` seam (`src/main.rs:211-214`). C022 pinned the
    machine contract for the seam; the two hand-built documents are in the one
    file with no tests. Moving them into `output.rs` would close the gap without
    a version bump.
@@ -1518,11 +1518,11 @@ to a module are the ones with no coverage.
    invocation a Routine Execute cleanup with no prompt. The safety argument is
    that `cleanup.rs` re-proves every candidate and deletion is always
    `cargo clean`, not that the default is conservative. Confirm that reading, and
-   that `src/cli.rs:20-33` (the `about`/`long_about` text) stays accurate — it
+   that `src/cli.rs:103-116` (the `about`/`long_about` text) stays accurate — it
    is the only place a user is told. **It is now accurate:** C040 rewrote the
-   root `long_about` (`src/cli.rs:21-33`) to say that `scan` *needs a scope*
+   root `long_about` (`src/cli.rs:104-116`) to say that `scan` *needs a scope*
    and that `--all` is the full read-only machine reconciliation
-   (`src/cli.rs:34-37`), and the manpage is rendered from that same text, so
+   (`src/cli.rs:117-120`), and the manpage is rendered from that same text, so
    the two cannot drift apart again. The remaining drift is in the comment at
    `src/main.rs:1373` ("Rootless `scan` is Full"), a reader-visible falsehood
    about a *safety-relevant* spelling.
@@ -1551,7 +1551,7 @@ to a module are the ones with no coverage.
     (`src/config.rs:610-612` does the same). The third site that omitted the
     prefix was removed with the old empty-roots branch (§8), so this is now the
     only inconsistency left.
-11. **Redundant root echo.** `src/main.rs:1218-1228` and `src/cleanup.rs:856-866`
+11. **Redundant root echo.** `src/main.rs:1305-1315` and `src/cleanup.rs:1340-1350`
     print the same root list, in two formats, as the first two lines of a human
     `clean` report (`selected_roots` is `roots.clone()`,
     `src/cleanup.rs:1647`). **M020 moved both under `--verbose`**, so the default
@@ -1575,7 +1575,7 @@ to a module are the ones with no coverage.
     understood to be a *pre*-pass, and that the `sort()` at `src/main.rs:1362` is
     understood to be *required* by the containment filter at `:1488`.
 15. **Explicit `ROOT` skips `policy::resolve`.** `src/main.rs:997-1018` never
-    calls it (only `Maintenance` does, `:1061-1070`), so the exists/is-a-directory/
+    calls it (only `Maintenance` does, `:1070-1079`), so the exists/is-a-directory/
     is-not-a-symlink checks at `src/policy.rs:32-41` never run for `clean ROOT` —
     a promise `src/cli.rs:721-723` makes while naming a different layer. The
     engine's own validation (`src/cleanup.rs:2956-2974`) is what actually holds
@@ -1603,6 +1603,6 @@ to a module are the ones with no coverage.
     (two JSON documents on one stdout, §4) would return. A behavioural
     assertion needs a `clean --full` case, which the bounded suite cannot
     afford; a cheaper substitute would be to assert that the *call site* passes
-    `EmitReport::No` (`src/main.rs:964`), which is the thing that actually
+    `EmitReport::No` (`src/main.rs:973`), which is the thing that actually
     matters and is a one-line source check that cannot be satisfied by a
     vestigial enum.
