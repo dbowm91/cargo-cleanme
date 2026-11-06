@@ -6,7 +6,35 @@ All notable changes to cargo-cleanme are documented here. The format follows
 stance: the `0.x` line may make breaking changes in any release, and the
 command-line, JSON, and release-asset contracts are the stable surface.
 
+## [0.2.13] - 2026-11-06
+
+### Fixed
+
+- **Self-update works again.** `0.2.12` was published to crates.io without its
+  GitHub release: the draft was published prematurely and reverted, which
+  burned the tag under the repository's immutable-release policy, so the
+  staged binaries could never be published under `v0.2.12`. Every `update`
+  from an older version therefore failed closed with `release integrity
+  evidence is unusable` (the `.sha256` sidecar URL returned 404). This
+  release ships the same product behaviour through the full release
+  procedure — staged, validated, published, then published to crates.io —
+  so the updater resolves a complete, attested release again. No action is
+  needed on `0.2.12` installs: `update` resolves the newest stable release
+  directly, so it moves straight to `0.2.13`.
+- **Eggpack candidate builds run on `macos-latest` for
+  `aarch64-apple-darwin`.** GitHub dropped the `macos-14` runner, so
+  candidate builds failed before staging any release asset.
+
+### Changed
+
+- `rustls` 0.23.45 → 0.23.46 (patch, via Dependabot).
+
 ## [0.2.12] - 2026-11-06
+
+> **Note:** the `0.2.12` crate was published to crates.io, but its GitHub
+> release never was (see `0.2.13` above). There are no `v0.2.12` release
+> assets, so self-update *into* `0.2.12` always fails closed. `0.2.12`
+> installs are otherwise complete and correct; update them to `0.2.13`.
 
 ### Fixed
 
