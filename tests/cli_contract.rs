@@ -2487,8 +2487,16 @@ fn scoped_human_report_carries_rows_and_reported_note_without_block() {
         "no block: {text}"
     );
     assert!(
-        text.contains("reported unprovable participant(s), not blocking"),
-        "the note is named on the human report: {text}"
+        !text.contains("reported unprovable participant(s), not blocking"),
+        "the quiet surface does not list passengers: {text}"
+    );
+    let verbose =
+        fixture.run_island_scenario(&["clean", "--verbose", "--dry-run", &root], "human", false);
+    assert_eq!(verbose.status.code(), Some(0), "{verbose:?}");
+    let verbose_text = String::from_utf8_lossy(&verbose.stdout);
+    assert!(
+        verbose_text.contains("reported unprovable participant(s), not blocking"),
+        "the note is named on the verbose report: {verbose_text}"
     );
     assert!(text.contains("Cleaned"), "the completed row: {text}");
     assert!(!text.contains("island outcomes"), "{text}");

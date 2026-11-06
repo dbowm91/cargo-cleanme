@@ -725,11 +725,17 @@ impl CleanReport {
         }
     }
 
-    /// The safety disclosures, which both shapes carry.
+    /// The safety disclosures.
+    ///
+    /// Both shapes carry a blocked scope and the one-line out-of-scope count.
+    /// The per-manifest passenger listing is the verbose surface: on a clean
+    /// run it is a list of failures, and the quiet surface keeps only the
+    /// tally. A blocked scope still names the manifests, because that listing
+    /// is the reason nothing ran.
     ///
     /// Returns `true` when the caller must stop there: a blocked scope with no
     /// results has nothing to report beyond the block itself.
-    fn append_disclosures(&self, out: &mut String) -> bool {
+    fn append_disclosures(&self, out: &mut String, list_passengers: bool) -> bool {
         // ADR 007: poison outside the selected scope never blocks, but
         // silence about it would recreate the M012A defect in a new place —
         // "boundary clean" must not read as "system clean". Renders on both
@@ -757,10 +763,9 @@ impl CleanReport {
                 append_unresolved_listing(out, &self.unresolved_ownership);
             }
             return self.results.is_empty();
-        } else if !self.unresolved_ownership.is_empty() {
-            // ADR 007: reported-but-never-blocking participants (in-boundary
-            // passengers and scope notes) are still named on the clean path,
-            // or "boundary clean" would read as "nothing unproven".
+        } else if list_passengers && !self.unresolved_ownership.is_empty() {
+            // ADR 007: reported-but-never-blocking participants stay named on
+            // the verbose surface. The quiet surface does not list them.
             out.push_str("  reported unprovable participant(s), not blocking:\n");
             append_unresolved_listing(out, &self.unresolved_ownership);
         }
@@ -770,7 +775,7 @@ impl CleanReport {
     /// The quiet surface: one line per acted-on directory, one tally.
     fn render_quiet(&self, options: &crate::report::HumanOptions) -> String {
         let mut out = String::new();
-        if self.append_disclosures(&mut out) {
+        if self.append_disclosures(&mut out, false) {
             return out;
         }
         // Deterministic size-descending with stable path tie-break.
@@ -781,17 +786,14 @@ impl CleanReport {
                 .cmp(&a.before_bytes.unwrap_or(0))
                 .then_with(|| a.display_path.cmp(&b.display_path))
         });
-        // Only what the run acted on, plus the failures. A failure is not a
-        // skip: silence about it would be a silent failure.
+        // Only what the run cleaned, or would clean. A failure stays visible
+        // as a tally count; its row is the verbose surface.
         let acted: Vec<&CleanResult> = ordered
             .into_iter()
             .filter(|r| {
                 matches!(
                     r.outcome,
-                    CleanOutcome::Cleaned
-                        | CleanOutcome::Simulated
-                        | CleanOutcome::Previewed
-                        | CleanOutcome::Failed
+                    CleanOutcome::Cleaned | CleanOutcome::Simulated | CleanOutcome::Previewed
                 )
             })
             .collect();
@@ -944,7 +946,7 @@ impl CleanReport {
                 self.unresolved_ownership.len(),
             ));
         }
-        if self.append_disclosures(&mut out) {
+        if self.append_disclosures(&mut out, true) {
             return out;
         }
         let mut previewed = 0usize;
@@ -2442,35 +2444,40 @@ pub fn clean_with_roots_policy_selector_guarded(
                     observer.unit_completed(cleanup_phase);
                     continue;
                 }
-                let args = clean_args(&proof, mode, selector.as_ref());
                 let cwd = proof.workspace_root.clone();
-                let spawned = if frozen.is_empty() {
-                    runner.run(&cwd, &args)
-                } else {
-                    runner.run_with_env(&cwd, &args, &frozen)
-                };
-                let output = match spawned {
-                    Ok(o) => o,
-                    Err(e) => {
-                        report.failed += 1;
-                        report.results.push(CleanResult {
-                            display_path: unit.root.clone(),
-                            workspace_roots: proof.workspace_roots.clone(),
-                            output_roots: proof.covering.clone(),
-                            ownership: proof.ownership,
-                            outcome: CleanOutcome::Failed,
-                            policy_disposition: Some(PolicyDisposition::Selected),
-                            reason_code: CleanupReasonCode::CargoFailed,
-                            before_bytes: Some(proof.pre_bytes),
-                            after_bytes: None,
-                            observed_decrease: None,
-                            detail: format!("could not start Cargo: {e}"),
-                        });
-                        observer.unit_completed(cleanup_phase);
-                        continue;
+                let targets = clean_invocation_dirs(&proof);
+                let mut details: Vec<String> = Vec::new();
+                let mut spawn_failure: Option<String> = None;
+                for target_dir in &targets {
+                    let isolated = target_dir != &proof.target;
+                    let args = clean_args_for(&proof, mode, selector.as_ref(), target_dir);
+                    let isolated_env;
+                    let spawned = if isolated {
+                        isolated_env = isolated_clean_env(target_dir);
+                        runner.run_with_env(&cwd, &args, &isolated_env)
+                    } else if frozen.is_empty() {
+                        runner.run(&cwd, &args)
+                    } else {
+                        runner.run_with_env(&cwd, &args, &frozen)
+                    };
+                    let output = match spawned {
+                        Ok(output) => output,
+                        Err(e) => {
+                            spawn_failure = Some(format!("could not start Cargo: {e}"));
+                            break;
+                        }
+                    };
+                    if !output.success {
+                        spawn_failure = Some(format!(
+                            "Cargo exited {:?}: {}",
+                            output.code,
+                            output_text(&output)
+                        ));
+                        break;
                     }
-                };
-                if !output.success {
+                    details.push(output_text(&output));
+                }
+                if let Some(detail) = spawn_failure {
                     report.failed += 1;
                     report.results.push(CleanResult {
                         display_path: unit.root.clone(),
@@ -2483,11 +2490,12 @@ pub fn clean_with_roots_policy_selector_guarded(
                         before_bytes: Some(proof.pre_bytes),
                         after_bytes: None,
                         observed_decrease: None,
-                        detail: format!("Cargo exited {:?}: {}", output.code, output_text(&output)),
+                        detail,
                     });
                     observer.unit_completed(cleanup_phase);
                     continue;
                 }
+                let detail = details.join("\n");
                 if mode == CleanMode::CargoPreview {
                     report.results.push(CleanResult {
                         display_path: unit.root.clone(),
@@ -2500,12 +2508,12 @@ pub fn clean_with_roots_policy_selector_guarded(
                         before_bytes: Some(proof.pre_bytes),
                         after_bytes: None,
                         observed_decrease: None,
-                        detail: output_text(&output),
+                        detail,
                     });
                 } else {
                     // C003 §7.4: one post-clean measurement of the complete
-                    // deduplicated covering-root union this invocation could
-                    // affect, compared against the same union before it ran.
+                    // deduplicated covering-root union these invocations could
+                    // affect, compared against the same union before they ran.
                     match measure_union(&proof.covering) {
                         Ok(after) => {
                             let decrease = proof.pre_bytes.saturating_sub(after);
@@ -2520,7 +2528,7 @@ pub fn clean_with_roots_policy_selector_guarded(
                                 before_bytes: Some(proof.pre_bytes),
                                 after_bytes: Some(after),
                                 observed_decrease: Some(decrease),
-                                detail: output_text(&output),
+                                detail,
                             });
                         }
                         Err(e) => {
@@ -3385,13 +3393,22 @@ fn refresh_one_proof_workspace(
     let adapter = WorkspaceCleanupAdapter { runner };
     let mut proof_counters = ScanCounters::default();
     let mut proof_diagnostics = Vec::new();
-    let fresh = workspace::refresh_workspace_from_root_manifest(
+    let mut fresh = workspace::refresh_workspace_from_root_manifest(
         &workspace.root_manifest,
         &adapter,
         &mut proof_counters,
         &mut proof_diagnostics,
         &crate::progress::NoopObserver,
     );
+    // A single-manifest refresh does not see the refused nested packages
+    // attributed on the full resolve. Keep the roots the hoisted universe
+    // just computed, or the fresh graph drops their `target/` and the proof
+    // fails closed on a shape change.
+    if let Some(refreshed) = fresh.as_mut() {
+        refreshed
+            .nested_package_roots
+            .clone_from(&workspace.nested_package_roots);
+    }
     (proof_counters, fresh)
 }
 
@@ -3988,7 +4005,11 @@ fn final_cleanup_proof_roots(
     // package's tree destroys that package's checked-in files. This re-proves
     // it against the filesystem at the moment of the spawn, so a
     // classification regression cannot delete a source tree.
-    if workspace::nested_package_overlap(&unit.covering, &unit.root) {
+    if workspace::nested_package_overlap(
+        &unit.covering,
+        &unit.root,
+        &workspace::owned_package_roots(fresh_ws),
+    ) {
         return Err(ProofFailure::new(
             CleanupReasonCode::SkippedSafety,
             format!(
@@ -4044,6 +4065,12 @@ fn final_cleanup_proof_roots(
             }
         }
     }
+    // Conventional package `target/` directories are output too. Leaving them
+    // out of this list makes the source walk treat their artifacts as source
+    // and skip the workspace for activity it did not edit.
+    for group in &fresh_groups {
+        all_outputs.extend(group.covering.iter().cloned());
+    }
     let activity_start = std::time::Instant::now();
     let mut newest_activity: Option<SystemTime> = None;
     for member_root in workspace::workspace_member_roots(fresh_ws) {
@@ -4072,6 +4099,14 @@ fn final_cleanup_proof_roots(
         .saturating_add(crate::domain::elapsed_nanos(activity_start.elapsed()));
     let sizing_start = std::time::Instant::now();
     let mut fresh_bytes = 0u64;
+    // Each covering root is its own `cargo clean`. A member `target/` that is
+    // too recent, or that Cargo would refuse for a missing cache marker, must
+    // not defer the workspace target beside it. When nothing remains, the
+    // unit skips for the same reason a single-root proof used to: activity
+    // first, then the marker.
+    let mut cleanable: Vec<PathBuf> = Vec::new();
+    let mut saw_active: Option<ProofFailure> = None;
+    let mut saw_marker: Option<ProofFailure> = None;
     for covering in &unit.covering {
         let stats = traverse::measure_single_target(covering);
         if stats.uncertain {
@@ -4100,22 +4135,37 @@ fn final_cleanup_proof_roots(
         // inside "modified since the cutoff". The second disjunct was
         // subsumed by the first and could never change the verdict.
         if stats.newest.is_some_and(|t| t >= cutoff) {
-            return Err(ProofFailure::new(
-                CleanupReasonCode::SkippedActive,
-                "workspace changed before cleanup; skipped: output became active",
-            ));
+            if saw_active.is_none() {
+                saw_active = Some(ProofFailure::new(
+                    CleanupReasonCode::SkippedActive,
+                    "workspace changed before cleanup; skipped: output became active",
+                ));
+            }
+            continue;
         }
+        if let Err(failure) = require_cargo_markers(std::slice::from_ref(covering)) {
+            if saw_marker.is_none() {
+                saw_marker = Some(failure);
+            }
+            continue;
+        }
+        cleanable.push(covering.clone());
         fresh_bytes = fresh_bytes.saturating_add(stats.bytes);
         if let Some(t) = stats.newest {
             newest_activity = Some(newest_activity.map_or(t, |old| old.max(t)));
         }
     }
+    if cleanable.is_empty() && !unit.covering.is_empty() {
+        return Err(saw_active.or(saw_marker).unwrap_or_else(|| {
+            ProofFailure::new(
+                CleanupReasonCode::SkippedSafety,
+                "no covering root was cleanable; cleanup deferred",
+            )
+        }));
+    }
     counters.proof_output_sizing_nanos = counters
         .proof_output_sizing_nanos
         .saturating_add(crate::domain::elapsed_nanos(sizing_start.elapsed()));
-    // 12. Marker validation is part of the same non-mutating proof consumed by
-    // Simulate, and covers the complete affected union.
-    require_cargo_markers(&unit.covering)?;
     // 13. Frozen-environment capability validation from the fresh OutputSet.
     let target = fresh_ws
         .output
@@ -4152,7 +4202,7 @@ fn final_cleanup_proof_roots(
         target,
         build,
         capability: fresh_ws.capability,
-        covering: unit.covering.clone(),
+        covering: cleanable,
         pre_bytes: fresh_bytes,
         newest_activity,
         ownership: OutputOwnershipClass::PrivateBounded,
@@ -4281,10 +4331,43 @@ fn frozen_env(ctx: &RevalidatedContext) -> Result<Vec<(OsString, OsString)>, Pro
     Ok(env)
 }
 
-fn clean_args(
+/// Directories one workspace clean must pass to `cargo clean --target-dir`.
+///
+/// The metadata target and build directory share one invocation: `--target-dir`
+/// names the target, and the frozen environment names the build directory.
+/// Every other covering root is a member's or a refused nested package's
+/// conventional `target/`, which that invocation does not touch.
+/// Environment for a conventional package `target/` that is not the
+/// metadata target. Both directories are pinned to that one path, so the
+/// invocation cannot follow the workspace's build directory.
+fn isolated_clean_env(target_dir: &Path) -> Vec<(OsString, OsString)> {
+    let path = target_dir.as_os_str().to_owned();
+    vec![
+        (OsString::from("CARGO_TARGET_DIR"), path.clone()),
+        (OsString::from("CARGO_BUILD_BUILD_DIR"), path),
+    ]
+}
+
+fn clean_invocation_dirs(proof: &ExecutionProof) -> Vec<PathBuf> {
+    let covered =
+        |path: &Path| path == proof.target.as_path() || proof.build.as_deref() == Some(path);
+    let mut dirs = Vec::new();
+    if proof.covering.iter().any(|path| covered(path)) || proof.covering.is_empty() {
+        dirs.push(proof.target.clone());
+    }
+    for path in &proof.covering {
+        if !covered(path) {
+            dirs.push(path.clone());
+        }
+    }
+    dirs
+}
+
+fn clean_args_for(
     ctx: &RevalidatedContext,
     mode: CleanMode,
     selector: Option<&CleanupSelector>,
+    target_dir: &Path,
 ) -> Vec<OsString> {
     let mut args = vec![OsString::from("clean")];
     if mode == CleanMode::CargoPreview {
@@ -4297,7 +4380,7 @@ fn clean_args(
     args.push(ctx.root_manifest.as_os_str().to_owned());
     // Freeze target via explicit arg as well as env (equivalent, Cargo-owned).
     args.push(OsString::from("--target-dir"));
-    args.push(ctx.target.as_os_str().to_owned());
+    args.push(target_dir.as_os_str().to_owned());
     if let Some(CleanupSelector::Profile(profile)) = selector {
         args.push(OsString::from("--profile"));
         args.push(OsString::from(profile));
@@ -6011,18 +6094,19 @@ mod tests {
                 report.scope_blocked, None,
                 "a scope note never blocks the boundary: {mode:?}"
             );
+            let quiet = report.render(&crate::report::HumanOptions::default());
             assert!(
-                report
-                    .render(&crate::report::HumanOptions::default())
-                    .contains("reported unprovable participant(s), not blocking"),
-                "the note is named on the human report: {mode:?}"
+                !quiet.contains("reported unprovable participant(s), not blocking"),
+                "the quiet surface does not list passengers: {mode:?} {quiet}"
+            );
+            let verbose = report.render(&crate::report::HumanOptions::verbose());
+            assert!(
+                verbose.contains("reported unprovable participant(s), not blocking"),
+                "the note is named on the verbose report: {mode:?}"
             );
             assert!(
-                report
-                    .render(&crate::report::HumanOptions::default())
-                    .contains("unresolved [locate]"),
-                "the participant row is bounded and staged: {mode:?} {}",
-                report.render(&crate::report::HumanOptions::default())
+                verbose.contains("unresolved [locate]"),
+                "the participant row is bounded and staged: {mode:?} {verbose}"
             );
             assert_eq!(
                 report.diagnostics, 1,
@@ -6723,6 +6807,133 @@ mod tests {
         }
     }
 
+    /// A member's `target/` and a refused nested package's `target/` are Cargo
+    /// output of the workspace that contains them. The workspace target does
+    /// not cover either directory, so each gets its own `cargo clean`.
+    #[test]
+    fn package_targets_inside_a_workspace_are_cleaned() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().canonicalize().unwrap();
+        let root = ws_root(&base, "app");
+        let member = ws_root(&root, "lib1");
+        let nested = ws_root(&root, "fuzz");
+        let workspace_target = cargo_output(&root.join("target"), 2048);
+        let member_target = cargo_output(&member.join("target"), 1024);
+        let nested_target = cargo_output(&nested.join("target"), 512);
+        backdate(&base, SystemTime::now() - Duration::from_secs(3600));
+        let mut runner = StagedCargo::new();
+        runner
+            .add(&root, workspace_target.clone(), None)
+            .and_member(&member);
+        let reason = format!(
+            "error: current package believes it's in a workspace when it's not: current: {} workspace: {}",
+            nested.join("Cargo.toml").display(),
+            root.join("Cargo.toml").display(),
+        );
+        runner.refuse_locate(&nested.join("Cargo.toml"), &reason);
+        let report = clean_default(d.path(), CleanMode::Execute, &runner);
+        assert!(
+            report.scope_blocked.is_none(),
+            "the refused package stays a passenger: {report:?}"
+        );
+        assert!(
+            report.unresolved_ownership.iter().any(|p| p
+                .manifest
+                .ends_with(std::path::Path::new("fuzz").join("Cargo.toml"))),
+            "the refused manifest stays named: {report:?}"
+        );
+        let dirs: Vec<PathBuf> = runner
+            .clean_calls()
+            .iter()
+            .filter_map(|(_, args, _)| {
+                let pos = args.iter().position(|arg| arg == "--target-dir")?;
+                Some(PathBuf::from(&args[pos + 1]))
+            })
+            .collect();
+        for expected in [&workspace_target, &member_target, &nested_target] {
+            let canonical = fs::canonicalize(expected).unwrap();
+            assert!(
+                dirs.iter().any(|dir| dir == &canonical || dir == expected),
+                "missing cargo clean of {}: dirs {dirs:?}\n{report:?}",
+                expected.display()
+            );
+        }
+    }
+
+    /// A package `target/` Cargo will not clean (no cache marker) is left in
+    /// place. The workspace target beside it is still cleaned.
+    #[test]
+    fn a_markerless_package_target_does_not_block_its_workspace() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().canonicalize().unwrap();
+        let root = ws_root(&base, "app");
+        let member = ws_root(&root, "lib1");
+        let workspace_target = cargo_output(&root.join("target"), 2048);
+        let member_target = member.join("target");
+        fs::create_dir_all(&member_target).unwrap();
+        fs::write(member_target.join("artifact.bin"), vec![1u8; 1024]).unwrap();
+        backdate(&base, SystemTime::now() - Duration::from_secs(3600));
+        let mut runner = StagedCargo::new();
+        runner
+            .add(&root, workspace_target.clone(), None)
+            .and_member(&member);
+        let report = clean_default(d.path(), CleanMode::Execute, &runner);
+        assert!(report.scope_blocked.is_none(), "{report:?}");
+        let row = row_for(&report, &root);
+        assert_eq!(row.outcome, CleanOutcome::Cleaned, "{report:?}");
+        let dirs: Vec<PathBuf> = runner
+            .clean_calls()
+            .iter()
+            .filter_map(|(_, args, _)| {
+                let pos = args.iter().position(|arg| arg == "--target-dir")?;
+                Some(PathBuf::from(&args[pos + 1]))
+            })
+            .collect();
+        let workspace_canonical = fs::canonicalize(&workspace_target).unwrap();
+        assert!(
+            dirs.iter()
+                .any(|dir| dir == &workspace_canonical || dir == &workspace_target),
+            "workspace target was not cleaned: {dirs:?}"
+        );
+        let member_canonical = fs::canonicalize(&member_target).unwrap();
+        assert!(
+            dirs.iter()
+                .all(|dir| dir != &member_canonical && dir != &member_target),
+            "marker-less package target was spawned: {dirs:?}"
+        );
+    }
+
+    /// The only output is a package `target/` with no cache marker. Cargo
+    /// would refuse it, so the unit is still deferred rather than deleted.
+    #[test]
+    fn a_markerless_package_target_alone_is_still_deferred() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().canonicalize().unwrap();
+        let root = ws_root(&base, "app");
+        let member = ws_root(&root, "lib1");
+        let member_target = member.join("target");
+        fs::create_dir_all(&member_target).unwrap();
+        fs::write(member_target.join("artifact.bin"), vec![1u8; 1024]).unwrap();
+        backdate(&base, SystemTime::now() - Duration::from_secs(3600));
+        let mut runner = StagedCargo::new();
+        runner
+            .add(&root, root.join("target"), None)
+            .and_member(&member);
+        let report = clean_default(d.path(), CleanMode::Execute, &runner);
+        assert!(report.scope_blocked.is_none(), "{report:?}");
+        let row = row_for(&report, &root);
+        assert_eq!(
+            row.reason_code,
+            CleanupReasonCode::SkippedMarkerInvalid,
+            "{report:?}"
+        );
+        assert!(
+            runner.clean_calls().is_empty(),
+            "{:?}",
+            runner.clean_calls()
+        );
+    }
+
     /// M017 hostile twin: nested-output prefix overlap skips at the unit gate
     /// with zero spawns — same shape as the redirect twin.
     #[test]
@@ -7256,6 +7467,8 @@ mod tests {
                     metadata_had_build_directory: true,
                     env_build_dir_set: false,
                 },
+
+                nested_package_roots: Vec::new(),
             };
             // Inside the bounded root but non-private → still skipped.
             assert!(
@@ -7309,6 +7522,8 @@ mod tests {
                 metadata_had_build_directory: true,
                 env_build_dir_set: false,
             },
+
+            nested_package_roots: Vec::new(),
         };
         // Private inside workspace (hence inside ROOT when workspace is inside
         // ROOT) is authorized. Here workspace root is `root`, target is
@@ -7373,6 +7588,8 @@ mod tests {
                 metadata_had_build_directory: true,
                 env_build_dir_set: false,
             },
+
+            nested_package_roots: Vec::new(),
         };
         assert!(is_authorized(&raw, &root, &[]).unwrap());
     }
@@ -7425,6 +7642,8 @@ mod tests {
                 metadata_had_build_directory: true,
                 env_build_dir_set: false,
             },
+
+            nested_package_roots: Vec::new(),
         };
         // Outside ROOT without authorization → not authorized.
         assert!(!is_authorized(&raw, &root, &[]).unwrap());
@@ -7483,6 +7702,8 @@ mod tests {
                     metadata_had_build_directory: true,
                     env_build_dir_set: false,
                 },
+
+                nested_package_roots: Vec::new(),
             };
             let root = d.path().join("root");
             std::fs::create_dir(&root).unwrap();
@@ -8020,12 +8241,16 @@ mod tests {
             }),
             "the refused manifest is named (component-wise: symlinked TMPDIR on macOS, separators on Windows): {report:?}"
         );
+        let quiet = report.render(&crate::report::HumanOptions::default());
+        assert!(
+            !quiet.contains("reported unprovable participant(s), not blocking"),
+            "the quiet surface does not list passengers: {quiet}"
+        );
         assert!(
             report
-                .render(&crate::report::HumanOptions::default())
+                .render(&crate::report::HumanOptions::verbose())
                 .contains("reported unprovable participant(s), not blocking"),
-            "the note is named on the human report: {}",
-            report.render(&crate::report::HumanOptions::default())
+            "the note is named on the verbose report"
         );
     }
 
@@ -9663,6 +9888,15 @@ mod tests {
                 fail_metadata_from: None,
             });
             self.metadata_calls.lock().unwrap().push(0);
+            self
+        }
+
+        fn and_member(&mut self, member: &Path) -> &mut Self {
+            self.ws
+                .last_mut()
+                .expect("and_member follows add")
+                .members
+                .push(member.to_path_buf());
             self
         }
 
@@ -11926,10 +12160,11 @@ mod tests {
             ownership: OutputOwnershipClass::PrivateBounded,
             frozen_env: Vec::new(),
         };
-        let args = clean_args(
+        let args = clean_args_for(
             &ctx,
             CleanMode::CargoPreview,
             Some(&CleanupSelector::Profile("dev".into())),
+            &ctx.target,
         );
         let args: Vec<String> = args
             .iter()
@@ -11945,10 +12180,11 @@ mod tests {
             !args.iter().any(|a| a == "--package"),
             "a profile selector must not also name a package: {args:?}"
         );
-        let args = clean_args(
+        let args = clean_args_for(
             &ctx,
             CleanMode::CargoPreview,
             Some(&CleanupSelector::Package("app-a@1.0.0".into())),
+            &ctx.target,
         );
         let args: Vec<String> = args
             .iter()
@@ -12106,13 +12342,13 @@ mod tests {
         );
     }
 
-    /// M020: a failure is never silent.
+    /// A failure is a tally count on the quiet surface, and a row on the
+    /// verbose one.
     ///
-    /// A failure is not a skip. The quiet surface hides the skipped rows; it
-    /// must not hide the ones that went wrong. *Fails if:* the failure filter
-    /// treats a failure like a skip.
+    /// *Fails if:* the quiet surface lists the failed path, or the tally
+    /// drops the count, or `--verbose` hides the row.
     #[test]
-    fn a_failed_unit_is_always_listed() {
+    fn a_failed_unit_is_counted_on_the_quiet_surface_and_listed_when_verbose() {
         let mut report = empty_report_over("/work");
         report
             .results
@@ -12125,16 +12361,22 @@ mod tests {
             .push(unit_row("/work/gamma/target", CleanOutcome::Skipped, 50));
         let text = report.render(&crate::report::HumanOptions::default());
         assert!(
-            text.contains("/work/beta/target"),
-            "the failure vanished: {text}"
+            !text.contains("/work/beta"),
+            "a failed row leaked into the quiet surface: {text}"
         );
-        assert!(text.contains("Failed"), "{text}");
+        assert!(!text.contains("Failed"), "{text}");
         assert!(text.contains("1 failed"), "{text}");
+        assert!(text.contains("1 skipped"), "{text}");
         // The failed unit's bytes are not counted as reclaimed.
         assert!(text.contains("100.00 B reclaimed"), "{text}");
         assert!(
             !text.contains("/work/gamma"),
             "the skipped row stays hidden: {text}"
+        );
+        let verbose = report.render(&crate::report::HumanOptions::verbose());
+        assert!(
+            verbose.contains("/work/beta/target"),
+            "the verbose surface must list the failure: {verbose}"
         );
     }
 

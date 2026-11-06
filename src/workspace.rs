@@ -1027,7 +1027,7 @@ pub fn resolve_workspaces_with_coverage(
             unresolved_stage.insert(manifest.clone(), ("metadata", UnknownCapability::Unproven));
         }
     }
-    let workspaces: Vec<_> = ordered_keys
+    let mut workspaces: Vec<_> = ordered_keys
         .into_iter()
         .filter_map(|k| cache.remove(&k))
         .collect();
@@ -1073,6 +1073,7 @@ pub fn resolve_workspaces_with_coverage(
     unresolved.dedup_by(|a, b| {
         canonical_manifest_key(&a.manifest) == canonical_manifest_key(&b.manifest)
     });
+    attach_nested_package_roots(&mut workspaces, &unresolved);
     // No enforcement pass-through here, deliberately. A refused manifest that
     // names a resolved workspace is still an unresolved participant and still
     // blocks the whole scope under ADR 001 C004/C006: withholding it from
@@ -1300,6 +1301,7 @@ fn complete_workspace_from_metadata(
                 build: build_root,
             },
             capability,
+            nested_package_roots: Vec::new(),
         }),
         None,
     )
@@ -1403,8 +1405,20 @@ pub(crate) fn source_tree_dirs(workspaces: &[ResolvedWorkspace]) -> Vec<PathBuf>
 /// The owning workspace's own root is the boundary. `<ws>/target` sits inside
 /// the owner's package directory, and that is the ordinary case; the walk stops
 /// there and never asks whether the workspace root is itself a package.
-pub(crate) fn nested_package_overlap(covering: &[PathBuf], workspace_root: &Path) -> bool {
+pub(crate) fn nested_package_overlap(
+    covering: &[PathBuf],
+    workspace_root: &Path,
+    package_roots: &[PathBuf],
+) -> bool {
     covering.iter().any(|root| {
+        // `<package>/target` of a member, or of a package Cargo refused and
+        // named this workspace, is that package's Cargo output. `cargo clean
+        // --target-dir` removes that directory only. An arbitrary path inside
+        // the package (`lib1/assets`, `lib1/src`) stays refused: that is the
+        // shape that deleted checked-in files.
+        if is_owned_conventional_target(root, package_roots) {
+            return false;
+        }
         if !strictly_below(workspace_root, root) {
             return false;
         }
@@ -1424,6 +1438,68 @@ pub(crate) fn nested_package_overlap(covering: &[PathBuf], workspace_root: &Path
         }
         false
     })
+}
+
+/// Package directories whose conventional `target/` belongs to `ws`.
+///
+/// Members come from Cargo metadata. Nested roots are packages Cargo refused
+/// (`current package believes it's in a workspace when it's not`) while naming
+/// this workspace; they stay unresolved for the proof boundary, and their
+/// `target/` is still this workspace's output when it exists.
+pub(crate) fn owned_package_roots(ws: &ResolvedWorkspace) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = ws.members.iter().map(|m| m.source_root.clone()).collect();
+    roots.extend(ws.nested_package_roots.iter().cloned());
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+/// True when `path` is exactly `<package>/target` for one of `package_roots`.
+fn is_owned_conventional_target(path: &Path, package_roots: &[PathBuf]) -> bool {
+    path.file_name().is_some_and(|name| name == "target")
+        && path
+            .parent()
+            .is_some_and(|parent| package_roots.iter().any(|root| root == parent))
+}
+
+/// Record refused nested packages on the workspace Cargo named.
+///
+/// The manifest stays in `unresolved`. This only remembers the package
+/// directory so a conventional `target/` beside it can be cleaned through the
+/// owning workspace: `cargo clean` of the nested manifest itself fails.
+fn attach_nested_package_roots(
+    workspaces: &mut [ResolvedWorkspace],
+    unresolved: &[UnresolvedOwnershipParticipant],
+) {
+    for participant in unresolved {
+        let UnknownDisposition::PassengerOf { named_manifest } =
+            attribute_unknown(participant, workspaces)
+        else {
+            continue;
+        };
+        let Some(package_dir) = participant.manifest.parent() else {
+            continue;
+        };
+        if package_dir.as_os_str().is_empty() {
+            continue;
+        }
+        let package_dir =
+            canonical_or_absolute(package_dir).unwrap_or_else(|_| package_dir.to_path_buf());
+        let named_key = canonical_manifest_key(&named_manifest);
+        let Some(workspace) = workspaces
+            .iter_mut()
+            .find(|workspace| canonical_manifest_key(&workspace.root_manifest) == named_key)
+        else {
+            continue;
+        };
+        if workspace.root == package_dir || workspace.nested_package_roots.contains(&package_dir) {
+            continue;
+        }
+        workspace.nested_package_roots.push(package_dir);
+    }
+    for workspace in workspaces {
+        workspace.nested_package_roots.sort();
+    }
 }
 
 /// Returns true if `maybe_child` is strictly below `parent`.
@@ -1506,6 +1582,8 @@ fn group_overlaps_uncertain(covering: &[PathBuf], uncertain_aliases: &[PathBuf])
 ///   output root that is (or contains) any resolved workspace's member source
 ///   tree, or one that is nested inside a package directory, or one of Cargo's
 ///   conventional source directories (`src`, `tests`, `benches`, `examples`).
+///   A package's own `target/` directory is the exception: it is that
+///   package's Cargo output, cleaned through the owning workspace.
 /// - Shared: multiple workspaces own overlapping physical output, or the group's
 ///   covering overlaps an unrepresentable root's known aliases, so exclusivity
 ///   is unprovable for that group.
@@ -1558,6 +1636,30 @@ pub fn build_groups(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup> {
                 uncertain_ws.insert(idx);
                 uncertain_aliases.extend(uncertain_root_aliases(root));
             }
+        }
+        // A member's or refused nested package's own `target/` is not the
+        // workspace target Cargo metadata reports. It is still that
+        // workspace's Cargo output, and `cargo clean` of the workspace
+        // target does not remove it.
+        for package_root in owned_package_roots(ws) {
+            let target = package_root.join("target");
+            let Ok(meta) = fs::symlink_metadata(&target) else {
+                continue;
+            };
+            if !meta.is_dir() || meta.file_type().is_symlink() || traverse::path_is_symlink(&target)
+            {
+                continue;
+            }
+            let Ok(physical) = fs::canonicalize(&target) else {
+                continue;
+            };
+            if nodes
+                .iter()
+                .any(|node| node.ws == idx && node.physical == physical)
+            {
+                continue;
+            }
+            nodes.push(Node { ws: idx, physical });
         }
     }
     // Union-find over nodes by overlap.
@@ -1662,7 +1764,8 @@ pub fn build_groups(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup> {
             // directory. The resolved members cannot see this shape — Cargo
             // refuses a nested package that is not a workspace member, so the
             // victim is exactly the package the universe does not contain.
-            nested_source_overlap = nested_package_overlap(&covering, &ws.root);
+            nested_source_overlap =
+                nested_package_overlap(&covering, &ws.root, &owned_package_roots(ws));
             source_overlap |= nested_source_overlap;
             let inside_root = covering.iter().all(|c| strictly_below(&ws.root, c));
             if uncertain_ws.contains(&owners[0]) || source_overlap {
@@ -1842,6 +1945,9 @@ pub fn analyze_groups_detailed(
             }
         }
     }
+    for group in &groups {
+        all_outputs.extend(group.covering.iter().cloned());
+    }
     // Workspaces owning at least one non-empty group, computed in one pass.
     // The alternative -- asking `groups.iter().any(...)` per workspace -- made
     // this stage quadratic in workspaces × groups before any source walk.
@@ -1854,7 +1960,12 @@ pub fn analyze_groups_detailed(
     for (wi, ws) in workspaces.iter().enumerate() {
         // If workspace has no existing output at all, it cannot be eligible;
         // skip source walk entirely (fail-fast).
-        let has_existing = ws.output.target.exists || ws.output.build.exists;
+        // A conventional package `target/` is output even when Cargo's
+        // declared target directory is absent. Source activity still has to
+        // be read; skipping the walk would treat a recently edited member as
+        // quiet.
+        let has_existing =
+            ws.output.target.exists || ws.output.build.exists || ws_owns_nonempty.contains(&wi);
         if !has_existing {
             counters.missing_output_skipped += 1;
             ws_source_recent.insert(wi, false);
@@ -2222,6 +2333,22 @@ fn map_workspace_groups_indexed(
         };
         if let Some(&gi) = by_physical.get(physical.as_path())
             && !idxs.contains(&gi)
+        {
+            idxs.push(gi);
+        }
+    }
+    // Conventional `<package>/target` directories are nodes in the physical
+    // graph but are not the metadata target or build directory. They still
+    // belong to this workspace's cleanup.
+    let package_roots = owned_package_roots(ws);
+    for (gi, group) in groups.iter().enumerate() {
+        if idxs.contains(&gi) {
+            continue;
+        }
+        if group
+            .physicals
+            .iter()
+            .any(|path| is_owned_conventional_target(path, &package_roots))
         {
             idxs.push(gi);
         }
@@ -4462,6 +4589,8 @@ mod tests {
                 metadata_had_build_directory: false,
                 env_build_dir_set: false,
             },
+
+            nested_package_roots: Vec::new(),
         };
         let workspaces = vec![ws];
         let participant = UnresolvedOwnershipParticipant {
@@ -4697,6 +4826,8 @@ mod tests {
                 metadata_had_build_directory: true,
                 env_build_dir_set: false,
             },
+
+            nested_package_roots: Vec::new(),
         };
         let groups = build_groups(std::slice::from_ref(&ws));
         assert_eq!(groups.len(), 1);
@@ -4727,6 +4858,8 @@ mod tests {
                 },
             },
             capability: ws.capability,
+
+            nested_package_roots: Vec::new(),
         };
         let groups = build_groups(&[ws, ws2]);
         assert_eq!(groups.len(), 1);
@@ -4793,6 +4926,7 @@ mod tests {
                 metadata_had_build_directory: true,
                 env_build_dir_set: false,
             },
+            nested_package_roots: Vec::new(),
         }
     }
 
@@ -4930,6 +5064,89 @@ mod tests {
         );
         assert!(!groups[0].source_overlap);
         assert!(!groups[0].nested_source_overlap);
+    }
+
+    #[test]
+    fn a_members_conventional_target_is_private_even_inside_the_package() {
+        // A workspace member keeps its own `target/` when Cargo's workspace
+        // target is somewhere else (or absent). That directory is the
+        // member's Cargo output, not an arbitrary path inside the package.
+        let d = tempfile::tempdir().unwrap();
+        let ws_root = std::fs::canonicalize(d.path()).unwrap().join("ws");
+        let member = ws_root.join("crates/lib1");
+        std::fs::create_dir_all(member.join("src")).unwrap();
+        std::fs::create_dir_all(member.join("target")).unwrap();
+        std::fs::write(
+            member.join("Cargo.toml"),
+            b"[package]\nname=\"lib1\"\nversion=\"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(member.join("target/artifact.bin"), b"bin").unwrap();
+        let ws =
+            workspace_with_output(&ws_root, vec![ws_root.clone(), member.clone()], None, false);
+        let groups = build_groups(std::slice::from_ref(&ws));
+        assert_eq!(groups.len(), 1, "{groups:?}");
+        assert_eq!(groups[0].ownership, OutputOwnershipClass::PrivateBounded);
+        assert!(!groups[0].nested_source_overlap);
+        assert_eq!(
+            groups[0].covering,
+            vec![std::fs::canonicalize(member.join("target")).unwrap()]
+        );
+    }
+
+    #[test]
+    fn a_refused_nested_packages_conventional_target_is_private() {
+        let d = tempfile::tempdir().unwrap();
+        let ws_root = std::fs::canonicalize(d.path()).unwrap().join("ws");
+        let nested = ws_root.join("fuzz");
+        std::fs::create_dir_all(nested.join("target")).unwrap();
+        std::fs::write(
+            nested.join("Cargo.toml"),
+            b"[package]\nname=\"fuzz\"\nversion=\"0.0.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(nested.join("target/artifact.bin"), b"bin").unwrap();
+        let mut ws = workspace_with_output(&ws_root, vec![ws_root.clone()], None, false);
+        // Not a member. Cargo refused it and named this workspace.
+        ws.nested_package_roots
+            .push(std::fs::canonicalize(&nested).unwrap());
+        let groups = build_groups(std::slice::from_ref(&ws));
+        assert_eq!(groups.len(), 1, "{groups:?}");
+        assert_eq!(groups[0].ownership, OutputOwnershipClass::PrivateBounded);
+        assert_eq!(
+            groups[0].covering,
+            vec![std::fs::canonicalize(nested.join("target")).unwrap()]
+        );
+    }
+
+    #[test]
+    fn an_unowned_package_target_is_not_added() {
+        // A package directory Cargo did not name is not an output root.
+        // `lib1/assets` stays the C044 refusal; `lib1/target` is not claimed
+        // either, until the package is a member or a refused passenger.
+        let d = tempfile::tempdir().unwrap();
+        let ws_root = std::fs::canonicalize(d.path()).unwrap().join("ws");
+        let nested = ws_root.join("lib1");
+        std::fs::create_dir_all(nested.join("target")).unwrap();
+        std::fs::write(
+            nested.join("Cargo.toml"),
+            b"[package]\nname=\"lib1\"\nversion=\"0.1.0\"\n",
+        )
+        .unwrap();
+        let declared = ws_root.join("target");
+        std::fs::create_dir_all(&declared).unwrap();
+        let ws = workspace_with_output(
+            &ws_root,
+            vec![ws_root.clone()],
+            Some(declared.clone()),
+            false,
+        );
+        let groups = build_groups(std::slice::from_ref(&ws));
+        assert_eq!(groups.len(), 1, "{groups:?}");
+        assert_eq!(
+            groups[0].covering,
+            vec![std::fs::canonicalize(declared).unwrap()]
+        );
     }
 
     #[test]
@@ -5192,6 +5409,8 @@ mod tests {
                 metadata_had_build_directory: true,
                 env_build_dir_set: false,
             },
+
+            nested_package_roots: Vec::new(),
         };
         let groups = build_groups(&[a, b, c]);
         assert_eq!(groups.len(), 2, "the uncertain root contributes no node");
@@ -5297,6 +5516,8 @@ mod tests {
                 metadata_had_build_directory: true,
                 env_build_dir_set: false,
             },
+
+            nested_package_roots: Vec::new(),
         };
         let groups = build_groups(std::slice::from_ref(&ws));
         assert_eq!(groups.len(), 1, "nested roots form one group");
@@ -5363,6 +5584,8 @@ mod tests {
                 metadata_had_build_directory: true,
                 env_build_dir_set: false,
             },
+
+            nested_package_roots: Vec::new(),
         };
         let groups = build_groups(std::slice::from_ref(&ws));
         assert_eq!(groups.len(), 1);
@@ -5401,6 +5624,8 @@ mod tests {
                 metadata_had_build_directory: false,
                 env_build_dir_set: false,
             },
+
+            nested_package_roots: Vec::new(),
         };
         let groups = build_groups(std::slice::from_ref(&ws));
         // Symlink roots produce no physical nodes; no groups, but workspace is
@@ -5491,6 +5716,7 @@ mod tests {
                 metadata_had_build_directory: true,
                 env_build_dir_set: false,
             },
+            nested_package_roots: Vec::new(),
         }
     }
 

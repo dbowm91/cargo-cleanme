@@ -191,6 +191,13 @@ fn stderr_is_terminal() -> bool {
     std::io::stderr().is_terminal()
 }
 
+/// One terminal row. `{wide_msg}` pads or truncates to the terminal width, so
+/// the bar cannot wrap onto a second row.
+fn spinner_style() -> indicatif::ProgressStyle {
+    indicatif::ProgressStyle::with_template("{spinner} {wide_msg}")
+        .expect("spinner template is a static string")
+}
+
 /// Inline attended-terminal renderer on stderr.
 ///
 /// **One line, and one line only.** The renderer owns a single
@@ -269,6 +276,11 @@ impl IndicatifRenderer {
             indicatif::ProgressDrawTarget::stderr_with_hz(10),
         );
         let main = multi.add(indicatif::ProgressBar::new_spinner());
+        // `{wide_msg}` keeps the bar on one terminal row. A plain `{msg}`
+        // wraps, and indicatif then treats each wrapped row as its own line:
+        // the next tick moves up by that count and the leftovers stay on
+        // screen under the spinner.
+        main.set_style(spinner_style());
         main.enable_steady_tick(Duration::from_millis(100));
         main.set_message("scanning…");
         Self::assemble(false, verbose, Some(multi), Some(main))
@@ -285,6 +297,7 @@ impl IndicatifRenderer {
             indicatif::ProgressDrawTarget::term_like_with_hz(Box::new(term.clone()), 10),
         );
         let main = multi.add(indicatif::ProgressBar::new_spinner());
+        main.set_style(spinner_style());
         main.set_message("scanning…");
         (
             Self::assemble(false, verbose, Some(multi), Some(main)),
@@ -424,6 +437,11 @@ impl IndicatifRenderer {
     pub fn finish_and_clear(&self) {
         if self.hidden {
             return;
+        }
+        // The ticker thread draws on its own. Stop it before the clear, or
+        // one more tick lands after the frame is gone and the line stays.
+        if let Some(main) = &self.main {
+            main.disable_steady_tick();
         }
         if let Some(multi) = &self.multi {
             let _ = multi.clear();

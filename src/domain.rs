@@ -167,6 +167,15 @@ pub struct ResolvedWorkspace {
     pub packages: Vec<WorkspacePackage>,
     pub output: OutputSet,
     pub capability: CargoCapabilities,
+    /// Package directories inside this workspace that Cargo refused to treat
+    /// as members ("current package believes it's in a workspace when it's
+    /// not") and named this workspace as their owner.
+    ///
+    /// They are not members, so metadata never lists a target directory for
+    /// them. A conventional `<package>/target` that exists is still Cargo
+    /// output of this workspace: `cargo clean` on the package manifest fails,
+    /// and `cargo clean` of the workspace target does not reach it.
+    pub nested_package_roots: Vec<PathBuf>,
 }
 
 /// What an unresolved manifest proves about its own byte-ownership (M015).

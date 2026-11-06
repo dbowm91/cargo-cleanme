@@ -363,9 +363,12 @@ for the empty and non-empty cases alike, and neither ever says "reclaimed" or
 
 #### The quiet surface
 
-**One row per unit the run acted on** — `Cleaned` (Execute), `Simulated`
-(Simulate), `Previewed` (CargoPreview), and `Failed` (`cleanup.rs:706-717`). A
-failure is never silent: it is a row, not a footnote.
+**One row per directory the run cleaned, or would clean** — `Cleaned`
+(Execute), `Simulated` (Simulate), and `Previewed` (CargoPreview). A `Failed`
+unit is not a row on this surface. Its count stays in the tally as
+`(N failed)`, and the row itself is on the verbose surface. Unresolved
+passengers are the same: named only with `--verbose`, except when the scope
+is blocked, where the listing is the reason nothing ran.
 
 **Skipped units are not listed.** Their count appears in the tally as
 `(N skipped)` (`cleanup.rs:811-813`). This is the point of the quiet surface: a
@@ -1628,7 +1631,7 @@ assertions:
 | `the_quiet_cleanup_report_lists_only_what_the_run_acted_on` | 12023 | the quiet surface lists the acted-on unit, omits the skipped ones, and keeps their count as `(3 skipped)` |
 | `the_quiet_tally_states_the_space_saved` | 12053 | the tally's byte figure and "2 directories", and the absence of the verbose surface's scope census |
 | `execute_and_simulation_words_their_tallies_differently` | 12080 | Execute says `reclaimed`, Simulate says `would be reclaimed` and says that no `cargo clean` was invoked |
-| `a_failed_unit_is_always_listed` | 12115 | a `Failed` unit is a row and a `(1 failed)` count, and its bytes are not counted as reclaimed |
+| `a_failed_unit_is_counted_on_the_quiet_surface_and_listed_when_verbose` | 12351 | a `Failed` unit is `(1 failed)` on the quiet surface and a row on the verbose one; its bytes are not counted as reclaimed |
 | `the_verbose_surface_restores_the_skipped_rows_and_the_census` | 12146 | `--verbose` brings back the skipped rows, the `combined scope:` line, and the `CleanupUnit(s)` census |
 | `the_safety_disclosures_survive_the_quiet_surface` | 12167 | the ADR 007 disclosures are present on the **quiet** shape as well as the verbose one |
 
