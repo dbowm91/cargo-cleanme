@@ -1,7 +1,7 @@
 # Installing cargo-cleanme
 
-Nineteen releases are published as GitHub releases and on crates.io: v0.1.0
-through v0.1.6, then v0.2.0 through v0.2.11. **Eighteen of them are
+Twenty releases are published as GitHub releases and on crates.io: v0.1.0
+through v0.1.6, then v0.2.0 through v0.2.12. **Nineteen of them are
 installable.** **0.2.0 is yanked**: it could delete files it did not own, and
 `cargo install` will no longer select it for a new installation. See
 [TROUBLESHOOTING.md](TROUBLESHOOTING.md#check-this-first-known-defects-by-version)

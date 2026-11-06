@@ -1090,9 +1090,19 @@ pub trait CleanupRunner: Sync {
 
 pub struct SystemCleanupRunner;
 
+fn cargo_command_without_global_output_env(cwd: &Path) -> Command {
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(cwd);
+    cmd.env_remove("CARGO_TARGET_DIR");
+    cmd.env_remove("CARGO_BUILD_BUILD_DIR");
+    cmd
+}
+
 impl CargoRunner for SystemCleanupRunner {
     fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput> {
-        let output = Command::new("cargo").args(args).current_dir(cwd).output()?;
+        let output = cargo_command_without_global_output_env(cwd)
+            .args(args)
+            .output()?;
         Ok(ProcessOutput {
             success: output.status.success(),
             code: output.status.code(),
@@ -1112,8 +1122,8 @@ impl CleanupRunner for SystemCleanupRunner {
         args: &[OsString],
         env: &[(OsString, OsString)],
     ) -> io::Result<ProcessOutput> {
-        let mut cmd = Command::new("cargo");
-        cmd.args(args).current_dir(cwd);
+        let mut cmd = cargo_command_without_global_output_env(cwd);
+        cmd.args(args);
         for (k, v) in env {
             cmd.env(k, v);
         }

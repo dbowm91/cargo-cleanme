@@ -77,11 +77,22 @@ pub fn refresh_workspace_from_root_manifest(
 
 pub struct SystemCargoRunner;
 
+/// Strip workspace-wide Cargo output overrides from the parent environment before
+/// invoking real Cargo. CI and agent sandboxes often set `CARGO_TARGET_DIR` globally;
+/// that would shadow `.cargo/config.toml` and `cargo metadata`'s authoritative
+/// `target_directory`, breaking integration tests that assert redirected paths.
+fn cargo_command_without_global_output_env(cwd: &Path) -> std::process::Command {
+    let mut cmd = std::process::Command::new("cargo");
+    cmd.current_dir(cwd);
+    cmd.env_remove("CARGO_TARGET_DIR");
+    cmd.env_remove("CARGO_BUILD_BUILD_DIR");
+    cmd
+}
+
 impl CargoRunner for SystemCargoRunner {
     fn run(&self, cwd: &Path, args: &[std::ffi::OsString]) -> io::Result<ProcessOutput> {
-        let output = std::process::Command::new("cargo")
+        let output = cargo_command_without_global_output_env(cwd)
             .args(args)
-            .current_dir(cwd)
             .output()?;
         Ok(ProcessOutput {
             success: output.status.success(),

@@ -2234,13 +2234,14 @@ mod tests {
     /// construction, so it is the right home for a fixture that has to survive
     /// the maintainability check.
     fn maintainable_fixture(prefix: &str) -> tempfile::TempDir {
-        let base = std::env::var_os("CARGO_TARGET_DIR")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::env::current_dir()
-                    .expect("the crate root")
-                    .join("target")
-            });
+        // Always anchor under the workspace `target/`. Some runners set
+        // `CARGO_TARGET_DIR` to a shared cache under the system temp tree;
+        // `automatic_root_is_maintainable` then classifies fixtures there as
+        // non-maintainable when `$HOME` is a real directory, and the gate test
+        // measures the wrong rule.
+        let base = std::env::current_dir()
+            .expect("the crate root")
+            .join("target");
         std::fs::create_dir_all(&base).expect("the build directory");
         tempfile::Builder::new()
             .prefix(prefix)

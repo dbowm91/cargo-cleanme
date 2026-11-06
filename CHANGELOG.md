@@ -6,6 +6,26 @@ All notable changes to cargo-cleanme are documented here. The format follows
 stance: the `0.x` line may make breaking changes in any release, and the
 command-line, JSON, and release-asset contracts are the stable surface.
 
+## [0.2.12] - 2026-11-06
+
+### Fixed
+
+- **Conventional `target/` directories inside workspace members and refused
+  passenger crates are discovered and cleaned** when they qualify, using an
+  isolated `cargo clean` per distinct output root (so nested package targets do
+  not fight the workspace target).
+- **Default human cleanup reports list only what was cleaned or simulated** —
+  skipped units, failed units, and non-blocking passenger-manifest disclosures
+  are summarized in the tally unless `--verbose` is used (JSON and log surfaces
+  unchanged).
+- **Progress spinner teardown** disables the steady-tick thread before clearing
+  `indicatif` output so stray spinner glyphs do not remain on the terminal.
+
+### Changed
+
+- Architecture deep dive [10-reporting](architecture/10-reporting.md) updated
+  to document the quiet versus verbose cleanup disclosure contract.
+
 ## [0.2.11] - 2026-10-25
 
 ### Changed — BREAKING

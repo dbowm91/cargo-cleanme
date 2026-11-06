@@ -32,6 +32,20 @@ fn path_with(prefix: &std::path::Path) -> std::ffi::OsString {
     std::env::join_paths(paths).expect("join PATH")
 }
 
+/// Invoke the real `cargo` binary without inheriting workspace-wide output
+/// redirects (`CARGO_TARGET_DIR` / `CARGO_BUILD_BUILD_DIR`). CI sandboxes and
+/// agent environments often set those globally; a fixture `cargo build` would
+/// then land outside `project/target/` and the contract test's size assertion
+/// would fail even though Cargo succeeded.
+fn real_cargo_command() -> Command {
+    let mut cmd = Command::new(
+        std::env::var_os("CARGO").unwrap_or_else(|| std::ffi::OsString::from("cargo")),
+    );
+    cmd.env_remove("CARGO_TARGET_DIR");
+    cmd.env_remove("CARGO_BUILD_BUILD_DIR");
+    cmd
+}
+
 /// The first `cargo-cleanme[.exe]` on `path_value`, resolved the way Cargo
 /// resolves an external subcommand.
 ///
@@ -652,8 +666,7 @@ fn repeated_real_cargo_failures_are_grouped_without_losing_json_diagnostics() {
 #[test]
 fn real_cargo_workspace_failure_matrix_records_stage_and_context() {
     let temp = tempfile::tempdir().unwrap();
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let version = Command::new(&cargo).arg("--version").output().unwrap();
+    let version = real_cargo_command().arg("--version").output().unwrap();
     assert!(version.status.success());
     let cargo_version = String::from_utf8_lossy(&version.stdout).trim().to_owned();
     assert!(cargo_version.starts_with("cargo "), "{cargo_version}");
@@ -708,7 +721,7 @@ fn real_cargo_workspace_failure_matrix_records_stage_and_context() {
 
     let probe = |manifest: &std::path::Path| {
         let cwd = manifest.parent().unwrap();
-        let locate = Command::new(&cargo)
+        let locate = real_cargo_command()
             .args(["locate-project", "--workspace", "--manifest-path"])
             .arg(manifest)
             .current_dir(cwd)
@@ -716,7 +729,7 @@ fn real_cargo_workspace_failure_matrix_records_stage_and_context() {
             .unwrap();
         let metadata = if locate.status.success() {
             Some(
-                Command::new(&cargo)
+                real_cargo_command()
                     .args([
                         "metadata",
                         "--offline",
@@ -2100,10 +2113,9 @@ fn routine_bare_dry_run_and_execute_use_real_cargo_on_default_seed() {
     )
     .unwrap();
 
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let cargo_home = home.join(".cargo");
     fs::create_dir_all(&cargo_home).unwrap();
-    let build = Command::new(&cargo)
+    let build = real_cargo_command()
         .args(["build", "--offline", "--manifest-path"])
         .arg(project.join("Cargo.toml"))
         .env("HOME", &home)
@@ -2135,7 +2147,10 @@ fn routine_bare_dry_run_and_execute_use_real_cargo_on_default_seed() {
     assert_staged_is_resolved(&path, &staged);
     let wrapper = bin.join("cargo");
     let calls = temp.path().join("cargo-calls.log");
-    let real_cargo = cargo.to_string_lossy();
+    let real_cargo = std::env::var_os("CARGO")
+        .unwrap_or_else(|| std::ffi::OsString::from("cargo"))
+        .to_string_lossy()
+        .to_string();
     // Deliberate POSIX wrapper: log exact argv, then delegate all behavior to
     // the real Cargo binary. The checker sees this only in a cfg(unix) test.
     fs::write(
