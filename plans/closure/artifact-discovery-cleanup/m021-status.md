@@ -8,8 +8,8 @@ Plan: `plans/implementation/artifact-discovery-cleanup/m021-scan-resolution-and-
 
 Repository baseline: `c333501` (published v0.2.13).
 
-Implementation commit: **none.** The change is uncommitted on `main` at
-`c333501`. No commit was requested.
+Implementation: `6fdde56` (`perf(scan): skip locates metadata has already named`),
+parent `c333501`.
 
 ## Requirement-to-evidence matrix
 
