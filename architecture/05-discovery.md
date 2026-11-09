@@ -185,7 +185,7 @@ let global = matches!(policy.scope, ScanScope::Global(_) | ScanScope::Routine(_)
 | walker | `dua_core::walk_roots` (`:473``) | `dua_core::walk` (`:473`) |
 | workers | `traverse::worker_threads().min(GLOBAL_DISCOVERY_WORKER_CAP)` (`:397``) | `traverse::worker_threads()` (`:1008``) |
 | order | `Order::ParentFirst` by default (`:229-235`) | `Order::ParentFirst` (`:1009``) |
-| options | `skip_metadata` on Linux and macOS by default (`:415-421`) | full metadata (`:415`) |
+| options | `skip_metadata` on Linux and macOS by default (`:538-543`) | the same bit, `explicit_walk_skips_metadata` (`:558`); the profiling environment is not read |
 | attribution | per-entry map (`:756-771``) | never (`top_level_entries` empty, `:458``) |
 
 **Not the standard library.** `std::fs` appears only for `symlink_metadata`

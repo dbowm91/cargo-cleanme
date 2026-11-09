@@ -246,75 +246,85 @@ answer — yields "no enclosing workspace", and the working directory remains a
 scope root on its own. The worst case is therefore that the enclosing
 workspace is not cleaned, never that something is cleaned without proof.
 
-### The four phases
+### The resolution phases
 
-1. **Locate, in parallel (`:814-816`, worker `locate_one` at `:607-724`).**
-   Every manifest gets exactly one `locate-project` spawn, in input-order
-   chunks of [`resolution_concurrency`] (`:536-540`, capped at
-   `RESOLUTION_CONCURRENCY_CAP = 4`, `:534`), joining in order. The worker
-   only builds argv, spawns, and classifies into `LocateOutcome`
-   (`:572-593`): transport failure, Cargo-reported failure, unparseable
-   stdout, located root, or lost worker slot. A lost slot degrades to a
-   deterministic spawn-failure diagnostic — never a panic or a lost manifest.
-2. **Group, sequential (`:821-847`).** Outcomes classify in input order;
-   manifests locating to the same canonical root form a `ResolutionGroup`
-   (`:785-787`) in first-seen order. Group order is the order the old loop
-   would have discovered workspaces in.
-3. **Metadata, in parallel (`:852-863`, worker `metadata_one` at
-   `:734-765`).** One spawn per group — the same spawn set the old loop
-   issued, since every group has a first manifest that would have triggered
-   metadata. Parsing and member validation stay sequential.
-4. **Emulation, sequential (`:884-1049`).** The manifest loop replays
-   per-manifest decisions over the precomputed results:
-   - **Fast path (`:898-903`).** Canonicalize the manifest; if it is already
-     in `member_to_root` *and* that root is in `cache`, take it as covered:
-     `deduped_workspace_hits += 1`, add to `authoritative_coverage`,
-     `continue`. The locate for this manifest already ran in phase 1, so the
-     hit saves metadata but not the locate.
-   - **Locate outcomes (`:847-905`).** Transport (`could not start`),
-     Cargo-reported failure, unparseable stdout, and a lost worker slot each
-     push the same `Warning` / `CandidateUncertain` diagnostic at the same
-     position as the old loop, with identical text.
-   - **Workspace cache (`:906-921`).** Located root already known: count a
-     dedup hit, register the manifest, stop. **No metadata process.**
-   - **Metadata trigger (`:976-1048`).** First manifest per group: account one
-     metadata call plus the recorded wall time, then run the shared
-     post-spawn processor (`complete_workspace_from_metadata`, `:1126`)
-     with this manifest as the diagnostic path. On success the workspace is
-     registered and members seeded exactly as before (`:1027-1040`).
-   - **Repeat triggers of a failed root** reuse the recorded outcome via
-     `failed_templates` (`:992-1010`): one metadata call, the recorded wall
-     time, one failure (when the outcome counts as one), and a per-manifest
-     diagnostic cloned from the path-independent template. The old loop re-spawned here;
-     accounting matches a fresh spawn while one pass cannot fork the ledger
-     on concurrent mutation. Repeat triggers of a *successful* root never
-     reach this code — the caches above divert them first.
+1. **Wave-1 locate, in parallel (`workspace.rs:931`, worker `locate_one` at `:600`).**
+   A discovered manifest is located in this wave when no other discovered
+   manifest's directory is a strict ancestor of its directory
+   (`wave1_indices`, `:800`). Path ancestry only schedules the spawn. It
+   never marks a manifest covered. The wave runs in input-order chunks of
+   [`resolution_concurrency`] (`:529`, capped at
+   `RESOLUTION_CONCURRENCY_CAP = 4`, `:527`) and joins in order. The worker
+   classifies into `LocateOutcome` (`:565`): transport failure,
+   Cargo-reported failure, unparseable stdout, located root, or lost worker
+   slot. A lost slot degrades to a deterministic spawn-failure diagnostic.
+2. **Wave-1 metadata, in parallel (`metadata_one` at `:727`).** One spawn per
+   distinct located root, `--offline --locked --no-deps --format-version 1`.
+   A successful result names the manifests it covers
+   (`manifests_named_by_successful_metadata`, `:886`), compared with
+   `canonical_manifest_key`. A failure, a transport error, or an unparseable
+   result covers nothing. The classification discards its diagnostics; the
+   emulation is the only publisher.
+3. **Wave-2 locate, then metadata for new roots (`:966`).** A manifest that
+   was not in wave 1 is located only when no successful wave-1 metadata
+   result names it. Sibling members whose workspace-root manifest was not
+   discovered are both in wave 1, because neither directory contains the
+   other. A nested manifest metadata does not name is located here. New
+   roots get one metadata spawn; a root wave 1 already located does not.
+4. **Emulation, sequential (`:1006`).** The manifest loop replays
+   per-manifest decisions over the precomputed results. Diagnostics,
+   coverage, workspace order, and the unresolved ledger stay those of the
+   sequential loop. The allowed delta is which locate processes spawned.
+   - **Locate accounting (`:1012`).** A manifest that was located increments
+     `cargo_locate_calls`, including one the fast path then reuses. A covered
+     member that was never located does not.
+   - **Fast path (`:1017`).** If the manifest is already in `member_to_root`
+     and that root is in `cache`, count `deduped_workspace_hits` and stop.
+     Coverage was recorded when the workspace was created; the fast path
+     does not record it again.
+   - **Locate outcomes.** Transport (`could not start`), Cargo-reported
+     failure, unparseable stdout, and a lost worker slot each push the same
+     `Warning` / `CandidateUncertain` diagnostic, in input order.
+   - **Covered without a locate.** A manifest successful metadata named, and
+     that this pass did not locate, is a dedup hit once its workspace is in
+     the cache. If it is the first manifest of that workspace in input
+     order, it is still the metadata trigger, so workspace order does not
+     move.
+   - **Workspace cache.** A located root already known: count a dedup hit,
+     register the manifest, stop. No metadata process.
+   - **Metadata trigger.** First manifest of a root: account one metadata
+     call plus the recorded wall time, then
+     `complete_workspace_from_metadata` (`:1288`) with this manifest as the
+     diagnostic path.
+   - **Repeat triggers of a failed root** reuse `failed_templates`
+     (`:1133`): one accounted metadata call, one diagnostic, no second
+     spawn.
 
 ### What changed about spawn counts, and what did not
 
-Metadata is still deduplicated by the canonical workspace root: one spawn per
-unique root, plus re-accounting (not re-spawning) for repeat triggers of
-failed roots. The `cargo_metadata_calls` counter therefore matches sequential
-evaluation exactly, as do `cargo_failures`, `unique_workspaces,
-deduped_workspace_hits`, workspace order, diagnostic order and content, and
-the unresolved set.
+Metadata is still one spawn per distinct canonical workspace root, plus
+re-accounting (not re-spawning) for repeat triggers of failed roots.
+`cargo_metadata_calls`, `cargo_failures`, `unique_workspaces`,
+`deduped_workspace_hits`, workspace order, diagnostic order and content, and
+the unresolved set stay those of sequential evaluation.
 
-Locate is not: an N-member workspace now costs N `locate-project` spawns plus
-one `cargo metadata`, in either discovery order, where the old loop cost one
-plus one once the first metadata had seeded the member cache. The old
-fast path skipped locates, and skipping locates serializes the whole phase on
-member order — there is no order-independent way to know two manifests share
-a root without asking Cargo, and ancestry inference is forbidden. The two
-tests that pinned the old count were updated with this justification
-(`n_member_workspace_requires_one_metadata_regardless_of_order`,
-`:3716`; `repeated_members_invoke_metadata_once`, `:3075`), and
+Locate does not. A workspace whose root manifest was discovered pays one
+`locate-project` for that root. Members metadata names are not located, in
+either input order (`n_member_workspace_requires_one_metadata_regardless_of_order`,
+`:3982`). Sibling members whose root manifest is absent from the input are
+still both located, because ancestry is not membership
+(`repeated_members_invoke_metadata_once`, `:3362`): two locates, one
+metadata. A nested manifest metadata does not name is located
+(`nested_non_member_is_located_when_metadata_does_not_name_it`). A failed
+metadata result covers nothing, so the members are still located
+(`metadata_failure_does_not_cover_member_manifests`).
 `shared_failing_root_reaccounts_metadata_per_manifest_from_one_spawn`
-(`:3768`) pins the clone rule from the other side: two manifests, one actual
-metadata spawn, two accounted calls with per-manifest diagnostics.
-`resolution_overlaps_locate_spawns` (`:3825`) proves spawns actually overlap
+(`:4270`) still pins one actual metadata spawn and two accounted calls.
+`resolution_overlaps_locate_spawns` (`:4348`) proves wave-1 spawns overlap
 (peak concurrency ≥ 2 on multi-core hosts), and
-`mixed_locate_and_metadata_failures_keep_manifest_order` (`:3893`) pins the
-interleaved diagnostic order.
+`mixed_locate_and_metadata_failures_keep_manifest_order` (`:4416`) pins
+diagnostic order. `cargo_locate_calls` counts spawned locates. It is a
+stderr `--stats` counter, not a machine-contract field.
 
 ### Does a member manifest short-circuit a nested metadata call?
 
@@ -1117,10 +1127,12 @@ matter, and asymptotically O(manifests) overall — with bounded parallelism.**
   (`:831-842`), counted at `:995` (trigger) and `:981` (repeat-trigger
   re-accounting, which replays the recorded outcome without re-spawning). So
   ≤ O(unique workspaces) ≤ O(manifests) spawns.
-- `cargo locate-project`: **exactly one per discovered manifest** (`:793-795`),
-  including manifests the fast path later covers without metadata. Worst case
-  is O(manifests): a machine of N unrelated single-crate projects costs N
-  locate + N metadata.
+- `cargo locate-project`: one spawn for each wave-1 manifest, plus one for
+  each later manifest that no successful metadata result named
+  (`wave1_indices`, `:800`; wave 2 at `:966`). A workspace whose root
+  manifest was discovered costs one locate. A machine of N unrelated
+  single-crate projects still costs N locate + N metadata, because those
+  manifests are siblings.
 - `refresh_workspace_from_root_manifest` (`:59-76`) costs one metadata and zero
   locate per call; `cleanup.rs:3103` calls it per candidate at the destructive
   boundary, tracked in the separate `proof_*` counters so `--stats` cannot hide
@@ -1168,8 +1180,8 @@ gate; `the_composed_locate_arguments_resolve_against_the_supplied_working_direct
 | Double | Line | Uniquely proves |
 |---|---|---|
 | `FakeCargo` | `:2890` | The general scripted shape: one locate root, N synthetic members, optional `build_directory`, three failure switches (`fail_locate`, `fail_metadata`, `malformed`). It **records nothing**, so it structurally cannot prove call counts. |
-| `CountingRunner` | `:3104` | *Call counts.* Wraps `FakeCargo` with an `AtomicU64` on `argv[0] == "metadata"`, supplying the one observation `FakeCargo` cannot make — that one metadata per workspace holds while every manifest locates. |
-| `MemberFirstFails` | `:3422` | The failure mode where a **member-first** locate failure is cached as permanently unresolved and never cleared. It discriminates on the manifest path so only the member's locate fails, then asserts `unresolved.is_empty()` **and** `cargo_failures == 1`: coverage is repaired, the diagnostic is not retracted. Without this test, a plausible cache-seeding bug would make resolution order-dependent. |
+| `CountingRunner` | `:3370` | *Call counts.* Wraps `FakeCargo` with an `AtomicU64` on `argv[0] == "metadata"`, supplying the one observation `FakeCargo` cannot make — that one metadata per workspace holds. Locate counts are asserted on `ScanCounters`, not on this double. |
+| `MemberFirstFails` | `:3688` | A member listed before its root is covered by the root's metadata and is not located. The runner would fail that member's locate, and the test asserts the failure is not spawned (`cargo_locate_calls == 1`, `cargo_failures == 0`) while `unresolved` stays empty. |
 | `TwoWsRunner` | `:4008` | The *opposite* failure — over-eager member caching. Routes locate by substring on the manifest path to two independent roots and requires 2 locate + 2 metadata. If `member_to_root` were seeded wrongly, workspace B would be silently folded into A. |
 | `FailFirstRunner` | `:4077` | A poisoned cache: one workspace's locate failure must not suppress an unrelated workspace's resolution. |
 | `RecordingRunner` | `:6155` | *Argument composition*, with no Cargo at all. Records `(cwd, argv)` and returns failure; asserts `cwd.join(args.last()).exists()`. Carries an explicit anti-false-green assertion at `:6196-6199`: "the locate path was never exercised, so nothing was proven." |

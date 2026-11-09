@@ -172,6 +172,12 @@ C008 Phase 9 closure/planning reconciliation [closed]
 Phase 10 distribution and operational polish [owned by distribution/release/update subsystem]
 ~~~
 
+M021 (scan resolution and measurement cost) is **closing** and is not on the
+chain above. It is implemented and ladder-green, and it has not been
+published. Its soft dependencies are closed M006B and closed M006F. Plan:
+`plans/implementation/artifact-discovery-cleanup/m021-scan-resolution-and-measurement-cost.md`.
+Evidence: `plans/closure/artifact-discovery-cleanup/m021-status.md`.
+
 ## 6. Milestone M001 — Foundation, CLI, config, and domain contracts
 
 Status: closed.
@@ -384,7 +390,7 @@ Outcome:
 - the final proof re-resolves every workspace discovered under clean ROOT, rebuilds the complete fresh physical graph, and rejects the candidate when any other discovered workspace (including symlink or unresolvable output roots) can reach the affected output, failing closed when a universe workspace cannot be re-resolved;
 - `cleanup --stats` reports final-proof Cargo work separately from the initial scan counters.
 
-C003 keeps generic global-scan performance as a separate future optimization line. M005 destructive release qualification was reopened until C003 closed and is unblocked again by its closure.
+C003 keeps generic global-scan performance as a separate future optimization line. That line is now claimed by M021. M005 destructive release qualification was reopened until C003 closed and is unblocked again by its closure.
 
 Deferred (recorded in the C003 closure, not a blocked plan): the ownership-universe refresh performs one bounded re-resolution per cleanable candidate (N candidates over N discovered workspaces ⇒ N² Cargo resolutions, recorded with `--stats`); and on macOS a symlinked path component of the clean root leaves member source roots non-canonical, so the source-activity walk does not prune output directories (eligibility-neutral, wasted traversal, candidate follow-up corrective).
 
@@ -407,7 +413,7 @@ Purpose:
 
 C004 does not optimize the C003 N² final-proof cost, macOS source-root canonicalization, or generic no-argument scan performance. M005 destructive release qualification is restored after C004 closure.
 
-Outcome: cleanup resolution now retains authoritative manifest coverage and unresolved participants; any remaining unresolved participant blocks the complete cleanup scope before output sizing or per-unit proof. Read-only scan retains partial-result behavior. M005 destructive release qualification is restored after C004 closure. The C003 N² refresh cost, macOS source-root canonicalization, and generic scan performance remain deferred follow-up candidates, not blocked implementation plans.
+Outcome: cleanup resolution now retains authoritative manifest coverage and unresolved participants; any remaining unresolved participant blocks the complete cleanup scope before output sizing or per-unit proof. Read-only scan retains partial-result behavior. M005 destructive release qualification is restored after C004 closure. The C003 N² refresh cost and macOS source-root canonicalization remain deferred follow-up candidates, not blocked implementation plans. Generic scan performance is claimed by M021 (closing).
 
 ## 10D. Milestone M006 — Performance hardening
 
@@ -905,6 +911,8 @@ The implementation should specifically verify:
 - candidate targets can share one bounded worker pool;
 - increasing candidate count does not spawn unbounded worker pools;
 - memory grows with active analysis state, not total discovered filesystem entries.
+
+M021 (closing) is the next performance slice. It cuts locate spawns, explicit-discovery metadata, inventory sizing stats, and source-activity pool startup, and it leaves the pre-delete proof on the re-stat path. It has no wall-clock gate. The matched sample left `RESOLUTION_CONCURRENCY_CAP` at 4. Plan: `plans/implementation/artifact-discovery-cleanup/m021-scan-resolution-and-measurement-cost.md`. Evidence: `plans/closure/artifact-discovery-cleanup/m021-status.md`.
 
 ## 14. Completion definition
 
@@ -1520,3 +1528,35 @@ unqualified branch and passes.
 **Why C045 did not fix it.** A plan that finds a defect writes a corrective; it
 does not fix it (`AGENTS.md` §5). The production rendering is correct and is
 not changed by this plan: only the assertion is.
+
+## M021 — scan resolution and measurement cost (closing)
+
+Status: **closing** — implemented and ladder-green in the working tree on
+`c333501`; not published. Plan:
+`plans/implementation/artifact-discovery-cleanup/m021-scan-resolution-and-measurement-cost.md`.
+Baseline: `c333501` (published v0.2.13). Closure record:
+`plans/closure/artifact-discovery-cleanup/m021-status.md`.
+
+C003 and C004 left generic scan performance unclaimed. M006B removed
+redundant locates from the proof refresh and left the initial resolution
+locating every discovered manifest. M006F measured the full-machine walk as
+syscall-bound and kept the eight-thread cap; on that host the walk was about
+a fifth of the CLI inventory. M021 takes the four costs still in the scan
+itself:
+
+1. Locate a manifest only when no successful `cargo metadata` has named it.
+   Path ancestry schedules the spawn. It does not decide membership.
+2. The explicit discovery walk uses the same `skip_metadata` bit the global
+   walk already uses. `global_walk_knobs` stays as it is, so the M018
+   verification pass does not drift.
+3. Inventory sizing uses the walker's metadata on Linux and macOS, where
+   that metadata is the number `measure_single_target` reports. Windows
+   keeps the re-stat. The proof measurement keeps the re-stat on every
+   platform.
+4. Inventory source-activity walks share one pool. The pre-delete proof
+   keeps calling `workspace_member_activity`.
+
+`RESOLUTION_CONCURRENCY_CAP` stays 4. The matched eggfetch sample did not
+show metadata dominating the wall clock, so the cap-8 pair was not run.
+There is no wall-clock closure gate.
+No flag, config key, reason code, exit code, or JSON field changes.

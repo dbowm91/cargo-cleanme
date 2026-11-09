@@ -476,7 +476,7 @@ One Windows-specific hazard, verifiable and worth stating: that path calls `std:
 
 | Cost | Where | Note |
 |---|---|---|
-| **Two metadata syscalls per entry.** The engine collects `entry.metadata()` eagerly because `skip_metadata` is off (`dua-core lib.rs:776`), then `traverse.rs:353`/`:461` throws it away and re-`stat`s. | `:78-80` + `:353` | The single largest avoidable cost in the module. `discovery.rs:711` uses `.skip_metadata()`; `traverse.rs` cannot, because it needs the `modified()` value — but it does not need the *rest* of the metadata. |
+| **Proof sizing re-stats; Linux and macOS inventory does not.** `measure_single_target` (`:354`) re-stats every entry, and so does Windows inventory inside `note_inventory_entry` (`:434`). Linux inventory passes the walker's `std::fs::Metadata` to `filesize`. macOS inventory uses `allocated_size()` (`blocks * 512`) and `modified()`. A missing stat, a metadata error, or a missing mtime marks that root `uncertain`. | `:354`, `:434` | The proof re-stat is the vanish check. Inventory on Linux and macOS trusts the walker because that metadata is the same allocated-size figure. Windows compressed size is a different number, so that inventory path keeps the re-stat. |
 | `PathBuf` allocated per entry. `entry.path()` joins parent + filename and returns an owned `PathBuf` (`dua-core lib.rs:748`). | `:330`, `:442` | O(entries) heap allocations. Unavoidable given the re-stat design. |
 | **Double directory read in source activity.** The descend closure and the entry classification used to ask the same question of the same directory, each costing a `fs::read_dir`. | `:557` + `:622`, and `:445` + `:492` | **Fixed.** One definition, `contains_vcs_marker` (`:31-39`), behind a `NestedRepoMarkers` memo (`:49-65`) shared by both. Only *positives* are recorded, so the memo is bounded by the number of nested repositories rather than by the size of the tree, and a miss costs exactly what it cost before — the entry loop degrades to the old behaviour rather than to a wrong answer. |
 | O(entries) with two passes for roots. `symlink_metadata` runs once in the batch pre-pass and again per entry inside the walk. | `:408`, `:454` | |
@@ -631,14 +631,15 @@ Filesystem measurement is the easiest thing in this project to test against a fi
   green test proves only that its own premises hold* ([the overview](overview.md)
   §11). Four gaps:
 
-1. **Allocated-vs-apparent is never asserted, on any platform.** Every size
-   test writes dense non-sparse files (`:742`, `:540-541`, `:576`, `:592`, `:603`) and compares batch against single,
-     never against an expected number. No fixture creates a sparse file, a compressed NTFS file,
-     an APFS clone, or a hard link. So the §7 claim — sparse files report allocated bytes, hard
-     links are counted N times, `SizeMetric::Allocated` is the truthful label — is supported by
-     reading `filesize-0.2.0` and `workspace.rs:1879-1888`, **not by any test in this
-     repository.** A `filesize` change to its Unix branch, or a divergence between its cfg and
-     `workspace.rs`'s duplicate cfg, would pass the suite.
+1. **Allocated-vs-apparent is asserted for one sparse file, and nowhere else.**
+   `single_and_batched_target_measures_agree` (`src/traverse.rs:999`) creates
+   a hole with `set_len` and requires the batched inventory and
+   `measure_single_target` to report the same `bytes`, and on Unix requires
+   that figure to be below the apparent length. A compressed NTFS file, an
+   APFS clone, and a hard link are still untested. A `filesize` change that
+   preserved sparse-file agreement would still pass. The Windows inventory
+   path re-stats, so the same assertion is what fails an accidental Windows
+   shortcut that reported a different byte count.
 2. **The uncertainty paths are almost entirely untested.** No test in
    `traverse.rs` constructs a permission error, a mid-walk deletion, an EMFILE, or a vanished
      file; the batch-vs-single parity test (`:736-755`) runs on a healthy temp dir where every
@@ -677,11 +678,12 @@ Filesystem measurement is the easiest thing in this project to test against a fi
 3. **`traverse.rs:186-187` vs `:180`** — the doc promises "input order", the
    code delivers "index-sorted order". They agree only because `workspace.rs:1776-1780` uses
      `.enumerate()`. Either fix the doc or document the uniqueness + ascending precondition.
-4. **`traverse.rs:353` + `:461`** — the re-`stat` that duplicates the engine's
-   eager `entry.metadata()` (`dua-core lib.rs:776`). This is the module's largest avoidable
-     syscall cost, and it exists for a stated reason (`traverse.rs:9-12`). If anyone "optimises"
-     it away by reading `entry.metadata()`, the allocated-bytes metric and the error-conservatism
-     guarantee both move.
+4. **`measure_single_target` (`traverse.rs:354`) and the Windows arm of
+   `note_inventory_entry` (`:434`)** — the re-stat. Linux and macOS inventory
+   read the walker's metadata instead. The proof path must keep the re-stat:
+   it is the vanish check immediately before `cargo clean`. An inventory
+   shortcut that disagrees with `measure_single_target` on a stable tree is
+   a stop, not a fix to the proof function.
 5. **`workspace.rs:2109-2118` vs `filesize-0.2.0/src/lib.rs:58-126`**
    — the `SizeMetric` label is a second, hand-maintained statement about which platform branch of
      a dependency actually ran. Change one cfg, change both.

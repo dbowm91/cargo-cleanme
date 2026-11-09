@@ -5,13 +5,15 @@
 //! see `dua-core` types; they work with paths, sizes, and timestamps only.
 //!
 //! `dua-core` supplies parallel directory reads from a bounded worker pool
-//! and never follows symlinks. Per-file size and timestamp semantics stay
-//! identical to the previous sequential implementation on purpose: every
-//! entry is re-stat'ed with `std::fs::symlink_metadata` (target sizing) or
-//! `std::fs::metadata` (source activity), so platform behaviour, error
-//! conservatism, and the allocated-bytes metric do not drift with the engine
-//! change. Dropping any walk stops and joins its workers; no partial scan is
-//! ever presented as complete.
+//! and never follows symlinks. The proof measurements re-stat every entry
+//! with `std::fs::symlink_metadata` (target sizing) or `std::fs::metadata`
+//! (source activity), so a vanished entry is still observed at deletion time.
+//! Inventory sizing on Linux and macOS uses the metadata the walker already
+//! collected, because that metadata is the same allocated-size figure the
+//! proof reports on a stable tree. Windows inventory keeps the re-stat:
+//! `filesize` reports compressed size, which directory enumeration does not.
+//! Dropping any walk stops and joins its workers; no partial scan is ever
+//! presented as complete.
 
 #![allow(clippy::result_unit_err)]
 
@@ -422,6 +424,101 @@ pub fn measure_single_target(target: &Path) -> TargetStats {
     stats
 }
 
+/// Record one walked entry on the inventory path.
+///
+/// Linux uses the walker's `std::fs::Metadata` with `filesize`. macOS uses
+/// `allocated_size` (`blocks * 512`) and `modified()`. Windows re-stats with
+/// `symlink_metadata`, because `filesize` asks for the compressed size and
+/// directory enumeration does not have it. A missing stat, a metadata error,
+/// or a missing mtime marks the root uncertain.
+fn note_inventory_entry(stats: &mut TargetStats, path: &Path, entry: &dua_core::Entry) {
+    #[cfg(windows)]
+    {
+        let _ = entry;
+        let meta = match fs::symlink_metadata(path) {
+            Ok(meta) => meta,
+            Err(_) => {
+                stats.uncertain = true;
+                return;
+            }
+        };
+        let modified = match meta.modified() {
+            Ok(time) => time,
+            Err(_) => {
+                stats.uncertain = true;
+                return;
+            }
+        };
+        let is_file = meta.is_file();
+        let file_size = is_file.then(|| filesize::file_real_size_fast(path, &meta));
+        accumulate_inventory_entry(stats, path, modified, is_file, file_size);
+    }
+    #[cfg(not(windows))]
+    {
+        let Some(recorded) = entry.metadata.as_ref() else {
+            stats.uncertain = true;
+            return;
+        };
+        let meta = match recorded {
+            Ok(meta) => meta,
+            Err(_) => {
+                stats.uncertain = true;
+                return;
+            }
+        };
+        let modified = match meta.modified() {
+            Ok(time) => time,
+            Err(_) => {
+                stats.uncertain = true;
+                return;
+            }
+        };
+        #[cfg(target_os = "macos")]
+        let (is_file, file_size) = {
+            let is_file = entry.file_type.is_file();
+            (is_file, is_file.then(|| Ok(meta.allocated_size())))
+        };
+        #[cfg(not(target_os = "macos"))]
+        let (is_file, file_size) = {
+            let is_file = meta.is_file();
+            (
+                is_file,
+                is_file.then(|| filesize::file_real_size_fast(path, meta)),
+            )
+        };
+        accumulate_inventory_entry(stats, path, modified, is_file, file_size);
+    }
+}
+
+fn accumulate_inventory_entry(
+    stats: &mut TargetStats,
+    path: &Path,
+    modified: SystemTime,
+    is_file: bool,
+    file_size: Option<std::io::Result<u64>>,
+) {
+    stats.newest = newest_time(stats.newest, modified);
+    match stats.entries.checked_add(1) {
+        Some(count) => stats.entries = count,
+        None => {
+            stats.uncertain = true;
+            return;
+        }
+    }
+    if stats.package_dir.is_none() {
+        stats.package_dir = manifest_package_dir(path);
+    }
+    if is_file {
+        match file_size {
+            Some(Ok(size)) => match stats.bytes.checked_add(size) {
+                Some(total) => stats.bytes = total,
+                None => stats.uncertain = true,
+            },
+            _ => stats.uncertain = true,
+        }
+    }
+}
+
 /// Measure many target trees with one bounded worker pool.
 ///
 /// Each input is `(candidate_index, target_path)`. Results are returned in
@@ -431,10 +528,11 @@ pub fn measure_single_target(target: &Path) -> TargetStats {
 /// uncertain; other roots still complete. The pool size is [`worker_threads`],
 /// independent of candidate count.
 ///
-/// Every entry is re-stated, exactly as the proof measurement
-/// ([`measure_single_target`]) does: an entry that vanished between the walk
-/// and the measurement has to be observed, because a partial measurement must
-/// never be promoted to a candidate.
+/// This is the inventory measurement. On Linux the walker's metadata is
+/// `std::fs::Metadata` and `filesize` reads `st_blocks` from it. On macOS the
+/// walker's `allocated_size` is `blocks * 512`, the same figure. Windows
+/// re-stats, because compressed size is a different number. The proof
+/// measurement ([`measure_single_target`]) re-stats on every platform.
 pub fn measure_many_targets(targets: &[(usize, PathBuf)]) -> Vec<(usize, TargetStats)> {
     let mut ordered: Vec<(usize, PathBuf)> = targets.iter().map(|(i, p)| (*i, p.clone())).collect();
     ordered.sort_by_key(|(i, _)| *i);
@@ -494,44 +592,11 @@ pub fn measure_many_targets(targets: &[(usize, PathBuf)]) -> Vec<(usize, TargetS
                 if path == *root {
                     continue;
                 }
-                // The engine collected the metadata for this entry while it was
-                // walking, but its type is platform-specific (macOS and Windows
-                // carry their own `Metadata`), so it cannot be handed to
-                // `filesize`. The re-stat stays.
-                let meta = match fs::symlink_metadata(&path) {
-                    Ok(meta) => meta,
-                    Err(_) => {
-                        stats.uncertain = true;
-                        continue;
-                    }
-                };
-                let modified = match meta.modified() {
-                    Ok(time) => time,
-                    Err(_) => {
-                        stats.uncertain = true;
-                        continue;
-                    }
-                };
-                stats.newest = newest_time(stats.newest, modified);
-                match stats.entries.checked_add(1) {
-                    Some(n) => stats.entries = n,
-                    None => {
-                        stats.uncertain = true;
-                        continue;
-                    }
-                }
-                if stats.package_dir.is_none() {
-                    stats.package_dir = manifest_package_dir(&path);
-                }
-                if meta.is_file() {
-                    match filesize::file_real_size_fast(&path, &meta) {
-                        Ok(size) => match stats.bytes.checked_add(size) {
-                            Some(n) => stats.bytes = n,
-                            None => stats.uncertain = true,
-                        },
-                        Err(_) => stats.uncertain = true,
-                    }
-                }
+                // A walker metadata error, a missing mtime, or an entry the
+                // walker did not stat marks this root uncertain and stops
+                // accumulating it. Windows re-stats instead; see
+                // [`note_inventory_entry`].
+                note_inventory_entry(stats, &path, &entry);
             }
             dua_core::RootEvent::Entry(Err(_)) => {
                 if let Some(stats) = stats_by_index.get_mut(&index) {
@@ -768,6 +833,155 @@ fn is_excluded_multi(
     is_dir && markers.probe(path)
 }
 
+/// Inventory source activity for every outermost member root, in one pool.
+///
+/// The verdict is folded in root order, which is the order
+/// [`workspace_member_activity`] would have walked the roots: the first
+/// `Recent` or `Err` wins, and a later root does not change it. A non-symlink
+/// uses the walker's `modified()`. A symlink keeps `fs::metadata`, so the
+/// followed mtime is the one the proof function reports. Dropping the walk
+/// joins the pool.
+pub fn inventory_member_roots_activity(
+    member_roots: &[PathBuf],
+    output_roots: &[PathBuf],
+    cutoff: SystemTime,
+) -> Result<SourceActivity, ()> {
+    if member_roots.is_empty() {
+        return Ok(SourceActivity::Quiet(None));
+    }
+    let outputs = output_roots.to_vec();
+    let markers = NestedRepoMarkers::default();
+    let descend_roots = member_roots.to_vec();
+    let descend_outputs = outputs.clone();
+    let descend_markers = markers.clone();
+    let roots: Vec<(usize, PathBuf)> = member_roots.iter().cloned().enumerate().collect();
+    let walk = dua_core::walk_roots(
+        roots,
+        worker_threads(),
+        dua_core::Order::ParentFirst,
+        walk_options(),
+        move |root_idx, entry| {
+            let Some(root) = descend_roots.get(root_idx) else {
+                return false;
+            };
+            let path = entry.path();
+            if path != *root
+                && descend_outputs
+                    .iter()
+                    .any(|output| path == *output || path.starts_with(output))
+            {
+                return false;
+            }
+            if path != *root
+                && path
+                    .file_name()
+                    .is_some_and(|name| is_vcs_name(&name.to_string_lossy()))
+            {
+                return false;
+            }
+            if path != *root && entry.file_type.is_dir() && descend_markers.probe(&path) {
+                return false;
+            }
+            true
+        },
+    );
+    let mut verdicts: Vec<RootActivity> = (0..member_roots.len())
+        .map(|_| RootActivity::Pending { newest: None })
+        .collect();
+    for (index, event) in walk {
+        if fold_member_activity(&verdicts).is_some() {
+            break;
+        }
+        let Some(verdict) = verdicts.get_mut(index) else {
+            return Err(());
+        };
+        match event {
+            dua_core::RootEvent::Entry(Ok(entry)) => {
+                let Some(root) = member_roots.get(index) else {
+                    return Err(());
+                };
+                let path = entry.path();
+                if is_excluded_multi(root, &outputs, &markers, &path, entry.file_type.is_dir()) {
+                    continue;
+                }
+                let modified = if entry.file_type.is_symlink() {
+                    fs::metadata(&path).and_then(|meta| meta.modified()).ok()
+                } else {
+                    walker_modified(&entry).ok()
+                };
+                let Some(modified) = modified else {
+                    if matches!(verdict, RootActivity::Pending { .. }) {
+                        *verdict = RootActivity::Failed;
+                    }
+                    continue;
+                };
+                match verdict {
+                    RootActivity::Pending { newest } => {
+                        *newest = newest_time(*newest, modified);
+                        if modified >= cutoff {
+                            *verdict = RootActivity::Recent(modified);
+                        }
+                    }
+                    RootActivity::Recent(_) | RootActivity::Failed | RootActivity::Quiet(_) => {}
+                }
+            }
+            dua_core::RootEvent::Entry(Err(_)) => {
+                if matches!(verdict, RootActivity::Pending { .. }) {
+                    *verdict = RootActivity::Failed;
+                }
+            }
+            dua_core::RootEvent::Finished => {
+                if let RootActivity::Pending { newest } = *verdict {
+                    *verdict = RootActivity::Quiet(newest);
+                }
+            }
+        }
+    }
+    for verdict in &mut verdicts {
+        if matches!(verdict, RootActivity::Pending { .. }) {
+            *verdict = RootActivity::Failed;
+        }
+    }
+    fold_member_activity(&verdicts).unwrap_or(Err(()))
+}
+
+enum RootActivity {
+    Pending { newest: Option<SystemTime> },
+    Recent(SystemTime),
+    Quiet(Option<SystemTime>),
+    Failed,
+}
+
+fn fold_member_activity(verdicts: &[RootActivity]) -> Option<Result<SourceActivity, ()>> {
+    let mut newest: Option<SystemTime> = None;
+    for verdict in verdicts {
+        match verdict {
+            RootActivity::Pending { .. } => return None,
+            RootActivity::Failed => return Some(Err(())),
+            RootActivity::Recent(time) => return Some(Ok(SourceActivity::Recent(*time))),
+            RootActivity::Quiet(time) => {
+                newest = match (newest, *time) {
+                    (Some(current), Some(next)) => Some(current.max(next)),
+                    (Some(current), None) => Some(current),
+                    (None, next) => next,
+                };
+            }
+        }
+    }
+    Some(Ok(SourceActivity::Quiet(newest)))
+}
+
+fn walker_modified(entry: &dua_core::Entry) -> Result<SystemTime, ()> {
+    entry
+        .metadata
+        .as_ref()
+        .ok_or(())?
+        .as_ref()
+        .map_err(|_| ())?
+        .modified()
+        .map_err(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -789,16 +1003,38 @@ mod tests {
             fs::write(target.join("artifact.bin"), vec![9u8; 4096]).unwrap();
             targets.push(target);
         }
+        let sparse_dir = dir.path().join("sparse");
+        fs::create_dir_all(&sparse_dir).unwrap();
+        let sparse = sparse_dir.join("hole.bin");
+        fs::File::create(&sparse).unwrap().set_len(1 << 20).unwrap();
+        targets.push(sparse_dir);
         let singles: Vec<TargetStats> = targets.iter().map(|t| measure_single_target(t)).collect();
-        assert!(singles.iter().all(|s| !s.uncertain && s.entries == 1));
+        assert!(singles.iter().all(|s| !s.uncertain && s.entries >= 1));
         let indexed: Vec<(usize, PathBuf)> = targets.iter().cloned().enumerate().collect();
         let batched = measure_many_targets(&indexed);
-        assert_eq!(batched.len(), 3);
+        assert_eq!(batched.len(), targets.len());
         for ((_, batch), single) in batched.iter().zip(singles.iter()) {
             assert!(!batch.uncertain);
             assert_eq!(batch.entries, single.entries);
             assert_eq!(batch.bytes, single.bytes);
+            assert_eq!(batch.newest, single.newest);
         }
+        let sparse_stats = singles.last().unwrap();
+        assert!(sparse.is_file(), "the sparse fixture exists");
+        #[cfg(unix)]
+        {
+            let apparent = fs::symlink_metadata(&sparse).unwrap().len();
+            assert!(
+                apparent > sparse_stats.bytes,
+                "the fixture must be sparse, apparent={apparent} allocated={}",
+                sparse_stats.bytes
+            );
+        }
+        assert_eq!(
+            batched.last().unwrap().1.bytes,
+            sparse_stats.bytes,
+            "inventory bytes and the proof measurement agree on a sparse file"
+        );
     }
 
     #[test]

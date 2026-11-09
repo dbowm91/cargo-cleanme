@@ -439,6 +439,7 @@ pub fn discover_manifests_with_attribution(
             &mut pruned,
             observer,
             &mut coverage_complete,
+            explicit_walk_skips_metadata(),
         )?;
     }
     manifests.sort();
@@ -546,6 +547,16 @@ fn global_walk_knobs() -> GlobalWalkKnobs {
             env::var("CARGO_CLEANME_PROFILE_ORDER").ok().as_deref(),
         ),
     }
+}
+
+/// The `skip_metadata` bit an explicit discovery walk uses.
+///
+/// The same default `global_walk_knobs` computes when profiling is off: Linux
+/// and macOS skip, Windows does not. The profiling environment is not read
+/// here, and `global_walk_knobs` itself is unchanged so the M018 verification
+/// pass keeps the knobs it shares with the platform walk.
+fn explicit_walk_skips_metadata() -> bool {
+    cfg!(any(target_os = "linux", target_os = "macos"))
 }
 
 /// Verify each root as its own walk root and report its coverage.
@@ -991,6 +1002,7 @@ fn discover_manifests_root(
     pruned: &mut u64,
     observer: &dyn ProgressObserver,
     coverage_complete: &mut bool,
+    skip_metadata: bool,
 ) -> Result<(), AppError> {
     let walker_root = root.to_path_buf();
     let root_path = walker_root.clone();
@@ -1003,11 +1015,16 @@ fn discover_manifests_root(
     let mut batch_visited = 0u64;
     let mut batch_pruned = 0u64;
     let mut traversal_errors = (0u64, 0u64, 0u64);
+    let walk_options = if skip_metadata {
+        dua_core::Options::default().skip_metadata()
+    } else {
+        dua_core::Options::default()
+    };
     let mut walk = dua_core::walk(
         &walker_root,
         traverse::worker_threads(),
         dua_core::Order::ParentFirst,
-        dua_core::Options::default(),
+        walk_options,
         move |entry| {
             let path = entry.path();
             if !entry.file_type.is_dir() {
@@ -1182,6 +1199,7 @@ mod tests {
             &mut pruned,
             &NoopObserver,
             &mut coverage_complete,
+            explicit_walk_skips_metadata(),
         )
         .unwrap();
         assert_eq!(manifests, vec![readable.join("Cargo.toml")]);
@@ -2295,6 +2313,87 @@ mod tests {
         );
     }
 
+    /// Explicit discovery with the platform `skip_metadata` bit returns the
+    /// same manifests and the same prune total as a walk that stats every
+    /// entry. The manifest check re-stats with `symlink_metadata`, so the
+    /// walker's metadata is not an input.
+    #[test]
+    fn explicit_walk_manifest_and_prune_counts_agree_across_metadata_modes() {
+        let d = tempdir().unwrap();
+        let root = fs::canonicalize(d.path()).unwrap();
+        fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::write(
+            root.join("nested/Cargo.toml"),
+            "[package]\nname='nested'\nversion='0.1.0'\n",
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("target")).unwrap();
+        fs::write(
+            root.join("target/Cargo.toml"),
+            "[package]\nname='hidden'\nversion='0.1.0'\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        let outside_dir = tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let outside = outside_dir.path().join("pkg");
+            fs::create_dir_all(&outside).unwrap();
+            fs::write(
+                outside.join("Cargo.toml"),
+                "[package]\nname='out'\nversion='0.1.0'\n",
+            )
+            .unwrap();
+            symlink(&outside, root.join("linked-outside")).unwrap();
+            fs::create_dir_all(root.join("alias")).unwrap();
+            symlink(root.join("Cargo.toml"), root.join("alias/Cargo.toml")).unwrap();
+        }
+
+        let mut observed = Vec::new();
+        for skip_metadata in [false, true] {
+            let mut manifests = Vec::new();
+            let mut diagnostics = Vec::new();
+            let mut visited = 0;
+            let mut visited_dirs = 0;
+            let mut pruned = 0;
+            let mut coverage_complete = true;
+            discover_manifests_root(
+                &root,
+                &Filters::new(&[], &[]).unwrap(),
+                true,
+                &[],
+                &mut manifests,
+                &mut diagnostics,
+                &mut visited,
+                &mut visited_dirs,
+                &mut pruned,
+                &NoopObserver,
+                &mut coverage_complete,
+                skip_metadata,
+            )
+            .unwrap();
+            manifests.sort();
+            observed.push((manifests, pruned, coverage_complete, diagnostics));
+        }
+        assert_eq!(observed[0].0, observed[1].0, "manifest set");
+        assert_eq!(observed[0].1, observed[1].1, "prune total");
+        assert_eq!(observed[0].2, observed[1].2, "coverage_complete");
+        assert!(observed[0].2, "the fixture is fully readable");
+        assert!(observed[0].1 >= 1, "target/ must be counted as pruned");
+        let mut expected = vec![root.join("Cargo.toml"), root.join("nested/Cargo.toml")];
+        expected.sort();
+        assert_eq!(observed[0].0, expected);
+        assert!(
+            observed[0]
+                .0
+                .iter()
+                .all(|path| !path.ends_with("target/Cargo.toml")),
+            "a manifest under target/ is pruned"
+        );
+    }
+
     #[test]
     fn explicit_walk_respects_explicit_flag_for_pass_through_manifest() {
         // H-1 explicit half: with `explicit=false` the same `PassThrough`
@@ -2327,6 +2426,7 @@ mod tests {
             &mut pruned,
             &NoopObserver,
             &mut coverage_complete,
+            explicit_walk_skips_metadata(),
         )
         .unwrap();
         manifests.sort();
@@ -2354,6 +2454,7 @@ mod tests {
             &mut pruned,
             &NoopObserver,
             &mut coverage_complete,
+            explicit_walk_skips_metadata(),
         )
         .unwrap();
         manifests.sort();

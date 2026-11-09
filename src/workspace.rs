@@ -493,20 +493,22 @@ pub fn attribute_unknown(
 /// Returns workspaces in deterministic order plus diagnostics. Cache key is the
 /// canonical workspace root manifest from locate-project.
 ///
-/// Resolution runs in bulk phases: every manifest is located (bounded
-/// parallelism), manifests are grouped by located root in first-seen order,
-/// then one metadata runs per group (bounded parallelism), and a sequential
-/// emulation pass replays manifest order over the precomputed results. The
-/// emulation keeps the historical per-manifest semantics exactly: a manifest
-/// already listed by earlier metadata is a dedup hit with no new metadata, a
-/// repeat trigger of a failed root re-accounts metadata like a fresh spawn,
-/// and diagnostics, coverage, workspace order, and the unresolved ledger are
-/// identical to sequential evaluation. Only `cargo_locate_calls` /
-/// `cargo_locate_nanos` grow (one locate per manifest instead of one per
-/// unresolved-unknown manifest), because the sequential fast path that
-/// skipped locates serializes the whole phase on member order. Metadata stays
-/// one spawn per unique root; failed roots re-account without re-spawning.
-/// Membership is never inferred from path ancestry or hand-parsed TOML.
+/// Resolution runs in bulk phases. Path ancestry only schedules the first
+/// locate wave: a manifest is located immediately when no other discovered
+/// manifest's directory is a strict ancestor of its directory. Those locates
+/// run with bounded parallelism, one metadata runs per distinct located root,
+/// and a manifest a *successful* metadata result names is not located again.
+/// Everything else is located in a second wave, then metadata runs for any
+/// newly located root. A sequential emulation pass replays manifest order
+/// over the precomputed results. The emulation keeps the historical
+/// per-manifest semantics: a manifest already listed by earlier metadata is a
+/// dedup hit with no new metadata, a repeat trigger of a failed root
+/// re-accounts metadata like a fresh spawn, and diagnostics, coverage,
+/// workspace order, and the unresolved ledger stay those of sequential
+/// evaluation. A covered member that was never located does not increment
+/// `cargo_locate_calls`. Metadata stays one spawn per unique root; failed
+/// roots re-account without re-spawning. Membership is never inferred from
+/// path ancestry or hand-parsed TOML.
 pub fn resolve_workspaces(
     manifests: &[PathBuf],
     runner: &dyn CargoRunner,
@@ -770,11 +772,138 @@ struct MetadataFailure {
     counts_as_failure: bool,
 }
 
-/// Manifests locating to one workspace root, in input order. One metadata
-/// spawn per group is the same spawn set the sequential loop issued (every
-/// trigger ran metadata), only issued up front instead of interleaved.
+/// Manifests locating to one workspace root, in first-seen order. One metadata
+/// spawn per group. Wave 1 creates a group for every distinct root it located;
+/// wave 2 adds a group only for a root wave 1 did not already locate.
 struct ResolutionGroup {
     root_manifest: PathBuf,
+    canonical_key: PathBuf,
+}
+
+/// The directory that contains a manifest.
+///
+/// `"Cargo.toml".parent()` is `Some("")`, not `None`, so the empty parent is
+/// not a directory anyone can be an ancestor of.
+fn manifest_directory(manifest: &Path) -> &Path {
+    manifest
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+}
+
+/// Manifests whose directory has no strict ancestor among the discovered
+/// manifest directories.
+///
+/// Ancestry chooses which locate to spawn in wave 1. It never marks a
+/// manifest covered: a nested manifest metadata does not name is located in
+/// wave 2, and a failed metadata result covers nothing.
+fn wave1_indices(manifests: &[PathBuf]) -> Vec<usize> {
+    let directories: Vec<&Path> = manifests.iter().map(|m| manifest_directory(m)).collect();
+    let directory_set: HashSet<&Path> = directories.iter().copied().collect();
+    (0..manifests.len())
+        .filter(|&index| {
+            let mut parent = directories[index].parent();
+            while let Some(candidate) = parent {
+                if directory_set.contains(candidate) {
+                    return false;
+                }
+                if candidate.as_os_str().is_empty() {
+                    break;
+                }
+                parent = candidate.parent();
+            }
+            true
+        })
+        .collect()
+}
+
+fn locate_indices(
+    manifests: &[PathBuf],
+    indices: &[usize],
+    runner: &dyn CargoRunner,
+) -> Vec<(usize, LocateOutcome)> {
+    let spawned = parallel_map(indices.len(), &|slot| {
+        locate_one(&manifests[indices[slot]], runner)
+    });
+    indices
+        .iter()
+        .copied()
+        .zip(spawned)
+        .map(|(index, spawn)| (index, spawn.unwrap_or(LocateOutcome::WorkerFailed)))
+        .collect()
+}
+
+fn note_located_outcome(
+    index: usize,
+    outcome: LocateOutcome,
+    locate_outcomes: &mut [Option<LocateOutcome>],
+    group_index: &mut HashMap<PathBuf, usize>,
+    groups: &mut Vec<ResolutionGroup>,
+    group_of: &mut [Option<usize>],
+) {
+    if let LocateOutcome::Located {
+        root_manifest,
+        canonical_key,
+        ..
+    } = &outcome
+    {
+        let group = if let Some(&group) = group_index.get(canonical_key) {
+            group
+        } else {
+            let group = groups.len();
+            group_index.insert(canonical_key.clone(), group);
+            groups.push(ResolutionGroup {
+                root_manifest: root_manifest.clone(),
+                canonical_key: canonical_key.clone(),
+            });
+            group
+        };
+        group_of[index] = Some(group);
+    }
+    locate_outcomes[index] = Some(outcome);
+}
+
+fn spawn_metadata(groups: &[ResolutionGroup], runner: &dyn CargoRunner) -> Vec<MetadataSpawn> {
+    parallel_map(groups.len(), &|group| {
+        metadata_one(&groups[group].root_manifest, runner)
+    })
+    .into_iter()
+    .map(|spawn| {
+        spawn.unwrap_or(MetadataSpawn {
+            result: Err("parallel metadata worker failed".into()),
+            nanos: 0,
+        })
+    })
+    .collect()
+}
+
+/// Canonical manifest identities a successful metadata result names.
+///
+/// The classification uses the same parser as the emulation and then discards
+/// its diagnostics and counters, so a failure, a transport error, or an
+/// unparseable result covers nothing and the emulation remains the only
+/// publisher of diagnostics. Path ancestry is not consulted.
+fn manifests_named_by_successful_metadata(
+    result: &Result<ProcessOutput, String>,
+    canonical_key: &Path,
+) -> Option<HashSet<PathBuf>> {
+    let mut counters = ScanCounters::default();
+    let mut diagnostics = Vec::new();
+    let (workspace, _) = complete_workspace_from_metadata(
+        result,
+        canonical_key,
+        Path::new("."),
+        &mut counters,
+        &mut diagnostics,
+        &crate::progress::NoopObserver,
+    );
+    let workspace = workspace?;
+    let mut named = HashSet::new();
+    for member in &workspace.members {
+        named.insert(canonical_manifest_key(&member.manifest_path));
+    }
+    named.insert(canonical_manifest_key(&workspace.root_manifest));
+    Some(named)
 }
 
 /// Resolve discovered manifests while retaining proof of which manifests were
@@ -783,9 +912,10 @@ struct ResolutionGroup {
 /// partial-result behavior is intentionally unchanged.
 ///
 /// The implementation is bulk-parallel but sequentially faithful (see
-/// [`resolve_workspaces`]): locate runs bounded-parallel over all manifests,
-/// metadata runs bounded-parallel over located groups, and a manifest-order
-/// emulation replays per-manifest decisions over the precomputed results.
+/// [`resolve_workspaces`]): wave-1 locates run bounded-parallel, metadata
+/// runs bounded-parallel over those roots, wave-2 locates only the manifests
+/// no successful metadata named, and a manifest-order emulation replays
+/// per-manifest decisions over the precomputed results.
 pub fn resolve_workspaces_with_coverage(
     manifests: &[PathBuf],
     runner: &dyn CargoRunner,
@@ -798,66 +928,67 @@ pub fn resolve_workspaces_with_coverage(
     // Authoritative member -> root mapping seeded from Cargo metadata.
     let mut member_to_root: HashMap<PathBuf, PathBuf> = HashMap::new();
     let mut authoritative_coverage: HashSet<PathBuf> = HashSet::new();
-    // Bulk phase 1 (parallel): locate every manifest. Each spawn is
-    // independent — a locate result never depends on another manifest's —
-    // so the whole phase runs in input-order chunks of worker threads and
-    // joins in order. A lost worker slot degrades to a spawn failure.
-    let locate_spawns = parallel_map(manifests.len(), &|index| {
-        locate_one(&manifests[index], runner)
-    });
-    // Bulk phase 2 (sequential, no subprocess): collect locate outcomes in
-    // input order and group manifests by located workspace root, first-seen
-    // first. Group order is the order the old sequential loop would have
-    // discovered workspaces in.
-    let mut locate_outcomes: Vec<LocateOutcome> = Vec::with_capacity(manifests.len());
+    // Wave 1: locate manifests that have no discovered ancestor. Joining in
+    // input order keeps the emulation's view of outcomes stable. A lost
+    // worker slot degrades to a spawn failure.
+    let mut locate_outcomes: Vec<Option<LocateOutcome>> =
+        (0..manifests.len()).map(|_| None).collect();
     let mut group_index: HashMap<PathBuf, usize> = HashMap::new();
     let mut groups: Vec<ResolutionGroup> = Vec::new();
     let mut group_of: Vec<Option<usize>> = vec![None; manifests.len()];
-    for (index, spawn) in locate_spawns.into_iter().enumerate() {
-        let outcome = spawn.unwrap_or(LocateOutcome::WorkerFailed);
-        if let LocateOutcome::Located {
-            root_manifest,
-            canonical_key,
-            ..
-        } = &outcome
-        {
-            let group = match group_index.get(canonical_key) {
-                Some(&group) => group,
-                None => {
-                    let group = groups.len();
-                    group_index.insert(canonical_key.clone(), group);
-                    groups.push(ResolutionGroup {
-                        root_manifest: root_manifest.clone(),
-                    });
-                    group
-                }
-            };
-            group_of[index] = Some(group);
-        }
-        locate_outcomes.push(outcome);
+    for (index, outcome) in locate_indices(manifests, &wave1_indices(manifests), runner) {
+        note_located_outcome(
+            index,
+            outcome,
+            &mut locate_outcomes,
+            &mut group_index,
+            &mut groups,
+            &mut group_of,
+        );
     }
-    // Bulk phase 3 (parallel): one metadata spawn per located group. Every
-    // group has a trigger (the first manifest locating to it), and the old
-    // loop ran metadata for every trigger, so this is the same spawn set —
-    // issued up front instead of interleaved with locates.
-    let metadata_spawns = parallel_map(groups.len(), &|group| {
-        metadata_one(&groups[group].root_manifest, runner)
-    });
-    let metadata_spawns: Vec<MetadataSpawn> = metadata_spawns
-        .into_iter()
-        .map(|spawn| {
-            spawn.unwrap_or(MetadataSpawn {
-                result: Err("parallel metadata worker failed".into()),
-                nanos: 0,
-            })
+    // Metadata once per distinct wave-1 root. A failure covers nothing, so
+    // the manifests under that root stay eligible for wave 2.
+    let mut metadata_spawns = spawn_metadata(&groups, runner);
+    let mut covered_by: HashMap<PathBuf, (PathBuf, usize)> = HashMap::new();
+    for (group_idx, spawn) in metadata_spawns.iter().enumerate() {
+        let Some(named) =
+            manifests_named_by_successful_metadata(&spawn.result, &groups[group_idx].canonical_key)
+        else {
+            continue;
+        };
+        let canonical_key = groups[group_idx].canonical_key.clone();
+        for key in named {
+            covered_by
+                .entry(key)
+                .or_insert((canonical_key.clone(), group_idx));
+        }
+    }
+    // Wave 2: locate every remaining manifest successful metadata did not
+    // name. Sibling members whose root manifest was not discovered are
+    // already in wave 1, because neither directory contains the other.
+    let wave2: Vec<usize> = (0..manifests.len())
+        .filter(|&index| {
+            locate_outcomes[index].is_none()
+                && !covered_by.contains_key(&canonical_manifest_key(&manifests[index]))
         })
         .collect();
-    // Bulk phase 4 (sequential emulation): replay the manifest loop over the
-    // precomputed results. Every branch below matches the old sequential
-    // loop decision-for-decision — same diagnostics in the same order, same
-    // coverage sets, same workspace order — except that locates were already
-    // issued for all manifests, so the fast path saves metadata but not the
-    // locate itself (see [`resolve_workspaces`]).
+    let wave1_groups = groups.len();
+    for (index, outcome) in locate_indices(manifests, &wave2, runner) {
+        note_located_outcome(
+            index,
+            outcome,
+            &mut locate_outcomes,
+            &mut group_index,
+            &mut groups,
+            &mut group_of,
+        );
+    }
+    if groups.len() > wave1_groups {
+        metadata_spawns.extend(spawn_metadata(&groups[wave1_groups..], runner));
+    }
+    // Sequential emulation. Diagnostics, coverage, workspace order, and the
+    // unresolved ledger stay those of the old per-manifest loop. The allowed
+    // delta is which locate processes actually spawned.
     //
     // Repeat triggers of a failed root reuse the recorded outcome: the old
     // loop re-spawned metadata here (a failed root never enters the caches),
@@ -873,114 +1004,133 @@ pub fn resolve_workspaces_with_coverage(
     // byte-capability stays unproven there.
     let mut unresolved_stage: HashMap<PathBuf, (&'static str, UnknownCapability)> = HashMap::new();
     for (index, manifest) in manifests.iter().enumerate() {
-        // Every manifest located exactly once up front, so the spawn is
-        // accounted here — before any fast path. A fast-pathed manifest
-        // still ran its locate (its outcome is simply unneeded); only
-        // failures observed by the old loop are reported.
-        counters.cargo_locate_calls += 1;
-        if let Some(nanos) = locate_nanos(&locate_outcomes[index]) {
-            counters.cargo_locate_nanos = counters.cargo_locate_nanos.saturating_add(nanos);
+        // A covered member that was never located does not count a locate and
+        // does not need an outcome. A manifest that was located still counts,
+        // including one the fast path then reuses.
+        let manifest_key = canonical_manifest_key(manifest);
+        if let Some(outcome) = locate_outcomes[index].as_ref() {
+            counters.cargo_locate_calls += 1;
+            if let Some(nanos) = locate_nanos(outcome) {
+                counters.cargo_locate_nanos = counters.cargo_locate_nanos.saturating_add(nanos);
+            }
         }
         // C002 fast path: if this manifest was listed as a member (or root)
         // by an earlier successful metadata response, reuse that workspace
-        // without another metadata process. (The locate above already ran;
-        // only the metadata is still saved.)
-        let manifest_key = canonical_manifest_key(manifest);
-        if let Some(root_key) = member_to_root.get(&manifest_key)
-            && cache.contains_key(root_key)
+        // without another metadata process.
+        if let Some(root_key) = member_to_root.get(&manifest_key).cloned()
+            && cache.contains_key(&root_key)
         {
             counters.deduped_workspace_hits += 1;
             continue;
         }
-        let outcome = &locate_outcomes[index];
-        let canonical_key = match outcome {
-            LocateOutcome::Transport { error, .. } => {
-                counters.cargo_failures += 1;
-                observer.cargo_failure();
+        let (canonical_key, group_idx) = if let Some(outcome) = locate_outcomes[index].as_ref() {
+            let canonical_key = match outcome {
+                LocateOutcome::Transport { error, .. } => {
+                    counters.cargo_failures += 1;
+                    observer.cargo_failure();
+                    diagnostics.push(ScanDiagnostic {
+                        severity: DiagnosticSeverity::Warning,
+                        category: DiagnosticCategory::CandidateUncertain,
+                        path: Some(manifest.clone()),
+                        message: format!("cargo locate-project could not start: {error}"),
+                    });
+                    unresolved_stage
+                        .insert(manifest.clone(), ("locate", UnknownCapability::Unproven));
+                    continue;
+                }
+                LocateOutcome::Failed { reason, .. } => {
+                    counters.cargo_failures += 1;
+                    observer.cargo_failure();
+                    diagnostics.push(ScanDiagnostic {
+                        severity: DiagnosticSeverity::Warning,
+                        category: DiagnosticCategory::CandidateUncertain,
+                        path: Some(manifest.clone()),
+                        message: format!("cargo locate-project failed: {reason}"),
+                    });
+                    unresolved_stage.insert(
+                        manifest.clone(),
+                        ("locate", UnknownCapability::RefusedByCargo),
+                    );
+                    continue;
+                }
+                LocateOutcome::Unparseable { error, .. } => {
+                    counters.cargo_failures += 1;
+                    observer.cargo_failure();
+                    diagnostics.push(ScanDiagnostic {
+                        severity: DiagnosticSeverity::Warning,
+                        category: DiagnosticCategory::CandidateUncertain,
+                        path: Some(manifest.clone()),
+                        message: format!("cannot parse cargo locate-project output: {error}"),
+                    });
+                    unresolved_stage
+                        .insert(manifest.clone(), ("locate", UnknownCapability::Unproven));
+                    continue;
+                }
+                LocateOutcome::WorkerFailed => {
+                    counters.cargo_failures += 1;
+                    observer.cargo_failure();
+                    diagnostics.push(ScanDiagnostic {
+                        severity: DiagnosticSeverity::Warning,
+                        category: DiagnosticCategory::CandidateUncertain,
+                        path: Some(manifest.clone()),
+                        message:
+                            "cargo locate-project could not start: parallel locate worker failed"
+                                .into(),
+                    });
+                    unresolved_stage
+                        .insert(manifest.clone(), ("locate", UnknownCapability::Unproven));
+                    continue;
+                }
+                LocateOutcome::Located { canonical_key, .. } => canonical_key.clone(),
+            };
+            // The memo: this workspace root has already been resolved, so this
+            // manifest is one more member of it and needs no metadata of its own.
+            if cache.contains_key(&canonical_key) {
+                counters.deduped_workspace_hits += 1;
+                authoritative_coverage.insert(manifest_key.clone());
+                member_to_root.insert(manifest_key, canonical_key);
+                continue;
+            }
+            // A located manifest always has a group. `None` is a logic
+            // regression; fail closed with a diagnostic (never a panic) so it
+            // stays inside the 0/1/2 exit contract. The manifest keeps no
+            // coverage and lands in `unresolved`.
+            let Some(group_idx) = group_of[index] else {
                 diagnostics.push(ScanDiagnostic {
                     severity: DiagnosticSeverity::Warning,
                     category: DiagnosticCategory::CandidateUncertain,
                     path: Some(manifest.clone()),
-                    message: format!("cargo locate-project could not start: {error}"),
+                    message: "internal error: located manifest has no resolution group".into(),
                 });
-                unresolved_stage.insert(manifest.clone(), ("locate", UnknownCapability::Unproven));
+                unresolved_stage
+                    .insert(manifest.clone(), ("identity", UnknownCapability::Unproven));
+                continue;
+            };
+            (canonical_key, group_idx)
+        } else if let Some((canonical_key, group_idx)) = covered_by.get(&manifest_key).cloned() {
+            // Named by successful wave-1 metadata and never located. If the
+            // workspace is already in the cache this is a dedup; if it is the
+            // first manifest of that workspace in input order, it is still
+            // the metadata trigger, so workspace order does not move.
+            if cache.contains_key(&canonical_key) {
+                counters.deduped_workspace_hits += 1;
+                authoritative_coverage.insert(manifest_key.clone());
+                member_to_root.insert(manifest_key, canonical_key);
                 continue;
             }
-            LocateOutcome::Failed { reason, .. } => {
-                counters.cargo_failures += 1;
-                observer.cargo_failure();
-                diagnostics.push(ScanDiagnostic {
-                    severity: DiagnosticSeverity::Warning,
-                    category: DiagnosticCategory::CandidateUncertain,
-                    path: Some(manifest.clone()),
-                    message: format!("cargo locate-project failed: {reason}"),
-                });
-                unresolved_stage.insert(
-                    manifest.clone(),
-                    ("locate", UnknownCapability::RefusedByCargo),
-                );
-                continue;
-            }
-            LocateOutcome::Unparseable { error, .. } => {
-                counters.cargo_failures += 1;
-                observer.cargo_failure();
-                diagnostics.push(ScanDiagnostic {
-                    severity: DiagnosticSeverity::Warning,
-                    category: DiagnosticCategory::CandidateUncertain,
-                    path: Some(manifest.clone()),
-                    message: format!("cannot parse cargo locate-project output: {error}"),
-                });
-                unresolved_stage.insert(manifest.clone(), ("locate", UnknownCapability::Unproven));
-                continue;
-            }
-            LocateOutcome::WorkerFailed => {
-                counters.cargo_failures += 1;
-                observer.cargo_failure();
-                diagnostics.push(ScanDiagnostic {
-                    severity: DiagnosticSeverity::Warning,
-                    category: DiagnosticCategory::CandidateUncertain,
-                    path: Some(manifest.clone()),
-                    message: "cargo locate-project could not start: parallel locate worker failed"
-                        .into(),
-                });
-                unresolved_stage.insert(manifest.clone(), ("locate", UnknownCapability::Unproven));
-                continue;
-            }
-            LocateOutcome::Located { canonical_key, .. } => canonical_key,
-        };
-        // The memo: this workspace root has already been resolved, so this
-        // manifest is one more member of it and needs no metadata of its own.
-        //
-        // It used to be a *second* map beside the resolved-workspace cache,
-        // whose value was never read and whose key set was always the cache's
-        // own — so the check below always fired first and the second map's
-        // own check was unreachable. One map now, so the two cannot disagree.
-        if cache.contains_key(canonical_key) {
-            counters.deduped_workspace_hits += 1;
-            // Seed this manifest as a known member for future lookups.
-            // `manifest_key` *is* `canonical_manifest_key(manifest)`, already
-            // computed above; re-canonicalizing it is a syscall for nothing.
-            authoritative_coverage.insert(manifest_key.clone());
-            member_to_root.insert(manifest_key, canonical_key.clone());
-            continue;
-        }
-        // Metadata once per workspace root; repeats re-account from the memo.
-        // Phase 2 assigns a group to every located manifest, so `None` here
-        // is unreachable; fail closed with a diagnostic (never a panic) so a
-        // logic regression stays inside the 0/1/2 exit contract (M-8). The
-        // manifest keeps no coverage and lands in `unresolved`, blocking
-        // cleanup scope rather than attributing it to a wrong workspace.
-        let Some(group_idx) = group_of[index] else {
+            (canonical_key, group_idx)
+        } else {
             diagnostics.push(ScanDiagnostic {
                 severity: DiagnosticSeverity::Warning,
                 category: DiagnosticCategory::CandidateUncertain,
                 path: Some(manifest.clone()),
-                message: "internal error: located manifest has no resolution group".into(),
+                message: "internal error: manifest was neither located nor named by metadata"
+                    .into(),
             });
             unresolved_stage.insert(manifest.clone(), ("identity", UnknownCapability::Unproven));
             continue;
         };
-        if let Some((template, _)) = failed_templates.get(canonical_key) {
+        if let Some((template, _)) = failed_templates.get(&canonical_key) {
             // Repeat triggers re-account the call and the diagnostic like a
             // fresh spawn, but wall time is added once per unique root:
             // re-adding the memo nanos per manifest multiplied one bad root's
@@ -1005,7 +1155,7 @@ pub fn resolve_workspaces_with_coverage(
             .saturating_add(metadata_spawns[group_idx].nanos);
         let (workspace, failure) = complete_workspace_from_metadata(
             &metadata_spawns[group_idx].result,
-            canonical_key,
+            &canonical_key,
             manifest,
             counters,
             diagnostics,
@@ -2511,7 +2661,7 @@ pub fn build_cleanup_units(
 fn workspace_source_activity(
     ws: &ResolvedWorkspace,
     all_outputs: &[PathBuf],
-    start: SystemTime,
+    _start: SystemTime,
     cutoff: SystemTime,
 ) -> Result<bool, ()> {
     // Returns Ok(true) if recent, Ok(false) if quiet, Err on uncertainty.
@@ -2520,14 +2670,13 @@ fn workspace_source_activity(
     // member roots are worth testing against; the rest of the universe
     // matches nothing this walk can see.
     let relevant = outputs_relevant_to(&member_roots, all_outputs);
-    for root in &member_roots {
-        match traverse::workspace_member_activity(root, &relevant, start, cutoff) {
-            Ok(traverse::SourceActivity::Recent(_)) => return Ok(true),
-            Ok(traverse::SourceActivity::Quiet(_)) => {}
-            Err(()) => return Err(()),
-        }
+    // Inventory walks share one pool. The pre-delete proof still calls
+    // `workspace_member_activity`, which re-stats every entry.
+    match traverse::inventory_member_roots_activity(&member_roots, &relevant, cutoff) {
+        Ok(traverse::SourceActivity::Recent(_)) => Ok(true),
+        Ok(traverse::SourceActivity::Quiet(_)) => Ok(false),
+        Err(()) => Err(()),
     }
-    Ok(false)
 }
 
 /// The output roots that can exclude an entry under `member_roots`.
@@ -3260,14 +3409,14 @@ mod tests {
                 .load(std::sync::atomic::Ordering::Relaxed),
             1
         );
-        // Bulk resolution issues one locate per manifest up front (the
-        // sequential fast path that skipped locates serialized the whole
-        // phase), but metadata stays one call per workspace root and the
-        // member cache still records the dedup hit without new metadata.
+        // Neither member directory contains the other, and the workspace
+        // root manifest is not in the input, so ancestry schedules both
+        // locates. Metadata still runs once: the second member is a dedup
+        // hit after the first metadata names the shared root.
         assert_eq!(counters.cargo_metadata_calls, 1);
         assert_eq!(
             counters.cargo_locate_calls, 2,
-            "every manifest locates once; members share one metadata"
+            "sibling members whose root manifest was not discovered each locate once"
         );
         assert_eq!(counters.deduped_workspace_hits, 1);
     }
@@ -3593,9 +3742,16 @@ mod tests {
         assert_eq!(coverage.discovered_manifest_count, 2);
         assert_eq!(coverage.workspaces.len(), 1);
         assert!(coverage.unresolved.is_empty());
-        assert_eq!(
-            counters.cargo_failures, 1,
-            "the diagnostic remains observable although metadata later covers the manifest"
+        // The member is not located: the root is its ancestor, and successful
+        // metadata names it. The old assertion required `cargo_failures == 1`
+        // from that locate, which is the spawn this change removes.
+        assert_eq!(counters.cargo_locate_calls, 1);
+        assert_eq!(counters.cargo_failures, 0);
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| !diagnostic.message.contains("transient locate failure")),
+            "the member locate is not spawned: {diagnostics:?}"
         );
     }
 
@@ -3831,8 +3987,8 @@ mod tests {
 
     #[test]
     fn n_member_workspace_requires_one_metadata_regardless_of_order() {
-        // Discovery order with a member before the root still => one metadata
-        // for the shared root (bulk resolution locates every manifest).
+        // The root directory is an ancestor of every member, so only the root
+        // is located. Metadata names the three members, in either input order.
         for order in [false, true] {
             let d = tempfile::tempdir().unwrap();
             let ws_root = d.path().join("ws");
@@ -3848,14 +4004,37 @@ mod tests {
                 std::fs::create_dir_all(m.parent().unwrap()).unwrap();
                 std::fs::write(m, "").unwrap();
             }
-            let runner = FakeCargo {
-                locate_root: root_manifest.clone(),
-                target: target.clone(),
-                build: None,
-                members: 3,
-                fail_locate: false,
-                fail_metadata: false,
-                malformed: false,
+            let located = std::sync::Mutex::new(Vec::new());
+            struct RecordingRunner<'a> {
+                inner: FakeCargo,
+                located: &'a std::sync::Mutex<Vec<PathBuf>>,
+            }
+            impl CargoRunner for RecordingRunner<'_> {
+                fn run(
+                    &self,
+                    cwd: &Path,
+                    args: &[std::ffi::OsString],
+                ) -> io::Result<ProcessOutput> {
+                    if args.first().is_some_and(|arg| arg == "locate-project") {
+                        self.located
+                            .lock()
+                            .unwrap()
+                            .push(PathBuf::from(args.last().unwrap()));
+                    }
+                    self.inner.run(cwd, args)
+                }
+            }
+            let runner = RecordingRunner {
+                inner: FakeCargo {
+                    locate_root: root_manifest.clone(),
+                    target: target.clone(),
+                    build: None,
+                    members: 3,
+                    fail_locate: false,
+                    fail_metadata: false,
+                    malformed: false,
+                },
+                located: &located,
             };
             let mut counters = ScanCounters::default();
             let mut diags = Vec::new();
@@ -3870,10 +4049,223 @@ mod tests {
             let ws = resolve_workspaces(&manifests, &runner, &mut counters, &mut diags, &noop);
             assert_eq!(ws.len(), 1, "order={order}");
             assert_eq!(counters.cargo_metadata_calls, 1, "order={order}");
-            // Bulk resolution locates every manifest (4) while metadata stays
-            // one call for the shared root, in either discovery order.
-            assert_eq!(counters.cargo_locate_calls, 4, "order={order}");
+            assert_eq!(counters.cargo_locate_calls, 1, "order={order}");
+            assert_eq!(
+                located.lock().unwrap().as_slice(),
+                std::slice::from_ref(&root_manifest),
+                "order={order}: only the ancestor manifest is located"
+            );
+            assert!(
+                ws[0]
+                    .members
+                    .iter()
+                    .any(|member| member.manifest_path == m0),
+                "metadata still covers the members, order={order}"
+            );
         }
+    }
+
+    /// A nested manifest that metadata does not name is still located. Path
+    /// ancestry scheduled it out of wave 1; it must not swallow it.
+    #[test]
+    fn nested_non_member_is_located_when_metadata_does_not_name_it() {
+        let d = tempfile::tempdir().unwrap();
+        let ws_root = d.path().join("ws");
+        std::fs::create_dir_all(&ws_root).unwrap();
+        let root_manifest = ws_root.join("Cargo.toml");
+        std::fs::write(&root_manifest, "").unwrap();
+        let target = ws_root.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        let m0 = ws_root.join("member0/Cargo.toml");
+        let m1 = ws_root.join("member1/Cargo.toml");
+        for manifest in [&m0, &m1] {
+            std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+            std::fs::write(manifest, "").unwrap();
+        }
+        let nested = ws_root.join("nested/not-a-member/Cargo.toml");
+        std::fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        std::fs::write(&nested, "").unwrap();
+        let located = std::sync::Mutex::new(Vec::new());
+        struct SplitRunner<'a> {
+            root_manifest: PathBuf,
+            nested: PathBuf,
+            target: PathBuf,
+            located: &'a std::sync::Mutex<Vec<PathBuf>>,
+        }
+        impl CargoRunner for SplitRunner<'_> {
+            fn run(&self, _cwd: &Path, args: &[std::ffi::OsString]) -> io::Result<ProcessOutput> {
+                let manifest = PathBuf::from(args.last().unwrap());
+                let nested = manifest.ends_with("not-a-member/Cargo.toml");
+                if args.first().is_some_and(|arg| arg == "locate-project") {
+                    self.located.lock().unwrap().push(manifest.clone());
+                    let root = if nested {
+                        self.nested.clone()
+                    } else {
+                        self.root_manifest.clone()
+                    };
+                    let json = serde_json::json!({"root": root});
+                    return Ok(ProcessOutput {
+                        success: true,
+                        code: Some(0),
+                        stdout: serde_json::to_vec(&json).unwrap(),
+                        stderr: Vec::new(),
+                    });
+                }
+                let (manifest_path, workspace_root, target) = if nested {
+                    (
+                        self.nested.clone(),
+                        self.nested.parent().unwrap().to_path_buf(),
+                        self.nested.parent().unwrap().join("target"),
+                    )
+                } else {
+                    (
+                        self.root_manifest.clone(),
+                        self.root_manifest.parent().unwrap().to_path_buf(),
+                        self.target.clone(),
+                    )
+                };
+                let mut packages = vec![serde_json::json!({
+                    "id": "root",
+                    "name": "root",
+                    "manifest_path": manifest_path,
+                })];
+                if !nested {
+                    for name in ["member0", "member1"] {
+                        packages.push(serde_json::json!({
+                            "id": name,
+                            "name": name,
+                            "manifest_path": workspace_root.join(name).join("Cargo.toml"),
+                        }));
+                    }
+                }
+                let json = serde_json::json!({
+                    "packages": packages,
+                    "workspace_members": ["root"],
+                    "workspace_root": workspace_root,
+                    "target_directory": target,
+                });
+                Ok(ProcessOutput {
+                    success: true,
+                    code: Some(0),
+                    stdout: serde_json::to_vec(&json).unwrap(),
+                    stderr: Vec::new(),
+                })
+            }
+        }
+        let runner = SplitRunner {
+            root_manifest: root_manifest.clone(),
+            nested: nested.clone(),
+            target,
+            located: &located,
+        };
+        let mut counters = ScanCounters::default();
+        let mut diagnostics = Vec::new();
+        let coverage = resolve_workspaces_with_coverage(
+            &[
+                root_manifest.clone(),
+                m0.clone(),
+                m1.clone(),
+                nested.clone(),
+            ],
+            &runner,
+            &mut counters,
+            &mut diagnostics,
+            &NoopObserver,
+        );
+        let mut located = located.lock().unwrap().clone();
+        located.sort();
+        let mut expected = vec![root_manifest.clone(), nested.clone()];
+        expected.sort();
+        assert_eq!(
+            located, expected,
+            "the members are named by metadata; the non-member is located"
+        );
+        assert_eq!(counters.cargo_locate_calls, 2);
+        assert_eq!(counters.cargo_metadata_calls, 2);
+        assert!(coverage.unresolved.is_empty(), "{:?}", coverage.unresolved);
+        assert_eq!(coverage.workspaces.len(), 2);
+    }
+
+    /// A failed metadata result covers nothing, so member manifests are still
+    /// located and stay unresolved.
+    #[test]
+    fn metadata_failure_does_not_cover_member_manifests() {
+        let d = tempfile::tempdir().unwrap();
+        let ws_root = d.path().join("ws");
+        std::fs::create_dir_all(&ws_root).unwrap();
+        let root_manifest = ws_root.join("Cargo.toml");
+        std::fs::write(&root_manifest, "").unwrap();
+        let members: Vec<PathBuf> = (0..2)
+            .map(|index| {
+                let manifest = ws_root.join(format!("member{index}/Cargo.toml"));
+                std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+                std::fs::write(&manifest, "").unwrap();
+                manifest
+            })
+            .collect();
+        let located = std::sync::Mutex::new(Vec::new());
+        struct FailMetadata<'a> {
+            root_manifest: PathBuf,
+            located: &'a std::sync::Mutex<Vec<PathBuf>>,
+        }
+        impl CargoRunner for FailMetadata<'_> {
+            fn run(&self, _cwd: &Path, args: &[std::ffi::OsString]) -> io::Result<ProcessOutput> {
+                if args.first().is_some_and(|arg| arg == "locate-project") {
+                    self.located
+                        .lock()
+                        .unwrap()
+                        .push(PathBuf::from(args.last().unwrap()));
+                    let json = serde_json::json!({"root": self.root_manifest});
+                    return Ok(ProcessOutput {
+                        success: true,
+                        code: Some(0),
+                        stdout: serde_json::to_vec(&json).unwrap(),
+                        stderr: Vec::new(),
+                    });
+                }
+                Ok(ProcessOutput {
+                    success: false,
+                    code: Some(1),
+                    stdout: Vec::new(),
+                    stderr: b"metadata failed".to_vec(),
+                })
+            }
+        }
+        let runner = FailMetadata {
+            root_manifest: root_manifest.clone(),
+            located: &located,
+        };
+        let manifests = vec![
+            root_manifest.clone(),
+            members[0].clone(),
+            members[1].clone(),
+        ];
+        let mut counters = ScanCounters::default();
+        let mut diagnostics = Vec::new();
+        let coverage = resolve_workspaces_with_coverage(
+            &manifests,
+            &runner,
+            &mut counters,
+            &mut diagnostics,
+            &NoopObserver,
+        );
+        let mut located = located.lock().unwrap().clone();
+        located.sort();
+        let mut expected = manifests.clone();
+        expected.sort();
+        assert_eq!(
+            located, expected,
+            "a failed metadata result locates every member"
+        );
+        assert_eq!(counters.cargo_locate_calls, 3);
+        assert!(coverage.workspaces.is_empty());
+        assert_eq!(coverage.unresolved.len(), 3);
+        assert!(
+            coverage
+                .unresolved
+                .iter()
+                .all(|participant| { participant.stage == "metadata" })
+        );
     }
 
     /// A root whose metadata fails keeps sequential accounting without
@@ -5841,6 +6233,129 @@ mod tests {
             }
         }
         let _ = set_path_modified(path, old);
+    }
+
+    /// Inventory source activity and the proof walk agree on a stable tree.
+    ///
+    /// *Fails if:* the shared pool reports a different `Recent` / `Quiet` /
+    /// `Err`, or `Quiet`'s max timestamp moves. `Recent`'s timestamp is
+    /// scheduling-dependent and is not compared. Returning from the recent
+    /// case drops the walk before every root finishes; the call returning is
+    /// the join.
+    #[test]
+    fn inventory_source_activity_agrees_with_the_proof_walk() {
+        let old = SystemTime::now() - Duration::from_secs(48 * 3600);
+        let cutoff = SystemTime::now() - Duration::from_secs(3600);
+        let start = SystemTime::now();
+
+        let quiet = tempfile::tempdir().unwrap();
+        let quiet_root = quiet.path().join("member");
+        std::fs::create_dir_all(quiet_root.join("src")).unwrap();
+        std::fs::write(quiet_root.join("src/lib.rs"), "old").unwrap();
+        backdate_tree(&quiet_root, old);
+        assert_activity_pair(&quiet_root, &[], start, cutoff, ActivityExpect::Quiet);
+
+        let recent = tempfile::tempdir().unwrap();
+        let recent_root = recent.path().join("member");
+        std::fs::create_dir_all(recent_root.join("src")).unwrap();
+        std::fs::write(recent_root.join("src/lib.rs"), "old").unwrap();
+        let recent_file = recent_root.join("src/new.rs");
+        std::fs::write(&recent_file, "new").unwrap();
+        backdate_tree(&recent_root, old);
+        set_path_modified(&recent_file, SystemTime::now()).unwrap();
+        assert_activity_pair(&recent_root, &[], start, cutoff, ActivityExpect::Recent);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let linked = tempfile::tempdir().unwrap();
+            let linked_root = linked.path().join("member");
+            std::fs::create_dir_all(&linked_root).unwrap();
+            std::fs::write(linked_root.join("lib.rs"), "old").unwrap();
+            let outside = linked.path().join("outside.rs");
+            std::fs::write(&outside, "new").unwrap();
+            set_path_modified(&outside, SystemTime::now()).unwrap();
+            let link = linked_root.join("alias.rs");
+            symlink(&outside, &link).unwrap();
+            backdate_tree(&linked_root, old);
+            let touched = std::process::Command::new("touch")
+                .args(["-h", "-t", "202001010000.00"])
+                .arg(&link)
+                .status()
+                .unwrap();
+            assert!(
+                touched.success(),
+                "touch -h must backdate the symlink itself"
+            );
+            let link_own = std::fs::symlink_metadata(&link)
+                .unwrap()
+                .modified()
+                .unwrap();
+            let followed = std::fs::metadata(&link).unwrap().modified().unwrap();
+            assert!(
+                link_own < cutoff && followed >= cutoff,
+                "premise: only the symlink target is recent"
+            );
+            assert_activity_pair(&linked_root, &[], start, cutoff, ActivityExpect::Recent);
+        }
+
+        let nested = tempfile::tempdir().unwrap();
+        let nested_root = nested.path().join("member");
+        std::fs::create_dir_all(nested_root.join("vendor/.git")).unwrap();
+        std::fs::write(nested_root.join("src.rs"), "old").unwrap();
+        let buried = nested_root.join("vendor/new.rs");
+        std::fs::write(&buried, "new").unwrap();
+        backdate_tree(&nested_root, old);
+        set_path_modified(&buried, SystemTime::now()).unwrap();
+        assert_activity_pair(&nested_root, &[], start, cutoff, ActivityExpect::Quiet);
+
+        let missing = quiet.path().join("does-not-exist");
+        assert_activity_pair(&missing, &[], start, cutoff, ActivityExpect::Unreadable);
+    }
+
+    enum ActivityExpect {
+        Quiet,
+        Recent,
+        Unreadable,
+    }
+
+    fn assert_activity_pair(
+        root: &Path,
+        outputs: &[PathBuf],
+        start: SystemTime,
+        cutoff: SystemTime,
+        expect: ActivityExpect,
+    ) {
+        let root_buf = root.to_path_buf();
+        let inventory = traverse::inventory_member_roots_activity(
+            std::slice::from_ref(&root_buf),
+            outputs,
+            cutoff,
+        );
+        let proof = traverse::workspace_member_activity(root, outputs, start, cutoff);
+        match expect {
+            ActivityExpect::Unreadable => {
+                assert!(inventory.is_err(), "inventory: {inventory:?}");
+                assert!(proof.is_err(), "proof: {proof:?}");
+            }
+            ActivityExpect::Recent => {
+                assert!(
+                    matches!(inventory, Ok(traverse::SourceActivity::Recent(_))),
+                    "inventory: {inventory:?}"
+                );
+                assert!(
+                    matches!(proof, Ok(traverse::SourceActivity::Recent(_))),
+                    "proof: {proof:?}"
+                );
+            }
+            ActivityExpect::Quiet => match (inventory, proof) {
+                (
+                    Ok(traverse::SourceActivity::Quiet(left)),
+                    Ok(traverse::SourceActivity::Quiet(right)),
+                ) => assert_eq!(left, right, "Quiet timestamps"),
+                (left, right) => panic!("expected Quiet, inventory={left:?} proof={right:?}"),
+            },
+        }
     }
 
     #[test]
