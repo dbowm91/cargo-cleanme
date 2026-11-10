@@ -5906,6 +5906,88 @@ mod tests {
         (d, root, target)
     }
 
+    /// Set a path's modification time, for a file or a directory.
+    ///
+    /// `File::open` cannot open a directory on Windows, and opening one for
+    /// writing fails too, so `set_modified` never reaches a directory there.
+    /// The activity walk counts the workspace directory itself. A fixture
+    /// whose directory stays "now" looks active on Windows and idle everywhere
+    /// else. Windows needs `FILE_FLAG_BACKUP_SEMANTICS` and `SetFileTime`.
+    fn set_path_modified(path: &Path, when: SystemTime) -> io::Result<()> {
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, INVALID_HANDLE_VALUE};
+            use windows_sys::Win32::Storage::FileSystem::{
+                CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE,
+                FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, SetFileTime,
+            };
+
+            const EPOCH_OFFSET_TICKS: u128 = 11_644_473_600 * 10_000_000;
+            const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
+            let since_epoch = when.duration_since(SystemTime::UNIX_EPOCH).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "timestamp predates the Unix epoch",
+                )
+            })?;
+            let ticks =
+                u64::try_from(since_epoch.as_nanos() / 100 + EPOCH_OFFSET_TICKS).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "timestamp out of range")
+                })?;
+            let filetime = FILETIME {
+                dwLowDateTime: (ticks & 0xFFFF_FFFF) as u32,
+                dwHighDateTime: (ticks >> 32) as u32,
+            };
+            let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+            wide.push(0);
+            // SAFETY: `wide` is a NUL-terminated UTF-16 buffer that outlives
+            // the call, the security-attributes pointer is null as documented,
+            // and the returned handle is closed on every path below.
+            let handle = unsafe {
+                CreateFileW(
+                    wide.as_ptr(),
+                    FILE_WRITE_ATTRIBUTES,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    std::ptr::null(),
+                    OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_BACKUP_SEMANTICS,
+                    std::ptr::null_mut(),
+                )
+            };
+            if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            // SAFETY: `handle` was opened above and is closed exactly once;
+            // `filetime` outlives the call.
+            let ok = unsafe {
+                SetFileTime(
+                    handle,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &filetime as *const FILETIME,
+                )
+            };
+            // SAFETY: `handle` was successfully opened above.
+            unsafe { CloseHandle(handle) };
+            if ok == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        }
+        #[cfg(not(windows))]
+        {
+            if fs::symlink_metadata(path)?.is_dir() {
+                fs::File::open(path)?.set_modified(when)
+            } else {
+                fs::OpenOptions::new()
+                    .write(true)
+                    .open(path)?
+                    .set_modified(when)
+            }
+        }
+    }
+
     fn backdate(path: &Path, old: SystemTime) {
         let mut stack = vec![path.to_path_buf()];
         while let Some(current) = stack.pop() {
@@ -5921,14 +6003,7 @@ mod tests {
                     }
                 }
             }
-            if let Ok(f) = fs::OpenOptions::new().write(true).open(&current) {
-                let _ = f.set_modified(old);
-            } else if let Ok(dir) = fs::File::open(&current) {
-                let _ = dir.set_modified(old);
-            }
-        }
-        if let Ok(dir) = fs::File::open(path) {
-            let _ = dir.set_modified(old);
+            let _ = set_path_modified(&current, old);
         }
     }
 
