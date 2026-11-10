@@ -204,10 +204,10 @@ Sixteen `pub mod` declarations, one per line, alphabetical (`lib.rs:1-16`):
 
 | Variant | Label | Assigned when | Permitted at cleanup time |
 |---|---|---|---|
-| `PrivateBounded` | `private` | Single owner, every covering root strictly below the workspace root, no source overlap, and the group does **not** overlap an unrepresentable root's known aliases (`workspace.rs:1497-1503`) | **The only actionable class** — still subject to path authorization and a fresh ownership proof at the spawn boundary. |
-| `Shared` | `shared` | More than one owner maps to the group (`workspace.rs:1478-1479`), *or* it is inside the root but not provably exclusive because it overlaps an unrepresentable root's known aliases (`workspace.rs:1504-1508`) | Inventory-only: `cleanup.rs:1318` returns `CleanupReasonCode::SkippedShared`. |
-| `ExternalUnproven` | `external-unproven` | Inside no single workspace root — e.g. a `CARGO_TARGET_DIR` outside the project (`workspace.rs:1509-1510`) | Inventory-only *even inside a clean ROOT or a configured `allowed_output_roots`*: `cleanup.rs:1320`, plus the gate at `cleanup.rs:1125-1127` which fires before any root validation. |
-| `Uncertain` | `uncertain` | The owning workspace is itself uncertain, or a covering root *is or contains* a member source root — cleaning would delete the project (`workspace.rs:1498-1501`) | Never. Dropped before sizing with an explicit `CandidateUncertain` warning (`workspace.rs:1751-1769`). |
+| `PrivateBounded` | `private` | Single owner, every covering root strictly below the workspace root, no source overlap, and the group does **not** overlap an unrepresentable root's known aliases (`workspace.rs:1965-1966`) | Cleanable when idle, and only when every covering root sits inside a cleanup root or an allowed root (`cleanup.rs:1667-1689`). |
+| `Shared` | `shared` | More than one owner maps to the group (`workspace.rs:1958-1959`), *or* it is inside the root but not provably exclusive because it overlaps an unrepresentable root's known aliases (`workspace.rs:1967-1971`). A directory that contains a source tree is `Uncertain`, not `Shared`. | Cleanable when every owner is idle. An active co-owner keeps the directory (`cleanup.rs:4708-4752`). |
+| `ExternalUnproven` | `external-unproven` | Single owner, output outside the workspace root (`workspace.rs:1972-1973`) | Cleanable when that project is idle. An allow-list entry does not change the class (`cleanup.rs:1667-1668`). |
+| `Uncertain` | `uncertain` | Source overlap, a nested package directory, a conventional source directory, a symlink, or no physical identity (`workspace.rs:1927-1964`) | Never. `cleanable_artifact_class` omits it (`cleanup.rs:1698-1704`). |
 
 The `Uncertain` source-overlap case deserves attention: a user who sets
 `target-dir` to their source tree would otherwise get silence, so the group is
@@ -223,18 +223,17 @@ workspace anywhere demotes everything" is wrong, and the distinction is
 load-bearing: it is the difference between one poisoned group and a poisoned
 run.
 
-The *order* of checks in `covering_is_authorized_roots` (`cleanup.rs:1113`) is
-load-bearing: ownership class is tested **first**, before allowed roots are
-validated as absolute and non-symlink. Its comment states the rule — ownership
-class is authoritative. An idle `ExternalUnproven` artifact directory is
-cleanable; a configured allowed root does not admit `Uncertain`
-(`cleanup.rs:1122-1127`). That is what
-makes `allowed_output_roots` unable to upgrade an unproven class. Four more
-gates repeat the test: `cleanup.rs:1259` (per group in a unit),
-`cleanup.rs:2282` (the interactive listing's `provably_private`),
-`cleanup.rs:2556` (`unit_blocking_class`, which reduces a workspace unit to
-its worst member's class), and `cleanup.rs:3608` (the fresh proof's re-check
-at the spawn boundary).
+The order of checks in `AuthorizationContext::admits` (`cleanup.rs:1659`) is
+load-bearing. `cleanable_artifact_class` (`cleanup.rs:1698`) is tested first.
+`Uncertain` returns `Ok(false)` before any allowed root is consulted.
+`Shared` and `ExternalUnproven` then return `Ok(true)`: they are artifact
+directories, and an allow-list entry is not what admits them. Only
+`PrivateBounded` is checked against the cleanup roots and
+`allowed_output_roots` (`cleanup.rs:1667-1689`). The allow-list still cannot
+turn `ExternalUnproven` into `PrivateBounded`. The unit gate
+(`cleanup.rs:1864`) and the fresh proof (`cleanup.rs:4688`) repeat the same
+class rule. `provably_private` (`cleanup.rs:3213`) is a presentation hint,
+not the eligibility verdict.
 
 `OutputRootKind` (`domain.rs:141-144`) is the smaller, purely descriptive
 sibling: `Target` and `Build`. Since Cargo 1.91 these can be distinct

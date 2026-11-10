@@ -28,10 +28,10 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
             break
         }
         'cargo;cargo-cleanme' {
-            [CompletionResult]::new('--config', '--config', [CompletionResultType]::ParameterName, 'config')
+            [CompletionResult]::new('--config', '--config', [CompletionResultType]::ParameterName, 'Use this config file instead of the platform default')
             [CompletionResult]::new('--format', '--format', [CompletionResultType]::ParameterName, 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers')
             [CompletionResult]::new('--min-reclaimable-bytes', '--min-reclaimable-bytes', [CompletionResultType]::ParameterName, 'Require at least this many reclaimable bytes per workspace')
-            [CompletionResult]::new('--older-than', '--older-than', [CompletionResultType]::ParameterName, 'Require this many seconds of inactivity')
+            [CompletionResult]::new('--older-than', '--older-than', [CompletionResultType]::ParameterName, 'Also require this many seconds of inactivity. This does not replace the recency guard (`scan.recency_seconds`, default 300)')
             [CompletionResult]::new('--include', '--include', [CompletionResultType]::ParameterName, 'Include canonical workspace roots matching this glob (repeatable)')
             [CompletionResult]::new('--exclude', '--exclude', [CompletionResultType]::ParameterName, 'Exclude canonical workspace roots matching this glob (repeatable)')
             [CompletionResult]::new('--profile', '--profile', [CompletionResultType]::ParameterName, 'Ask Cargo to clean one named profile. Selector byte estimates are unknown')
@@ -50,13 +50,13 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
             [CompletionResult]::new('-V', '-V ', [CompletionResultType]::ParameterName, 'Print version')
             [CompletionResult]::new('--version', '--version', [CompletionResultType]::ParameterName, 'Print version')
             [CompletionResult]::new('scan', 'scan', [CompletionResultType]::ParameterValue, 'Reconcile the machine read-only: full with `--all`, explicit with ROOT, routine inventory with `--known`')
-            [CompletionResult]::new('config', 'config', [CompletionResultType]::ParameterValue, 'config')
+            [CompletionResult]::new('config', 'config', [CompletionResultType]::ParameterValue, 'Print, show, or edit the config file')
             [CompletionResult]::new('clean', 'clean', [CompletionResultType]::ParameterValue, 'Preview or execute cleanup of revalidated Cargo build artifacts')
             [CompletionResult]::new('update', 'update', [CompletionResultType]::ParameterValue, 'Update this cargo-cleanme to the latest stable published release')
             break
         }
         'cargo;cargo-cleanme;scan' {
-            [CompletionResult]::new('--config', '--config', [CompletionResultType]::ParameterName, 'config')
+            [CompletionResult]::new('--config', '--config', [CompletionResultType]::ParameterName, 'Use this config file instead of the platform default')
             [CompletionResult]::new('--format', '--format', [CompletionResultType]::ParameterName, 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers')
             [CompletionResult]::new('--known', '--known', [CompletionResultType]::ParameterName, 'Routine read-only inventory over the maintenance scope')
             [CompletionResult]::new('-a', '-a', [CompletionResultType]::ParameterName, 'Full machine reconciliation')
@@ -71,7 +71,7 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
             break
         }
         'cargo;cargo-cleanme;config' {
-            [CompletionResult]::new('--config', '--config', [CompletionResultType]::ParameterName, 'config')
+            [CompletionResult]::new('--config', '--config', [CompletionResultType]::ParameterName, 'Use this config file instead of the platform default')
             [CompletionResult]::new('--format', '--format', [CompletionResultType]::ParameterName, 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers')
             [CompletionResult]::new('--no-progress', '--no-progress', [CompletionResultType]::ParameterName, 'Disable transient progress UI (useful for benchmarks and debugging)')
             [CompletionResult]::new('--stats', '--stats', [CompletionResultType]::ParameterName, 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination')
@@ -80,13 +80,13 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
             [CompletionResult]::new('--interactive', '--interactive', [CompletionResultType]::ParameterName, 'Choose the workspaces to clean from an inline selection list (NOR/INS)')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
-            [CompletionResult]::new('path', 'path', [CompletionResultType]::ParameterValue, 'path')
-            [CompletionResult]::new('show', 'show', [CompletionResultType]::ParameterValue, 'show')
-            [CompletionResult]::new('edit', 'edit', [CompletionResultType]::ParameterValue, 'edit')
+            [CompletionResult]::new('path', 'path', [CompletionResultType]::ParameterValue, 'Print the path of the config file')
+            [CompletionResult]::new('show', 'show', [CompletionResultType]::ParameterValue, 'Print the effective config')
+            [CompletionResult]::new('edit', 'edit', [CompletionResultType]::ParameterValue, 'Open the config in an editor (`$VISUAL`, then `$EDITOR`)')
             break
         }
         'cargo;cargo-cleanme;config;path' {
-            [CompletionResult]::new('--config', '--config', [CompletionResultType]::ParameterName, 'config')
+            [CompletionResult]::new('--config', '--config', [CompletionResultType]::ParameterName, 'Use this config file instead of the platform default')
             [CompletionResult]::new('--format', '--format', [CompletionResultType]::ParameterName, 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers')
             [CompletionResult]::new('--no-progress', '--no-progress', [CompletionResultType]::ParameterName, 'Disable transient progress UI (useful for benchmarks and debugging)')
             [CompletionResult]::new('--stats', '--stats', [CompletionResultType]::ParameterName, 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination')
@@ -98,7 +98,7 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
             break
         }
         'cargo;cargo-cleanme;config;show' {
-            [CompletionResult]::new('--config', '--config', [CompletionResultType]::ParameterName, 'config')
+            [CompletionResult]::new('--config', '--config', [CompletionResultType]::ParameterName, 'Use this config file instead of the platform default')
             [CompletionResult]::new('--format', '--format', [CompletionResultType]::ParameterName, 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers')
             [CompletionResult]::new('--no-progress', '--no-progress', [CompletionResultType]::ParameterName, 'Disable transient progress UI (useful for benchmarks and debugging)')
             [CompletionResult]::new('--stats', '--stats', [CompletionResultType]::ParameterName, 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination')
@@ -110,7 +110,7 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
             break
         }
         'cargo;cargo-cleanme;config;edit' {
-            [CompletionResult]::new('--config', '--config', [CompletionResultType]::ParameterName, 'config')
+            [CompletionResult]::new('--config', '--config', [CompletionResultType]::ParameterName, 'Use this config file instead of the platform default')
             [CompletionResult]::new('--format', '--format', [CompletionResultType]::ParameterName, 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers')
             [CompletionResult]::new('--no-progress', '--no-progress', [CompletionResultType]::ParameterName, 'Disable transient progress UI (useful for benchmarks and debugging)')
             [CompletionResult]::new('--stats', '--stats', [CompletionResultType]::ParameterName, 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination')
@@ -123,12 +123,12 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
         }
         'cargo;cargo-cleanme;clean' {
             [CompletionResult]::new('--min-reclaimable-bytes', '--min-reclaimable-bytes', [CompletionResultType]::ParameterName, 'Require at least this many reclaimable bytes per workspace')
-            [CompletionResult]::new('--older-than', '--older-than', [CompletionResultType]::ParameterName, 'Require this many seconds of inactivity')
+            [CompletionResult]::new('--older-than', '--older-than', [CompletionResultType]::ParameterName, 'Also require this many seconds of inactivity. This does not replace the recency guard (`scan.recency_seconds`, default 300)')
             [CompletionResult]::new('--include', '--include', [CompletionResultType]::ParameterName, 'Include canonical workspace roots matching this glob (repeatable)')
             [CompletionResult]::new('--exclude', '--exclude', [CompletionResultType]::ParameterName, 'Exclude canonical workspace roots matching this glob (repeatable)')
             [CompletionResult]::new('--profile', '--profile', [CompletionResultType]::ParameterName, 'Ask Cargo to clean one named profile. Selector byte estimates are unknown')
             [CompletionResult]::new('--package', '--package', [CompletionResultType]::ParameterName, 'Clean one validated workspace package through qualified Cargo versions')
-            [CompletionResult]::new('--config', '--config', [CompletionResultType]::ParameterName, 'config')
+            [CompletionResult]::new('--config', '--config', [CompletionResultType]::ParameterName, 'Use this config file instead of the platform default')
             [CompletionResult]::new('--format', '--format', [CompletionResultType]::ParameterName, 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers')
             [CompletionResult]::new('--dry-run', '--dry-run', [CompletionResultType]::ParameterName, 'Application simulation: run the full decision/proof/report path but invoke no Cargo clean command. The default mode is Execute')
             [CompletionResult]::new('--dryrun', '--dryrun', [CompletionResultType]::ParameterName, 'Historical spelling of `--dry-run`; retained as a hidden alias')
@@ -146,7 +146,7 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
             break
         }
         'cargo;cargo-cleanme;update' {
-            [CompletionResult]::new('--config', '--config', [CompletionResultType]::ParameterName, 'config')
+            [CompletionResult]::new('--config', '--config', [CompletionResultType]::ParameterName, 'Use this config file instead of the platform default')
             [CompletionResult]::new('--format', '--format', [CompletionResultType]::ParameterName, 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers')
             [CompletionResult]::new('--dry-run', '--dry-run', [CompletionResultType]::ParameterName, 'Resolve the plan and report it without acquiring or replacing bytes')
             [CompletionResult]::new('--no-progress', '--no-progress', [CompletionResultType]::ParameterName, 'Disable transient progress UI (useful for benchmarks and debugging)')
@@ -165,7 +165,7 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
         }
         'cargo;help;cargo-cleanme' {
             [CompletionResult]::new('scan', 'scan', [CompletionResultType]::ParameterValue, 'Reconcile the machine read-only: full with `--all`, explicit with ROOT, routine inventory with `--known`')
-            [CompletionResult]::new('config', 'config', [CompletionResultType]::ParameterValue, 'config')
+            [CompletionResult]::new('config', 'config', [CompletionResultType]::ParameterValue, 'Print, show, or edit the config file')
             [CompletionResult]::new('clean', 'clean', [CompletionResultType]::ParameterValue, 'Preview or execute cleanup of revalidated Cargo build artifacts')
             [CompletionResult]::new('update', 'update', [CompletionResultType]::ParameterValue, 'Update this cargo-cleanme to the latest stable published release')
             break
@@ -174,9 +174,9 @@ Register-ArgumentCompleter -Native -CommandName 'cargo' -ScriptBlock {
             break
         }
         'cargo;help;cargo-cleanme;config' {
-            [CompletionResult]::new('path', 'path', [CompletionResultType]::ParameterValue, 'path')
-            [CompletionResult]::new('show', 'show', [CompletionResultType]::ParameterValue, 'show')
-            [CompletionResult]::new('edit', 'edit', [CompletionResultType]::ParameterValue, 'edit')
+            [CompletionResult]::new('path', 'path', [CompletionResultType]::ParameterValue, 'Print the path of the config file')
+            [CompletionResult]::new('show', 'show', [CompletionResultType]::ParameterValue, 'Print the effective config')
+            [CompletionResult]::new('edit', 'edit', [CompletionResultType]::ParameterValue, 'Open the config in an editor (`$VISUAL`, then `$EDITOR`)')
             break
         }
         'cargo;help;cargo-cleanme;config;path' {

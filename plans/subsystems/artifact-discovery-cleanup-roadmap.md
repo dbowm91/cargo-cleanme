@@ -1475,10 +1475,9 @@ denies the shipped surface and is finding **65**. No resolved intent changes;
 no published spelling is removed or narrowed; the rendered help and the
 generated artifacts must be byte-identical afterwards.
 
-Also recorded by this line: **C036 D36** (the root's `--config` flag is the
-only root option with no description, and `config path|show|edit` are the only
-subcommands with none — their three man pages have an empty `.SH DESCRIPTION`
-and a `.SH NAME` that is the bare word) and **C036 D37** (a second
+Also recorded by this line: **C036 D36** (the root's `--config` flag and
+`config path|show|edit` had no description; corrected 2026-11-10, help text
+now exists and the man pages render it) and **C036 D37** (a second
 hand-maintained count with D29's exact mechanism — `architecture/overview.md`
 §10 asserted a finding count that was stale by two, in a sentence whose own
 claim was that the count is re-derivable by counting the table).

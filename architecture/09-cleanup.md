@@ -348,33 +348,31 @@ enforced by construction, not validation. A mistyped glob such as `/tmp/*/out`
 `Ok(false)` with the message at `:1474-1479`, not a configuration error.
 Fail-closed but silent.
 
-**The critical property: authorization cannot promote an ownership class.
-Definitive.** `covering_is_authorized_roots` returns `Ok(false)` for any class
-other than `PrivateBounded` at `:1262-1264`, *before* inspecting a single path.
-`allowed_output_roots` is consulted only at `:1276-1282`, unreachable for
-`ExternalUnproven`, `Shared`, and `Uncertain`. The same rule is re-asserted at
-the unit gate (`:1460`, comment "Ownership class is authoritative; authorization
-never promotes") and again in the proof (`:3909-3919`, where a fresh group no
-longer `PrivateBounded` fails regardless of location).
+**The critical property: an allow-list cannot admit `Uncertain`, and it does
+not reclassify a class.** `AuthorizationContext::admits` (`cleanup.rs:1659`)
+rejects anything `cleanable_artifact_class` (`cleanup.rs:1698`) does not name.
+That set is `PrivateBounded`, `Shared`, and `ExternalUnproven`. `Uncertain`
+returns `Ok(false)` before any path is inspected. `Shared` and
+`ExternalUnproven` return `Ok(true)` without a location check: an idle
+artifact directory is cleanable, and an allow-list entry is not what admits
+it. Only `PrivateBounded` must sit inside a cleanup root or an allowed root
+(`cleanup.rs:1667-1689`). The allow-list still cannot turn `ExternalUnproven`
+into `PrivateBounded`.
 
-**There are five such ownership gates in production, not four:**
+The fresh proof repeats the class rule at the spawn: `Uncertain` fails
+(`cleanup.rs:4688`), and an active co-owner — or one whose sources cannot be
+statted — keeps a shared directory (`cleanup.rs:4708-4752`).
 
-| Line | Site | Form |
-| --- | --- | --- |
-| `:1194` | `covering_is_authorized_roots` | `ownership != PrivateBounded` ⇒ `Ok(false)` |
-| `:1433` | `unit_block_reason_roots` | `group.ownership != PrivateBounded` ⇒ `Err` |
-| `:2585-2586` | `CleanupCandidate::provably_private` | `self.ownership == PrivateBounded` (the only positive form; a presentation hint, not an eligibility verdict) |
-| `:2853` | `unit_blocking_class` | `group.ownership != PrivateBounded` ⇒ that class decides the skip |
-| `:3726` | `final_cleanup_proof_roots` | `g.ownership != PrivateBounded` ⇒ proof fails |
+`provably_private` (`cleanup.rs:3213`) is still true only for
+`PrivateBounded`. It is a presentation hint, not the eligibility verdict.
+`unit_blocking_class` (`cleanup.rs:3528`) reports the first non-private group
+so a cleaned shared unit is labeled `shared`.
 
-This matches three independent sources: `config.toml:35-36` ("authorization
-never manufactures ownership proof and cannot promote ExternalUnproven to
-private (ADR 001, C002)"); the crate-wide invariant in `overview.md`; ADR 001
-`:132-133`. Tests close it from both sides:
-`external_unproven_outside_root_never_authorized_by_allowed_root` (`:7381`)
-asserts `!is_authorized` with and without an allowed root, and
-`external_outside_root_allowed_via_configured_root` (`:8611`) runs the *real*
-Cargo path and asserts `Skipped` in both cases.
+`config.toml` states the same boundary: an allow-list entry does not admit
+`uncertain` output and does not reclassify `external-unproven`. Overview §8
+is the crate-wide statement. `external_outside_root_allowed_via_configured_root`
+runs the real Cargo path and skips an external directory that has no
+`CACHEDIR.TAG`; the marker is what refuses it, not the ownership class.
 
 **One naming trap.** The test at `:2060` is named
 `external_outside_root_allowed_via_configured_root`, which reads as "an allowed
@@ -394,20 +392,16 @@ already guarded by `ownership != PrivateBounded` (`:1461`, `:3909`), and its tex
 is a *location* message that cannot apply to a group that passed the location
 check. Harmless, but a trap for a future caller.
 
-**`unit_block_reason`** (`:1421-1431`) is a single-root wrapper; `unit_block_reason_roots`
-(`:1433-1442`) runs three ordered checks over one
-`CleanupUnit` (`:1445-1497`): (a) `unit.unmapped` non-empty → `Err` naming root
-kind and logical path (`:1449-1458`) — any output root with unprovable physical
-identity blocks the whole unit because its footprint cannot be bounded; (b) for
-every group the invocation can affect, ownership must be `PrivateBounded`
-(`:1459-1469`) then `covering_is_authorized_roots` must return `Ok(true)` for that
-group alone (`:1470-1484`); (c) every group must have `measured.is_some()`
-(`:1485-1494`), otherwise the fail-fast verdict and its `GroupSkipReason::detail()`
-(`workspace.rs:1750`) become the reason. The doc comment `:906-916` states the
-C003 invariant — every affected group qualifies independently, and "No Cargo
-process is spawned for any subset of a unit" — which is what stops a
-`PrivateBounded` target smuggling an `ExternalUnproven` sibling build group into
-one invocation.
+**`unit_block_reason`** (`cleanup.rs:1840`) is a single-root wrapper.
+`unit_block_reason_roots_with` (`cleanup.rs:1864`) runs three ordered checks
+over one `CleanupUnit`: (a) `unit.unmapped` non-empty blocks the unit, because
+an output root with no physical identity has no bounded footprint
+(`cleanup.rs:1868-1876`); (b) every group must be a cleanable artifact class,
+and a private group must pass `admits` (`cleanup.rs:1878-1904`) — an idle
+shared or external sibling stays in the invocation, an `Uncertain` sibling
+does not; (c) every group must have `measured.is_some()`
+(`cleanup.rs:1906-1914`). One `cargo clean` touches every group, so the unit
+is skipped whole rather than cleaned in part.
 
 **Authorization-infrastructure errors are scope blocks, not per-unit skips.**
 `is_authorization_infrastructure_error` (`:1350-1362`) recognises only the two

@@ -29,7 +29,7 @@ INVOCATION
 .SH OPTIONS
 .TP
 \fB\-\-config\fR \fI<CONFIG>\fR
-
+Use this config file instead of the platform default
 .TP
 \fB\-\-no\-progress\fR
 Disable transient progress UI (useful for benchmarks and debugging)
@@ -78,7 +78,7 @@ The canonical spelling of the Full cleanup operation (ADR 008 §4b). `cargo clea
 Require at least this many reclaimable bytes per workspace
 .TP
 \fB\-\-older\-than\fR \fI<OLDER_THAN>\fR
-Require this many seconds of inactivity
+Also require this many seconds of inactivity. This does not replace the recency guard (`scan.recency_seconds`, default 300)
 .TP
 \fB\-\-include\fR \fI<INCLUDE>\fR
 Include canonical workspace roots matching this glob (repeatable)
@@ -111,6 +111,7 @@ cargo\-cleanme\-scan(1)
 Reconcile the machine read\-only: full with `\-\-all`, explicit with ROOT, routine inventory with `\-\-known`
 .TP
 cargo\-cleanme\-config(1)
+Print, show, or edit the config file
 .TP
 cargo\-cleanme\-update(1)
 Update this cargo\-cleanme to the latest stable published release

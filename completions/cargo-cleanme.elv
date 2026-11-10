@@ -24,10 +24,10 @@ set edit:completion:arg-completer[cargo] = {|@words|
             cand help 'Print this message or the help of the given subcommand(s)'
         }
         &'cargo;cargo-cleanme'= {
-            cand --config 'config'
+            cand --config 'Use this config file instead of the platform default'
             cand --format 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers'
             cand --min-reclaimable-bytes 'Require at least this many reclaimable bytes per workspace'
-            cand --older-than 'Require this many seconds of inactivity'
+            cand --older-than 'Also require this many seconds of inactivity. This does not replace the recency guard (`scan.recency_seconds`, default 300)'
             cand --include 'Include canonical workspace roots matching this glob (repeatable)'
             cand --exclude 'Exclude canonical workspace roots matching this glob (repeatable)'
             cand --profile 'Ask Cargo to clean one named profile. Selector byte estimates are unknown'
@@ -46,12 +46,12 @@ set edit:completion:arg-completer[cargo] = {|@words|
             cand -V 'Print version'
             cand --version 'Print version'
             cand scan 'Reconcile the machine read-only: full with `--all`, explicit with ROOT, routine inventory with `--known`'
-            cand config 'config'
+            cand config 'Print, show, or edit the config file'
             cand clean 'Preview or execute cleanup of revalidated Cargo build artifacts'
             cand update 'Update this cargo-cleanme to the latest stable published release'
         }
         &'cargo;cargo-cleanme;scan'= {
-            cand --config 'config'
+            cand --config 'Use this config file instead of the platform default'
             cand --format 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers'
             cand --known 'Routine read-only inventory over the maintenance scope'
             cand -a 'Full machine reconciliation'
@@ -65,7 +65,7 @@ set edit:completion:arg-completer[cargo] = {|@words|
             cand --help 'Print help (see more with ''--help'')'
         }
         &'cargo;cargo-cleanme;config'= {
-            cand --config 'config'
+            cand --config 'Use this config file instead of the platform default'
             cand --format 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers'
             cand --no-progress 'Disable transient progress UI (useful for benchmarks and debugging)'
             cand --stats 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination'
@@ -74,12 +74,12 @@ set edit:completion:arg-completer[cargo] = {|@words|
             cand --interactive 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
             cand -h 'Print help (see more with ''--help'')'
             cand --help 'Print help (see more with ''--help'')'
-            cand path 'path'
-            cand show 'show'
-            cand edit 'edit'
+            cand path 'Print the path of the config file'
+            cand show 'Print the effective config'
+            cand edit 'Open the config in an editor (`$VISUAL`, then `$EDITOR`)'
         }
         &'cargo;cargo-cleanme;config;path'= {
-            cand --config 'config'
+            cand --config 'Use this config file instead of the platform default'
             cand --format 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers'
             cand --no-progress 'Disable transient progress UI (useful for benchmarks and debugging)'
             cand --stats 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination'
@@ -90,7 +90,7 @@ set edit:completion:arg-completer[cargo] = {|@words|
             cand --help 'Print help (see more with ''--help'')'
         }
         &'cargo;cargo-cleanme;config;show'= {
-            cand --config 'config'
+            cand --config 'Use this config file instead of the platform default'
             cand --format 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers'
             cand --no-progress 'Disable transient progress UI (useful for benchmarks and debugging)'
             cand --stats 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination'
@@ -101,7 +101,7 @@ set edit:completion:arg-completer[cargo] = {|@words|
             cand --help 'Print help (see more with ''--help'')'
         }
         &'cargo;cargo-cleanme;config;edit'= {
-            cand --config 'config'
+            cand --config 'Use this config file instead of the platform default'
             cand --format 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers'
             cand --no-progress 'Disable transient progress UI (useful for benchmarks and debugging)'
             cand --stats 'Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. `--no-progress --stats` is the canonical benchmark/debug combination'
@@ -113,12 +113,12 @@ set edit:completion:arg-completer[cargo] = {|@words|
         }
         &'cargo;cargo-cleanme;clean'= {
             cand --min-reclaimable-bytes 'Require at least this many reclaimable bytes per workspace'
-            cand --older-than 'Require this many seconds of inactivity'
+            cand --older-than 'Also require this many seconds of inactivity. This does not replace the recency guard (`scan.recency_seconds`, default 300)'
             cand --include 'Include canonical workspace roots matching this glob (repeatable)'
             cand --exclude 'Exclude canonical workspace roots matching this glob (repeatable)'
             cand --profile 'Ask Cargo to clean one named profile. Selector byte estimates are unknown'
             cand --package 'Clean one validated workspace package through qualified Cargo versions'
-            cand --config 'config'
+            cand --config 'Use this config file instead of the platform default'
             cand --format 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers'
             cand --dry-run 'Application simulation: run the full decision/proof/report path but invoke no Cargo clean command. The default mode is Execute'
             cand --dryrun 'Historical spelling of `--dry-run`; retained as a hidden alias'
@@ -135,7 +135,7 @@ set edit:completion:arg-completer[cargo] = {|@words|
             cand --help 'Print help (see more with ''--help'')'
         }
         &'cargo;cargo-cleanme;update'= {
-            cand --config 'config'
+            cand --config 'Use this config file instead of the platform default'
             cand --format 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers'
             cand --dry-run 'Resolve the plan and report it without acquiring or replacing bytes'
             cand --no-progress 'Disable transient progress UI (useful for benchmarks and debugging)'
@@ -152,16 +152,16 @@ set edit:completion:arg-completer[cargo] = {|@words|
         }
         &'cargo;help;cargo-cleanme'= {
             cand scan 'Reconcile the machine read-only: full with `--all`, explicit with ROOT, routine inventory with `--known`'
-            cand config 'config'
+            cand config 'Print, show, or edit the config file'
             cand clean 'Preview or execute cleanup of revalidated Cargo build artifacts'
             cand update 'Update this cargo-cleanme to the latest stable published release'
         }
         &'cargo;help;cargo-cleanme;scan'= {
         }
         &'cargo;help;cargo-cleanme;config'= {
-            cand path 'path'
-            cand show 'show'
-            cand edit 'edit'
+            cand path 'Print the path of the config file'
+            cand show 'Print the effective config'
+            cand edit 'Open the config in an editor (`$VISUAL`, then `$EDITOR`)'
         }
         &'cargo;help;cargo-cleanme;config;path'= {
         }

@@ -1196,9 +1196,8 @@ struct Columns {
 
 /// The ownership annotation for one candidate.
 ///
-/// A non-private row must not be mistaken for a candidate: a hidden row is
-/// indistinguishable from a row that does not exist, and the operator's next
-/// question would again be "which one?".
+/// `uncertain` is inventory-only and says so. `shared` and `external-unproven`
+/// are cleanable when idle, so they keep the class label.
 fn ownership_text(candidate: &CleanupCandidate, full: bool) -> String {
     if full {
         match candidate.ownership {

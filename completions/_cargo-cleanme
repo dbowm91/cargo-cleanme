@@ -28,12 +28,12 @@ _cargo() {
         case $line[1] in
             (cargo-cleanme)
 _arguments "${_arguments_options[@]}" : \
-'--config=[]:CONFIG:_files' \
+'--config=[Use this config file instead of the platform default]:CONFIG:_files' \
 '--format=[Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers]:FORMAT:((human\:""
 json\:""
 log\:"One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract\: complete consumers use \`json\`"))' \
 '--min-reclaimable-bytes=[Require at least this many reclaimable bytes per workspace]:MIN_RECLAIMABLE_BYTES:_default' \
-'--older-than=[Require this many seconds of inactivity]:OLDER_THAN:_default' \
+'--older-than=[Also require this many seconds of inactivity. This does not replace the recency guard (\`scan.recency_seconds\`, default 300)]:OLDER_THAN:_default' \
 '*--include=[Include canonical workspace roots matching this glob (repeatable)]:INCLUDE:_default' \
 '*--exclude=[Exclude canonical workspace roots matching this glob (repeatable)]:EXCLUDE:_default' \
 '(--package)--profile=[Ask Cargo to clean one named profile. Selector byte estimates are unknown]:PROFILE:_default' \
@@ -64,7 +64,7 @@ log\:"One bounded ASCII summary line per report, for unattended schedulers that 
         case $line[2] in
             (scan)
 _arguments "${_arguments_options[@]}" : \
-'--config=[]:CONFIG:_files' \
+'--config=[Use this config file instead of the platform default]:CONFIG:_files' \
 '--format=[Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers]:FORMAT:((human\:""
 json\:""
 log\:"One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract\: complete consumers use \`json\`"))' \
@@ -83,7 +83,7 @@ log\:"One bounded ASCII summary line per report, for unattended schedulers that 
 ;;
 (config)
 _arguments "${_arguments_options[@]}" : \
-'--config=[]:CONFIG:_files' \
+'--config=[Use this config file instead of the platform default]:CONFIG:_files' \
 '--format=[Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers]:FORMAT:((human\:""
 json\:""
 log\:"One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract\: complete consumers use \`json\`"))' \
@@ -106,7 +106,7 @@ log\:"One bounded ASCII summary line per report, for unattended schedulers that 
         case $line[1] in
             (path)
 _arguments "${_arguments_options[@]}" : \
-'--config=[]:CONFIG:_files' \
+'--config=[Use this config file instead of the platform default]:CONFIG:_files' \
 '--format=[Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers]:FORMAT:((human\:""
 json\:""
 log\:"One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract\: complete consumers use \`json\`"))' \
@@ -121,7 +121,7 @@ log\:"One bounded ASCII summary line per report, for unattended schedulers that 
 ;;
 (show)
 _arguments "${_arguments_options[@]}" : \
-'--config=[]:CONFIG:_files' \
+'--config=[Use this config file instead of the platform default]:CONFIG:_files' \
 '--format=[Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers]:FORMAT:((human\:""
 json\:""
 log\:"One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract\: complete consumers use \`json\`"))' \
@@ -136,7 +136,7 @@ log\:"One bounded ASCII summary line per report, for unattended schedulers that 
 ;;
 (edit)
 _arguments "${_arguments_options[@]}" : \
-'--config=[]:CONFIG:_files' \
+'--config=[Use this config file instead of the platform default]:CONFIG:_files' \
 '--format=[Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers]:FORMAT:((human\:""
 json\:""
 log\:"One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract\: complete consumers use \`json\`"))' \
@@ -156,12 +156,12 @@ esac
 (clean)
 _arguments "${_arguments_options[@]}" : \
 '--min-reclaimable-bytes=[Require at least this many reclaimable bytes per workspace]:MIN_RECLAIMABLE_BYTES:_default' \
-'--older-than=[Require this many seconds of inactivity]:OLDER_THAN:_default' \
+'--older-than=[Also require this many seconds of inactivity. This does not replace the recency guard (\`scan.recency_seconds\`, default 300)]:OLDER_THAN:_default' \
 '*--include=[Include canonical workspace roots matching this glob (repeatable)]:INCLUDE:_default' \
 '*--exclude=[Exclude canonical workspace roots matching this glob (repeatable)]:EXCLUDE:_default' \
 '(--package)--profile=[Ask Cargo to clean one named profile. Selector byte estimates are unknown]:PROFILE:_default' \
 '(--profile)--package=[Clean one validated workspace package through qualified Cargo versions]:PACKAGE:_default' \
-'--config=[]:CONFIG:_files' \
+'--config=[Use this config file instead of the platform default]:CONFIG:_files' \
 '--format=[Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers]:FORMAT:((human\:""
 json\:""
 log\:"One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract\: complete consumers use \`json\`"))' \
@@ -183,7 +183,7 @@ log\:"One bounded ASCII summary line per report, for unattended schedulers that 
 ;;
 (update)
 _arguments "${_arguments_options[@]}" : \
-'--config=[]:CONFIG:_files' \
+'--config=[Use this config file instead of the platform default]:CONFIG:_files' \
 '--format=[Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers]:FORMAT:((human\:""
 json\:""
 log\:"One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract\: complete consumers use \`json\`"))' \
@@ -294,7 +294,7 @@ _cargo_commands() {
 _cargo__subcmd__cargo-cleanme_commands() {
     local commands; commands=(
 'scan:Reconcile the machine read-only\: full with \`--all\`, explicit with ROOT, routine inventory with \`--known\`' \
-'config:' \
+'config:Print, show, or edit the config file' \
 'clean:Preview or execute cleanup of revalidated Cargo build artifacts' \
 'update:Update this cargo-cleanme to the latest stable published release' \
     )
@@ -308,9 +308,9 @@ _cargo__subcmd__cargo-cleanme__subcmd__clean_commands() {
 (( $+functions[_cargo__subcmd__cargo-cleanme__subcmd__config_commands] )) ||
 _cargo__subcmd__cargo-cleanme__subcmd__config_commands() {
     local commands; commands=(
-'path:' \
-'show:' \
-'edit:' \
+'path:Print the path of the config file' \
+'show:Print the effective config' \
+'edit:Open the config in an editor (\`\$VISUAL\`, then \`\$EDITOR\`)' \
     )
     _describe -t commands 'cargo cargo-cleanme config commands' commands "$@"
 }
@@ -351,7 +351,7 @@ _cargo__subcmd__help_commands() {
 _cargo__subcmd__help__subcmd__cargo-cleanme_commands() {
     local commands; commands=(
 'scan:Reconcile the machine read-only\: full with \`--all\`, explicit with ROOT, routine inventory with \`--known\`' \
-'config:' \
+'config:Print, show, or edit the config file' \
 'clean:Preview or execute cleanup of revalidated Cargo build artifacts' \
 'update:Update this cargo-cleanme to the latest stable published release' \
     )
@@ -365,9 +365,9 @@ _cargo__subcmd__help__subcmd__cargo-cleanme__subcmd__clean_commands() {
 (( $+functions[_cargo__subcmd__help__subcmd__cargo-cleanme__subcmd__config_commands] )) ||
 _cargo__subcmd__help__subcmd__cargo-cleanme__subcmd__config_commands() {
     local commands; commands=(
-'path:' \
-'show:' \
-'edit:' \
+'path:Print the path of the config file' \
+'show:Print the effective config' \
+'edit:Open the config in an editor (\`\$VISUAL\`, then \`\$EDITOR\`)' \
     )
     _describe -t commands 'cargo help cargo-cleanme config commands' commands "$@"
 }

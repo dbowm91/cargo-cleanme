@@ -734,10 +734,11 @@ things a reviewer should check first in any change.
 8. **Learned state is advisory, never authority.** A persistence failure never
    changes an exit code.
 9. **The discovery universe may only ever grow.** A wider scope can only
-   reclassify `shared` bytes to `private` — the class that authorizes
-   deletion — never the reverse. ADR 009's working-directory scope is
-   therefore *added* to the Routine roots and never substituted for them
-   (`src/main.rs:1189-1198`). Anything that narrows the universe re-opens
+   reclassify `shared` bytes to `private`, never the reverse. That promotion
+   hides co-owners, so a directory an active project still uses would be
+   cleaned as if it belonged to one workspace. ADR 009's working-directory
+   scope is therefore *added* to the Routine roots and never substituted for
+   them (`src/main.rs:1189-1198`). Anything that narrows the universe re-opens
    ADR 006's shared-output hazard.
 10. **An unproven root is excluded from the *candidate* set, never from the
     *discovery* set.** M018's Full gate decides coverage per learned root. A
