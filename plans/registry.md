@@ -23,10 +23,12 @@ roadmap. The smoke counts and release digests it used to repeat live in
 
 ## Published baseline
 
-`Cargo.toml` and `CHANGELOG.md` say **0.2.13** is the published version.
-crates.io carries v0.1.0 through v0.1.6 and v0.2.0 through v0.2.13.
+`Cargo.toml` and `CHANGELOG.md` say **0.2.14** is the published version.
+crates.io carries v0.1.0 through v0.1.6 and v0.2.0 through v0.2.14.
 **v0.2.0 is yanked.** v0.2.12 is on crates.io and has no GitHub release, so
-self-update into it fails closed; 0.2.13 is its replacement. This file does
+self-update into it fails closed; 0.2.13 is its replacement. 0.2.14 carries
+C047, C048, M021, and M022; its receipt is
+`plans/closure/distribution-release-update/r033-status.md`. This file does
 not re-query crates.io. The next release that changes the count must change
 this paragraph in the same pass; nothing gates the sentence.
 
@@ -37,10 +39,10 @@ release carries it.
 
 | Item | Status | Plan | Why it is still here |
 |---|---|---|---|
-| C048 | closing | `plans/implementation/artifact-discovery-cleanup/c048-idle-artifact-cleanup.md` | Idle `Shared` and `ExternalUnproven` artifact directories are cleanable. `Uncertain` paths are not. One active owner protects the directory. Implemented; not published. No release is authorized. |
-| C047 | closing | `plans/implementation/artifact-discovery-cleanup/c047-full-cleanup-per-learned-root-block.md` | On `--full`, a blocking unknown is attributed to the proven learned roots that contain it. Other proven roots still run `cargo clean`. Implemented; not published. |
-| M022 | closing | `plans/implementation/artifact-discovery-cleanup/m022-bounded-output-claim-cleanup.md` | A metadata failure whose output directories can be named holds only units that intersect that claim. An unnamed claim still blocks the boundary. Implemented; not published. |
-| M021 | closing | `plans/implementation/artifact-discovery-cleanup/m021-scan-resolution-and-measurement-cost.md` | Fewer locates, and Unix inventory sizing trusts walker metadata. The proof path is unchanged. `RESOLUTION_CONCURRENCY_CAP` stays 4. Implemented; not published. |
+| C048 | closing | `plans/implementation/artifact-discovery-cleanup/c048-idle-artifact-cleanup.md` | Idle `Shared` and `ExternalUnproven` artifact directories are cleanable. `Uncertain` paths are not. One active owner protects the directory. Published in v0.2.14; the closure record still needs the post-release evidence. |
+| C047 | closing | `plans/implementation/artifact-discovery-cleanup/c047-full-cleanup-per-learned-root-block.md` | On `--full`, a blocking unknown is attributed to the proven learned roots that contain it. Other proven roots still run `cargo clean`. Published in v0.2.14; the closure record still needs the post-release evidence. |
+| M022 | closing | `plans/implementation/artifact-discovery-cleanup/m022-bounded-output-claim-cleanup.md` | A metadata failure whose output directories can be named holds only units that intersect that claim. An unnamed claim still blocks the boundary. Published in v0.2.14; the closure record still needs the post-release evidence. |
+| M021 | closing | `plans/implementation/artifact-discovery-cleanup/m021-scan-resolution-and-measurement-cost.md` | Fewer locates, and Unix inventory sizing trusts walker metadata. The proof path is unchanged. `RESOLUTION_CONCURRENCY_CAP` stays 4. Published in v0.2.14; the closure record still needs the post-release evidence. |
 | M020 | closing | `plans/implementation/artifact-discovery-cleanup/m020-quiet-human-output-surface.md` | The default human surface is one progress line, one row per cleaned directory, and one tally. `--verbose` restores the detail. Implemented; not published. |
 | C033 | active | `plans/implementation/artifact-discovery-cleanup/c033-learned-root-reconciliation-and-unavailable-noise-corrective.md` | Omission summaries are grouped. Durable retirement of vanished learned roots is gated on proposed ADR 005, which has no implementation authority. |
 | C034 | active | `plans/implementation/artifact-discovery-cleanup/c034-default-routine-cleanup-live-happy-path-and-ownership-corrective.md` | A Unix real-Cargo happy path is proven. The remaining qualification named in the plan is outstanding. The plan's `--partitioned` sentence is historical; ADR 007 superseded that mechanism. |
@@ -57,8 +59,11 @@ mechanism: do not merge that branch. No Phase 14 milestone exists. Shared
 cache collection, and stronger provenance than the shipped attestation, each
 need their own plan. An idle roadmap is not permission to start one.
 
-The distribution line has no open milestone. v0.2.13 is the published
-replacement for the unreleasable v0.2.12.
+The distribution line has no open milestone. v0.2.13 replaced the
+unreleasable v0.2.12, and v0.2.14 carries C047, C048, M021, and M022. Its
+GitHub release is immutable with a valid attestation, crates.io sha256 is
+`ee472f81…`, automatic smoke `42885742223` is green on five targets, and the
+receipt is `plans/closure/distribution-release-update/r033-status.md`.
 
 ## Current cleanup rule
 

@@ -10,12 +10,11 @@ Cargo**, never by deleting directories. One binary over one library of 16
 modules, 18 source files, 46,269 lines in `src/`. No async runtime of its own.
 `cargo metadata` is the only binary dependency that matters for safety.
 
-The working tree is **0.2.14, the release candidate** (bump committed, tag and
-publication pending); `CHANGELOG.md` has no `[Unreleased]` section. Twenty-one
-releases are published on crates.io (v0.1.0 through v0.1.6, then 0.2.0, 0.2.1,
-0.2.2, 0.2.3, 0.2.4, 0.2.5, 0.2.6, 0.2.7, 0.2.8, 0.2.9, 0.2.10, 0.2.11, 0.2.12,
-0.2.13); this release makes twenty-two. **v0.2.0 is yanked; the other twenty
-are not.** **v0.2.12 has no GitHub release** — its draft was published
+The working tree is **0.2.14, the published version**; `CHANGELOG.md` has no
+`[Unreleased]` section. Twenty-two releases are published on crates.io (v0.1.0
+through v0.1.6, then 0.2.0, 0.2.1, 0.2.2, 0.2.3, 0.2.4, 0.2.5, 0.2.6, 0.2.7,
+0.2.8, 0.2.9, 0.2.10, 0.2.11, 0.2.12, 0.2.13, 0.2.14). **v0.2.0 is yanked; the
+other twenty-one are not.** **v0.2.12 has no GitHub release** — its draft was published
 prematurely and reverted, burning the tag under the immutable-release policy,
 so self-update into it fails closed; 0.2.13 is its replacement. Bumping
 `Cargo.toml` is not a publication — see `docs/RELEASING.md` and
