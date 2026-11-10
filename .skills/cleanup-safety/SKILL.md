@@ -14,9 +14,9 @@ tags:
 `cleanup.rs` is the only place in the repository that destroys data. Everything
 here is a consequence of one idea:
 
-> **Nothing is ever deleted on the strength of a timestamp. Every candidate must
-> first prove exclusive ownership of its physical bytes, and that proof must
-> still hold at the moment of deletion.**
+> **A target directory is rebuildable. It is cleaned when every project that
+> uses it is idle, and the path is an artifact directory rather than a source
+> tree. That check must still hold at the moment of deletion.**
 
 The architecture reference is
 [`architecture/09-cleanup.md`](../../architecture/09-cleanup.md) and ADR 001.
@@ -32,13 +32,13 @@ This skill is about *how to change it without weakening it*.
 
 ## The invariants, and the one that is easiest to break
 
-1. **Ownership proof, not timestamps.** `OutputOwnershipClass` in
-   `src/domain.rs:255` is the vocabulary. `Shared`, `Uncertain`, and
-   `ExternalUnproven` are **inventory-only, forever**.
-2. **Authorization never manufactures proof.** `allowed_output_roots` lets a
-   user authorize a location; it cannot upgrade an ownership class.
-   `covering_is_authorized_roots` returns `Ok(false)` for any non-`PrivateBounded`
-   class *before* it inspects a path. Do not "helpfully" reorder those checks.
+1. **Idle artifact directories are cleanable.** `PrivateBounded`, `Shared`,
+   and `ExternalUnproven` are artifact classes. `Uncertain` — a source tree,
+   a symlink, or an unidentified path — is never cleaned. One active owner
+   protects a shared directory. Re-check activity at the spawn.
+2. **An allow-list entry never admits `Uncertain`.** `allowed_output_roots`
+   authorizes a private path outside the cleanup root. It does not upgrade
+   `Uncertain`. Do not admit `Uncertain` by reordering that check.
 3. **Re-validate at the last moment.** Proof is repeated immediately before each
    spawn, because a workspace can change between scan and delete.
 4. **Fail closed on uncertainty.** Every uncertainty becomes a diagnostic, and
@@ -60,8 +60,8 @@ This skill is about *how to change it without weakening it*.
    (`src/policy.rs:551-620`): a learned root whose subtree could not be fully
    read is disclosed and its workspaces are dropped from the candidate set —
    but they are still discovered, resolved, sized and classified, so a shared
-   output between a proven root and an unproven one stays `Shared` and stays
-   inventory-only. Dropping *candidates* cannot reclassify anything; dropping
+   output between a proven root and an unproven one stays `Shared`. An idle
+   shared artifact directory is still cleanable. Dropping *candidates* cannot reclassify anything; dropping
    *participants* can, which is invariant 6's hazard in a new costume.
 
 ## Invariant 2 is the trap
@@ -223,8 +223,9 @@ consumer report coverage honestly.
 
 - `--dry-run` produces the same unit set, the same skips, and the same typed
   reason codes as default `Execute`, with zero spawns.
-- Any new `Shared`/`Uncertain`/`ExternalUnproven` case is inventory-only in
-  **both** the scan report and the cleanup decision.
+- `Uncertain` stays uncleaned in both the scan report and the cleanup
+  decision. Idle `Shared` and `ExternalUnproven` artifact directories are
+  cleaned. An active co-owner keeps the directory.
 - `cargo cleanme … --format json` round-trips: the `reason_code` for each
   unit explains its skip, and `skipped_ownership_unproven` is distinguishable
   from `skipped_changed_before_cleanup` (they warrant different operator
@@ -232,10 +233,11 @@ consumer report coverage honestly.
 - Nested and equal `target`/`build` roots still collapse to one group and one
   deduplicated byte union, so one invocation produces one result and one
   measurement.
-- **An out-of-boundary unresolved manifest still does not block**, and an
-  in-boundary unknown owner still does. If your change touched
-  `split_unresolved_for_boundary` or `boundary_admits`, say which of the three
-  ADR 007 cases you changed and why.
+- **An out-of-boundary unresolved manifest still does not block.** An
+  in-boundary unknown protects artifact directories only when its sources
+  are recent or cannot be statted. A stale one does not. If your change
+  touched `split_unresolved_for_boundary` or `boundary_admits`, say which
+  case you changed and why.
 - A Full cleanup that could not prove a learned root reports that root with
   `skipped_incomplete_coverage` and exits 1 — never 0. A Full cleanup that
   proved *no* root blocks; it never exits 0 with zero rows.

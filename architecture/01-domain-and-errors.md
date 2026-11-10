@@ -226,8 +226,9 @@ run.
 The *order* of checks in `covering_is_authorized_roots` (`cleanup.rs:1113`) is
 load-bearing: ownership class is tested **first**, before allowed roots are
 validated as absolute and non-symlink. Its comment states the rule — ownership
-class is authoritative, and `ExternalUnproven` is inventory-only even inside a
-clean ROOT or a configured allowed root (`cleanup.rs:1122-1127`). That is what
+class is authoritative. An idle `ExternalUnproven` artifact directory is
+cleanable; a configured allowed root does not admit `Uncertain`
+(`cleanup.rs:1122-1127`). That is what
 makes `allowed_output_roots` unable to upgrade an unproven class. Four more
 gates repeat the test: `cleanup.rs:1259` (per group in a unit),
 `cleanup.rs:2282` (the interactive listing's `provably_private`),

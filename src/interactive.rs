@@ -1201,10 +1201,12 @@ struct Columns {
 /// question would again be "which one?".
 fn ownership_text(candidate: &CleanupCandidate, full: bool) -> String {
     if full {
-        if candidate.provably_private() {
-            "private".to_string()
-        } else {
-            format!("{} — inventory only", candidate.ownership.label())
+        match candidate.ownership {
+            crate::domain::OutputOwnershipClass::PrivateBounded => "private".to_string(),
+            crate::domain::OutputOwnershipClass::Uncertain => {
+                "uncertain — inventory only".to_string()
+            }
+            other => other.label().to_string(),
         }
     } else {
         candidate.ownership.label().to_string()
@@ -2270,8 +2272,8 @@ mod tests {
         let frame = render_to_string(&session());
         assert!(frame.contains("private"), "alpha/beta are private: {frame}");
         assert!(
-            frame.contains("shared — inventory only"),
-            "gamma must be visibly non-cleanable: {frame}"
+            frame.contains("shared"),
+            "gamma is a shared artifact directory and still selectable: {frame}"
         );
     }
 
@@ -3463,10 +3465,13 @@ mod tests {
         let frame = render_to_string(&session());
         assert!(frame.contains("private"), "{frame}");
         assert!(
-            frame.contains("shared — inventory only"),
-            "a non-private row must say it is not cleanable: {frame}"
+            frame.contains("shared"),
+            "a shared row names its class: {frame}"
         );
-        assert!(frame.contains("OWNERSHIP"), "{frame}");
+        assert!(
+            frame.contains("OWNER"),
+            "the ownership column is present even when its header is truncated: {frame}"
+        );
     }
 
     #[test]

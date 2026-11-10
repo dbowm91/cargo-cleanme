@@ -340,9 +340,9 @@ the phrase *"N inactive Cargo output groups"* in the summary line, backed by
 `tests/end_to_end.rs:197-198` (a freshly built project is absent).
 
 **What the user reads to decide whether to run `clean`:** the `[ownership]`
-label. Per `cleanup.rs:1164-1166` and `cleanup.rs:1259-1267`, only `PrivateBounded`
-is ever eligible; `ExternalUnproven`, `Shared`, and `Uncertain` are inventory-only
-under any authorization-root configuration. A `[private]` row is a candidate; any
+label. `PrivateBounded`, idle `Shared`, and idle `ExternalUnproven` are
+artifact directories and are eligible; `Uncertain` is never cleaned.
+A `[private]` row is a candidate; any
 other label is informational. This invariant is *not* restated in the report's
 prose.
 

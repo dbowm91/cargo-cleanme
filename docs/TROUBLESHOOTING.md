@@ -499,8 +499,8 @@ illustrative fragment:
 ```
 
 The narrowing happens **after** ownership classification, so a shared output
-between a proven root and an unproven one stays `shared` and stays
-inventory-only. The filter can only remove candidates — never add one or
+between a proven root and an unproven one stays `shared`. An idle shared
+artifact directory is still cleanable. The filter can only remove candidates — never add one or
 reclassify one.
 
 It is also the one filter that may move the **proof boundary**, because it

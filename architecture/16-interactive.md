@@ -130,7 +130,7 @@ could not be proven is not offered — and the non-interactive path gets the sam
 narrowing (`src/main.rs:680-689`). The exclusion is applied to the *declared
 selection*, after ownership classification, so it can only ever remove
 candidates: a shared output between a proven root and an unproven one stays
-`Shared` and stays inventory-only.
+`Shared`. An idle shared artifact directory is still cleanable.
 
 Two refusals happen before any Cargo process is spawned, in this order:
 
@@ -351,7 +351,8 @@ and the committed selection still carries the canonical root, not the name.
 ### Ownership as an annotation
 
 Each row annotates its unit's ownership class (`src/interactive.rs:897-909`). A
-non-private row reads `shared — inventory only` rather than being hidden: a
+non-private row names its class (`shared`, `external-unproven`, or
+`uncertain — inventory only`) rather than being hidden: a
 hidden row is indistinguishable from a row that does not exist, and the
 operator's next question would again be "which one?".
 

@@ -263,3 +263,31 @@ refused-manifest passenger rule and the per-dispatch environment
 re-verification carry forward unchanged. In-boundary poison still blocks
 the boundary. Full rule text lives in ADR 007. History above is preserved;
 this note records what changed.
+
+## Amendment 2026-11-10 — idle artifact directories are cleanable
+
+Owner-directed the same day. Decisions 6, 7, and 8 are narrowed.
+
+A target directory holds build output. Cargo can recreate it. The reason to
+leave it in place is that a project is using it now, not that another crate
+might want the cache later.
+
+- `PrivateBounded`, `Shared`, and `ExternalUnproven` are artifact classes.
+  An idle one is cleanable. `cargo clean` still performs the deletion.
+- One active owner protects the whole physical directory, including a
+  directory other idle workspaces share. Activity is the existing source
+  walk and the newest artifact mtime.
+- `Uncertain` is unchanged: a path that contains a source tree, is a
+  conventional source directory, is a symlink, or could not be identified
+  is never cleaned.
+- A redirected artifact directory outside the workspace is cleanable when
+  its project is idle. `allowed_output_roots` still cannot make an
+  `Uncertain` path cleanable.
+- An unresolved manifest protects overlapping artifact directories only
+  when its own sources were touched inside the recency window, or when
+  those sources cannot be statted. A stale unresolved tree does not veto
+  a cleanup. The rule is restated on ADR 007 and ADR 010.
+- One physical directory is handed to `cargo clean` once. A later idle
+  workspace that shares it is reported, and its bytes are not counted again.
+- The pre-spawn proof repeats the activity check, the source-tree check,
+  and the cache-marker check.

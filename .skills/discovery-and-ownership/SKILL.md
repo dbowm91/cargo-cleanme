@@ -166,7 +166,7 @@ The rule that keeps this honest:
 > **The exclusion removes candidates, never participants.** An unproven learned
 > root's workspaces are still discovered, resolved, sized and classified; only
 > then are they dropped from the *candidate* set. So a shared output between a
-> proven root and an unproven one stays `Shared` and stays inventory-only.
+> proven root and an unproven one stays `Shared`. An idle one is still cleanable.
 > Narrowing the *universe* would reclassify `shared` bytes to `private` — the
 > one direction that authorises deletion — so that is not available here.
 

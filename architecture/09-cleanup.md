@@ -378,14 +378,16 @@ Cargo path and asserts `Skipped` in both cases.
 
 **One naming trap.** The test at `:2060` is named
 `external_outside_root_allowed_via_configured_root`, which reads as "an allowed
-root makes external output cleanable". Its own assertions say the opposite —
-the unit is skipped *because* authorization cannot promote.
+root makes external output cleanable". The fixture has no `CACHEDIR.TAG`,
+so both the bare run and the allow-listed run skip on the marker proof. The
+allow list is not what admits an external artifact directory, and it cannot
+admit one that fails the marker.
 
 **`ownership_skip_detail`** (`:1362-1373`) exists to state both halves of the rule
 (doc comment `:1358-1361`): the class is unproven *and* configuration does not fix
-it. `Shared` and `Uncertain` → "…remains inventory-only";
-`ExternalUnproven` → "external output ownership is unproven; configured
-authorization does not establish exclusivity". The `PrivateBounded` arm —
+it. `Uncertain` → "…remains inventory-only". `Shared` and `ExternalUnproven`
+are artifact classes: an idle directory is cleanable, and the detail is only
+reached when the class is not. The `PrivateBounded` arm —
 "external output requires explicit cleanup authorization" — is **unreachable in
 production**: its only two call sites (`:1467`, `:3916`) sit inside branches
 already guarded by `ownership != PrivateBounded` (`:1461`, `:3909`), and its text
@@ -743,8 +745,8 @@ Four properties are load-bearing, and each is a separate guarantee:
    at `cleanup.rs:3238`, in the loop that partitions the resolved units into
    `units` and `unselected` — *after* `build_groups` has classified ownership
    across the complete resolved universe (`cleanup.rs:3230-3243`). A shared
-   output between a proven root and an unproven one therefore stays `Shared`
-   and stays inventory-only. Applying the exclusion earlier — to the roots, or
+   output between a proven root and an unproven one therefore stays `Shared`.
+   An idle shared artifact directory is still cleanable. Applying the exclusion earlier — to the roots, or
    to discovery — would be the ADR 006 defect.
 2. **It removes candidates only.** It cannot add one or reclassify one.
    `admits` (`:147-171`) is the *inner* selection's answer AND-ed with "not
@@ -1226,7 +1228,9 @@ would require `cargo clean` to re-verify, outside this design.
 is narrower: `workspace.rs:1667-1673` requires every covering root to be **strictly
 below the workspace root**, disjoint from every member source root, with every
 universe root represented in the graph. Anything outside the workspace root is
-`ExternalUnproven` (`workspace.rs:1680`) and inventory-only, permanently (§5).
+`ExternalUnproven` (`workspace.rs:1680`). An idle one is cleanable when it is a
+real artifact directory with Cargo's cache marker and it does not contain a
+source tree (§5).
 
 Two secondary facts: the *invocation* is still
 `cargo clean --manifest-path <workspace root>`, so what Cargo removes is whatever
@@ -1279,7 +1283,7 @@ gates run without sleeping.
 
 | Group | Tests (line) |
 | --- | --- |
-| Authorization cannot promote | `external_unproven_inside_root_remains_inventory_only` `:7158`; `private_bounded_inside_workspace_is_authorized` `:7290`; `external_unproven_outside_root_never_authorized_by_allowed_root` `:7342`; `symlink_allowed_root_rejected_and_shared_forbidden` `:7401`; `external_outside_root_allowed_via_configured_root` `:8572`; `missing_and_file_allowed_roots_authorize_nothing_but_are_not_fatal` `:7692`; `authorization_infrastructure_failure_scope_blocks_instead_of_per_unit_skip` `:11482`; `external_unproven_skip_code_names_ownership_not_authorization` `:7601`; `ownership_degraded_code_matches_scan_time_vocabulary` `:11593`; `covering_inspect_failure_maps_permission_denied_to_uncertain` `:11577` |
+| Authorization cannot promote Uncertain | `idle_external_and_shared_are_authorized_and_uncertain_is_not`; `private_bounded_inside_workspace_is_authorized` `:7290`; `external_unproven_outside_root_never_authorized_by_allowed_root` `:7342`; `symlink_allowed_root_rejected_and_shared_forbidden` `:7401`; `external_outside_root_allowed_via_configured_root` `:8572`; `missing_and_file_allowed_roots_authorize_nothing_but_are_not_fatal` `:7692`; `authorization_infrastructure_failure_scope_blocks_instead_of_per_unit_skip` `:11482`; `external_unproven_skip_code_names_ownership_not_authorization` `:7601`; `ownership_degraded_code_matches_scan_time_vocabulary` `:11593`; `covering_inspect_failure_maps_permission_denied_to_uncertain` `:11577` |
 | Ownership gating / unit gate | `gate_blocks_mixed_class_units_in_every_combination` `:10340`; `private_target_with_external_unproven_build_skips_entire_unit` `:10105`; `private_target_with_shared_build_skips_entire_unit` `:10147`; `external_unproven_target_with_private_build_skips_entire_unit` `:10180`; `uncertain_build_identity_skips_entire_unit` `:10209`; `symlink_build_identity_skips_entire_unit` `:10250`; `gate_blocks_unmeasured_and_unmapped_unit_members` `:10377`; `distinct_private_target_and_build_is_one_cleanable_unit` `:10013`; `equal_and_nested_target_build_are_one_unit_and_one_invocation` `:10407` |
 | Proof universe completeness | `universe_workspace_that_cannot_reresolve_fails_closed` `:10633`; `cross_workspace_symlink_into_candidate_output_fails_closed` `:10532`; `cross_workspace_unresolvable_root_into_candidate_output_fails_closed` `:10568`; `cross_workspace_symlinked_ancestor_into_candidate_output_fails_closed` `:10606`; `combined_roots_classify_cross_root_output_as_shared_in_every_mode` `:11194`; `scope_note_in_second_root_does_not_block_first_root` `:11241`; `refused_empty_manifest_is_reported_without_blocking_scope` `:7871`; `proof_fails_closed_when_a_member_source_no_longer_resolves` `:7651` |
 | Pre-spawn / proof refresh | `revalidation_detects_changed_target_and_skips` `:7766`; `direct_metadata_refresh_detects_workspace_root_and_member_changes` `:8965`; `initial_shared_overlap_is_decided_conservatively_without_proof` `:10679`; `candidate_target_or_build_change_still_skips` `:10718`; `missing_marker_skips_instead_of_failing` `:8625`; `race_marker_disappears_and_changes_skip` `:8673`; `race_covering_root_disappears_skips` `:8442`; `race_covering_becomes_symlink_skips_and_changes_classification` `:9437`; `fresh_size_policy_rejects_shrunk_output_before_any_cargo_clean` `:9231`; `fresh_source_and_output_age_policy_rejects_before_any_cargo_clean` `:9281`; `race_output_becomes_recent_skips` `:8457`; `race_source_becomes_recent_skips` `:8479`; `race_target_replacement_skips_before_clean` `:8938`; `new_manifest_after_proof_blocks_remaining_scope` `:11666`; `prove_covering_roots_refuses_symlink_swap_with_change_code` `:7627`; `missing_output_identity_pair_compares_equal_not_unproven` `:4694` |

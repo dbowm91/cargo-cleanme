@@ -28,9 +28,9 @@ into it fails closed; 0.2.13 is its replacement. Bumping `Cargo.toml` is not a p
 
 The one thing to internalise before touching cleanup or discovery:
 
-> **Nothing is deleted on the strength of a timestamp. Every candidate must
-> first prove exclusive ownership of its physical bytes, and that proof must
-> still hold at the moment of deletion.**
+> **A target directory is rebuildable. It is cleaned when every project that
+> uses it is idle, and the path is an artifact directory rather than a source
+> tree. That check must still hold at the moment of deletion.**
 
 ## 1. Architecture index
 

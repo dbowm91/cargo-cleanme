@@ -36,9 +36,9 @@ mtime is old" — is wrong, because a single `target/` directory is routinely
 shared between several workspaces. Deleting it can destroy output another
 project still depends on. So the architecture is built around one idea:
 
-> **Nothing is ever deleted on the strength of a timestamp. Every candidate must
-> first prove exclusive ownership of its physical bytes, and that proof must
-> still hold at the moment of deletion.**
+> **A target directory is rebuildable. It is cleaned when every project that
+> uses it is idle, and the path is an artifact directory rather than a source
+> tree. That check is repeated at the moment of deletion.**
 
 Everything else — the discovery state file, the two scan modes, the ownership
 proof pass, the simulation mode, the fail-closed diagnostics — exists to
@@ -710,15 +710,14 @@ all, and the proof universe stays wide even when the candidate set is narrow.
 These are the properties the architecture is shaped around. They are the
 things a reviewer should check first in any change.
 
-1. **Ownership proof, not timestamps.** A candidate is only actionable when it
-   is classified as private-and-bounded under a resolved ownership universe.
-   `OutputOwnershipClass` in `src/domain.rs:255` is the vocabulary; anything
-   `Shared`, `Uncertain`, or `ExternalUnproven` is inventory-only, forever.
-2. **Authorization never manufactures proof.** `allowed_output_roots` lets a
-   user authorize a location for deletion; it cannot upgrade an unproven
-   ownership class. `covering_is_authorized_roots` returns `Ok(false)` for any
-   non-`PrivateBounded` class *before* it inspects a path. See
-   [Cleanup §5](09-cleanup.md).
+1. **Activity, not exclusive ownership.** A candidate is actionable when it is
+   an artifact directory and every project that uses it is idle.
+   `PrivateBounded`, `Shared`, and `ExternalUnproven` are artifact classes.
+   `Uncertain` — a source tree, a symlink, or a path that could not be
+   identified — is never cleaned. One active owner protects a shared directory.
+2. **An allow-list entry never admits an uncertain path.** `allowed_output_roots`
+   authorizes a private path that sits outside the cleanup root. It cannot turn
+   `Uncertain` into an artifact class. See [Cleanup §5](09-cleanup.md).
 3. **Re-validate at the last moment.** Proof work is repeated immediately
    before each spawn, because a workspace can change between scan and delete.
 4. **Fail closed on uncertainty.** Every uncertainty becomes a diagnostic, and
@@ -745,7 +744,8 @@ things a reviewer should check first in any change.
     root whose subtree could not be fully read has its workspaces removed
     from the candidate set — but they are still discovered, resolved, sized
     and classified, so a shared output between a proven root and an unproven
-    one stays `Shared` and stays inventory-only. Narrowing the *candidates*
+    one stays `Shared`. An idle shared artifact directory is still cleanable.
+    Narrowing the *candidates*
     cannot reclassify anything; narrowing the *universe* can, which is
     invariant 9's hazard in a new costume.
 

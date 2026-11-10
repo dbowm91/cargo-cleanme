@@ -686,10 +686,9 @@ passes on per-group overlap.
 Note the residual asymmetry: a single-owner group whose covering root lies
 *outside* the workspace root still gets `ExternalUnproven` even when an
 unrepresentable root overlaps it, because that arm is guarded by `inside_root`
-(`:1738-1751`). That is safe by construction — `ExternalUnproven` is
-inventory-only, and `covering_is_authorized_roots`
-(`cleanup.rs:1113-1127`) returns `Ok(false)` for anything that is not
-`PrivateBounded`.
+(`:1738-1751`). An idle external artifact directory is cleanable when the
+cache marker holds; an allow-list entry is not what admits it. `Uncertain`
+stays uncleaned.
 
 `strictly_below` (`:1529-1531`) exists because `contains` is inclusive: grouping
 *needs* equality, but an artifact must sit strictly inside its workspace, so the
@@ -989,9 +988,9 @@ even reaches `unmapped`, because `affected` is empty first.
 different groups. The safety property is not that a unit is uniformly
 `PrivateBounded`; it is that `cleanup.rs` re-checks each group independently
 through `covering_is_authorized_roots` (`cleanup.rs:1113-1127`), which returns
-`Ok(false)` for anything that is not `PrivateBounded` — `ExternalUnproven`,
-`Shared`, and `Uncertain` are all inventory-only, permanently
-(ADR §7, `plans/adr/001-workspace-output-ownership-and-cleanup-authorization.md:101-107`). And even a `PrivateBounded` group is
+`Ok(true)` for an idle `Shared` or `ExternalUnproven` artifact directory and
+`Ok(false)` for `Uncertain`. ADR 001 §7's inventory-only rule was amended on
+2026-11-10 (`plans/adr/001-workspace-output-ownership-and-cleanup-authorization.md`). And even a `PrivateBounded` group is
 still gated by the location check, so user authorization can never manufacture
 proof.
 

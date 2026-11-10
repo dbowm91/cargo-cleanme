@@ -130,7 +130,8 @@ the directory you are standing in, contains it, or is contained by it.
 `cargo cleanme ROOT` and `cargo cleanme --full` skip this filter, because their
 roots already bound the scope. The anchor narrows candidates only — ownership
 is proven across the whole resolved universe first, so a target shared with a
-workspace outside the anchor stays `shared` and stays inventory-only. Units the
+workspace outside the anchor stays `shared`. It is cleaned when every owner is
+idle, and kept when any owner is active. Units the
 anchor excludes are reported as typed `skipped_outside_selection` rows rather
 than dropped, so "nothing was selected" never looks like "nothing was
 eligible". `scan --known` is not anchored: it is the read-only inventory over
@@ -244,7 +245,8 @@ discloses the ones it cannot.
    with the reason code `skipped_incomplete_coverage`, whose detail names the
    root, the cause, and the alternative. Because the narrowing happens
    **after** ownership classification, a shared output between a proven root
-   and an unproven one stays `Shared` and stays inventory-only. The filter can
+   and an unproven one stays `Shared`. It is cleaned when every owner is idle.
+   The filter can
    only remove candidates — never add one or reclassify one.
 
    An unproven root is also **outside the proof boundary**: an unreadable
@@ -448,13 +450,13 @@ apparent bytes.
 
 | Class | Cleanable | Meaning |
 |---|---|---|
-| `private` | yes | this workspace exclusively owns these bytes |
-| `shared` | **no** | another known workspace shares them |
-| `external-unproven` | **no** | a participant exists that cannot be attributed |
-| `uncertain` | **no** | ownership could not be decided |
+| `private` | yes, when idle | this workspace's artifact directory |
+| `shared` | yes, when every owner is idle | another known workspace uses the same artifact directory |
+| `external-unproven` | yes, when the owning project is idle | Cargo reported this artifact directory outside the workspace |
+| `uncertain` | **no** | the path contains source, is a symlink, or could not be identified |
 
-Only `private` is ever a cleanup candidate. The other three are inventory-only
-everywhere — in the scan report and in the cleanup decision alike.
+An active project protects the whole directory it builds into, including one it
+shares. A stale project does not. `uncertain` is never cleaned.
 
 ## Cleanup safety model
 
@@ -725,9 +727,10 @@ for the explicit-root case, which is a different thing entirely.
 `archived/keep*` names a literal directory that does not exist and re-includes
 nothing. Glob patterns belong in `ignore`, `include`, and `exclude`.
 
-`allowed_output_roots` entries must be absolute and non-symlink. They authorize;
-they cannot manufacture ownership proof. A group that is `shared` or
-`external-unproven` stays inventory-only no matter what is configured.
+`allowed_output_roots` entries must be absolute and non-symlink. They authorize
+a private artifact directory that sits outside the cleanup root. They cannot
+make an `uncertain` path cleanable. `shared` and `external-unproven` artifact
+directories are cleanable when idle, with or without an entry.
 
 ## JSON output
 

@@ -254,8 +254,8 @@ pub struct RootCoverage {
 /// the ones it cannot. An unproven root's workspaces stay in the discovery
 /// universe — discovered, resolved, sized and classified like every other
 /// unit — but they are removed from the *candidate* set, so a shared output
-/// between a proven root and an unproven one stays `Shared` and stays
-/// inventory-only.
+/// between a proven root and an unproven one stays `Shared`. An idle shared
+/// artifact directory is still cleanable.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UnprovenRoot {
     /// The learned root as the discovery state recorded it.

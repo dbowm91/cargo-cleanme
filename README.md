@@ -55,9 +55,10 @@ my-app/target  4.02 MiB  [private]
   4.02 MiB inventory estimate across 1 inactive Cargo output groups
 ```
 
-`[private]` means cargo-cleanme can prove it owns those bytes exclusively.
-`[shared]`, `[external-unproven]`, and `[uncertain]` are **inventory only** and
-are never cleaned.
+`[private]`, `[shared]`, and `[external-unproven]` are artifact directories.
+They are cleaned when every project that uses them is idle. `[uncertain]` is a
+source tree, a symlink, or a path that could not be identified, and it is never
+cleaned. One active project protects a directory it shares.
 
 > **If `scan` reports 0 groups on a project you just built, that is the safety
 > guard working.** Anything touched within the last 300 seconds is *active* and
@@ -137,7 +138,7 @@ keep only the units anchored at the working directory; `cargo cleanme ROOT` and
 `cargo cleanme --full` keep every resolved unit, because their roots already
 bound the scope. Ownership is proven across the whole resolved universe
 *before* the anchor narrows anything, so a target shared with a project
-elsewhere stays shared and stays inventory-only.
+elsewhere stays shared and is cleaned only when every owner is idle.
 
 → [docs/USAGE.md](docs/USAGE.md) for the full command and flag reference, the
 discovery model, and the cleanup safety model.
