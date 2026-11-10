@@ -263,7 +263,9 @@ one bounded line, load-aware timing, and never root for a developer home.**
 - It will not clean anything you built in the last `recency_seconds` (default
   300). Nightly schedules are far outside that window; a job that somehow runs
   during a build protects the build.
-- It will not clean a group whose exclusive ownership it cannot prove.
+- It will not clean `uncertain` output: a source tree, a symlink, or a path
+  that could not be identified. Idle `shared` and `external-unproven` artifact
+  directories are cleaned. One active owner keeps a shared directory.
   Cleanup fails closed **only for the proof boundary** — the scope you
   selected: the working-directory anchor, the explicit roots, or the Full set.
   A manifest Cargo cannot resolve *inside* that boundary blocks it when its

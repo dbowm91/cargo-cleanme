@@ -172,12 +172,12 @@ flag and compares stdout and the exit code.
 (`src/cli.rs:152`). Clap's own `-h`/`-V` complete the set. The root command has
 no other short form.
 
-`--config` carries no doc comment (`src/cli.rs:41-42`), which is why
-`man/cargo-cleanme.1` renders it with an empty description body. The `--stats`
+`--config` (`src/cli.rs:125-127`) says to use that file instead of the
+platform default. The `--stats`
 help text asserts the contract it must keep: *"Never changes deterministic
-stdout"* (`src/cli.rs:46-48`).
+stdout"* (`src/cli.rs:132`).
 
-`command: Option<Command>` (`src/cli.rs:125-126`) is **optional**, and that is
+`command: Option<Command>` (`src/cli.rs:170`) is **optional**, and that is
 load-bearing: a bare invocation parses successfully and produces
 `Invocation::Cleanup(CleanupRequest { scope: CleanupScope::Maintenance, mode:
 Execute, .. })` (`src/cli.rs:471-489`), pinned by

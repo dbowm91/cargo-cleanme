@@ -189,6 +189,8 @@ All existing invariants remain:
 - selectors may narrow Cargo's mutation request only after complete ownership proof;
 - no filesystem directory is recursively deleted by cargo-cleanme.
 
+**Amendment 2026-11-10 — ADR 001.** The section title, and the bullets that require every affected group to be `PrivateBounded` and that keep `Shared`, `ExternalUnproven`, and `Uncertain` output inventory-only, are historical. An idle `PrivateBounded`, `Shared`, or `ExternalUnproven` artifact directory is cleanable through `cargo clean`. `Uncertain` stays uncleaned. One active owner protects the directory. This ADR's command spellings are unchanged. The amendment does not authorize a release.
+
 ### 7. Add a bounded unattended log format
 
 The public output selector gains:

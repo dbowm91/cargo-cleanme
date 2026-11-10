@@ -1534,6 +1534,28 @@ pub(crate) fn inside_source_tree_dirs(covering: &Path, source_dirs: &[PathBuf]) 
     source_dirs.iter().any(|dir| contains(dir, covering))
 }
 
+/// True when `covering` sits inside a conventional source directory of a
+/// package that is visible on disk, whether or not that package resolved.
+///
+/// `source_tree_dirs` only sees resolved workspaces. An output root of
+/// `other/src/generated` is still that package's source when metadata for
+/// `other` failed: `cargo clean` would remove whatever lives under it.
+/// The nearest package ancestor is the one that counts, so a project that
+/// itself lives under a directory named `src` (`~/src/foo/target`) is not
+/// refused — `foo/target` is not inside `foo/src`.
+pub(crate) fn inside_package_source_on_disk(covering: &Path) -> bool {
+    let mut ancestor = covering.parent();
+    while let Some(dir) = ancestor {
+        if is_package_directory(dir) {
+            return SOURCE_DIR_NAMES
+                .iter()
+                .any(|name| contains(&dir.join(name), covering));
+        }
+        ancestor = dir.parent();
+    }
+    false
+}
+
 /// The conventional source directories of every resolved workspace.
 ///
 /// The set does not depend on the covering root being tested, so it is
@@ -1708,7 +1730,7 @@ pub fn outermost(roots: &[PathBuf]) -> Vec<PathBuf> {
 /// cannot be resolved only the logical spelling is known, which is still enough
 /// to block a group covering that spelling. This is scan-time grouping only;
 /// cleanup re-proves ownership immediately before each spawn.
-fn uncertain_root_aliases(root: &OutputRoot) -> Vec<PathBuf> {
+pub(crate) fn uncertain_root_aliases(root: &OutputRoot) -> Vec<PathBuf> {
     let mut aliases = vec![root.logical_path.clone()];
     let target = if root.is_symlink {
         fs::read_link(&root.logical_path).ok().map(|t| {
@@ -1751,9 +1773,10 @@ fn group_overlaps_uncertain(covering: &[PathBuf], uncertain_aliases: &[PathBuf])
 ///   conventional source directories (`src`, `tests`, `benches`, `examples`).
 ///   A package's own `target/` directory is the exception: it is that
 ///   package's Cargo output, cleaned through the owning workspace.
-/// - Shared: multiple workspaces own overlapping physical output, or the group's
-///   covering overlaps an unrepresentable root's known aliases, so exclusivity
-///   is unprovable for that group.
+/// - Shared: multiple idle-capable workspaces own overlapping physical output
+///   that is still an artifact directory, or the group's covering overlaps an
+///   unrepresentable root's known aliases. A shared directory that contains a
+///   source tree is Uncertain, not Shared.
 /// - PrivateBounded: single owner, every covering root strictly below the
 ///   workspace root, disjoint from every resolved member source root, and
 ///   disjoint from every unrepresentable root's known aliases.
@@ -1901,43 +1924,43 @@ pub fn build_groups(workspaces: &[ResolvedWorkspace]) -> Vec<RawGroup> {
             .first()
             .cloned()
             .unwrap_or_else(|| physicals[0].clone());
-        // Classification.
-        let mut source_overlap = false;
-        let mut nested_source_overlap = false;
-        let ownership = if owners.len() > 1 {
+        // Classification. Source overlap is decided before owner count: a
+        // directory that contains a source tree is not an artifact, however
+        // many workspaces point at it. `contains` is inclusive, so equality
+        // with a member source root counts.
+        //
+        // Every workspace in the universe is consulted, not only the group's
+        // owners: `cargo clean` deletes whatever is under the root, so a
+        // project whose *sources* live inside it is destroyed just as surely
+        // as an owner's own.
+        let mut source_overlap = covering.iter().any(|c| {
+            workspaces
+                .iter()
+                .any(|w| w.members.iter().any(|m| contains(c, &m.source_root)))
+                || is_conventional_source_dir(c)
+                // An output root that lives *inside* a crate's source tree is
+                // that crate's source, not a build artifact. The on-disk form
+                // still sees a package whose metadata never resolved.
+                || inside_source_tree_dirs(c, &source_dirs)
+                || inside_package_source_on_disk(c)
+        });
+        // A covering root that lives *inside* a package directory. The
+        // resolved members cannot see this shape — Cargo refuses a nested
+        // package that is not a workspace member, so the victim is exactly
+        // the package the universe does not contain. Any owner is enough.
+        let nested_source_overlap = owners.iter().any(|owner| {
+            let ws = &workspaces[*owner];
+            nested_package_overlap(&covering, &ws.root, &owned_package_roots(ws))
+        });
+        source_overlap |= nested_source_overlap;
+        let ownership = if source_overlap {
+            OutputOwnershipClass::Uncertain
+        } else if owners.len() > 1 {
             OutputOwnershipClass::Shared
         } else {
             let ws = &workspaces[owners[0]];
-            // A covering root that is the source tree itself, or an ancestor of
-            // a member source root, is not an artifact: cleaning it would
-            // delete the project. `contains` is inclusive, so equality counts.
-            //
-            // Every workspace in the universe is consulted, not only the
-            // group's own owner: `cargo clean` deletes whatever is under the
-            // root, so a second resolved project whose *sources* live inside it
-            // is destroyed just as surely as the owner's own. Consulting only
-            // `ws.members` would ratify exactly the shape this refuses.
-            source_overlap = covering.iter().any(|c| {
-                workspaces
-                    .iter()
-                    .any(|w| w.members.iter().any(|m| contains(c, &m.source_root)))
-                    || is_conventional_source_dir(c)
-                    // The mirror of the containment above: an output root that
-                    // lives *inside* a crate's source tree is that crate's
-                    // source, not a build artifact.
-                    || inside_source_tree_dirs(c, &source_dirs)
-            });
-            // The mirror: a covering root that lives *inside* a package
-            // directory. The resolved members cannot see this shape — Cargo
-            // refuses a nested package that is not a workspace member, so the
-            // victim is exactly the package the universe does not contain.
-            nested_source_overlap =
-                nested_package_overlap(&covering, &ws.root, &owned_package_roots(ws));
-            source_overlap |= nested_source_overlap;
             let inside_root = covering.iter().all(|c| strictly_below(&ws.root, c));
-            if uncertain_ws.contains(&owners[0]) || source_overlap {
-                // The owning workspace is uncertain, or its own source tree
-                // would be deleted. Never a private artifact.
+            if uncertain_ws.contains(&owners[0]) {
                 OutputOwnershipClass::Uncertain
             } else if inside_root && !group_overlaps_uncertain(&covering, &uncertain_aliases) {
                 OutputOwnershipClass::PrivateBounded
@@ -7138,7 +7161,7 @@ mod tests {
         // Discovery finds the manifest even with no local target.
         let groups = build_groups(&ws);
         assert_eq!(groups.len(), 1);
-        // Redirected outside the workspace root is external-unproven (inventory-only).
+        // Redirected outside the workspace root is external-unproven.
         assert_eq!(groups[0].ownership, OutputOwnershipClass::ExternalUnproven);
     }
 

@@ -48,8 +48,8 @@ The product MUST:
 The initial V0.1 release did not delete files, invoke `cargo clean`, resolve redirected output for cleanup, or support profile/package selectors. Those were staged-delivery constraints, not the current product boundary. The current product:
 
 - keeps every `scan` operation read-only while making bare invocation the canonical Routine Cargo-mediated cleanup operation under ADR 003;
-- offers cleanup only as a separate explicit command, using Cargo after complete workspace/output ownership, authorization, activity, marker, and freshness proof;
-- resolves target/build output through Cargo and permits cleanup only for completely proven private bounded output;
+- executes that cleanup through Cargo after the final activity, source-tree, and cache-marker proof; `cargo cleanme ROOT` and `cargo cleanme --full` are the other two cleanup scopes, and `clean` remains a hidden alias;
+- resolves target and build output through Cargo and cleans an idle artifact directory whose class is `PrivateBounded`, `Shared`, or `ExternalUnproven`;
 - delegates qualified profile/package selection to Cargo and never directly deletes inferred selector paths.
 
 Current non-goals are:
@@ -58,13 +58,16 @@ Current non-goals are:
 - directly delete inferred profile/package artifact paths or parse Cargo-private artifact/cache layout;
 - claim selector-specific reclaimable bytes where Cargo does not provide a trustworthy estimate;
 - infer arbitrary historical CARGO_TARGET_DIR environment values;
-- clean shared, uncertain, or externally unproven output;
+- clean an `Uncertain` path — a source tree, a symlink, or a path that could not be identified;
+- clean an artifact directory while any project that uses it is active;
 - follow symlinks;
 - use Git commit timestamps as the definition of project activity;
 - require a daemon, index database, filesystem watcher, or background service;
 - require a full-screen/raw-mode TUI. A later milestone may provide a transient inline terminal progress display.
 
-Cargo permits `build.target-dir` and `build.build-dir` to redirect output. Current support resolves these paths through Cargo, classifies their physical ownership, and cleans only when the complete output set is `PrivateBounded`, authorized, fresh, and safe. A distinct build-dir is supported only where runtime Cargo capability is known.
+Cargo permits `build.target-dir` and `build.build-dir` to redirect output. Current support resolves these paths through Cargo and classifies their physical ownership. An idle artifact directory is cleanable when every project that uses it is idle. One active owner protects the whole physical directory. `Uncertain` output is never cleaned. `allowed_output_roots` authorizes; it cannot make an `Uncertain` path cleanable. A distinct build-dir is supported only where runtime Cargo capability is known.
+
+> Amendment (2026-11-10, ADR 001). The previous text said cleanup was permitted only for a completely proven `PrivateBounded` output set, and listed shared, uncertain, and externally unproven output as one non-goal. That described M005. Decisions 6–8 of ADR 001 are narrowed: idle `Shared` and `ExternalUnproven` artifact directories are cleanable through `cargo clean`. `Uncertain` stays uncleaned. This amendment does not authorize a release.
 
 ## 4. Architectural principles
 
@@ -330,7 +333,9 @@ Cargo itself is authoritative for workspace/output resolution. cargo-cleanme doe
 
 Target and build output are separate logical roots that may be equal, nested, external, or shared. Existing roots are grouped by physical identity/containment before activity, sizing, or cleanup so bytes are not double-counted.
 
-Shared, uncertain, or externally unproven output MAY be inventoried but MUST NOT be destructively cleaned. External private output requires an explicit cleanup-output authorization boundary in addition to ownership evidence.
+An idle artifact directory whose class is `PrivateBounded`, `Shared`, or `ExternalUnproven` MAY be cleaned through `cargo clean`. `Uncertain` output MUST NOT be cleaned. One active owner protects the whole physical directory, including a directory other idle workspaces share. Discovery MUST NOT be narrowed to reclassify `Shared` output as `PrivateBounded`. `allowed_output_roots` cannot make an `Uncertain` path cleanable.
+
+> Amendment (2026-11-10, ADR 001). The previous sentence said shared, uncertain, and externally unproven output could be inventoried and MUST NOT be cleaned. The idle-artifact rule above replaces it.
 
 Source activity in any workspace member and output activity anywhere in a physical output group protect the workspace/group.
 
@@ -342,26 +347,35 @@ Before cleaning a candidate it MUST:
 
 1. revalidate project activity against a new cutoff;
 2. verify the project/artifact relationship still matches the analyzed candidate;
-3. refuse ambiguous or shared/redirected output ownership;
+3. refuse `Uncertain` output, and refuse an artifact directory while any project that uses it is active;
 4. invoke Cargo against the intended manifest/artifact contract rather than blindly deleting arbitrary directories;
 5. capture process failure independently per candidate;
 6. measure disk state after cleanup;
 7. report attempted, cleaned, skipped, failed, and actually recovered bytes separately;
 8. preserve physical target/build output identity so overlapping roots are measured once;
-9. refuse shared, uncertain, or unauthorized external output;
+9. refuse `Uncertain` output; an idle `Shared` or `ExternalUnproven` artifact directory is cleanable through `cargo clean`;
 10. authorize destructive cleanup at the workspace invocation boundary: every physical output group that one Cargo clean invocation can affect through the resolved OutputSet MUST pass ownership, authorization, activity, and path-safety checks before any mutation;
 11. produce one cleanup result and one deduplicated pre/post union measurement per Cargo workspace cleanup invocation;
 12. establish complete cleanup-scope ownership coverage: every Cargo manifest discovered under the explicit clean root MUST either be authoritatively covered by a successfully resolved Cargo workspace or remain an unresolved ownership participant, and any unresolved participant MUST block all Cargo cleanup commands for that scope.
 
 > Clarification (2026-10-16, ADR 007, owner-directed product change): "that
 > scope" is the selected proof boundary — the working-directory anchor for
-> bare/`--known` cleanup, the explicit roots for `clean ROOT`, the full
-> system for `clean --full`. Discovery still covers the whole system so
-> cross-boundary output claims stay visible at grouping time. An unresolved
-> participant *outside* the proof boundary MUST NOT block cleaning inside
-> it; out-of-scope blocking is a core product defect. Unresolved
-> participants *inside* the boundary still block, and `clean --full` keeps
-> whole-system fail-closed blocking.
+> bare/`--known` cleanup, the explicit roots for `clean ROOT`, and, since
+> ADR 008, the learned root for `cargo cleanme --full`. Discovery still
+> covers the whole system so cross-boundary output claims stay visible at
+> grouping time. An unresolved participant *outside* the proof boundary
+> MUST NOT block cleaning inside it; out-of-scope blocking is a core
+> product defect.
+>
+> Narrowed (2026-11-09, ADR 010; 2026-11-10, ADR 001 and ADR 007): a stale
+> unresolved manifest does not block. A manifest whose sources were touched
+> inside the recency window, or whose sources cannot be statted, still
+> protects overlapping artifact directories. A named output claim holds
+> only the units that intersect it. An unnamed, unreadable, or unlocated
+> claim still blocks the boundary that contains it. The 2026-10-16
+> sentence that every in-boundary unresolved participant blocks, and that
+> `clean --full` keeps whole-system fail-closed blocking, is withdrawn.
+> M018 shipped the learned-root gate in v0.2.11.
 
 Canonical `--dry-run` simulation MUST exercise discovery, resolution, filtering, sizing, authorization, revalidation, progress/reporting, and final proof while prohibiting every `cargo clean` subprocess. The historical `--dryrun` spelling may remain only as a compatibility alias. Simulation output is estimated/would-clean space, not recovered bytes.
 

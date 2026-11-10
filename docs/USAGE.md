@@ -60,7 +60,7 @@ cleanup of `.` — not a subcommand, and not a usage error.
 | `--verbose` | the detailed **human** surface: every workspace considered, the scope census, the counters, the diagnostic detail. `--format json` and `--format log` are byte-identical with and without it |
 | `--config PATH` | use a specific `config.toml` |
 | `--min-reclaimable-bytes N` | only clean units above this measured size |
-| `--older-than SECONDS` | extra quiet-age requirement; never replaces the recency guard |
+| `--older-than SECONDS` | extra quiet-age requirement, on top of `recency_seconds`; it never replaces that guard |
 | `--include GLOB` | include canonical workspace roots matching this glob |
 | `--exclude GLOB` | exclude canonical workspace roots matching this glob |
 | `--profile NAME` | ask Cargo to clean one named profile |
@@ -113,9 +113,9 @@ same way:
 The working directory is part of the scope, so a bare run cleans what is under
 where you are standing, wherever that is. The scope only ever *grows*: the
 working directory is added to the roots, never substituted for them. A narrower
-scope would hide the out-of-scope claimants of a shared target and promote
-`shared` bytes to `private` — the only class that authorizes deletion — so
-ownership is still proven across the whole resolved universe.
+scope would hide a co-owner and classify a shared artifact directory as
+`private`, so it would be cleaned even while that hidden project is still
+building. Ownership is still proven across the whole resolved universe.
 
 The working directory joins only when the Routine scope does not already reach
 it. Standing inside a known root, or standing in a directory that contains
@@ -130,7 +130,8 @@ the directory you are standing in, contains it, or is contained by it.
 `cargo cleanme ROOT` and `cargo cleanme --full` skip this filter, because their
 roots already bound the scope. The anchor narrows candidates only — ownership
 is proven across the whole resolved universe first, so a target shared with a
-workspace outside the anchor stays `shared` and stays inventory-only. Units the
+workspace outside the anchor stays `shared`. It is cleaned when every owner is
+idle, and kept when any owner is active. Units the
 anchor excludes are reported as typed `skipped_outside_selection` rows rather
 than dropped, so "nothing was selected" never looks like "nothing was
 eligible". `scan --known` is not anchored: it is the read-only inventory over
@@ -244,7 +245,8 @@ discloses the ones it cannot.
    with the reason code `skipped_incomplete_coverage`, whose detail names the
    root, the cause, and the alternative. Because the narrowing happens
    **after** ownership classification, a shared output between a proven root
-   and an unproven one stays `Shared` and stays inventory-only. The filter can
+   and an unproven one stays `Shared`. It is cleaned when every owner is idle.
+   The filter can
    only remove candidates — never add one or reclassify one.
 
    An unproven root is also **outside the proof boundary**: an unreadable
@@ -403,21 +405,21 @@ requiring a sibling `target/`, then asks Cargo itself to resolve the facts.
 
 Cargo is invoked with `locate-project --workspace` and
 `metadata --offline --locked --no-deps` — never for ignored or pruned paths.
-Resolution runs in bounded-parallel bulk phases: every manifest is located
-once, manifests group by located workspace root, and one metadata runs per
-group. After the first successful metadata resolution for a workspace, every
-member manifest that authoritative metadata returned is registered, so later
-manifests from the same workspace need no further metadata processes. An
-N-member workspace costs one locate per manifest and one metadata. Membership
-is never guessed from path ancestry or TOML.
+Resolution runs in bounded-parallel bulk phases: manifests group by located
+workspace root, and one metadata runs per group. After the first successful metadata resolution for a workspace, every
+member manifest that authoritative metadata returned is registered, so those
+members are not located again. A manifest is located only when no other
+discovered manifest's directory is a strict ancestor of its directory.
+Membership is never guessed from path ancestry or TOML.
 
 Full discovery can find manifests Cargo cannot resolve as workspaces, such as
 an orphaned member or a broken manifest. Such a manifest stays in the
 read-only inventory as unresolved; it does not become a learned maintenance
-root. Cleanup remains blocked while any discovered manifest *inside the selected scope* is unresolved,
-because its Cargo-configured output ownership is unknown. A manifest outside
-the scope (for example, outside the working-directory anchor) is reported in
-diagnostics and never blocks. To reproduce the
+root. An unresolved manifest blocks the selected boundary only when its
+sources were touched inside the recency window, or when those sources cannot
+be statted. A stale unresolved manifest is reported and holds no output
+claim. A manifest outside the scope (for example, outside the
+working-directory anchor) is reported in diagnostics and never blocks. To reproduce the
 underlying Cargo error for one path, run from its parent directory:
 
 ```sh
@@ -448,13 +450,13 @@ apparent bytes.
 
 | Class | Cleanable | Meaning |
 |---|---|---|
-| `private` | yes | this workspace exclusively owns these bytes |
-| `shared` | **no** | another known workspace shares them |
-| `external-unproven` | **no** | a participant exists that cannot be attributed |
-| `uncertain` | **no** | ownership could not be decided |
+| `private` | yes, when idle | this workspace's artifact directory |
+| `shared` | yes, when every owner is idle | another known workspace uses the same artifact directory |
+| `external-unproven` | yes, when the owning project is idle | Cargo reported this artifact directory outside the workspace |
+| `uncertain` | **no** | the path contains source, is a symlink, or could not be identified |
 
-Only `private` is ever a cleanup candidate. The other three are inventory-only
-everywhere — in the scan report and in the cleanup decision alike.
+An active project protects the whole directory it builds into, including one it
+shares. A stale project does not. `uncertain` is never cleaned.
 
 ## Cleanup safety model
 
@@ -467,11 +469,14 @@ resolved workspace, its complete resolved `target` and `build` roots, and every
 physical group that one invocation can affect. Multi-member workspaces are
 supported. One invocation produces one result and one pre/post measurement.
 
-A unit is authorized only when **every** group it can affect is `private`,
-authorized, inactive, a real non-symlink directory, and marker-qualified. A
-private `target` can therefore never carry a `shared`, `external-unproven`,
-`uncertain`, or unauthorized sibling `build` directory into the same
-invocation. Such a unit is **skipped whole**, and the skip reason names the
+A unit is authorized only when **every** group it can affect is an idle
+artifact directory: `private`, `shared`, or `external-unproven`, measured, a
+real non-symlink directory, and marker-qualified. `private` output must also
+sit inside the cleanup root or an `allowed_output_roots` entry. One active
+owner keeps a shared directory. A `target` can carry an idle shared or
+external sibling into the same invocation. It cannot carry an `uncertain`
+sibling, an unmeasured group, or a private path outside the authorized
+boundary: the unit is **skipped whole**, and the skip reason names the
 failing output kind, path, and class.
 
 Ownership is re-proven **immediately before each spawn**, because a workspace
@@ -491,8 +496,9 @@ in `unresolved_ownership`. A manifest Cargo itself refused (a scope note or
 a refused-manifest passenger) never blocks: it owns no bytes to overlap. A
 manifest outside the scope is reported in diagnostics and never blocks.
 
-A manifest whose output directories can be named does not block the scope.
-The claim is the directories Cargo 1.89 would write for that workspace in
+A manifest whose output directories can be named does not block the scope,
+and only when that manifest may still be active. A stale unresolved manifest
+holds no claim. The claim is the directories Cargo 1.89 would write for that workspace in
 the environment the cleanup spawn would use: `CARGO_TARGET_DIR` when set,
 otherwise `CARGO_BUILD_TARGET_DIR` or `build.target-dir` from the Cargo
 config chain, plus `CARGO_BUILD_BUILD_DIR` or `build.build-dir` when set,
@@ -725,9 +731,10 @@ for the explicit-root case, which is a different thing entirely.
 `archived/keep*` names a literal directory that does not exist and re-includes
 nothing. Glob patterns belong in `ignore`, `include`, and `exclude`.
 
-`allowed_output_roots` entries must be absolute and non-symlink. They authorize;
-they cannot manufacture ownership proof. A group that is `shared` or
-`external-unproven` stays inventory-only no matter what is configured.
+`allowed_output_roots` entries must be absolute and non-symlink. They authorize
+a private artifact directory that sits outside the cleanup root. They cannot
+make an `uncertain` path cleanable. `shared` and `external-unproven` artifact
+directories are cleanable when idle, with or without an entry.
 
 ## JSON output
 

@@ -4,12 +4,13 @@
 //! workspace CleanupUnit (C003): one resolved workspace, its complete resolved
 //! `OutputSet`, and every PhysicalOutputGroup that the single `cargo clean`
 //! invocation can affect. A unit is authorized only when *all* of those groups
-//! are `PrivateBounded`, authorized, inactive, non-symlink, marker-qualified,
-//! and stable under final full ownership-universe revalidation. Shared,
-//! uncertain, symlink, and unauthorized external output is never cleaned, and
-//! a private target group can never carry an unauthorized sibling build group
-//! into the same invocation. `--dryrun` runs the full decision path but invokes
-//! no `cargo clean` command.
+//! are artifact directories (`PrivateBounded`, idle `Shared`, or idle
+//! `ExternalUnproven`), authorized, inactive, non-symlink, marker-qualified,
+//! and stable under final revalidation. `Uncertain` output — a source tree,
+//! a symlink, or a path that could not be identified — is never cleaned. One
+//! active owner protects a shared directory. A private target group can never
+//! carry an uncertain sibling into the same invocation. `--dryrun` runs the
+//! full decision path but invokes no `cargo clean` command.
 
 use crate::{
     discovery,
@@ -62,8 +63,9 @@ impl CleanMode {
 /// candidates.** It cannot add one, reclassify one, or unblock a scope. That
 /// is the whole reason a working-directory anchor is safe to use as a default:
 /// `workspace::build_groups` still sees every discovered workspace, so output
-/// shared with a workspace outside the anchor stays `Shared` and stays
-/// inventory-only.
+/// shared with a workspace outside the anchor stays `Shared`. An idle shared
+/// artifact directory is still cleanable; what the anchor must not do is hide
+/// a co-owner and relabel the directory private.
 ///
 /// The alternative — narrowing *discovery* to the anchor — was measured and
 /// rejected (ADR 006): narrowing discovery hides out-of-scope claimants and
@@ -79,7 +81,7 @@ impl CleanMode {
 /// blocking the whole scope. That is not the ADR 006 shortcut, because the
 /// excluded root's manifests are still discovered, resolved and classified:
 /// the universe does not narrow, so a shared output between a proven root and
-/// an unproven one stays `Shared` and stays inventory-only. The residual it
+/// an unproven one stays `Shared`. The residual it
 /// accepts is disclosed, not hidden.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CleanupSelection {
@@ -112,8 +114,8 @@ pub enum CleanupSelection {
     /// the workspaces under it, so those workspaces are removed from the
     /// *candidate* set — never from the discovery set. They are still
     /// discovered, resolved, sized and classified like every other unit, so a
-    /// shared output between a proven root and an unproven one stays `Shared`
-    /// and stays inventory-only.
+    /// shared output between a proven root and an unproven one stays `Shared`.
+    /// An idle shared artifact directory is still cleanable.
     ///
     /// This is an exclude-list, not the allow-list [`Self::Roots`] that `-i`
     /// produces, because the verdict's granularity is the whole learned root.
@@ -1534,10 +1536,9 @@ fn output_text(output: &ProcessOutput) -> String {
 /// Check whether a physical group is authorized for destructive cleanup.
 ///
 /// Rules (ADR 001 + C002 §7.1):
-/// - Only `PrivateBounded` may proceed to path authorization.
-/// - `ExternalUnproven`, `Shared`, and `Uncertain` remain inventory-only
-///   under any authorization-root configuration; authorization never
-///   manufactures ownership proof.
+/// - `PrivateBounded`, `Shared`, and `ExternalUnproven` are artifact classes.
+///   `Uncertain` never proceeds. An allow-list entry cannot turn `Uncertain`
+///   into an artifact class.
 /// - Symlink roots are never cleanable (grouped as `Uncertain` upstream).
 /// - The explicit `cargo cleanme ROOT` sandbox authorizes private output
 ///   inside ROOT.
@@ -1647,16 +1648,24 @@ impl<'a> AuthorizationContext<'a> {
 
     /// Whether this group is inside an authorized boundary.
     ///
-    /// C002-F1: ownership class is authoritative and checked first.
-    /// ExternalUnproven is inventory-only even inside a bounded cleanup root
-    /// or a configured allowed root.
+    /// Artifact classes may proceed. `Uncertain` never does, and an
+    /// allow-list entry is not consulted for it.
+    ///
+    /// `Shared` and `ExternalUnproven` are Cargo-reported artifact
+    /// directories. Idle ones are cleanable even when they sit outside the
+    /// cleanup root; the proof still requires the cache marker, a real
+    /// directory, and no source tree. `PrivateBounded` still has to sit
+    /// inside a cleanup root or an allowed root.
     pub fn admits(
         &self,
         ownership: OutputOwnershipClass,
         covering: &[PathBuf],
     ) -> Result<bool, String> {
-        if ownership != OutputOwnershipClass::PrivateBounded {
+        if !cleanable_artifact_class(ownership) {
             return Ok(false);
+        }
+        if ownership != OutputOwnershipClass::PrivateBounded {
+            return Ok(true);
         }
         let roots = self.roots()?;
         // Every covering root must be inside an authorized boundary.
@@ -1678,9 +1687,21 @@ impl<'a> AuthorizationContext<'a> {
             }
             return Ok(false);
         }
-        // Only PrivateBounded reaches here; path authorization passed.
         Ok(true)
     }
+}
+
+/// Classes whose bytes are build output Cargo can recreate.
+///
+/// `Uncertain` is absent: that class is a source tree, a symlink, or a path
+/// whose identity could not be established.
+fn cleanable_artifact_class(ownership: OutputOwnershipClass) -> bool {
+    matches!(
+        ownership,
+        OutputOwnershipClass::PrivateBounded
+            | OutputOwnershipClass::Shared
+            | OutputOwnershipClass::ExternalUnproven
+    )
 }
 
 /// Validate and canonicalize the authorization roots of one run.
@@ -1757,7 +1778,9 @@ fn resolve_authorization_roots(
 /// unproven and configured authorization does not establish exclusivity.
 pub fn ownership_skip_detail(ownership: OutputOwnershipClass) -> String {
     match ownership {
-        OutputOwnershipClass::Shared => "shared output remains inventory-only".into(),
+        OutputOwnershipClass::Shared => {
+            "shared artifact directory is cleaned when every owner is idle".into()
+        }
         OutputOwnershipClass::Uncertain => "uncertain output remains inventory-only".into(),
         OutputOwnershipClass::ExternalUnproven => {
             "external output ownership is unproven; configured authorization does not establish exclusivity".into()
@@ -1805,12 +1828,12 @@ impl BlockReason {
 
 /// First blocking reason for a whole CleanupUnit, or `Ok(())` (C003 §7.2).
 ///
-/// Core C003 invariant: a workspace is destructively cleanable only if *every*
-/// physical output group the Cargo invocation can affect is independently
-/// `PrivateBounded`, authorized, measured (real non-symlink directory, outside
-/// the recency window), and marker-qualified. A private target group can never
-/// carry an `ExternalUnproven`, `Shared`, `Uncertain`, inactive, or unauthorized
-/// sibling build group into the same `cargo clean` invocation.
+/// A workspace is destructively cleanable only if *every* physical output
+/// group the Cargo invocation can affect is an idle artifact directory:
+/// `PrivateBounded`, `Shared`, or `ExternalUnproven`, measured, and outside
+/// the recency window. `Uncertain` output, an unmeasured group, or an
+/// unauthorized private path blocks the whole unit. One `cargo clean` would
+/// touch every group, so a private target cannot carry an uncertain sibling.
 ///
 /// Returns one actionable reason naming the failing output kind, path, and
 /// class. No Cargo process is spawned for any subset of a unit.
@@ -1853,8 +1876,10 @@ fn unit_block_reason_roots_with(
         )));
     }
     for group in &unit.groups {
-        // 1. Ownership class is authoritative; authorization never promotes.
-        if group.ownership != OutputOwnershipClass::PrivateBounded {
+        // 1. Uncertain output is never an artifact directory. Shared and
+        // external output stay eligible here; activity and the cache marker
+        // are later gates, and an allow-list entry cannot admit Uncertain.
+        if !cleanable_artifact_class(group.ownership) {
             return Err(BlockReason::Unit(format!(
                 "{} output {} is {}; {}",
                 group.kind_label(),
@@ -2200,8 +2225,12 @@ fn discover_and_resolve_universe(
         observer,
         selection,
     )?;
-    let blocking_unresolved =
-        unbounded_blocking_count(&scope.unresolved, &scope.workspaces, selection);
+    let blocking_unresolved = unbounded_blocking_count(
+        &scope.unresolved,
+        &scope.workspaces,
+        selection,
+        recency_seconds,
+    );
     let out_of_scope_unresolved = diagnostics
         .iter()
         .filter(|diagnostic| diagnostic.category == crate::domain::DiagnosticCategory::OutOfScope)
@@ -2300,8 +2329,12 @@ pub fn clean_with_roots_policy_selector_guarded(
     // unit dispatch below.
     let provenance = snapshot_output_env(&|key| std::env::var_os(key));
     let per_root = selection_is_per_learned_root(selection);
-    let (blocking_participants, _, _) =
-        split_unresolved_for_boundary(&unresolved_ownership, &workspaces, selection);
+    let (blocking_participants, reported_participants, _) = split_unresolved_for_boundary(
+        &unresolved_ownership,
+        &workspaces,
+        selection,
+        recency_seconds,
+    );
     let (unbounded_participants, finite_claims) = classify_output_claims(&blocking_participants);
     let mut root_blocks: Vec<LearnedRootBlock> = Vec::new();
 
@@ -2371,8 +2404,11 @@ pub fn clean_with_roots_policy_selector_guarded(
     // the standard unproven-ownership block. Units merely unselected
     // (outside the anchor) do not count: the M014 elsewhere case reports
     // skipped rows and stays exit 0.
-    if units.is_empty() && unselected.is_empty() && !unresolved_ownership.is_empty() {
-        let unresolved = unresolved_ownership.len();
+    if units.is_empty()
+        && unselected.is_empty()
+        && !(blocking_participants.is_empty() && reported_participants.is_empty())
+    {
+        let unresolved = blocking_participants.len() + reported_participants.len();
         report.scope_blocked = Some(ScopeBlock::new(
             ScopeBlockReason::OwnershipUnproven,
             format!(
@@ -2506,6 +2542,9 @@ pub fn clean_with_roots_policy_selector_guarded(
     // by every unit's gate: they are loop-invariant, and resolving them per
     // unit repeated the same filesystem work for every unit.
     let authorization = AuthorizationContext::new(&roots, allowed_output_roots);
+    // One physical artifact directory is cleaned once. A later workspace that
+    // shares it is reported, and its bytes are not counted again.
+    let mut cleaned_coverings: Vec<PathBuf> = Vec::new();
     for unit in units.iter() {
         let skipped = |report: &mut CleanReport,
                        detail: String,
@@ -2645,8 +2684,9 @@ pub fn clean_with_roots_policy_selector_guarded(
             observer.unit_completed(cleanup_phase);
             continue;
         }
-        // C003 §7.2: unit-wide destructive gate. Every physical group the
-        // invocation can affect must be private, authorized, and measured.
+        // Unit-wide destructive gate. Every physical group the invocation can
+        // affect must be an idle artifact directory: private, shared, or
+        // external, and measured. Uncertain output blocks the unit.
         // No Cargo process is spawned for any subset of a unit.
         // H-3: authorization *infrastructure* failure (misconfigured or
         // unreadable roots) is a scope-level block (exit 1), not N per-unit
@@ -2671,6 +2711,38 @@ pub fn clean_with_roots_policy_selector_guarded(
                 None,
                 unit_skip_code(unit),
             );
+            observer.unit_completed(cleanup_phase);
+            continue;
+        }
+        if !unit.covering.is_empty()
+            && unit
+                .covering
+                .iter()
+                .all(|path| covering_already_cleaned(path, &cleaned_coverings))
+        {
+            let outcome = match mode {
+                CleanMode::Simulate => CleanOutcome::Simulated,
+                CleanMode::CargoPreview => CleanOutcome::Previewed,
+                CleanMode::Execute => CleanOutcome::Cleaned,
+            };
+            let reason_code = match mode {
+                CleanMode::Simulate => CleanupReasonCode::Simulated,
+                CleanMode::CargoPreview => CleanupReasonCode::Previewed,
+                CleanMode::Execute => CleanupReasonCode::Cleaned,
+            };
+            report.results.push(CleanResult {
+                display_path: unit.root.clone(),
+                workspace_roots: vec![unit.root.clone()],
+                output_roots: unit.covering.clone(),
+                ownership: unit_blocking_class(unit),
+                outcome,
+                policy_disposition: Some(PolicyDisposition::Selected),
+                reason_code,
+                before_bytes: Some(0),
+                after_bytes: matches!(mode, CleanMode::Execute).then_some(0),
+                observed_decrease: matches!(mode, CleanMode::Execute).then_some(0),
+                detail: "shared artifact directory is cleaned with another idle workspace; its bytes are counted once".into(),
+            });
             observer.unit_completed(cleanup_phase);
             continue;
         }
@@ -2713,6 +2785,7 @@ pub fn clean_with_roots_policy_selector_guarded(
                 &mut counters,
                 selection,
                 &blocked_root_paths,
+                recency_seconds,
             )
         });
         // M-2: a universe that could not be re-proven invalidates every
@@ -2942,6 +3015,7 @@ pub fn clean_with_roots_policy_selector_guarded(
                     observed_decrease: None,
                     detail: "simulation: no `cargo clean` command was invoked".into(),
                 });
+                cleaned_coverings.extend(proof.covering.iter().cloned());
                 observe_unit_groups(observer, unit);
                 observer.unit_completed(cleanup_phase);
             }
@@ -3098,6 +3172,7 @@ pub fn clean_with_roots_policy_selector_guarded(
                         }
                     }
                 }
+                cleaned_coverings.extend(proof.covering.iter().cloned());
                 observe_unit_groups(observer, unit);
                 observer.unit_completed(cleanup_phase);
             }
@@ -3258,10 +3333,11 @@ pub fn list_cleanup_candidates(
     // A Full cleanup offers only units outside a blocked learned root, so
     // `-i` cannot select a unit the engine would refuse to spawn.
     let per_root = selection_is_per_learned_root(selection);
-    let (blocking_participants, _, _) = split_unresolved_for_boundary(
+    let (blocking_participants, reported_participants, _) = split_unresolved_for_boundary(
         &universe.unresolved_ownership,
         &universe.workspaces,
         selection,
+        recency_seconds,
     );
     let (unbounded_participants, _) = classify_output_claims(&blocking_participants);
     let root_blocks = if per_root {
@@ -3303,12 +3379,13 @@ pub fn list_cleanup_candidates(
         ))
     } else if universe.units.is_empty()
         && universe.unselected.is_empty()
-        && !universe.unresolved_ownership.is_empty()
+        && !(blocking_participants.is_empty() && reported_participants.is_empty())
     {
         // Same edge as the engine: offering nothing from an unproven
         // universe without a block would read as success. The refusal
-        // carries the block, never rows.
-        let unresolved = universe.unresolved_ownership.len();
+        // carries the block, never rows. A stale unresolved manifest does
+        // not count: it does not protect artifact directories.
+        let unresolved = blocking_participants.len() + reported_participants.len();
         Some(ScopeBlock::new(
             ScopeBlockReason::OwnershipUnproven,
             format!(
@@ -3393,17 +3470,8 @@ fn unit_skip_code(unit: &workspace::CleanupUnit) -> CleanupReasonCode {
         return CleanupReasonCode::SkippedUncertain;
     }
     for group in &unit.groups {
-        match group.ownership {
-            OutputOwnershipClass::Shared => return CleanupReasonCode::SkippedShared,
-            OutputOwnershipClass::Uncertain => return CleanupReasonCode::SkippedUncertain,
-            // ExternalUnproven is an ownership failure, not an authorization
-            // one: the prose (`ownership_skip_detail`) already says so, and
-            // the JSON code must agree so operators get the right response
-            // ("understand it before proceeding", not "add an allow-entry").
-            OutputOwnershipClass::ExternalUnproven => {
-                return CleanupReasonCode::SkippedOwnershipUnproven;
-            }
-            OutputOwnershipClass::PrivateBounded => {}
+        if group.ownership == OutputOwnershipClass::Uncertain {
+            return CleanupReasonCode::SkippedUncertain;
         }
         if group.measured.is_none() {
             return match group.skip {
@@ -3420,6 +3488,8 @@ fn unit_skip_code(unit: &workspace::CleanupUnit) -> CleanupReasonCode {
             };
         }
     }
+    // Measured shared and external groups are cleanable. Reaching here means
+    // a private path failed the location check.
     CleanupReasonCode::SkippedUnauthorized
 }
 
@@ -3519,7 +3589,7 @@ fn boundary_admits(selection: &CleanupSelection, manifest: &Path) -> bool {
         // This is not the ADR 006 shortcut: the excluded root's manifests are
         // still discovered, resolved and classified, so the universe does not
         // narrow and a shared output between a proven root and an unproven one
-        // stays `Shared` and stays inventory-only. What the exclusion narrows
+        // stays `Shared`. An idle shared directory is still cleanable. What the exclusion narrows
         // is the *proof*, not the *discovery*.
         CleanupSelection::ExcludeRoots { inner, roots } => {
             inner.admits(manifest)
@@ -3548,6 +3618,7 @@ fn split_unresolved_for_boundary(
     unresolved: &[UnresolvedOwnershipParticipant],
     workspaces: &[ResolvedWorkspace],
     selection: &CleanupSelection,
+    recency_seconds: u64,
 ) -> (
     Vec<UnresolvedOwnershipParticipant>,
     Vec<UnresolvedOwnershipParticipant>,
@@ -3562,12 +3633,48 @@ fn split_unresolved_for_boundary(
             continue;
         }
         match workspace::attribute_unknown(participant, workspaces) {
-            workspace::UnknownDisposition::MergeAll => blocking.push(participant.clone()),
-            workspace::UnknownDisposition::PassengerOf { .. }
+            workspace::UnknownDisposition::MergeAll
+                if unresolved_may_be_active(participant, recency_seconds) =>
+            {
+                blocking.push(participant.clone())
+            }
+            workspace::UnknownDisposition::MergeAll
+            | workspace::UnknownDisposition::PassengerOf { .. }
             | workspace::UnknownDisposition::ScopeNote => reported.push(participant.clone()),
         }
     }
     (blocking, reported, out_of_scope)
+}
+
+/// Whether an unresolved manifest must still protect overlapping artifacts.
+///
+/// A tree whose sources are stale does not. The artifacts are rebuildable,
+/// and the projects that are actually being worked on are protected by their
+/// own recency. A tree that was touched inside the window, or whose sources
+/// cannot be statted, still protects.
+fn unresolved_may_be_active(
+    participant: &UnresolvedOwnershipParticipant,
+    recency_seconds: u64,
+) -> bool {
+    let Some(root) = participant
+        .located_manifest
+        .as_ref()
+        .and_then(|manifest| manifest.parent())
+        .or_else(|| participant.manifest.parent())
+        .map(Path::to_path_buf)
+    else {
+        return true;
+    };
+    let start = SystemTime::now();
+    let Some(cutoff) = start.checked_sub(Duration::from_secs(recency_seconds)) else {
+        return true;
+    };
+    let outputs = vec![root.join("target")];
+    match traverse::workspace_member_activity(&root, &outputs, start, cutoff) {
+        Ok(traverse::SourceActivity::Recent(_)) => true,
+        Ok(traverse::SourceActivity::Quiet(_)) => false,
+        Err(()) => true,
+    }
 }
 
 /// Count of unresolved participants that block the boundary under ADR 007.
@@ -3577,8 +3684,10 @@ fn unbounded_blocking_count(
     unresolved: &[UnresolvedOwnershipParticipant],
     workspaces: &[ResolvedWorkspace],
     selection: &CleanupSelection,
+    recency_seconds: u64,
 ) -> usize {
-    let (blocking, _, _) = split_unresolved_for_boundary(unresolved, workspaces, selection);
+    let (blocking, _, _) =
+        split_unresolved_for_boundary(unresolved, workspaces, selection, recency_seconds);
     classify_output_claims(&blocking).0.len()
 }
 
@@ -3673,8 +3782,12 @@ fn resolve_cleanup_scope(
     // `Shared` at grouping time.
     let unresolved: Vec<UnresolvedOwnershipParticipant>;
     {
-        let (blocking, reported, out_of_scope) =
-            split_unresolved_for_boundary(&coverage_unresolved, &workspaces, selection);
+        let (blocking, reported, out_of_scope) = split_unresolved_for_boundary(
+            &coverage_unresolved,
+            &workspaces,
+            selection,
+            recency.as_secs(),
+        );
         for participant in &out_of_scope {
             diagnostics.push(ScanDiagnostic {
                 severity: crate::domain::DiagnosticSeverity::Info,
@@ -4054,6 +4167,7 @@ impl ProofUniverse {
         counters: &mut ScanCounters,
         selection: &CleanupSelection,
         blocked_roots: &[PathBuf],
+        recency_seconds: u64,
     ) -> Self {
         match refresh_combined_universe(
             universe,
@@ -4062,6 +4176,7 @@ impl ProofUniverse {
             counters,
             selection,
             blocked_roots,
+            recency_seconds,
         ) {
             Ok(fresh) => Self {
                 fresh: Some(fresh),
@@ -4099,6 +4214,7 @@ fn refresh_combined_universe(
     counters: &mut ScanCounters,
     selection: &CleanupSelection,
     blocked_roots: &[PathBuf],
+    recency_seconds: u64,
 ) -> Result<Vec<ResolvedWorkspace>, ProofFailure> {
     // M018: the refresh walks per root, for the same reason the initial
     // discovery does — a traversal error carries no path, so the root that
@@ -4180,8 +4296,12 @@ fn refresh_combined_universe(
         // scan-time manifests by path) also fails closed when a scan-time
         // passenger's owner disappears mid-run — the fresh disposition is
         // `MergeAll`, which blocks.
-        let (blocking, _, _) =
-            split_unresolved_for_boundary(&coverage.unresolved, &coverage.workspaces, selection);
+        let (blocking, _, _) = split_unresolved_for_boundary(
+            &coverage.unresolved,
+            &coverage.workspaces,
+            selection,
+            recency_seconds,
+        );
         let (unbounded, _) = classify_output_claims(&blocking);
         let unbounded_outside_blocked: Vec<_> = unbounded
             .iter()
@@ -4356,6 +4476,7 @@ pub fn final_cleanup_proof(
         counters,
         &CleanupSelection::All,
         &[],
+        recency_seconds,
     );
     final_cleanup_proof_roots(
         unit,
@@ -4552,6 +4673,7 @@ fn final_cleanup_proof_roots(
         ));
     }
     let mut fresh_covering: Vec<PathBuf> = Vec::new();
+    let mut proof_ownership = OutputOwnershipClass::PrivateBounded;
     for gi in &fresh_affected {
         // L-1: fail closed on a desynced graph index instead of panicking.
         let Some(g) = fresh_groups.get(*gi) else {
@@ -4560,20 +4682,20 @@ fn final_cleanup_proof_roots(
                 "fresh output graph index is out of bounds; cleanup deferred",
             ));
         };
-        // M-5: report the fresh class specifically (Shared/Uncertain/
-        // OwnershipUnproven), like the scan-time `unit_skip_code` does,
-        // instead of conflating every degradation to `Changed`.
-        if g.ownership != OutputOwnershipClass::PrivateBounded {
+        // A source tree, a symlink, or an unidentified path is not an
+        // artifact directory. Shared and external artifact directories stay
+        // eligible; an active co-owner is refused just below.
+        if g.ownership == OutputOwnershipClass::Uncertain {
             return Err(ProofFailure::new(
                 ownership_degraded_code(g.ownership),
                 format!(
-                    "ownership changed before cleanup; skipped: output {} is now {}; {}",
+                    "ownership could not be re-proven: output {} is uncertain; {}",
                     g.display.display(),
-                    g.ownership.label(),
                     ownership_skip_detail(g.ownership)
                 ),
             ));
         }
+        proof_ownership = broader_artifact_class(proof_ownership, g.ownership);
         fresh_covering.extend(g.covering.iter().cloned());
     }
     fresh_covering = workspace::outermost(&fresh_covering);
@@ -4583,29 +4705,62 @@ fn final_cleanup_proof_roots(
             "workspace changed before cleanup; skipped: physical output shape changed",
         ));
     }
-    // 8. No other discovered workspace may now overlap the candidate's affected
-    // output, nor have its source tree inside it. The fresh graph catches proven
-    // overlaps (the group would be `Shared` in step 7); this pass also covers
-    // symlink/unresolvable roots the graph cannot represent, failing closed when
-    // they can reach the region.
+    // 8. Another discovered workspace may share the artifact directory. That
+    // is cleanable when every such workspace is idle. An active co-owner, or
+    // one whose sources cannot be statted, keeps the directory. A co-owner's
+    // *source* tree inside the directory is refused unconditionally below.
+    let activity_now = SystemTime::now();
+    let activity_cutoff = activity_now
+        .checked_sub(Duration::from_secs(recency_seconds))
+        .ok_or_else(|| {
+            ProofFailure::new(
+                CleanupReasonCode::SkippedSafety,
+                "recency window exceeds system time range",
+            )
+        })?;
+    let mut co_owner_outputs: Vec<PathBuf> = Vec::new();
+    for other in &fresh_universe {
+        for root in [&other.output.target, &other.output.build] {
+            co_owner_outputs.extend(provable_output_paths(root));
+        }
+    }
     for other in &fresh_universe {
         if other.id == unit.id {
             continue;
         }
+        let mut other_paths = Vec::new();
         for root in [&other.output.target, &other.output.build] {
-            for other_path in provable_output_paths(root) {
-                if unit.covering.iter().any(|c| {
-                    other_path == *c || other_path.starts_with(c) || c.starts_with(&other_path)
-                }) {
+            other_paths.extend(provable_output_paths(root));
+            if root.is_symlink {
+                other_paths.extend(workspace::uncertain_root_aliases(root));
+            }
+        }
+        let overlaps_output = other_paths.iter().any(|other_path| {
+            unit.covering
+                .iter()
+                .any(|c| other_path == c || other_path.starts_with(c) || c.starts_with(other_path))
+        });
+        if overlaps_output {
+            match co_owner_is_active(other, &co_owner_outputs, activity_now, activity_cutoff) {
+                Ok(true) => {
                     return Err(ProofFailure::new(
-                        CleanupReasonCode::SkippedChangedBeforeCleanup,
+                        CleanupReasonCode::SkippedActive,
                         format!(
-                            "ownership changed before cleanup; skipped: another discovered workspace ({}) now overlaps cleaned output {}",
-                            other.root.display(),
-                            other_path.display()
+                            "shared artifact directory is still in use by {}; left untouched",
+                            other.root.display()
                         ),
                     ));
                 }
+                Err(()) => {
+                    return Err(ProofFailure::new(
+                        CleanupReasonCode::SkippedUncertain,
+                        format!(
+                            "could not tell whether {} is still using the artifact directory; left untouched",
+                            other.root.display()
+                        ),
+                    ));
+                }
+                Ok(false) => {}
             }
         }
         // Another workspace's *source* tree inside the cleaned region is the
@@ -4660,11 +4815,10 @@ fn final_cleanup_proof_roots(
     // root — the set is rebuilt per workspace member, and this is the proof
     // path.
     let fresh_source_dirs = workspace::source_tree_dirs(&fresh_universe);
-    if unit
-        .covering
-        .iter()
-        .any(|c| workspace::inside_source_tree_dirs(c, &fresh_source_dirs))
-    {
+    if unit.covering.iter().any(|c| {
+        workspace::inside_source_tree_dirs(c, &fresh_source_dirs)
+            || workspace::inside_package_source_on_disk(c)
+    }) {
         return Err(ProofFailure::new(
             CleanupReasonCode::SkippedSafety,
             format!(
@@ -4836,7 +4990,7 @@ fn final_cleanup_proof_roots(
         covering: cleanable,
         pre_bytes: fresh_bytes,
         newest_activity,
-        ownership: OutputOwnershipClass::PrivateBounded,
+        ownership: proof_ownership,
         frozen_env: Vec::new(),
     };
     let frozen = frozen_env(&provisional)?;
@@ -5195,6 +5349,44 @@ fn semver_spec_matches(actual: &str, requested: &str) -> bool {
             .iter()
             .zip(requested_parts)
             .all(|(actual, requested)| actual == &requested)
+}
+
+fn covering_already_cleaned(path: &Path, cleaned: &[PathBuf]) -> bool {
+    cleaned
+        .iter()
+        .any(|done| path == done || path.starts_with(done))
+}
+
+fn broader_artifact_class(
+    current: OutputOwnershipClass,
+    next: OutputOwnershipClass,
+) -> OutputOwnershipClass {
+    if current == OutputOwnershipClass::Shared || next == OutputOwnershipClass::Shared {
+        OutputOwnershipClass::Shared
+    } else if current == OutputOwnershipClass::ExternalUnproven
+        || next == OutputOwnershipClass::ExternalUnproven
+    {
+        OutputOwnershipClass::ExternalUnproven
+    } else {
+        OutputOwnershipClass::PrivateBounded
+    }
+}
+
+/// `Ok(true)` when `other` was edited inside the recency window.
+fn co_owner_is_active(
+    other: &crate::domain::ResolvedWorkspace,
+    output_roots: &[PathBuf],
+    start: SystemTime,
+    cutoff: SystemTime,
+) -> Result<bool, ()> {
+    for member_root in workspace::workspace_member_roots(other) {
+        match traverse::workspace_member_activity(&member_root, output_roots, start, cutoff) {
+            Ok(traverse::SourceActivity::Recent(_)) => return Ok(true),
+            Ok(traverse::SourceActivity::Quiet(_)) => {}
+            Err(()) => return Err(()),
+        }
+    }
+    Ok(false)
 }
 
 fn require_cargo_markers(covering: &[PathBuf]) -> Result<(), ProofFailure> {
@@ -5714,6 +5906,88 @@ mod tests {
         (d, root, target)
     }
 
+    /// Set a path's modification time, for a file or a directory.
+    ///
+    /// `File::open` cannot open a directory on Windows, and opening one for
+    /// writing fails too, so `set_modified` never reaches a directory there.
+    /// The activity walk counts the workspace directory itself. A fixture
+    /// whose directory stays "now" looks active on Windows and idle everywhere
+    /// else. Windows needs `FILE_FLAG_BACKUP_SEMANTICS` and `SetFileTime`.
+    fn set_path_modified(path: &Path, when: SystemTime) -> io::Result<()> {
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, INVALID_HANDLE_VALUE};
+            use windows_sys::Win32::Storage::FileSystem::{
+                CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE,
+                FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, SetFileTime,
+            };
+
+            const EPOCH_OFFSET_TICKS: u128 = 11_644_473_600 * 10_000_000;
+            const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
+            let since_epoch = when.duration_since(SystemTime::UNIX_EPOCH).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "timestamp predates the Unix epoch",
+                )
+            })?;
+            let ticks =
+                u64::try_from(since_epoch.as_nanos() / 100 + EPOCH_OFFSET_TICKS).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "timestamp out of range")
+                })?;
+            let filetime = FILETIME {
+                dwLowDateTime: (ticks & 0xFFFF_FFFF) as u32,
+                dwHighDateTime: (ticks >> 32) as u32,
+            };
+            let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+            wide.push(0);
+            // SAFETY: `wide` is a NUL-terminated UTF-16 buffer that outlives
+            // the call, the security-attributes pointer is null as documented,
+            // and the returned handle is closed on every path below.
+            let handle = unsafe {
+                CreateFileW(
+                    wide.as_ptr(),
+                    FILE_WRITE_ATTRIBUTES,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    std::ptr::null(),
+                    OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_BACKUP_SEMANTICS,
+                    std::ptr::null_mut(),
+                )
+            };
+            if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            // SAFETY: `handle` was opened above and is closed exactly once;
+            // `filetime` outlives the call.
+            let ok = unsafe {
+                SetFileTime(
+                    handle,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &filetime as *const FILETIME,
+                )
+            };
+            // SAFETY: `handle` was successfully opened above.
+            unsafe { CloseHandle(handle) };
+            if ok == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        }
+        #[cfg(not(windows))]
+        {
+            if fs::symlink_metadata(path)?.is_dir() {
+                fs::File::open(path)?.set_modified(when)
+            } else {
+                fs::OpenOptions::new()
+                    .write(true)
+                    .open(path)?
+                    .set_modified(when)
+            }
+        }
+    }
+
     fn backdate(path: &Path, old: SystemTime) {
         let mut stack = vec![path.to_path_buf()];
         while let Some(current) = stack.pop() {
@@ -5729,14 +6003,7 @@ mod tests {
                     }
                 }
             }
-            if let Ok(f) = fs::OpenOptions::new().write(true).open(&current) {
-                let _ = f.set_modified(old);
-            } else if let Ok(dir) = fs::File::open(&current) {
-                let _ = dir.set_modified(old);
-            }
-        }
-        if let Ok(dir) = fs::File::open(path) {
-            let _ = dir.set_modified(old);
+            let _ = set_path_modified(&current, old);
         }
     }
 
@@ -6029,9 +6296,33 @@ mod tests {
             .collect();
         engine.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(
-            listed, engine,
-            "the interactive list and the engine must agree on units, bytes, and ownership"
+            listed.len(),
+            engine.len(),
+            "listed {listed:?} engine {engine:?}"
         );
+        for (listed_row, engine_row) in listed.iter().zip(engine.iter()) {
+            assert_eq!(
+                listed_row.0, engine_row.0,
+                "the same units, in the same order"
+            );
+            assert_eq!(
+                listed_row.2,
+                engine_row.2,
+                "ownership agrees for {}",
+                listed_row.0.display()
+            );
+            // The listing shows the measured size of a shared directory on
+            // every row. The engine counts those bytes on the first workspace
+            // that cleans it and reports 0 on the later one, so a tally of
+            // the report does not reclaim the same directory twice.
+            if engine_row.1 != listed_row.1 {
+                assert_eq!(
+                    engine_row.1, 0,
+                    "only the deduped row drops its bytes: {engine_row:?}"
+                );
+                assert_eq!(listed_row.2, "shared");
+            }
+        }
 
         // And the selection must travel identically into both. This is the
         // property the TUI depends on: what the operator sees is what the
@@ -6382,9 +6673,8 @@ mod tests {
     ///
     /// A workspace in the readable root shares its output root with a
     /// workspace in the unproven root. The unproven root's workspace stays in
-    /// the *discovery* universe, so the shared output stays `Shared` and the
-    /// readable root's unit is inventory-only — and no `cargo clean` is
-    /// issued for it.
+    /// the *discovery* universe, so the shared output stays `Shared`. Both
+    /// claimants are idle, so the shared artifact directory is cleaned.
     ///
     /// The roots handed to the engine are the two the gate admits — the
     /// proven root and the unproven one — which is the production shape. If
@@ -6392,9 +6682,9 @@ mod tests {
     /// proven root and the shared bytes would be classified `PrivateBounded`.
     ///
     /// *Fails if:* the unproven root is dropped from discovery. The shared
-    /// bytes would then be classified `PrivateBounded` and deleted.
+    /// bytes would then be classified `PrivateBounded`.
     #[test]
-    fn a_shared_output_with_an_unproven_root_stays_shared_and_is_not_cleaned() {
+    fn a_shared_output_with_an_idle_unproven_root_stays_shared_and_is_cleaned() {
         let (_d, _root, readable, unproven) = coverage_gate_fixture();
         let noop = NoopObserver;
         let selection = CleanupSelection::All.excluding(vec![crate::domain::UnprovenRoot {
@@ -6428,16 +6718,16 @@ mod tests {
             "the unproven root's workspace is still a claimant, so the shared output stays shared: {:?}",
             alpha
         );
-        assert_ne!(
+        assert_eq!(
             alpha.reason_code,
             CleanupReasonCode::Cleaned,
-            "a shared output is inventory-only"
+            "both claimants are idle, so the shared artifact directory is cleaned: {alpha:?}"
         );
-        // The bytes are still there: no `cargo clean` was issued for it.
+        // The bytes are gone: one `cargo clean` reclaimed the shared directory.
         let artifact = readable.join("alpha/target/artifact.bin");
         assert!(
-            artifact.exists(),
-            "the shared output must not be cleaned: {}",
+            !artifact.exists(),
+            "the idle shared output must be cleaned: {}",
             artifact.display()
         );
     }
@@ -7034,6 +7324,14 @@ mod tests {
 
     /// M017: run the guarded engine the one way it runs now — scoped proof
     /// is the default, no flag.
+    fn outcome_for(mode: CleanMode) -> CleanOutcome {
+        match mode {
+            CleanMode::Simulate => CleanOutcome::Simulated,
+            CleanMode::CargoPreview => CleanOutcome::Previewed,
+            CleanMode::Execute => CleanOutcome::Cleaned,
+        }
+    }
+
     fn clean_default(root: &Path, mode: CleanMode, runner: &StagedCargo) -> CleanReport {
         clean_with_roots_policy_selector_guarded(
             std::slice::from_ref(&root.to_path_buf()),
@@ -7437,14 +7735,16 @@ mod tests {
             assert_eq!(report.results.len(), 2, "{mode:?}: {report:?}");
             for root in [&root_a, &root_b] {
                 let row = row_for(&report, root);
-                assert_eq!(row.outcome, CleanOutcome::Skipped, "{mode:?} {root:?}");
-                assert_eq!(
-                    row.reason_code,
-                    CleanupReasonCode::SkippedShared,
-                    "{mode:?} {root:?}"
-                );
+                assert_eq!(row.outcome, outcome_for(mode), "{mode:?} {root:?}");
+                assert_eq!(row.ownership, OutputOwnershipClass::Shared, "{mode:?}");
             }
-            assert!(runner.clean_calls().is_empty(), "{mode:?}");
+            // One physical directory, one cargo clean. Simulate spawns nothing.
+            let spawned = runner.clean_calls().len();
+            assert_eq!(
+                spawned,
+                usize::from(mode != CleanMode::Simulate),
+                "{mode:?}"
+            );
         }
     }
 
@@ -7608,9 +7908,12 @@ mod tests {
             assert_eq!(report.results.len(), 2, "{mode:?}: {report:?}");
             for root in [&root_a, &root_b] {
                 let row = row_for(&report, root);
-                assert_eq!(row.outcome, CleanOutcome::Skipped, "{mode:?} {root:?}");
+                assert_eq!(row.outcome, outcome_for(mode), "{mode:?} {root:?}");
             }
-            assert!(runner.clean_calls().is_empty(), "{mode:?}");
+            assert!(
+                mode == CleanMode::Simulate || !runner.clean_calls().is_empty(),
+                "{mode:?}"
+            );
         }
     }
 
@@ -7801,32 +8104,16 @@ mod tests {
             // B points at A's target.
             runner.stage(1, 2, target_a.clone(), None);
             let report = clean_default(d.path(), mode, &runner);
-            assert!(
-                runner.clean_calls().is_empty(),
-                "{mode:?}: no clean at all: {:?}",
-                runner.clean_calls()
-            );
-            for root in [&root_a, &root_b] {
-                let row = row_for(&report, root);
-                assert_eq!(
-                    row.outcome,
-                    CleanOutcome::Skipped,
-                    "{mode:?} {root:?}: {}",
-                    row.detail
-                );
-            }
-            assert!(
-                row_for(&report, &root_b).detail.contains("changed")
-                    || row_for(&report, &root_b).detail.contains("shared")
-                    || row_for(&report, &root_b).detail.contains("overlap"),
-                "{mode:?}: B refused for the move: {}",
-                row_for(&report, &root_b).detail
-            );
-            assert!(
-                row_for(&report, &root_a).detail.contains("overlap")
-                    || row_for(&report, &root_a).detail.contains("shared"),
-                "{mode:?}: A's gate 8 saw B's fresh overlap: {}",
+            assert_eq!(
+                row_for(&report, &root_a).outcome,
+                outcome_for(mode),
+                "{mode:?}: {}",
                 row_for(&report, &root_a).detail
+            );
+            assert!(
+                mode == CleanMode::Simulate || !runner.clean_calls().is_empty(),
+                "{mode:?}: {:?}",
+                runner.clean_calls()
             );
         }
     }
@@ -7865,18 +8152,30 @@ mod tests {
             // From the refresh on, A's target sits under B's.
             runner.stage(0, 2, target_b, None);
             let report = clean_default(d.path(), mode, &runner);
-            assert!(
-                runner.clean_calls().is_empty(),
-                "{mode:?}: no clean at all: {:?}",
-                runner.clean_calls()
+            // A redirected onto B's target between the scan and the proof, so
+            // A's own unit is refused. B is idle and its artifact directory is
+            // still cleaned; the refused passenger stays named below.
+            assert_eq!(
+                row_for(&report, &root_a).outcome,
+                CleanOutcome::Skipped,
+                "{mode:?}: {}",
+                row_for(&report, &root_a).detail
             );
-            for root in [&root_a, &root_b] {
-                assert_eq!(
-                    row_for(&report, root).outcome,
-                    CleanOutcome::Skipped,
-                    "{mode:?} {root:?}"
-                );
-            }
+            assert!(
+                row_for(&report, &root_a).detail.contains("changed"),
+                "{mode:?}: {}",
+                row_for(&report, &root_a).detail
+            );
+            assert_eq!(
+                row_for(&report, &root_b).outcome,
+                outcome_for(mode),
+                "{mode:?}: {}",
+                row_for(&report, &root_b).detail
+            );
+            assert!(
+                mode == CleanMode::Simulate || !runner.clean_calls().is_empty(),
+                "{mode:?}"
+            );
             assert!(
                 report
                     .unresolved_ownership
@@ -8077,7 +8376,7 @@ mod tests {
         runner.fail_locate_transport(&poison.join("Cargo.toml"));
         let refused = list_cleanup_candidates(
             std::slice::from_ref(&d.path().to_path_buf()),
-            0,
+            300,
             CleanMode::Simulate,
             &runner,
             &NoopObserver,
@@ -8102,10 +8401,10 @@ mod tests {
     }
 
     #[test]
-    fn external_unproven_inside_root_remains_inventory_only() {
-        // C002-F1: ExternalUnproven is inventory-only even inside a bounded
-        // cleanup root.
-        // Authorization never manufactures ownership proof (ADR 001).
+    fn idle_external_and_shared_are_authorized_and_uncertain_is_not() {
+        // An idle external or shared artifact directory is eligible inside a
+        // bounded root. Uncertain is not. An allow-list entry is not what
+        // admits the artifact classes, and it cannot admit Uncertain.
         let d = tempfile::tempdir().unwrap();
         let root = d.path().join("root");
         let proj = root.join("proj");
@@ -8167,18 +8466,20 @@ mod tests {
 
                 nested_package_roots: Vec::new(),
             };
-            // Inside the bounded root but non-private → still skipped.
-            assert!(
-                !is_authorized(&raw, &root, &[]).unwrap(),
-                "{ownership:?} inside ROOT must remain inventory-only"
-            );
-            // Inside configured allowed root → still skipped.
-            assert!(
-                !is_authorized(&raw, &root, std::slice::from_ref(&redirected)).unwrap(),
-                "{ownership:?} inside allowed root must remain inventory-only"
-            );
-            // Inside both → still skipped.
-            assert!(!is_authorized(&raw, &root, &[root.clone(), redirected.clone()]).unwrap());
+            if ownership == OutputOwnershipClass::Uncertain {
+                assert!(
+                    !is_authorized(&raw, &root, &[]).unwrap(),
+                    "uncertain output stays ineligible"
+                );
+                assert!(!is_authorized(&raw, &root, &[root.clone(), redirected.clone()]).unwrap());
+            } else {
+                // Idle shared and external artifact directories are eligible
+                // on their own. The allow list is not what admits them.
+                assert!(
+                    is_authorized(&raw, &root, &[]).unwrap(),
+                    "{ownership:?} is an idle artifact class"
+                );
+            }
         }
         // PrivateBounded inside ROOT remains authorized (conventional case).
         let canonical_target = fs::canonicalize(&proj).unwrap().join("target");
@@ -8342,14 +8643,16 @@ mod tests {
 
             nested_package_roots: Vec::new(),
         };
-        // Outside ROOT without authorization → not authorized.
-        assert!(!is_authorized(&raw, &root, &[]).unwrap());
-        // Inside configured allowed root → still not authorized (C002 correction).
-        assert!(!is_authorized(&raw, &root, &[outside]).unwrap());
-        // Skip detail must state both facts.
-        let detail = ownership_skip_detail(OutputOwnershipClass::ExternalUnproven);
-        assert!(detail.contains("unproven"));
-        assert!(detail.contains("authorization does not establish"));
+        // An external artifact directory is eligible whether or not it is
+        // listed. The allow list does not decide the class, and the proof
+        // still requires Cargo's cache marker.
+        assert!(is_authorized(&raw, &root, &[]).unwrap());
+        assert!(is_authorized(&raw, &root, std::slice::from_ref(&outside)).unwrap());
+        let uncertain = workspace::RawGroup {
+            ownership: OutputOwnershipClass::Uncertain,
+            ..raw
+        };
+        assert!(!is_authorized(&uncertain, &root, &[outside]).unwrap());
     }
 
     #[test]
@@ -8406,7 +8709,8 @@ mod tests {
             std::fs::create_dir(&root).unwrap();
             assert!(is_authorized(&raw, &root, &[link]).is_err());
 
-            // Shared remains forbidden even inside allowed root.
+            // A shared artifact directory is eligible. Uncertain is not,
+            // including when an allow entry names it.
             let shared_raw = workspace::RawGroup {
                 physicals: vec![real.clone()],
                 covering: vec![real.clone()],
@@ -8416,7 +8720,7 @@ mod tests {
                 source_overlap: false,
                 nested_source_overlap: false,
             };
-            assert!(!is_authorized(&shared_raw, &root, std::slice::from_ref(&real)).unwrap());
+            assert!(is_authorized(&shared_raw, &root, std::slice::from_ref(&real)).unwrap());
             // Uncertain forbidden.
             let uncertain_raw = workspace::RawGroup {
                 physicals: vec![real.clone()],
@@ -8555,29 +8859,33 @@ mod tests {
     }
 
     #[test]
-    fn external_unproven_skip_code_names_ownership_not_authorization() {
-        // B9: the JSON code for an ownership failure must say
-        // ownership-unproven, matching the prose (`ownership_skip_detail`)
-        // and the operator response it warrants.
+    fn measured_shared_and_external_groups_are_not_ownership_skips() {
+        // Idle shared and external artifact directories are cleanable. The
+        // skip code is reserved for a class that still cannot be cleaned.
         let d = tempfile::tempdir().unwrap();
         let base = fs::canonicalize(d.path()).unwrap();
-        for (class, expected) in [
-            (
-                OutputOwnershipClass::Shared,
-                CleanupReasonCode::SkippedShared,
-            ),
-            (
-                OutputOwnershipClass::Uncertain,
-                CleanupReasonCode::SkippedUncertain,
-            ),
-            (
-                OutputOwnershipClass::ExternalUnproven,
-                CleanupReasonCode::SkippedOwnershipUnproven,
-            ),
+        for class in [
+            OutputOwnershipClass::Shared,
+            OutputOwnershipClass::ExternalUnproven,
         ] {
             let unit = synthetic_mixed_unit(&base, OutputOwnershipClass::PrivateBounded, class);
-            assert_eq!(unit_skip_code(&unit), expected, "{class:?}");
+            assert_ne!(
+                unit_skip_code(&unit),
+                CleanupReasonCode::SkippedShared,
+                "{class:?}"
+            );
+            assert_ne!(
+                unit_skip_code(&unit),
+                CleanupReasonCode::SkippedOwnershipUnproven,
+                "{class:?}"
+            );
         }
+        let unit = synthetic_mixed_unit(
+            &base,
+            OutputOwnershipClass::PrivateBounded,
+            OutputOwnershipClass::Uncertain,
+        );
+        assert_eq!(unit_skip_code(&unit), CleanupReasonCode::SkippedUncertain);
     }
 
     #[test]
@@ -9197,8 +9505,8 @@ mod tests {
     fn real_temp_project_preview_and_execute_with_redirected_target() {
         // Real Cargo integration: private redirected output inside workspace
         // (hence PrivateBounded) and inside the bounded root. C002 keeps this
-        // eligible; external-unproven output outside the workspace remains
-        // inventory-only even inside ROOT.
+        // eligible; an external artifact directory outside the workspace is
+        // cleanable when it is idle and carries the cache marker.
         let d = tempfile::tempdir().unwrap();
         let root = d.path().join("root");
         let proj = root.join("proj");
@@ -9565,13 +9873,20 @@ mod tests {
         backdate(d.path(), old);
         let noop = NoopObserver;
         let runner = SystemCleanupRunner;
-        // Without authorization → skipped as external-unproven.
+        // An idle external artifact directory is cleanable. An allow-list
+        // entry is not what admits it, and it still cannot admit Uncertain.
         let skipped = clean_with(&root, 0, &[], CleanMode::Simulate, &runner, &noop).unwrap();
         assert_eq!(skipped.results.len(), 1);
         assert_eq!(skipped.results[0].outcome, CleanOutcome::Skipped);
-        // With explicit allowed root → still skipped (C002 §7.1: authorization
-        // never manufactures ownership proof; ExternalUnproven is
-        // inventory-only under any authorization configuration).
+        assert!(
+            skipped.results[0].detail.contains("CACHEDIR.TAG"),
+            "the marker proof still refuses, past the ownership gate: {}",
+            skipped.results[0].detail
+        );
+        assert_eq!(
+            skipped.results[0].ownership,
+            OutputOwnershipClass::ExternalUnproven
+        );
         let allowed = clean_with(
             &root,
             0,
@@ -9584,10 +9899,9 @@ mod tests {
         assert_eq!(allowed.results.len(), 1);
         assert_eq!(allowed.results[0].outcome, CleanOutcome::Skipped);
         assert!(
-            allowed.results[0]
-                .detail
-                .contains("authorization does not establish")
-                || allowed.results[0].detail.contains("unproven")
+            allowed.results[0].detail.contains("CACHEDIR.TAG"),
+            "an allow-list entry does not skip the marker proof: {}",
+            allowed.results[0].detail
         );
     }
 
@@ -10358,22 +10672,22 @@ mod tests {
             report
                 .results
                 .iter()
-                .all(|r| r.ownership == OutputOwnershipClass::Shared
-                    && r.outcome == CleanOutcome::Skipped)
-        );
-        assert!(
-            report
-                .results
-                .iter()
-                .any(|r| r.policy_disposition == Some(PolicyDisposition::Excluded)),
+                .all(|r| r.ownership == OutputOwnershipClass::Shared),
             "{report:?}"
         );
         assert!(
-            report
-                .results
-                .iter()
-                .any(|r| r.policy_disposition.is_none()),
-            "included owner must still be blocked by excluded owner's shared output"
+            report.results.iter().any(|r| {
+                r.policy_disposition == Some(PolicyDisposition::Excluded)
+                    && r.outcome == CleanOutcome::Skipped
+            }),
+            "{report:?}"
+        );
+        assert!(
+            report.results.iter().any(|r| {
+                r.policy_disposition != Some(PolicyDisposition::Excluded)
+                    && r.outcome == CleanOutcome::Simulated
+            }),
+            "the included idle owner is cleaned; exclusion applies to the other row: {report:?}"
         );
     }
 
@@ -11010,6 +11324,72 @@ mod tests {
     }
 
     #[test]
+    fn an_idle_shared_target_is_cleaned_once() {
+        let d = tempfile::tempdir().unwrap();
+        let alpha = ws_root(d.path(), "alpha");
+        let beta = ws_root(d.path(), "beta");
+        let shared = cargo_output(&d.path().join("shared-target"), 4096);
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(3600));
+        let mut runner = StagedCargo::new();
+        runner.add(&alpha, shared.clone(), None);
+        runner.add(&beta, shared.clone(), None);
+        runner.removes_on_clean(vec![shared.join("artifact.bin")]);
+        let report = clean_with(d.path(), 0, &[], CleanMode::Execute, &runner, &NoopObserver)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(report.scope_blocked.is_none(), "{:?}", report.scope_blocked);
+        assert_eq!(
+            runner.clean_calls().len(),
+            1,
+            "one cargo clean for the shared directory: {:?}",
+            report.results
+        );
+        assert!(!shared.join("artifact.bin").exists());
+        let cleaned: Vec<_> = report
+            .results
+            .iter()
+            .filter(|row| row.outcome == CleanOutcome::Cleaned)
+            .collect();
+        assert_eq!(cleaned.len(), 2, "{:?}", report.results);
+        let zeroed = cleaned
+            .iter()
+            .filter(|row| row.before_bytes == Some(0))
+            .count();
+        assert_eq!(
+            zeroed, 1,
+            "the shared directory is counted on one row: {:?}",
+            report.results
+        );
+    }
+
+    #[test]
+    fn an_active_co_owner_keeps_the_shared_target() {
+        let d = tempfile::tempdir().unwrap();
+        let alpha = ws_root(d.path(), "alpha");
+        let beta = ws_root(d.path(), "beta");
+        let shared = cargo_output(&d.path().join("shared-target"), 4096);
+        backdate(d.path(), SystemTime::now() - Duration::from_secs(7200));
+        fs::write(beta.join("src/main.rs"), "fn main() { /* editing */ }\n").unwrap();
+        let mut runner = StagedCargo::new();
+        runner.add(&alpha, shared.clone(), None);
+        runner.add(&beta, shared.clone(), None);
+        let report = clean_with(
+            d.path(),
+            3600,
+            &[],
+            CleanMode::Execute,
+            &runner,
+            &NoopObserver,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            runner.clean_calls().is_empty(),
+            "an active co-owner keeps the directory: {:?}",
+            report.results
+        );
+        assert!(shared.join("artifact.bin").exists());
+    }
+
+    #[test]
     fn distinct_private_target_and_build_is_one_cleanable_unit() {
         // C003 §9: private target + private build, distinct siblings => one
         // cleanable unit, one Cargo invocation, one result, in every mode.
@@ -11123,23 +11503,17 @@ mod tests {
             let report = clean_with(d.path(), 0, &[], mode, &runner, &noop).unwrap();
             assert_eq!(report.results.len(), 1, "{mode:?}");
             let row = row_for(&report, &root);
-            assert_eq!(row.outcome, CleanOutcome::Skipped, "{mode:?}");
+            assert_eq!(row.outcome, outcome_for(mode), "{mode:?}");
             assert_eq!(
                 row.ownership,
                 OutputOwnershipClass::ExternalUnproven,
                 "{mode:?}"
             );
-            assert!(
-                row.detail.contains("build output"),
-                "{mode:?}: {}",
-                row.detail
+            assert_eq!(
+                runner.clean_calls().len(),
+                usize::from(mode != CleanMode::Simulate),
+                "{mode:?}"
             );
-            assert!(
-                row.detail.contains("external-unproven"),
-                "{mode:?}: {}",
-                row.detail
-            );
-            assert!(runner.clean_calls().is_empty(), "{mode:?}");
         }
     }
 
@@ -11164,15 +11538,13 @@ mod tests {
             let noop = NoopObserver;
             let report = clean_with(d.path(), 0, &[], mode, &runner, &noop).unwrap();
             let row = row_for(&report, &root_a);
-            assert_eq!(row.outcome, CleanOutcome::Skipped, "{mode:?}");
+            assert_eq!(row.outcome, outcome_for(mode), "{mode:?}");
             assert_eq!(row.ownership, OutputOwnershipClass::Shared, "{mode:?}");
-            assert!(
-                row.detail.contains("build output"),
-                "{mode:?}: {}",
-                row.detail
+            assert_eq!(
+                runner.clean_calls().len(),
+                usize::from(mode != CleanMode::Simulate),
+                "{mode:?}"
             );
-            assert!(row.detail.contains("shared"), "{mode:?}: {}", row.detail);
-            assert!(runner.clean_calls().is_empty(), "{mode:?}");
         }
     }
 
@@ -11195,13 +11567,12 @@ mod tests {
             let noop = NoopObserver;
             let report = clean_with(d.path(), 0, &[], mode, &runner, &noop).unwrap();
             let row = row_for(&report, &root);
-            assert_eq!(row.outcome, CleanOutcome::Skipped, "{mode:?}");
-            assert!(
-                row.detail.contains("target output"),
-                "{mode:?}: {}",
-                row.detail
+            assert_eq!(row.outcome, outcome_for(mode), "{mode:?}");
+            assert_eq!(
+                runner.clean_calls().len(),
+                usize::from(mode != CleanMode::Simulate),
+                "{mode:?}"
             );
-            assert!(runner.clean_calls().is_empty(), "{mode:?}");
         }
     }
 
@@ -11337,10 +11708,10 @@ mod tests {
     }
 
     #[test]
-    fn gate_blocks_mixed_class_units_in_every_combination() {
-        // C003 §9 mixed matrix at the unit gate: PrivateBounded target plus
-        // ExternalUnproven / Shared / Uncertain build (and the mirrored target)
-        // all skip the entire unit; only all-private passes.
+    fn gate_blocks_uncertain_groups_and_admits_idle_artifact_classes() {
+        // An uncertain sibling still blocks the whole unit: one `cargo clean`
+        // would touch it. A measured shared or external sibling is an idle
+        // artifact directory and does not.
         let d = tempfile::tempdir().unwrap();
         // Covering roots are canonical by contract, so authorize against a
         // canonical cleanup root (macOS `/var` is a symlink).
@@ -11348,22 +11719,35 @@ mod tests {
         for build_class in [
             OutputOwnershipClass::ExternalUnproven,
             OutputOwnershipClass::Shared,
-            OutputOwnershipClass::Uncertain,
         ] {
             let unit =
                 synthetic_mixed_unit(&base, OutputOwnershipClass::PrivateBounded, build_class);
-            let err = unit_block_reason(&unit, &base, &[]).unwrap_err();
             assert!(
-                err.detail().contains("build output"),
-                "{build_class:?}: {err:?}"
+                unit_block_reason(&unit, &base, &[]).is_ok(),
+                "{build_class:?} build"
             );
             let unit =
                 synthetic_mixed_unit(&base, build_class, OutputOwnershipClass::PrivateBounded);
-            let err = unit_block_reason(&unit, &base, &[]).unwrap_err();
             assert!(
-                err.detail().contains("target output"),
-                "{build_class:?}: {err:?}"
+                unit_block_reason(&unit, &base, &[]).is_ok(),
+                "{build_class:?} target"
             );
+        }
+        for (target_class, build_class, needle) in [
+            (
+                OutputOwnershipClass::PrivateBounded,
+                OutputOwnershipClass::Uncertain,
+                "build output",
+            ),
+            (
+                OutputOwnershipClass::Uncertain,
+                OutputOwnershipClass::PrivateBounded,
+                "target output",
+            ),
+        ] {
+            let unit = synthetic_mixed_unit(&base, target_class, build_class);
+            let err = unit_block_reason(&unit, &base, &[]).unwrap_err();
+            assert!(err.detail().contains(needle), "{err:?}");
         }
         let unit = synthetic_mixed_unit(
             &base,
@@ -11470,18 +11854,14 @@ mod tests {
             let noop = NoopObserver;
             let report = clean_with(d.path(), 0, &[], mode, &runner, &noop).unwrap();
             let row = row_for(&report, &root_a);
+            // B moved onto A's artifact directory and both projects are idle,
+            // so the directory is cleaned. A's sources stay outside it.
+            assert_eq!(row.outcome, outcome_for(mode), "{mode:?}: {}", row.detail);
             assert_eq!(
-                row.outcome,
-                CleanOutcome::Skipped,
-                "{mode:?}: {}",
-                row.detail
+                runner.clean_calls().len(),
+                usize::from(mode != CleanMode::Simulate),
+                "{mode:?}"
             );
-            assert!(
-                row.detail.contains("shared") || row.detail.contains("overlaps"),
-                "{mode:?}: {}",
-                row.detail
-            );
-            assert!(runner.clean_calls().is_empty(), "{mode:?}: no clean at all");
             assert!(
                 runner.metadata_for(1) >= 2,
                 "{mode:?}: B must actually be re-resolved by the fresh graph"
@@ -11512,18 +11892,11 @@ mod tests {
             let noop = NoopObserver;
             let report = clean_with(d.path(), 0, &[], mode, &runner, &noop).unwrap();
             let row = row_for(&report, &root_a);
-            assert_eq!(
-                row.outcome,
-                CleanOutcome::Skipped,
-                "{mode:?}: {}",
-                row.detail
-            );
+            assert_eq!(row.outcome, outcome_for(mode), "{mode:?}: {}", row.detail);
             assert!(
-                row.detail.contains("shared") || row.detail.contains("overlaps"),
-                "{mode:?}: {}",
-                row.detail
+                mode == CleanMode::Simulate || !runner.clean_calls().is_empty(),
+                "{mode:?}"
             );
-            assert!(runner.clean_calls().is_empty(), "{mode:?}");
         }
     }
 
@@ -11551,16 +11924,12 @@ mod tests {
         let noop = NoopObserver;
         let report = clean_with(d.path(), 0, &[], CleanMode::Simulate, &runner, &noop).unwrap();
         let row = row_for(&report, &root_a);
-        assert_eq!(row.outcome, CleanOutcome::Skipped, "{}", row.detail);
-        // H4: B's symlinked root has no node in the physical graph, so while it
-        // exists no group may claim `private`. A's group is reported `shared`
-        // and fails the private-ownership gate before the explicit
-        // cross-workspace overlap check is even reached.
-        assert!(
-            row.detail.contains("shared") || row.detail.contains("overlaps"),
-            "{}",
-            row.detail
-        );
+        // B's target is a symlink onto A's artifact directory and B is idle,
+        // so the real directory is cleaned. The symlink itself is not a
+        // covering root.
+        assert_eq!(row.outcome, CleanOutcome::Simulated, "{}", row.detail);
+        assert!(root_b.join("Cargo.toml").is_file());
+        assert!(root_b.join("src/main.rs").is_file());
         assert!(runner.clean_calls().is_empty());
     }
 
@@ -11590,14 +11959,14 @@ mod tests {
             let noop = NoopObserver;
             let report = clean_with(d.path(), 0, &[], mode, &runner, &noop).unwrap();
             let row = row_for(&report, &root_a);
-            assert_eq!(
-                row.outcome,
-                CleanOutcome::Skipped,
-                "{mode:?}: {}",
-                row.detail
+            // B's configured path does not exist, so it is not a second owner
+            // of A's artifact directory. A is idle and is cleaned.
+            assert_eq!(row.outcome, outcome_for(mode), "{mode:?}: {}", row.detail);
+            assert!(root_b.join("src/main.rs").is_file(), "{mode:?}");
+            assert!(
+                mode == CleanMode::Simulate || !runner.clean_calls().is_empty(),
+                "{mode:?}"
             );
-            assert!(row.detail.contains("overlaps"), "{mode:?}: {}", row.detail);
-            assert!(runner.clean_calls().is_empty(), "{mode:?}");
         }
     }
 
@@ -11624,8 +11993,8 @@ mod tests {
         let noop = NoopObserver;
         let report = clean_with(d.path(), 0, &[], CleanMode::Simulate, &runner, &noop).unwrap();
         let row = row_for(&report, &root_a);
-        assert_eq!(row.outcome, CleanOutcome::Skipped, "{}", row.detail);
-        assert!(row.detail.contains("overlaps"), "{}", row.detail);
+        assert_eq!(row.outcome, CleanOutcome::Simulated, "{}", row.detail);
+        assert!(root_b.join("src/main.rs").is_file());
         assert!(runner.clean_calls().is_empty());
     }
 
@@ -11699,18 +12068,18 @@ mod tests {
             let noop = NoopObserver;
             let report = clean_with(d.path(), 0, &[], mode, &runner, &noop).unwrap();
             let row = row_for(&report, &root_a);
-            assert_eq!(
-                row.outcome,
-                CleanOutcome::Skipped,
-                "{mode:?}: {}",
-                row.detail
+            // The initial graph is shared. The fresh graph is re-proven, and
+            // an idle artifact directory is cleaned whether or not the overlap
+            // is still there.
+            assert_eq!(row.outcome, outcome_for(mode), "{mode:?}: {}", row.detail);
+            assert!(
+                report.counters.proof_workspaces_refreshed > 0,
+                "{mode:?}: an idle shared directory is re-proven rather than refused up front"
             );
-            assert!(row.detail.contains("shared"), "{mode:?}: {}", row.detail);
-            assert_eq!(
-                report.counters.proof_workspaces_refreshed, 0,
-                "{mode:?}: gate blocked before any ownership proof"
+            assert!(
+                mode == CleanMode::Simulate || !runner.clean_calls().is_empty(),
+                "{mode:?}"
             );
-            assert!(runner.clean_calls().is_empty(), "{mode:?}");
         }
     }
 
@@ -11861,8 +12230,13 @@ mod tests {
             );
 
             assert!(
-                runner.clean_calls().is_empty(),
-                "{mode:?}: no cargo clean may run with a neighbour's sources inside the region"
+                runner.clean_calls().iter().all(|(_, args, _)| {
+                    !args.windows(2).any(|pair| {
+                        pair[0] == "--target-dir" && Path::new(&pair[1]) == out.as_path()
+                    })
+                }),
+                "{mode:?}: the directory that contains the neighbour's sources must not be a cargo clean target: {:?}",
+                runner.clean_calls()
             );
             // The bytes 0.2.0 deleted.
             for path in [
@@ -11919,8 +12293,13 @@ mod tests {
             );
 
             assert!(
-                runner.clean_calls().is_empty(),
-                "{mode:?}: no cargo clean may run with a package directory inside the region"
+                runner.clean_calls().iter().all(|(_, args, _)| {
+                    !args.windows(2).any(|pair| {
+                        pair[0] == "--target-dir" && Path::new(&pair[1]) == out.as_path()
+                    })
+                }),
+                "{mode:?}: the directory inside the package must not be a cargo clean target: {:?}",
+                runner.clean_calls()
             );
             // The bytes a `cargo clean` of that root would have taken.
             for path in [
@@ -12219,7 +12598,7 @@ mod tests {
                 report
                     .results
                     .iter()
-                    .all(|r| r.outcome == CleanOutcome::Skipped),
+                    .all(|r| r.outcome == outcome_for(mode)),
                 "{mode:?}: {:?}",
                 report.results
             );
@@ -12229,7 +12608,11 @@ mod tests {
                     .iter()
                     .any(|r| r.ownership == OutputOwnershipClass::Shared)
             );
-            assert!(runner.clean_calls().is_empty(), "{mode:?}");
+            assert!(
+                mode == CleanMode::Simulate || !runner.clean_calls().is_empty(),
+                "{mode:?}: {:?}",
+                runner.clean_calls()
+            );
         }
     }
 
@@ -12539,18 +12922,10 @@ mod tests {
         );
         // Point the shared group at the decoy path so the skip detail embeds it.
         unit.groups[0].display = decoy.clone();
-        let reason = unit_block_reason(&unit, &base, &[]).unwrap_err();
+        let reason = unit_block_reason(&unit, &base, &[]);
         assert!(
-            !reason.is_authorization_infrastructure(),
-            "a path is not an authorization failure: {reason:?}"
-        );
-        assert!(
-            matches!(reason, BlockReason::Unit(_)),
-            "a shared output is a per-unit skip: {reason:?}"
-        );
-        assert!(
-            reason.detail().contains("cleanup authorization root"),
-            "the detail still names the path: {reason:?}"
+            reason.is_ok(),
+            "an idle shared artifact directory is cleanable, so a path named like an authorization error cannot become one: {reason:?}"
         );
     }
 
@@ -12605,27 +12980,17 @@ mod tests {
             ownership_degraded_code(OutputOwnershipClass::ExternalUnproven),
             CleanupReasonCode::SkippedOwnershipUnproven
         );
-        // Spot-check agreement with the scan-time gate on synthetic units.
+        // Uncertain is still the scan-time skip. Measured shared and external
+        // groups are cleanable, so they no longer share a skip code with the
+        // degradation helper.
         let d = tempfile::tempdir().unwrap();
         let base = fs::canonicalize(d.path()).unwrap();
-        for (class, expected) in [
-            (
-                OutputOwnershipClass::Shared,
-                CleanupReasonCode::SkippedShared,
-            ),
-            (
-                OutputOwnershipClass::Uncertain,
-                CleanupReasonCode::SkippedUncertain,
-            ),
-            (
-                OutputOwnershipClass::ExternalUnproven,
-                CleanupReasonCode::SkippedOwnershipUnproven,
-            ),
-        ] {
-            assert_eq!(ownership_degraded_code(class), expected);
-            let unit = synthetic_mixed_unit(&base, OutputOwnershipClass::PrivateBounded, class);
-            assert_eq!(unit_skip_code(&unit), expected, "{class:?}");
-        }
+        let unit = synthetic_mixed_unit(
+            &base,
+            OutputOwnershipClass::PrivateBounded,
+            OutputOwnershipClass::Uncertain,
+        );
+        assert_eq!(unit_skip_code(&unit), CleanupReasonCode::SkippedUncertain);
     }
 
     #[test]
@@ -13153,9 +13518,18 @@ mod tests {
         selection: &CleanupSelection,
         runner: &dyn CleanupRunner,
     ) -> CleanReport {
+        execute_roots_recency(roots, selection, runner, 0)
+    }
+
+    fn execute_roots_recency(
+        roots: &[PathBuf],
+        selection: &CleanupSelection,
+        runner: &dyn CleanupRunner,
+        recency_seconds: u64,
+    ) -> CleanReport {
         clean_with_roots_policy_selector_guarded(
             roots,
-            0,
+            recency_seconds,
             &[],
             CleanMode::Execute,
             runner,
@@ -13166,6 +13540,16 @@ mod tests {
             selection,
         )
         .unwrap()
+    }
+
+    /// Rewrite a workspace's sources so their mtimes fall inside `recency`.
+    fn retouch_sources(root: &Path) {
+        for rel in ["Cargo.toml", "src/main.rs", "src/lib.rs"] {
+            let path = root.join(rel);
+            if let Ok(bytes) = fs::read(&path) {
+                fs::write(&path, bytes).unwrap();
+            }
+        }
     }
 
     fn project_pair(base: &Path, broken_name: &str, healthy_name: &str) -> (PathBuf, PathBuf) {
@@ -13197,10 +13581,12 @@ mod tests {
             .add(&healthy_a, healthy_a.join("target"), None)
             .add(&healthy_b, healthy_b.join("target"), None)
             .fail_locate_transport(&broken.join("Cargo.toml"));
-        let report = execute_roots(
+        retouch_sources(&broken);
+        let report = execute_roots_recency(
             &[root_a.clone(), root_b.clone()],
             &CleanupSelection::PerLearnedRoot,
             &runner,
+            300,
         );
         assert!(
             report.scope_blocked.is_none(),
@@ -13254,22 +13640,25 @@ mod tests {
             .add(&healthy_a, shared.clone(), None)
             .add(&healthy_b, shared, None)
             .fail_locate_transport(&broken.join("Cargo.toml"));
-        let report = execute_roots(
+        retouch_sources(&broken);
+        let report = execute_roots_recency(
             &[root_a, root_b],
             &CleanupSelection::PerLearnedRoot,
             &runner,
+            300,
         );
-        assert!(
-            runner.clean_calls().is_empty(),
-            "a shared target must not be cleaned: {:?}",
+        assert_eq!(
+            runner.clean_calls().len(),
+            1,
+            "the unblocked root cleans the idle shared directory once: {:?}",
             runner.clean_calls()
         );
         assert!(
-            report
-                .results
-                .iter()
-                .any(|row| row.reason_code == CleanupReasonCode::SkippedShared),
-            "the proceeding root stays shared, not private: {:?}",
+            report.results.iter().any(|row| {
+                row.ownership == OutputOwnershipClass::Shared
+                    && row.outcome == CleanOutcome::Cleaned
+            }),
+            "blocking one root must not drop it from grouping: {:?}",
             report.results
         );
     }
@@ -13342,10 +13731,12 @@ mod tests {
             )
             .add(&sibling_ws, sibling_ws.join("target"), None)
             .fail_locate_transport(&poison.join("Cargo.toml"));
-        let report = execute_roots(
+        retouch_sources(&poison);
+        let report = execute_roots_recency(
             &[parent, child, sibling],
             &CleanupSelection::PerLearnedRoot,
             &runner,
+            300,
         );
         assert_eq!(runner.clean_calls().len(), 1, "{:?}", runner.clean_calls());
         assert!(runner.clean_calls()[0].0.starts_with(&sibling_ws));
@@ -13372,10 +13763,13 @@ mod tests {
             .add(&healthy_b, healthy_b.join("target"), None)
             .fail_locate_transport(&broken_a.join("Cargo.toml"))
             .fail_locate_transport(&broken_b.join("Cargo.toml"));
-        let report = execute_roots(
+        retouch_sources(&broken_a);
+        retouch_sources(&broken_b);
+        let report = execute_roots_recency(
             &[root_a, root_b],
             &CleanupSelection::PerLearnedRoot,
             &runner,
+            300,
         );
         assert_eq!(
             report.scope_blocked.as_ref().map(|block| block.reason),
@@ -13396,7 +13790,8 @@ mod tests {
         runner
             .add(&healthy, healthy.join("target"), None)
             .fail_locate_transport(&broken.join("Cargo.toml"));
-        let report = execute_roots(&[base], &CleanupSelection::All, &runner);
+        retouch_sources(&broken);
+        let report = execute_roots_recency(&[base], &CleanupSelection::All, &runner, 300);
         assert_eq!(
             report.scope_blocked.as_ref().map(|block| block.reason),
             Some(ScopeBlockReason::OwnershipUnproven)
@@ -13582,10 +13977,11 @@ mod tests {
         runner.add(&broken, broken.join("target"), None);
         runner.fail_metadata_from(0, 1);
         runner.add(&healthy, healthy.join("target"), None);
-        let report = execute_roots(&[base], &CleanupSelection::All, &runner);
+        retouch_sources(&broken);
+        let report = execute_roots_recency(&[base], &CleanupSelection::All, &runner, 300);
         assert!(
             runner.clean_calls().is_empty(),
-            "a redirect must hold the healthy unit: {:?}",
+            "a redirect from a recently touched unresolved tree must hold the healthy unit: {:?}",
             runner.clean_calls()
         );
         assert!(
@@ -13606,7 +14002,8 @@ mod tests {
         runner.add(&broken, broken.join("target"), None);
         runner.fail_metadata_from(0, 1);
         runner.add(&healthy, healthy.join("target"), None);
-        let report = execute_roots(&[base], &CleanupSelection::All, &runner);
+        retouch_sources(&broken);
+        let report = execute_roots_recency(&[base], &CleanupSelection::All, &runner, 300);
         assert_eq!(
             report.scope_blocked.as_ref().map(|block| block.reason),
             Some(ScopeBlockReason::OwnershipUnproven),
@@ -13652,7 +14049,8 @@ mod tests {
             runner.add(&broken, broken.join("target"), None);
             runner.fail_metadata_from(0, 1);
             runner.add(&healthy, healthy.join("target"), None);
-            let report = execute_roots(&[base], &CleanupSelection::All, &runner);
+            retouch_sources(&broken);
+            let report = execute_roots_recency(&[base], &CleanupSelection::All, &runner, 300);
             assert!(
                 runner.clean_calls().is_empty(),
                 "a symlinked redirect must hold the healthy unit: {:?}",
@@ -13677,7 +14075,8 @@ mod tests {
         runner.add(&broken, broken.join("target"), None);
         runner.fail_metadata_from(0, 1);
         runner.add(&healthy, healthy.join("target"), None);
-        let report = execute_roots(
+        retouch_sources(&broken);
+        let report = execute_roots_recency(
             &[base],
             &CleanupSelection::All,
             &ClaimRewriteRunner {
@@ -13686,6 +14085,7 @@ mod tests {
                 healthy_target: healthy.join("target"),
                 metadata_calls: std::sync::atomic::AtomicUsize::new(0),
             },
+            300,
         );
         assert!(
             runner.clean_calls().is_empty(),

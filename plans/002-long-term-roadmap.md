@@ -178,6 +178,8 @@ Required cases:
 
 Shared, uncertain, and externally unproven physical output remains inventory-only in M005.
 
+That sentence is the M005 rule. ADR 001's amendment of 2026-11-10 narrows it: an idle `Shared` or `ExternalUnproven` artifact directory is cleanable, and `Uncertain` output stays uncleaned.
+
 ## Phase 7 — Performance hardening and adaptive discovery
 
 Roadmap milestone: M006.

@@ -61,7 +61,8 @@ pub struct CleanupFlags {
     /// Require at least this many reclaimable bytes per workspace.
     #[arg(long)]
     pub min_reclaimable_bytes: Option<u64>,
-    /// Require this many seconds of inactivity.
+    /// Also require this many seconds of inactivity. This does not replace
+    /// the recency guard (`scan.recency_seconds`, default 300).
     #[arg(long)]
     pub older_than: Option<u64>,
     /// Include canonical workspace roots matching this glob (repeatable).
@@ -121,6 +122,7 @@ maintenance inventory.\n\n\
 Deletion is always delegated to Cargo; cargo-cleanme never removes a directory itself."
 )]
 pub struct Cli {
+    /// Use this config file instead of the platform default.
     #[arg(long, global = true)]
     pub config: Option<PathBuf>,
     /// Disable transient progress UI (useful for benchmarks and debugging).
@@ -263,6 +265,7 @@ pub enum Command {
         #[arg(short = 'a', long, alias = "full")]
         all: bool,
     },
+    /// Print, show, or edit the config file.
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
@@ -310,8 +313,11 @@ pub enum Command {
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Subcommand)]
 pub enum ConfigCommand {
+    /// Print the path of the config file.
     Path,
+    /// Print the effective config.
     Show,
+    /// Open the config in an editor (`$VISUAL`, then `$EDITOR`).
     Edit,
 }
 
@@ -343,10 +349,11 @@ pub enum CleanupScope {
 /// Which roots a read-only scan selects.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ScanIntent {
-    /// `scan` with no ROOT: full machine reconciliation under platform policy.
+    /// `scan --all`: full machine reconciliation under platform policy.
     ///
     /// This never consults a configured `scan.root`; configuration must not be
-    /// able to silently narrow the canonical reconciliation command.
+    /// able to silently narrow the canonical reconciliation command. `scan`
+    /// with no selector is a usage error, not this variant.
     Full,
     /// `scan ROOT`: bounded explicit scan that bypasses discovery filters.
     Explicit(PathBuf),

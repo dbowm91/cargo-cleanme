@@ -27,12 +27,12 @@ end
 complete -c cargo -n "__fish_cargo_needs_command" -s h -l help -d 'Print help'
 complete -c cargo -n "__fish_cargo_needs_command" -f -a "cargo-cleanme" -d 'Clean inactive Cargo build artifacts through Cargo, or reconcile the machine read-only'
 complete -c cargo -n "__fish_cargo_needs_command" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -l config -r -F
+complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -l config -d 'Use this config file instead of the platform default' -r -F
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -l format -d 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers' -r -f -a "human\t''
 json\t''
 log\t'One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract: complete consumers use `json`'"
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -l min-reclaimable-bytes -d 'Require at least this many reclaimable bytes per workspace' -r
-complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -l older-than -d 'Require this many seconds of inactivity' -r
+complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -l older-than -d 'Also require this many seconds of inactivity. This does not replace the recency guard (`scan.recency_seconds`, default 300)' -r
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -l include -d 'Include canonical workspace roots matching this glob (repeatable)' -r
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -l exclude -d 'Exclude canonical workspace roots matching this glob (repeatable)' -r
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -l profile -d 'Ask Cargo to clean one named profile. Selector byte estimates are unknown' -r
@@ -48,10 +48,10 @@ complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fis
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -s V -l version -d 'Print version'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -a "scan" -d 'Reconcile the machine read-only: full with `--all`, explicit with ROOT, routine inventory with `--known`'
-complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -a "config"
+complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -a "config" -d 'Print, show, or edit the config file'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -a "clean" -d 'Preview or execute cleanup of revalidated Cargo build artifacts'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and not __fish_seen_subcommand_from scan config clean update" -a "update" -d 'Update this cargo-cleanme to the latest stable published release'
-complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -l config -r -F
+complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -l config -d 'Use this config file instead of the platform default' -r -F
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -l format -d 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers' -r -f -a "human\t''
 json\t''
 log\t'One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract: complete consumers use `json`'"
@@ -62,7 +62,7 @@ complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_se
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -l verbose -d 'Show the detailed human surface: every workspace considered (including the ones that were skipped), the scope census, the per-phase counters, and the diagnostic detail'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -s i -l interactive -d 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from scan" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from config" -l config -r -F
+complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from config" -l config -d 'Use this config file instead of the platform default' -r -F
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from config" -l format -d 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers' -r -f -a "human\t''
 json\t''
 log\t'One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract: complete consumers use `json`'"
@@ -71,16 +71,16 @@ complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_se
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from config" -l verbose -d 'Show the detailed human surface: every workspace considered (including the ones that were skipped), the scope census, the per-phase counters, and the diagnostic detail'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from config" -s i -l interactive -d 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from config" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from config" -f -a "path"
-complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from config" -f -a "show"
-complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from config" -f -a "edit"
+complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from config" -f -a "path" -d 'Print the path of the config file'
+complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from config" -f -a "show" -d 'Print the effective config'
+complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from config" -f -a "edit" -d 'Open the config in an editor (`$VISUAL`, then `$EDITOR`)'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from clean" -l min-reclaimable-bytes -d 'Require at least this many reclaimable bytes per workspace' -r
-complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from clean" -l older-than -d 'Require this many seconds of inactivity' -r
+complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from clean" -l older-than -d 'Also require this many seconds of inactivity. This does not replace the recency guard (`scan.recency_seconds`, default 300)' -r
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from clean" -l include -d 'Include canonical workspace roots matching this glob (repeatable)' -r
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from clean" -l exclude -d 'Exclude canonical workspace roots matching this glob (repeatable)' -r
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from clean" -l profile -d 'Ask Cargo to clean one named profile. Selector byte estimates are unknown' -r
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from clean" -l package -d 'Clean one validated workspace package through qualified Cargo versions' -r
-complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from clean" -l config -r -F
+complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from clean" -l config -d 'Use this config file instead of the platform default' -r -F
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from clean" -l format -d 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers' -r -f -a "human\t''
 json\t''
 log\t'One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract: complete consumers use `json`'"
@@ -95,7 +95,7 @@ complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_se
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from clean" -l verbose -d 'Show the detailed human surface: every workspace considered (including the ones that were skipped), the scope census, the per-phase counters, and the diagnostic detail'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from clean" -s i -l interactive -d 'Choose the workspaces to clean from an inline selection list (NOR/INS)'
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from clean" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from update" -l config -r -F
+complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from update" -l config -d 'Use this config file instead of the platform default' -r -F
 complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_seen_subcommand_from update" -l format -d 'Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers' -r -f -a "human\t''
 json\t''
 log\t'One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract: complete consumers use `json`'"
@@ -108,6 +108,6 @@ complete -c cargo -n "__fish_cargo_using_subcommand cargo-cleanme; and __fish_se
 complete -c cargo -n "__fish_cargo_using_subcommand help; and not __fish_seen_subcommand_from cargo-cleanme help" -f -a "cargo-cleanme" -d 'Clean inactive Cargo build artifacts through Cargo, or reconcile the machine read-only'
 complete -c cargo -n "__fish_cargo_using_subcommand help; and not __fish_seen_subcommand_from cargo-cleanme help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c cargo -n "__fish_cargo_using_subcommand help; and __fish_seen_subcommand_from cargo-cleanme" -f -a "scan" -d 'Reconcile the machine read-only: full with `--all`, explicit with ROOT, routine inventory with `--known`'
-complete -c cargo -n "__fish_cargo_using_subcommand help; and __fish_seen_subcommand_from cargo-cleanme" -f -a "config"
+complete -c cargo -n "__fish_cargo_using_subcommand help; and __fish_seen_subcommand_from cargo-cleanme" -f -a "config" -d 'Print, show, or edit the config file'
 complete -c cargo -n "__fish_cargo_using_subcommand help; and __fish_seen_subcommand_from cargo-cleanme" -f -a "clean" -d 'Preview or execute cleanup of revalidated Cargo build artifacts'
 complete -c cargo -n "__fish_cargo_using_subcommand help; and __fish_seen_subcommand_from cargo-cleanme" -f -a "update" -d 'Update this cargo-cleanme to the latest stable published release'

@@ -36,9 +36,9 @@ mtime is old" — is wrong, because a single `target/` directory is routinely
 shared between several workspaces. Deleting it can destroy output another
 project still depends on. So the architecture is built around one idea:
 
-> **Nothing is ever deleted on the strength of a timestamp. Every candidate must
-> first prove exclusive ownership of its physical bytes, and that proof must
-> still hold at the moment of deletion.**
+> **A target directory is rebuildable. It is cleaned when every project that
+> uses it is idle, and the path is an artifact directory rather than a source
+> tree. That check is repeated at the moment of deletion.**
 
 Everything else — the discovery state file, the two scan modes, the ownership
 proof pass, the simulation mode, the fail-closed diagnostics — exists to
@@ -710,15 +710,14 @@ all, and the proof universe stays wide even when the candidate set is narrow.
 These are the properties the architecture is shaped around. They are the
 things a reviewer should check first in any change.
 
-1. **Ownership proof, not timestamps.** A candidate is only actionable when it
-   is classified as private-and-bounded under a resolved ownership universe.
-   `OutputOwnershipClass` in `src/domain.rs:255` is the vocabulary; anything
-   `Shared`, `Uncertain`, or `ExternalUnproven` is inventory-only, forever.
-2. **Authorization never manufactures proof.** `allowed_output_roots` lets a
-   user authorize a location for deletion; it cannot upgrade an unproven
-   ownership class. `covering_is_authorized_roots` returns `Ok(false)` for any
-   non-`PrivateBounded` class *before* it inspects a path. See
-   [Cleanup §5](09-cleanup.md).
+1. **Activity, not exclusive ownership.** A candidate is actionable when it is
+   an artifact directory and every project that uses it is idle.
+   `PrivateBounded`, `Shared`, and `ExternalUnproven` are artifact classes.
+   `Uncertain` — a source tree, a symlink, or a path that could not be
+   identified — is never cleaned. One active owner protects a shared directory.
+2. **An allow-list entry never admits an uncertain path.** `allowed_output_roots`
+   authorizes a private path that sits outside the cleanup root. It cannot turn
+   `Uncertain` into an artifact class. See [Cleanup §5](09-cleanup.md).
 3. **Re-validate at the last moment.** Proof work is repeated immediately
    before each spawn, because a workspace can change between scan and delete.
 4. **Fail closed on uncertainty.** Every uncertainty becomes a diagnostic, and
@@ -735,17 +734,19 @@ things a reviewer should check first in any change.
 8. **Learned state is advisory, never authority.** A persistence failure never
    changes an exit code.
 9. **The discovery universe may only ever grow.** A wider scope can only
-   reclassify `shared` bytes to `private` — the class that authorizes
-   deletion — never the reverse. ADR 009's working-directory scope is
-   therefore *added* to the Routine roots and never substituted for them
-   (`src/main.rs:1189-1198`). Anything that narrows the universe re-opens
+   reclassify `shared` bytes to `private`, never the reverse. That promotion
+   hides co-owners, so a directory an active project still uses would be
+   cleaned as if it belonged to one workspace. ADR 009's working-directory
+   scope is therefore *added* to the Routine roots and never substituted for
+   them (`src/main.rs:1189-1198`). Anything that narrows the universe re-opens
    ADR 006's shared-output hazard.
 10. **An unproven root is excluded from the *candidate* set, never from the
     *discovery* set.** M018's Full gate decides coverage per learned root. A
     root whose subtree could not be fully read has its workspaces removed
     from the candidate set — but they are still discovered, resolved, sized
     and classified, so a shared output between a proven root and an unproven
-    one stays `Shared` and stays inventory-only. Narrowing the *candidates*
+    one stays `Shared`. An idle shared artifact directory is still cleanable.
+    Narrowing the *candidates*
     cannot reclassify anything; narrowing the *universe* can, which is
     invariant 9's hazard in a new costume.
 
@@ -856,7 +857,7 @@ it is the number of numbered rows in the table below.
 | 37 | **`-i` and non-`-i` disagreed on the exit code for a scope that has roots but no cleanup units.** `run_interactive` refused an empty candidate list (`src/interactive.rs:1281-1283`), and the orchestrator mapped that to `AppError::Config` (`src/main.rs:708-724` at the time) → **exit 2**. The same scope without `-i` reported zero units and exited 0. | **Fixed in C038.** The empty surface is now a plain negative result: `SessionResult::NothingToClean` → one line, `Nothing to clean.`, on stdout, exit 0. The two spellings of one scope now agree. |
 | 38 | **`plans/output-schema-v1.md` is missing a reason code the code actually emits.** The schema listed 19 `reason_code` values while the code emitted **20**; the missing one was `skipped_outside_selection` — the value M014 actually emits for a workspace outside the selected scope (`src/cleanup.rs:1828`). M018 added a twenty-first, `skipped_incomplete_coverage`. | **Closed.** The schema document carries every `CleanupReasonCode::as_str` value (`src/cleanup.rs:820-846`). C047 and M022 added `skipped_root_blocked` and `skipped_output_claim`; the list is twenty-three values, and the envelope gained no field. |
 | 39 | **`plans/output-schema-v1.md` describes a non-UTF-8 path as using "the platform escaped debug form".** `output::path` (`src/output.rs:262-266`) now uses `to_string_lossy()`, so both the human and the machine output render `U+FFFD` and **agree** — the schema's description of a divergence that no longer exists is stale. The schema's own wording ("are UTF-8 strings when representable") is also wrong: a path is always a UTF-8 `String`, representable or not. | **Open — not yet planned.** Note the consequence: `output::path` is lossy and therefore **not injective**, so a JSON path string must not be used as a join key. |
-| 40 | **`plans/registry.md` contradicts itself about the self-update smoke.** The M011C row says the automatic smoke is "demonstrated three times" while the evidence table below it lists **seven** green automatic smokes. | **Open — not yet planned.** A registry is a control surface; a self-contradicting one is worse than a stale one, because a reader cannot tell which number to trust. |
+| 40 | **`plans/registry.md` contradicts itself about the self-update smoke.** The M011C row says the automatic smoke is "demonstrated three times" while the evidence table below it lists **seven** green automatic smokes. | **Discharged 2026-11-10.** The registry is again the open-work list. The duplicated smoke essay is gone; the counts stay in the closure records and `CHANGELOG.md`. Line citations into the old registry text are historical. |
 | 41 | **`progress::set_determinate_total` (`src/progress.rs:322`) is dead *and* internally inconsistent.** It sets the bar's total without zeroing `determinate_done`, unlike `apply_total` (`src/progress.rs:335`). It is the one path that can leave the displayed total and done-count mismatched. It has zero callers. | **Recorded in §10.1** — M020 confirmed zero call sites and removed its `set_length` call, so the inconsistency is now state only. The public item is kept deliberately (see §10.1's semver note). |
 | 42 | **The progress bar's message template hardcoded `"analyzing {done}/{total} …"` whenever a total existed**, so a `CleanupExecute` bar read *"analyzing 3/12 …"*. The root cause was the duplicated counter set, not the label. | **Closed by M020.** The renderer now composes the whole line from the phase label (`src/progress.rs:348`) and the fraction (`src/progress.rs:365`), so every phase names itself: *"scanning…"*, *"resolving workspaces…"*, *"analyzing output 3/12…"*, *"cleaning…"*. The phase also moved out of the bar's *prefix* into its message, because indicatif's default spinner template (`{spinner} {msg}`) never renders the prefix — so the transitions had never been visible at all. |
 | 43 | **`--format json` on an attended terminal gets no progress at all.** The format gate at `src/main.rs:1464-1465` suppresses the renderer on anything other than `OutputFormat::Human`, regardless of whether stdout is a pipe. Progress is on **stderr**, so a `jq` consumer is unaffected by it — and the log mode's suppression is independently justified, but the JSON mode's is not. A minutes-long `--format json` scan gives the operator nothing. | **Open — not yet planned.** |

@@ -137,8 +137,9 @@ values are exactly the defaults.
 field is *currently inert*. It authorizes a **location** for deletion of output
 already private but outside the `clean ROOT` sandbox; entries must be absolute
 directory roots, not globs, and symlink roots are invalid
-(`src/cleanup.rs:1128-1159`). Shared, uncertain and external-unproven output
-"remains inventory-only even inside an allowed root": authorization "never
+(`src/cleanup.rs:1128-1159`). An allowed root authorizes a private path that
+sits outside the cleanup root. It does not admit `Uncertain`, and it is not
+what makes an idle shared or external artifact directory cleanable: authorization "never
 manufactures ownership proof and cannot promote ExternalUnproven to private"
 (`config.toml:33-36`; ADR 001, C002), restated as a hard contract at
 `src/cleanup.rs:1069-1074`. An empty list "preserves M004-style containment"

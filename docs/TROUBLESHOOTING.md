@@ -46,10 +46,12 @@ first project's exclusive property. The run then deleted the second project's
 **checked-in files** and reported the space it had reclaimed as a successful
 cleanup.
 
-The rule that was broken is the repository's first one: *nothing is deleted on
-the strength of a timestamp; every candidate must first prove exclusive
-ownership of its physical bytes.* A timestamp — the target directory's mtime —
-was enough.
+The rule that was broken, as it stood in 0.2.10, was: nothing is deleted on
+the strength of a timestamp; every candidate must first prove it is an
+artifact directory and not another project's source. A timestamp — the target
+directory's mtime — was enough. Idle shared and external artifact directories
+are cleanable now. A directory that contains source, a nested package, or a
+symlink is still never cleaned.
 
 A covering root nested inside a package directory is now refused during
 resolution and re-proved at the spawn, so the second pass cannot be fooled by
@@ -499,8 +501,8 @@ illustrative fragment:
 ```
 
 The narrowing happens **after** ownership classification, so a shared output
-between a proven root and an unproven one stays `shared` and stays
-inventory-only. The filter can only remove candidates — never add one or
+between a proven root and an unproven one stays `shared`. An idle shared
+artifact directory is still cleanable. The filter can only remove candidates — never add one or
 reclassify one.
 
 It is also the one filter that may move the **proof boundary**, because it

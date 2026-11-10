@@ -1,5 +1,12 @@
 ## Artifact Discovery and Cleanup Roadmap
 
+What is open is [`plans/registry.md`](../registry.md). The status paragraph
+below is history through the C029–C031 line. Sentences in it that describe
+`--partitioned`, a whole-scope block, or inventory-only `Shared` output are
+not the current product. Idle `Shared` and `ExternalUnproven` artifact
+directories are cleanable (ADR 001, amended 2026-11-10); `Uncertain` output
+is not.
+
 Status: Phase 12 implementation remains **closed** under ADR 003. Its first published realization, immutable v0.2.0, carried two destructive defects; **C023 is closed** — its last open criterion, a green **automatic** `release: published` five-lane smoke, was met by the v0.2.2 release (run `37561575727`). Both defects are fixed and shipped in v0.2.1, and crates.io 0.2.0 is yanked and disclosed. **C024** — Windows glob canonicalization — is **closed and shipped in v0.2.2**: the canonical-glob rewrite now runs on Windows, and the hosted Windows lane observed the fix. **C025** is closed. **C026 is closed** — a cross-subsystem planning/architecture/repository-hygiene corrective that changed no cleanup or matching semantics. **C028 is closed and shipped in v0.2.4**: provenance admission for automatic roots, late admission rechecks, Full-generation freshness, and Full-only absence pruning fix the stale-learned-root abort; hosted lanes green, automatic five-target smoke green (`37850582892`), release record `r024-status.md`. Historical Phase 12, C023–C026 closures are unchanged. **C029–C031 safe tracks are closed**: corrected-head hosted run `37953997910` is green on Ubuntu, Windows, macOS, MSRV, generated docs, benchmark, and Linux/Windows/macOS installers. C031's partial-scope research is answered for the narrowed rule: ADR 004 was accepted 2026-10-16 with the C004/C006 amendment and M016 implements per-island activation behind `--partitioned` (see Post-M015/M016 sections below). General automatic partition beyond that rule remains out of scope; the operator-declared-scopes route (C035, separate branch) needs a scope decision against M016.
 
 
@@ -1475,10 +1482,9 @@ denies the shipped surface and is finding **65**. No resolved intent changes;
 no published spelling is removed or narrowed; the rendered help and the
 generated artifacts must be byte-identical afterwards.
 
-Also recorded by this line: **C036 D36** (the root's `--config` flag is the
-only root option with no description, and `config path|show|edit` are the only
-subcommands with none — their three man pages have an empty `.SH DESCRIPTION`
-and a `.SH NAME` that is the bare word) and **C036 D37** (a second
+Also recorded by this line: **C036 D36** (the root's `--config` flag and
+`config path|show|edit` had no description; corrected 2026-11-10, help text
+now exists and the man pages render it) and **C036 D37** (a second
 hand-maintained count with D29's exact mechanism — `architecture/overview.md`
 §10 asserted a finding count that was stale by two, in a sentence whose own
 claim was that the count is re-derivable by counting the table).

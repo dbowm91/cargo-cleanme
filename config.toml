@@ -28,14 +28,14 @@ ignore = []
 unignore = []
 
 [cleanup]
-# Explicit cleanup location authorization for already-private output outside
-# the `clean ROOT` sandbox. Entries must be absolute directory roots (not
-# globs); symlink roots are invalid. Shared, uncertain, and external-unproven
-# output remains inventory-only even inside an allowed root: authorization
-# never manufactures ownership proof and cannot promote ExternalUnproven to
-# private (ADR 001, C002). An empty list preserves M004-style containment.
-# The field is currently operationally redundant because PrivateBounded output
-# is normally workspace-contained, but is preserved for schema compatibility.
+# Location authorization for already-private output outside the cleanup root.
+# Entries must be absolute directory roots (not globs); symlink roots are
+# invalid. An allow-list entry does not reclassify a directory and cannot
+# admit `uncertain` output. Idle `shared` and `external-unproven` artifact
+# directories are cleanable without an entry here. An empty list keeps
+# private output inside the cleanup root. The field is usually redundant
+# because private output sits inside its workspace, which is already inside
+# the cleanup root.
 allowed_output_roots = []
 
 # Optional selection policy, applied after complete ownership resolution.

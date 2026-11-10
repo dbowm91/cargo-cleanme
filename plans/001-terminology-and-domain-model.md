@@ -221,13 +221,17 @@ The cleanup-safety classification of a physical output group:
 - Shared — multiple workspaces resolve to equal/overlapping physical output;
 - Uncertain — resolution/path/activity/ownership evidence is incomplete.
 
-Only PrivateBounded is eligible for M005 destructive cleanup.
+Only PrivateBounded was eligible for M005 destructive cleanup.
+
+Amendment 2026-11-10 (ADR 001). That sentence describes M005. It is not the current eligibility rule. An idle `PrivateBounded`, `Shared`, or `ExternalUnproven` artifact directory is cleanable through `cargo clean`. `Uncertain` is never cleanable. One active owner protects the physical directory.
 
 ## 29. Cleanup output authorization root
 
 An explicit absolute directory root under which otherwise external private Cargo output may be cleaned.
 
-Authorization is not ownership proof. It never makes a Shared or Uncertain group cleanable.
+Authorization is not ownership proof. It cannot make an `Uncertain` path cleanable. An idle `Shared` artifact directory is cleanable because every project that uses it is idle, not because an allow-list entry promoted it.
+
+Amendment 2026-11-10 (ADR 001). The previous sentence said an allow-list entry never makes a `Shared` group cleanable. The idle-artifact rule above replaces the `Shared` half. The `Uncertain` half stands.
 
 The explicit clean source sandbox implicitly authorizes private output physically contained within that sandbox.
 

@@ -193,3 +193,13 @@ recorded as an amendment block in ADR 007 item 4 that names ADR 010
 and the date, in the same shape as the ADR 008 amendment. That block
 was written on 2026-11-09. Until it existed, M022 stayed blocked and
 no cleanup path was authorized to implement the claim rule.
+
+## Amendment 2026-11-10 — a stale unresolved tree does not claim
+
+Owner-directed the same day, with the ADR 001 amendment of the same
+date. A finite or unbounded claim is built only when the unresolved
+manifest's sources were touched inside the recency window, or when
+those sources cannot be statted. A stale unresolved tree does not hold
+an intersecting unit and does not block the boundary. A recent or
+unstattable tree keeps the claim rule above. The unresolved manifest
+is still not itself cleaned.
