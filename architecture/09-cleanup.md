@@ -961,29 +961,51 @@ the *full* proof — it is a rehearsal of the destructive path, not a cheaper on
 which side of the boundary it sits on. This is the most important distinction in
 the module.**
 
-**(a) Incomplete *inside* the boundary at scan time → the whole transaction
-aborts.** `boundary_discovery_diagnostics > 0` raises
-`ScopeBlockReason::IncompleteDiscovery` and returns early (`:1898-1908`);
-`blocking_unresolved > 0` raises `ScopeBlockReason::OwnershipUnproven` and
-returns early (`:1911-1926`). Neither proceeds partially. Pinned by
-`scope_note_does_not_block_in_boundary_execute` (`:6439`) and its Simulate /
-CargoPreview twins, `metadata_failure_blocks_boundary_with_zero_spawns`
-(`:6729`), and `symlinked_output_produces_no_unit_while_sibling_cleans`
-(`:6765`).
+**(a) Incomplete *inside* the boundary at scan time.** What blocks depends
+on the selection and on whether the unknown's output can be named.
+
+- An explicit root and the maintenance anchor (`CleanupSelection::All` and
+  `Ancestry`) still abort the boundary when an in-boundary discovery
+  diagnostic remains, or when an in-boundary `MergeAll` participant's claim
+  is unbounded (`:2337-2365`). `resolve_cleanup_scope` returns no units in
+  that unbounded case (`:3689-3701`).
+- A finite claim does not abort. `classify_output_claims` (`:459-495`)
+  groups located manifests by the workspace root locate named, and
+  `finite_output_directories` (`:351-454`) names `CARGO_TARGET_DIR`, else
+  `CARGO_BUILD_TARGET_DIR` or `build.target-dir`, plus
+  `CARGO_BUILD_BUILD_DIR` or `build.build-dir`, else `<workspace>/target`.
+  Unreadable or unparseable config, a missing located root, or an
+  unaccounted source is unbounded. Before each spawn the fingerprint is
+  compared again (`:2904-2909`); a change blocks the units not yet spawned.
+  A unit whose covering path intersects a claim is
+  `skipped_output_claim` (`:2923`).
+- `cargo cleanme --full` is `CleanupSelection::PerLearnedRoot`
+  (`src/cli.rs:693-700`). `boundary_admits` treats it like `All`
+  (`:3507`). `attribute_learned_root_blocks` (`:531`) attributes unbounded
+  unknowns and walk diagnostics to the proven learned roots that contain
+  them. Those units are `skipped_root_blocked` (`:2434-2446`). Other proven
+  roots proceed. An unattributable diagnostic is
+  `IncompleteDiscovery` (`:2324-2333`). Every proven root blocked is the
+  existing scope block, zero rows, zero spawns (`:2401-2423`).
+
+Pinned by `an_unbounded_unknown_blocks_only_its_learned_root`,
+`an_explicit_root_with_an_unbounded_unknown_still_blocks`,
+`metadata_failure_with_a_disjoint_claim_cleans_the_sibling`, and
+`output_claim_probe`.
 
 **(b) Incomplete *outside* the boundary → reported, never blocking.** This is
 ADR 007's central correction. The three-way split is computed by
-`split_unresolved_for_boundary` (`:2942-2966`) over `boundary_admits`
-(`:2504-2519`):
+`split_unresolved_for_boundary` (`:3547-3570`) over `boundary_admits`
+(`:3500-3510`):
 
 | Bucket | Predicate | Effect |
 | --- | --- | --- |
-| Out-of-boundary | `!boundary_admits(selection, &participant.manifest)` | Informational `out_of_scope` diagnostic; **never blocks** (`:2955-2958`). |
-| In-boundary `MergeAll` | `workspace::attribute_unknown` returns `UnknownDisposition::MergeAll` (`:2959-2960`) | **Blocks the boundary** (`:2760`). |
-| In-boundary `PassengerOf` / `ScopeNote` | `attribute_unknown` names an owner or a scope note (`:2961-2962`) | Reported, never blocking (`:547`). |
+| Out-of-boundary | `!boundary_admits(selection, &participant.manifest)` (`:3560-3562`) | Informational `out_of_scope` diagnostic; **never blocks** (`:3678-3687`). |
+| In-boundary `MergeAll` | `workspace::attribute_unknown` returns `UnknownDisposition::MergeAll` (`:3564-3565`) | A finite claim holds intersecting units (`skipped_output_claim`). An unbounded claim blocks the current boundary. On `PerLearnedRoot` that boundary is the proven learned root (`:2315-2448`). |
+| In-boundary `PassengerOf` / `ScopeNote` | `attribute_unknown` names an owner or a scope note (`:3566-3567`) | Reported, never blocking. `RefusedByCargo` does not grow a claim. |
 
-The counts that drive the decision are: `blocking_unresolved_count` (`:2971-2979`),
-`boundary_discovery_diagnostic_count` (`:2849-2871`), and the out-of-scope
+The counts that drive the decision are: `unbounded_blocking_count` (`:3576-3583`),
+`boundary_discovery_diagnostic_count` (`:3597-3622`), and the out-of-scope
 diagnostic count (`:1424-1429`). The count of out-of-boundary unprovables
 travels to the report as `out_of_scope_unresolved` (`:1878`) and is rendered as
 one bounded human line (`:737-742`) so "the boundary is clean" can never read as
@@ -1027,16 +1049,21 @@ block decision is boundary-scoped.
 
 Mechanically, in `clean_with_roots_policy_selector_guarded` (`:1833`):
 
-1. `resolve_cleanup_scope` (`:3042`) splits every unresolved participant three
-   ways (`:2942-2966`): out-of-boundary manifests become informational
-   `out_of_scope` diagnostics; in-boundary passengers and scope notes join
-   `unresolved_ownership` as reported-but-never-blocking; only in-boundary
-   `MergeAll` participants early-return the run with the existing typed block.
-   Grouping still sees every resolved workspace.
-2. The scan-time block sites check only the in-boundary counts
-   (`boundary_discovery_diagnostics`, `blocking_unresolved` on the universe):
-   discovery uncertainty and MergeAll unknowns inside the boundary block;
-   everything out-of-boundary is already a diagnostic.
+1. `resolve_cleanup_scope` (`:3646`) splits every unresolved participant three
+   ways (`split_unresolved_for_boundary`, `:3547-3570`): out-of-boundary
+   manifests become informational `out_of_scope` diagnostics; in-boundary
+   passengers and scope notes join `unresolved_ownership` as
+   reported-but-never-blocking. An unbounded in-boundary `MergeAll` returns
+   no units, except on `PerLearnedRoot`, where units are still built so the
+   other learned roots can proceed (`:3689-3703`). A finite claim never
+   suppresses unit construction. Grouping still sees every resolved
+   workspace.
+2. The scan-time block sites then attribute. On `PerLearnedRoot`,
+   `attribute_learned_root_blocks` (`:531`) skips the proven roots that
+   contain an unbounded unknown or a walk diagnostic and proceeds with the
+   rest (`:2315-2448`). On every other selection, an in-boundary discovery
+   diagnostic or an unbounded claim returns the typed scope block
+   (`:2337-2365`). Out-of-boundary participants are already diagnostics.
 3. `refresh_combined_universe` (`:3460-3560`) re-applies the boundary rule against
    the fresh workspaces instead of carrying a scan-time tolerated list:
    out-of-boundary and in-boundary passenger/note unknowns stay tolerated; only a
@@ -1441,10 +1468,15 @@ statically. Does that risk exist here? **Partly, in a narrower form.**
     is a place where a future edit can diverge from the live path with no compile
     error. Mark them clearly as test/consumer surface or delete them.
 17. **The ADR 007 boundary rule has three homes that must not drift:**
-    `split_unresolved_for_boundary` (`:2942`), `blocking_unresolved_count`
-    (`:2793`), and `boundary_discovery_diagnostic_count` (`:2993`). The engine
-    and the interactive listing both consume the same counts (`:1800`, `:1805`,
-    `:2705`, `:2326-2370`). A new block site must ask the same predicate.
+    `split_unresolved_for_boundary` (`:3547`), `unbounded_blocking_count`
+    (`:3576`), and `boundary_discovery_diagnostic_count` (`:3597`). A finite
+    claim is `classify_output_claims` (`:459`); a Full-cleanup root block is
+    `attribute_learned_root_blocks` (`:531`). The engine and the interactive
+    listing both consume those predicates. A new block site must ask the
+    same ones. `PerLearnedRoot` must not be collapsed back into `All`: that
+    is the C047 defect. A finite claim must not be treated as unbounded:
+    that is the M022 defect. An unreadable config must not become a finite
+    claim.
 18. **The mode surface changed under the reader's feet.** `CleanMode` has no
     `Preview` variant, `--dry-run` now means `Simulate` (not "discarded"), and
     bare `cargo cleanme` is `Execute`. Any prose, test name, or downstream

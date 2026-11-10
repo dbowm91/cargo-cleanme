@@ -374,12 +374,17 @@ changes the exact unresolved-manifest set.
 
 ### `ResolutionCoverage` and `UnresolvedOwnershipParticipant`
 
-`ResolutionCoverage` (`domain.rs:203-207`) = `workspaces` + `unresolved` +
+`ResolutionCoverage` (`domain.rs:216-220`) = `workspaces` + `unresolved` +
 `discovered_manifest_count`. `UnresolvedOwnershipParticipant`
-(`domain.rs:194-199`) = `{ manifest, stage: &'static str, reason: String,
-capability: UnknownCapability }`, where `stage` is one of `"locate"`,
-`"metadata"`, `"identity"`, and `capability` is `RefusedByCargo` or `Unproven`
-(`domain.rs:181-190`).
+(`domain.rs:203-212`) = `{ manifest, stage: &'static str, reason: String,
+capability: UnknownCapability, located_manifest: Option<PathBuf> }`, where
+`stage` is one of `"locate"`, `"metadata"`, `"identity"`, and `capability` is
+`RefusedByCargo` or `Unproven` (`domain.rs:190-199`). `located_manifest` is
+the root manifest locate named for a metadata failure (`src/workspace.rs:1153`,
+`src/workspace.rs:1193`, copied at `src/workspace.rs:1227`). It is absent when
+locate never succeeded. It is not serialized. Cleanup uses it to build one
+output claim per located workspace (ADR 010); a participant without it is an
+unbounded claim.
 
 Populated at `:1001-1042`: every discovered manifest not in `authoritative_coverage`
 becomes one entry. The `reason` is found by scanning `diagnostics` **backwards**
@@ -413,12 +418,15 @@ clean`, not even `--dry-run`.
 > **The boundary is the selection, not the discovered universe.** ADR 007 §1–§4
 > and M017 replaced the earlier whole-scope block: an unresolved manifest
 > **outside** the boundary is reported as an `out_of_scope` diagnostic and
-> **never blocks**, while an **in-boundary** unknown owner still blocks the
-> boundary. `src/cleanup.rs:2619-2642` implements the three-way split, and
-> `out_of_anchor_poison_does_not_block_anchor` (`src/cleanup.rs:5680`) fails by
-> construction against the old whole-scope rule. This passage is the one place
-> in the deep dives that still read as the superseded rule; it is corrected
-> here rather than left to rot.
+> **never blocks**. An in-boundary unknown owner is a finite output claim
+> when locate named the workspace and the Cargo 1.89 config chain can be
+> read (`finite_output_directories`, `src/cleanup.rs:351-454`); units that
+> miss that claim proceed, and units that intersect it are
+> `skipped_output_claim`. An unbounded claim still blocks the current
+> boundary. On `--full` that boundary is the proven learned root (C047).
+> `split_unresolved_for_boundary` is `src/cleanup.rs:3547-3570`, and
+> `out_of_anchor_poison_does_not_block_anchor` fails by construction against
+> the old whole-scope rule.
 
 `resolve_workspaces` (`:489-497`) discards the `unresolved`
 vector, which is exactly why the doc comment at `:767-770` says its

@@ -693,7 +693,11 @@ impl Cli {
 fn selection_for(scope: &CleanupScope) -> CleanupSelection {
     match scope {
         CleanupScope::Maintenance => CleanupSelection::WorkingDirectory,
-        CleanupScope::Root(_) | CleanupScope::Full => CleanupSelection::All,
+        // An explicit root is one proof boundary. `--full` is one boundary
+        // per learned root (C047): a blocking unknown stops the root that
+        // contains it, and the other proven roots still reach `cargo clean`.
+        CleanupScope::Root(_) => CleanupSelection::All,
+        CleanupScope::Full => CleanupSelection::PerLearnedRoot,
     }
 }
 
@@ -995,7 +999,8 @@ mod tests {
         // their own roots.
         let selection = match &scope {
             CleanupScope::Maintenance => CleanupSelection::WorkingDirectory,
-            CleanupScope::Root(_) | CleanupScope::Full => CleanupSelection::All,
+            CleanupScope::Root(_) => CleanupSelection::All,
+            CleanupScope::Full => CleanupSelection::PerLearnedRoot,
         };
         CleanupRequest {
             scope,
@@ -2223,24 +2228,23 @@ mod tests {
                 "{args:?} must anchor its selection to the working directory"
             );
         }
-        // `cargo cleanme ROOT` and `cargo cleanme --full` are already bounded by
-        // their own root selection; anchoring them too would silently narrow an
-        // explicit scope.
-        for args in [
-            vec!["cargo-cleanme", "clean", "/x"],
-            vec!["cargo-cleanme", "clean", "--full"],
-        ] {
-            let Invocation::Cleanup(request) =
-                Cli::try_parse_from(args.clone()).unwrap().invocation()
-            else {
-                panic!("{args:?} must resolve to a cleanup request");
-            };
-            assert_eq!(
-                request.selection,
-                CleanupSelection::All,
-                "{args:?} must stay unfiltered"
-            );
-        }
+        // `cargo cleanme ROOT` stays one boundary. `--full` is per learned
+        // root, which is still unfiltered: the selection admits every unit
+        // and the engine attributes a block to the root that contains it.
+        let explicit = Cli::try_parse_from(["cargo-cleanme", "clean", "/x"])
+            .unwrap()
+            .invocation();
+        let Invocation::Cleanup(explicit) = explicit else {
+            panic!("explicit root must resolve to a cleanup request");
+        };
+        assert_eq!(explicit.selection, CleanupSelection::All);
+        let full = Cli::try_parse_from(["cargo-cleanme", "clean", "--full"])
+            .unwrap()
+            .invocation();
+        let Invocation::Cleanup(full) = full else {
+            panic!("--full must resolve to a cleanup request");
+        };
+        assert_eq!(full.selection, CleanupSelection::PerLearnedRoot);
     }
 
     #[test]

@@ -124,17 +124,19 @@ skill. It is **not** "any unresolved manifest blocks the whole scope".
 Every `Cargo.toml` under the selected cleanup root must be accounted for by
 direct successful resolution or by successful workspace metadata listing it as a
 member/root. What happens to the ones that remain is a **three-way split**
-(ADR 007 §1–§4, implemented by `split_unresolved_for_boundary`,
-`src/cleanup.rs:2742-2766`):
+(ADR 007 §1–§4, amended by ADR 010 on 2026-11-09, implemented by
+`split_unresolved_for_boundary`, `src/cleanup.rs:3547-3570`, and
+`classify_output_claims`, `src/cleanup.rs:459-495`):
 
 | Where the unresolved manifest is | What happens |
 |---|---|
 | **Outside the proof boundary** | Reported as an `out_of_scope` diagnostic. **Never blocks.** |
-| **Inside the boundary**, unknown owner (`MergeAll`) | **Blocks the boundary.** Fails closed. |
-| **Inside the boundary**, Cargo named the owner (`PassengerOf`) or the scope (`ScopeNote`) | Reported. Never blocking. |
+| **Inside the boundary**, unknown owner (`MergeAll`), output directories named | A finite claim. Intersecting units are `skipped_output_claim`. Units that miss the claim still pass the existing gates. The unresolved workspace is not cleaned. |
+| **Inside the boundary**, unknown owner (`MergeAll`), output not nameable | **Blocks the current boundary.** On `--full` that is the proven learned root (`skipped_root_blocked` for its units; other proven roots proceed). An explicit root and the maintenance anchor stay one boundary. |
+| **Inside the boundary**, Cargo named the owner (`PassengerOf`) or the scope (`ScopeNote`) | Reported. Never blocking. Does not grow a claim. |
 
 The **proof boundary** is the scope the operator selected: the working-directory
-anchor, the explicit roots, or the Full set.
+anchor, the explicit roots, or, on `--full`, each proven learned root.
 
 Cleaning a healthy boundary while poison exists elsewhere is the *intended*
 behaviour, precisely so that a boundary clean can never be read as a system

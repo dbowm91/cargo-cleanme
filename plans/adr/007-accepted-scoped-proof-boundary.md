@@ -87,6 +87,27 @@ root stays `Shared` and is never deleted, and only an unknown that is
 in-boundary for the root being cleaned can block that root. The read-only
 `scan --all` is untouched: this amendment concerns the cleanup gate only.
 
+**Amendment 2026-11-09 — ADR 010.** Owner-directed the same day by the
+instruction to complete M022. Item 4's sentence "an in-boundary `MergeAll`
+unknown blocks the boundary" is **narrowed**, effective when M022 ships.
+An unresolved manifest whose output directories can be named is a finite
+claim: a cleanup unit proceeds only when none of its physical output paths
+intersect that set, and it still passes every existing ownership,
+authorization, and per-spawn gate. An unresolved manifest whose output
+cannot be named stays `MergeAll` and blocks the current boundary exactly
+as item 4 did. After C047 the Full boundary is the learned root that
+contains the manifest; an explicit root and the maintenance anchor stay
+one boundary each. The same claim rule applies on all three. One claim
+per workspace root that `cargo locate-project` named. A manifest that was
+never located, an unreadable or unparseable config on the chain Cargo
+1.89 would read, or a source the reader does not account for, is
+unbounded. The claim is recomputed before each spawn; a change blocks the
+units not yet spawned. `RefusedByCargo` passengers and scope notes still
+do not block and do not grow a claim. A unit held for an intersection is
+`skipped_output_claim`. The unresolved manifest stays in discovery and is
+not cleaned. This amendment does not change which directories are learned,
+and it does not authorize a release.
+
 ## Residuals (disclosed, not fixed)
 
 - An out-of-boundary unresolvable manifest's unknown output cannot be
@@ -106,6 +127,17 @@ cannot be disproven — now also covers an unreadable region **outside every
 learned root**, which under the withdrawn whole-system rule would have blocked
 the entire operation. It is disclosed, not fixed, and it is the residual
 ADR 008's acceptance record names.
+
+**Amendment 2026-11-09 — ADR 010.** The second bullet above — poison
+inside the boundary still blocks the boundary — is **narrowed** where
+the poison's output directories can be named. Those directories hold the
+units they intersect and do not block the rest. Poison whose output
+cannot be named still blocks the boundary that contains it. The residual
+an unresolved manifest in learned root A may have written inside learned
+root B is narrowed only for a finite named redirect: that redirect holds
+the intersecting unit. An unnamed or unreadable redirect still blocks the
+boundary that contains the unknown. Source-tree disjointness does not
+close the residual.
 
 ## Consequences
 

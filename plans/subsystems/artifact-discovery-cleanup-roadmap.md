@@ -1560,3 +1560,48 @@ itself:
 show metadata dominating the wall clock, so the cap-8 pair was not run.
 There is no wall-clock closure gate.
 No flag, config key, reason code, exit code, or JSON field changes.
+
+## C047 — a Full-cleanup unknown blocks its learned root (closing)
+
+Status: **closing** — implemented 2026-11-09, not published. Plan:
+`plans/implementation/artifact-discovery-cleanup/c047-full-cleanup-per-learned-root-block.md`.
+Evidence: `plans/closure/artifact-discovery-cleanup/c047-status.md`.
+Baseline: `5ad76cf` (published v0.2.13). Corrects M018.
+
+M018 removes a learned root whose traversal did not complete from the
+Full proof boundary. Proven roots stay one boundary: `CleanupSelection::All`
+makes `boundary_admits` true for every manifest outside an excluded
+root, and one `MergeAll` unknown returns before any `cargo clean`.
+The 2026-11-09 `cargo cleanme --full` run skipped 10 missing learned
+roots and then refused on 324 unresolved manifests, including trees
+under `/Users/davidbowman/projects`, so separate proven roots were not
+cleaned either.
+
+C047 attributes a blocking unknown to the proven learned roots that
+contain it. Those roots are reported `skipped_root_blocked` and are
+not spawned. Other proven roots proceed through the existing unit
+gates. The blocked root stays in the discovery set. An unattributable
+diagnostic still blocks the run. Explicit roots and the maintenance
+anchor are unchanged. The residual — an unresolved manifest in one
+proven root may still have pointed its output at another proven root —
+is disclosed, not closed. M022 narrows it where the claim is finite.
+
+## M022 — bounded output claim for an unresolved manifest (closing)
+
+Status: **closing** — ADR 010 accepted 2026-11-09, implemented the same
+day, not published. Plan:
+`plans/implementation/artifact-discovery-cleanup/m022-bounded-output-claim-cleanup.md`.
+Decision:
+`plans/adr/010-proposed-bounded-output-claim-for-unresolved-manifests.md`
+(accepted; the block is in ADR 007 item 4).
+Evidence: `plans/closure/artifact-discovery-cleanup/m022-status.md`.
+Baseline: `5ad76cf`.
+
+C047 leaves `~/projects` as one learned root. A metadata failure
+inside it whose output directories can be named holds only the units
+whose physical outputs intersect that set. A failure whose output
+cannot be named still blocks the boundary. The rule applies to Full,
+to an explicit root, and to the maintenance anchor. The unresolved
+manifest stays discovered and is not cleaned. `--partitioned` is not
+revived. Learned-root selection does not change. The acceptance block
+is in ADR 007 item 4, dated 2026-11-09.

@@ -272,9 +272,22 @@ The run discloses the residual:
 - if **no** learned root could be proven, the scope is blocked with the
   standard unproven-ownership block (`no learned root could be proven: N
   root(s) had incomplete coverage (...)`) and the run exits `1`. It never
-  exits `0` with zero rows.
+  exits `0` with zero rows;
+- a proven learned root that contains an unbounded unknown, or a discovery
+  diagnostic from that root's walk, is skipped with `skipped_root_blocked`.
+  The other proven roots still reach `cargo clean`. The run exits `1`. If
+  every proven root is blocked, the run is a scope block and spawns nothing.
+  An explicit root containing the same poison is still one boundary.
 
-**The residual this accepts.** An unreadable region hides what is inside it,
+**The residual this accepts.** An unresolved manifest in one proven learned
+root can still have configured its output at a path inside another proven
+learned root. A finite named redirect holds the unit that path intersects.
+An unnamed or unreadable redirect still blocks the boundary that contains
+the unknown. Two source trees are not treated as disjoint because their
+directories do not nest. A `target` shared between two resolved workspaces
+stays shared.
+
+An unreadable region hides what is inside it,
 and the location of the region is not known — only the root it was found under
 is. So a Cargo workspace hidden in such a region cannot be disproven: it may
 name an output root that a cleaned root also owns, and the shared output would
@@ -473,14 +486,31 @@ resolution or successful workspace metadata listing it as a member or root.
 An earlier failed member attempt is cleared only if later authoritative
 metadata covers it.
 
-Any remaining unresolved manifest **inside the selected scope** blocks that
-scope in Preview, Simulate, and Execute, reports `unresolved_ownership`
-under `--stats`, and runs **no** `cargo clean` command — including Cargo's
-own preview dry-run. A manifest Cargo itself refused (a scope note or a
-refused-manifest passenger) is reported, never blocking: it owns no bytes
-to overlap. A manifest outside the scope is reported in diagnostics and
-never blocks. Read-only scans stay partial-result tolerant; that asymmetry
-is deliberate.
+Any remaining unresolved manifest **inside the selected scope** is reported
+in `unresolved_ownership`. A manifest Cargo itself refused (a scope note or
+a refused-manifest passenger) never blocks: it owns no bytes to overlap. A
+manifest outside the scope is reported in diagnostics and never blocks.
+
+A manifest whose output directories can be named does not block the scope.
+The claim is the directories Cargo 1.89 would write for that workspace in
+the environment the cleanup spawn would use: `CARGO_TARGET_DIR` when set,
+otherwise `CARGO_BUILD_TARGET_DIR` or `build.target-dir` from the Cargo
+config chain, plus `CARGO_BUILD_BUILD_DIR` or `build.build-dir` when set,
+otherwise `<workspace>/target`. A unit whose physical output intersects one
+of those directories is skipped with `skipped_output_claim`. A unit that
+misses all of them still passes the existing ownership gates, and may be
+cleaned. The unresolved workspace is not a candidate and its `target` is
+not deleted. The claim is checked again before each spawn; a change blocks
+the units not yet spawned.
+
+A manifest whose output cannot be named still blocks the current boundary
+in Preview, Simulate, and Execute, and runs **no** `cargo clean` in that
+boundary, including Cargo's own preview dry-run. Unreadable or unparseable
+config, an unknown workspace root, and any source the reader does not
+account for are unbounded. On `--full` that boundary is the proven learned
+root that contains the manifest. An explicit root and a bare maintenance
+run stay one boundary. Read-only scans stay partial-result tolerant; that
+asymmetry is deliberate.
 
 ### Mode semantics
 
@@ -713,11 +743,11 @@ line. Field-level detail is normative in
 > count of manifests that did not resolve outside the selected scope). Read the
 > code alongside the schema document.
 >
-> Its `reason_code` list is now complete: it names every value
-> `CleanupReasonCode::as_str` can return, including `skipped_outside_selection`
-> and `skipped_incomplete_coverage`. The envelope's **shape** did not change —
-> one reason code was added, and a consumer reading `reason_code` sees one more
-> possible value than before.
+> Its `reason_code` list names every value `CleanupReasonCode::as_str` can
+> return, including `skipped_outside_selection`, `skipped_incomplete_coverage`,
+> `skipped_root_blocked`, and `skipped_output_claim`. The envelope's **shape**
+> did not change — the list gained values, and a consumer reading
+> `reason_code` sees those additional strings.
 
 - Diagnostics go to **stderr**, never into the document.
 - `--stats` goes to **stderr**. stdout is byte-identical with and without it.
