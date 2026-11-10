@@ -519,6 +519,7 @@ fn run_cleanup(
             units_considered: 0,
             effective_policy: Some(policy),
             selector,
+            roots_blocked: 0,
         };
         emit_cleanup(&report, &resolved, &resolved.roots, options, "")?;
         return Ok(1);
@@ -546,6 +547,7 @@ fn run_cleanup(
             units_considered: 0,
             effective_policy: Some(policy),
             selector,
+            roots_blocked: 0,
         };
         emit_cleanup(
             &empty,
@@ -821,6 +823,7 @@ fn run_engine_guarded(
                             units_considered: 0,
                             effective_policy: Some(policy.clone()),
                             selector: selector.clone(),
+                            roots_blocked: 0,
                         });
                     }
                     let rebuilt = cargo_cleanme::cleanup::AdmissionPremise { omitted };
@@ -846,6 +849,7 @@ fn run_engine_guarded(
                     units_considered: 0,
                     effective_policy: Some(policy.clone()),
                     selector: selector.clone(),
+                    roots_blocked: 0,
                 }),
             }
         }
@@ -893,7 +897,15 @@ fn cleanup_exit_code(
     report: &cargo_cleanme::cleanup::CleanReport,
     unproven: &[cargo_cleanme::domain::UnprovenRoot],
 ) -> i32 {
-    if report.failed > 0 || report.scope_blocked.is_some() || !unproven.is_empty() {
+    let held = report.roots_blocked > 0
+        || report.results.iter().any(|row| {
+            matches!(
+                row.reason_code,
+                cargo_cleanme::cleanup::CleanupReasonCode::SkippedRootBlocked
+                    | cargo_cleanme::cleanup::CleanupReasonCode::SkippedOutputClaim
+            )
+        });
+    if report.failed > 0 || report.scope_blocked.is_some() || !unproven.is_empty() || held {
         1
     } else {
         0
@@ -2032,6 +2044,7 @@ mod tests {
             units_considered: 0,
             effective_policy: None,
             selector: None,
+            roots_blocked: 0,
         }
     }
 
@@ -2277,6 +2290,33 @@ mod tests {
             "blocked".into(),
         ));
         assert_eq!(cleanup_exit_code(&blocked, &[]), 1, "a block is one");
+        let mut roots_blocked = empty_report();
+        roots_blocked.roots_blocked = 1;
+        assert_eq!(
+            cleanup_exit_code(&roots_blocked, &[]),
+            1,
+            "a blocked learned root is exit 1 even when other units were cleaned"
+        );
+        for code in [
+            CleanupReasonCode::SkippedRootBlocked,
+            CleanupReasonCode::SkippedOutputClaim,
+        ] {
+            let mut held = empty_report();
+            held.results.push(CleanResult {
+                display_path: std::path::PathBuf::from("/work/held"),
+                workspace_roots: vec![std::path::PathBuf::from("/work/held")],
+                output_roots: vec![std::path::PathBuf::from("/work/held/target")],
+                ownership: OutputOwnershipClass::PrivateBounded,
+                outcome: CleanOutcome::Skipped,
+                policy_disposition: None,
+                reason_code: code,
+                before_bytes: None,
+                after_bytes: None,
+                observed_decrease: None,
+                detail: "held".into(),
+            });
+            assert_eq!(cleanup_exit_code(&held, &[]), 1, "{code:?} is exit 1");
+        }
     }
 
     /// The interactive surface has three endings, and the orchestrator keeps

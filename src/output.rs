@@ -405,6 +405,19 @@ pub mod log {
         // envelope report two different numbers under the same field name for
         // one and the same run.
         optional.push(("unresolved", report.unresolved_ownership.len().to_string()));
+        // Counts only. A path here would blow the retained-history bound and
+        // would put a filesystem location on the one line that must stay a count.
+        if report.roots_blocked > 0 {
+            optional.push(("roots_blocked", report.roots_blocked.to_string()));
+        }
+        let output_claims = report
+            .results
+            .iter()
+            .filter(|row| row.reason_code == crate::cleanup::CleanupReasonCode::SkippedOutputClaim)
+            .count();
+        if output_claims > 0 {
+            optional.push(("output_claims", output_claims.to_string()));
+        }
 
         line(
             &[
@@ -535,6 +548,7 @@ pub mod log {
                 units_considered: 0,
                 effective_policy: None,
                 selector: None,
+                roots_blocked: 0,
             }
         }
 
@@ -631,6 +645,7 @@ pub mod log {
                     stage: "locate",
                     reason: "cargo locate-project failed".into(),
                     capability: crate::domain::UnknownCapability::RefusedByCargo,
+                    located_manifest: None,
                 });
             let line = super::cleanup(&report, "explicit");
             assert!(
@@ -686,6 +701,7 @@ pub mod log {
                 stage: "locate",
                 reason: "cargo locate-project failed".into(),
                 capability: crate::domain::UnknownCapability::RefusedByCargo,
+                located_manifest: None,
             }];
             let line = super::cleanup(&report, "routine");
             assert!(line.contains("status=blocked"), "{line}");

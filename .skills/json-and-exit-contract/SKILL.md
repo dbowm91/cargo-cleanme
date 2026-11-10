@@ -116,23 +116,24 @@ Two things to keep straight:
 
 ## Reason codes
 
-Cleanup emits typed `reason_code`s. The full, current set is the twenty-one
-variants of `CleanupReasonCode` in `src/cleanup.rs:348-388`, spelled by
-`CleanupReasonCode::as_str` (`src/cleanup.rs:426-450`):
+Cleanup emits typed `reason_code`s. The full, current set is the twenty-three
+variants of `CleanupReasonCode` in `src/cleanup.rs:710-759`, spelled by
+`CleanupReasonCode::as_str` (`src/cleanup.rs:820-846`):
 
 ```text
 previewed  simulated  cleaned  below_minimum_size  too_recent_for_policy
 not_included  excluded  skipped_active  skipped_shared  skipped_uncertain
 skipped_unauthorized  skipped_marker_invalid  skipped_changed_before_cleanup
 skipped_ownership_unproven  skipped_safety  skipped_outside_selection
-skipped_incomplete_coverage  cargo_failed  measurement_failed
-selector_unsupported  selector_invalid
+skipped_incomplete_coverage  skipped_root_blocked  skipped_output_claim
+cargo_failed  measurement_failed  selector_unsupported  selector_invalid
 ```
 
-`plans/output-schema-v1.md` § *reason_code* now carries all twenty-one. It
-listed nineteen until the C036 D11 gap was closed, and it was extended again
-when `skipped_incomplete_coverage` arrived. Check it against `as_str`, not
-against this prose — both have been wrong before.
+`plans/output-schema-v1.md` § *reason_code* carries the same twenty-three. It
+listed nineteen until the C036 D11 gap was closed, then twenty-one after
+`skipped_incomplete_coverage`. C047 added `skipped_root_blocked` and M022
+added `skipped_output_claim`. Neither added a JSON field. Check the list
+against `as_str`, not against this prose — both have been wrong before.
 
 The distinctions exist because they warrant **different operator responses**:
 
@@ -147,6 +148,12 @@ The distinctions exist because they warrant **different operator responses**:
 - `skipped_incomplete_coverage` — the learned root above this workspace could
   not be proven, so it was left untouched. A different fact from "you did not
   ask for this"; the `detail` string names the root and the cause.
+- `skipped_root_blocked` — a Full-cleanup learned root contained a blocking
+  unknown or a discovery diagnostic. The unit stayed discovered and was not
+  spawned. Distinct from incomplete coverage.
+- `skipped_output_claim` — the unit's output intersects a directory an
+  unresolved manifest may have written. The unresolved manifest is not
+  cleaned.
 - `previewed` and `simulated` are the expected outcomes in `CargoPreview` and
   `Simulate` mode respectively. There is **no** `skipped_dryrun` code.
 

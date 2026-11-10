@@ -205,6 +205,10 @@ pub struct UnresolvedOwnershipParticipant {
     pub stage: &'static str,
     pub reason: String,
     pub capability: UnknownCapability,
+    /// Root manifest `cargo locate-project` named for this failure, when it
+    /// named one. Absent when locate never succeeded. Not part of the JSON
+    /// envelope: the projection copies `manifest`, `stage`, and `reason` only.
+    pub located_manifest: Option<PathBuf>,
 }
 
 /// Workspace resolution plus explicit coverage of the discovered manifest set.

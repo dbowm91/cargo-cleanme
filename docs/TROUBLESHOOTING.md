@@ -125,8 +125,39 @@ boundary clean is never read as a system clean.
 Inside the boundary the block is narrower than "every unresolved manifest". A
 manifest Cargo itself named — a refused manifest it would not fold into
 another workspace — or one it recorded as a scope note has no unknown owner to
-merge, so it is reported and never blocks. Only an in-boundary manifest with
-an unknown owner blocks the boundary.
+merge, so it is reported and never blocks.
+
+An in-boundary manifest with an unknown owner is a claim when its output
+directories can be named, and a block when they cannot. The named directories
+are the ones Cargo 1.89 would use for that workspace: `CARGO_TARGET_DIR` when
+set, otherwise `CARGO_BUILD_TARGET_DIR` or `build.target-dir`, plus
+`CARGO_BUILD_BUILD_DIR` or `build.build-dir` when set, otherwise
+`<workspace>/target`. Config is read from the workspace `.cargo/config.toml`
+and `.cargo/config`, then each ancestor, then the Cargo home config. A missing
+file is skipped. An unreadable or unparseable file, a non-string `target-dir`
+or `build-dir`, an unknown workspace root, or a source the reader does not
+account for makes the claim unbounded, and the boundary that contains the
+manifest blocks. A finite claim does not block that boundary. A unit whose
+physical output intersects a named directory is skipped with
+`skipped_output_claim` and is not spawned. A unit that misses every named
+directory still has to pass the existing ownership gates. The unresolved
+manifest stays discovered and is not cleaned, including its own `target`. The
+claim is read again before each spawn; a change blocks the units not yet
+spawned.
+
+On `cargo cleanme --full` the boundary is the proven learned root that
+contains the manifest. An unbounded unknown, or a discovery diagnostic on that
+root's walk, skips the units under that root with `skipped_root_blocked` and
+leaves every other proven learned root eligible. An explicit `cargo cleanme
+ROOT` and a bare maintenance run stay one boundary: the same poison blocks
+that whole scope when the claim is unbounded, and holds only the intersecting
+units when the claim is finite.
+
+An unresolved manifest in learned root A can still have written output inside
+learned root B. A finite named redirect holds the unit it touches. An unnamed
+or unreadable redirect still blocks the boundary that contains the unknown.
+Source trees that merely sit in different directories do not close that
+residual. A `target` shared between two resolved workspaces stays shared.
 
 Reproduce the exact lookup with the same Cargo executable used by the scan:
 
@@ -150,8 +181,10 @@ A bare `cargo cleanme` that ends with `0 CleanupUnit(s)` and `cleanup
 ownership could not be proven: N discovered Cargo manifests did not resolve`
 did not measure zero workspaces. The `0` means resolution never got as far as
 building cleanup units: a manifest Cargo cannot resolve *inside* the proof
-boundary blocks it, because an unresolved manifest's output configuration is
-unknown and could overlap a healthy workspace's output. For a bare run the
+boundary blocks it when that manifest's output directories cannot be named.
+A manifest whose output can be named holds only the units whose physical
+outputs intersect those directories; a sibling with a disjoint conventional
+`target` is still cleaned. For a bare run the
 boundary is the working-directory anchor — the directory you are standing in,
 the tree below it, and its own ancestors — so the manifests that blocked are the
 ones **inside** that anchor, not the ones elsewhere on the machine. A manifest
@@ -183,13 +216,16 @@ keep the happy path (`scan --all`, then bare `cargo cleanme`) intact:
   elsewhere into an `out_of_scope` diagnostic instead of a block. Per-invocation
   `cargo cleanme ROOT` remains available for one-off work.
 
-The tool does not clean around an unresolved manifest and then call the result a
-system clean. Cleanup fails closed **only for the proof boundary** — the scope
-you selected: the working-directory anchor, the explicit roots, or the Full set.
-A manifest Cargo cannot resolve *inside* that boundary blocks it. A manifest
-*outside* it is reported as a bounded `out_of_scope` diagnostic and never
-blocks: cleaning a healthy anchor while poison exists elsewhere is the intended
-behaviour, so a boundary clean is never read as a system clean.
+The tool does not clean around an unresolved manifest whose output it cannot
+name and then call the result a system clean. Cleanup fails closed **only for
+the proof boundary** — the scope you selected: the working-directory anchor,
+the explicit roots, or, on `--full`, the learned root that contains the
+unknown. A manifest Cargo cannot resolve *inside* that boundary blocks it
+when its output cannot be named, and holds the units it may have written when
+its output can be named. A manifest *outside* it is reported as a bounded
+`out_of_scope` diagnostic and never blocks: cleaning a healthy anchor while
+poison exists elsewhere is the intended behaviour, so a boundary clean is
+never read as a system clean.
 
 The proof is complete coverage *inside* the boundary: every manifest there is
 accounted for, so no unknown output configuration inside it can overlap the
@@ -474,6 +510,26 @@ unproven learned root** blocks that root and not the whole run — the other
 learned roots are still cleaned. Every other unreadable root still blocks the
 run that contains it, because an unreadable root is indeterminate coverage,
 not absence.
+
+### A Full cleanup skips one proven learned root and cleans the others
+
+A proven learned root can still contain a manifest Cargo cannot resolve, or a
+discovery diagnostic from that root's own walk. That root's units are skipped
+with `skipped_root_blocked`. The detail names the learned root, whether the
+cause was an unresolved manifest or a discovery diagnostic, and the count. It
+does not reuse `skipped_incomplete_coverage`, which means the root's own
+traversal did not complete. The other proven roots still reach `cargo clean`.
+The run exits `1`. If every proven root is blocked, the run is the existing
+scope block, exit `1`, and no `cargo clean` is spawned.
+
+An explicit `cargo cleanme ROOT` containing the same poison is still one
+boundary. A bare maintenance run is still one boundary.
+
+The cross-root residual stays: an unresolved manifest in root A can have
+pointed its output at a path inside root B. A finite named redirect holds the
+unit it intersects. An unnamed or unreadable redirect blocks the boundary that
+contains the unknown. The tool does not treat two source trees as disjoint
+just because their directories do not nest.
 
 ### A Full cleanup is blocked because no learned root could be proven
 

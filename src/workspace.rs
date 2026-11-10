@@ -1003,6 +1003,9 @@ pub fn resolve_workspaces_with_coverage(
     // unparseable output, and lost workers never examined the manifest, so
     // byte-capability stays unproven there.
     let mut unresolved_stage: HashMap<PathBuf, (&'static str, UnknownCapability)> = HashMap::new();
+    // Root manifest locate named, for a metadata failure only. A locate that
+    // never succeeded leaves no entry: the output claim is then unbounded.
+    let mut located_manifests: HashMap<PathBuf, PathBuf> = HashMap::new();
     for (index, manifest) in manifests.iter().enumerate() {
         // A covered member that was never located does not count a locate and
         // does not need an outcome. A manifest that was located still counts,
@@ -1147,6 +1150,7 @@ pub fn resolve_workspaces_with_coverage(
                 message: template.message.clone(),
             });
             unresolved_stage.insert(manifest.clone(), ("metadata", UnknownCapability::Unproven));
+            located_manifests.insert(manifest.clone(), canonical_key.clone());
             continue;
         }
         counters.cargo_metadata_calls += 1;
@@ -1186,6 +1190,7 @@ pub fn resolve_workspaces_with_coverage(
                 (template, metadata_spawns[group_idx].nanos),
             );
             unresolved_stage.insert(manifest.clone(), ("metadata", UnknownCapability::Unproven));
+            located_manifests.insert(manifest.clone(), canonical_key.clone());
         }
     }
     let mut workspaces: Vec<_> = ordered_keys
@@ -1219,6 +1224,7 @@ pub fn resolve_workspaces_with_coverage(
                 stage,
                 reason: message,
                 capability,
+                located_manifest: located_manifests.get(manifest).cloned(),
             })
         })
         .collect();
@@ -4929,6 +4935,7 @@ mod tests {
                 stage,
                 reason: reason.into(),
                 capability: UnknownCapability::Unproven,
+                located_manifest: None,
             };
             assert_eq!(
                 attribute_unknown(&participant, empty),
@@ -4952,6 +4959,7 @@ mod tests {
                 stage: "locate",
                 reason: reason.into(),
                 capability: UnknownCapability::RefusedByCargo,
+                located_manifest: None,
             };
             assert_eq!(
                 attribute_unknown(&participant, empty),
@@ -5001,6 +5009,7 @@ mod tests {
             stage: "locate",
             reason: "error: current package believes it's in a workspace when it's not: | current: /w/fuzz/Cargo.toml | workspace: /w/Cargo.toml".into(),
             capability: UnknownCapability::RefusedByCargo,
+                located_manifest: None,
         };
         assert_eq!(
             attribute_unknown(&participant, &workspaces),
@@ -5022,6 +5031,7 @@ mod tests {
             stage: "locate",
             reason: "error: current package believes it's in a workspace when it's not: | current: /w/fuzz/Cargo.toml | workspace: /w/Cargo.toml".into(),
             capability: UnknownCapability::RefusedByCargo,
+                located_manifest: None,
         };
         assert_eq!(
             attribute_unknown(&participant, empty),
@@ -5039,6 +5049,7 @@ mod tests {
             reason: "error: current package believes it's in a workspace when it's… (truncated)"
                 .into(),
             capability: UnknownCapability::RefusedByCargo,
+            located_manifest: None,
         };
         assert_eq!(
             attribute_unknown(&participant, empty),

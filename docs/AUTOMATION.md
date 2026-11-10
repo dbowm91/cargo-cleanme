@@ -266,19 +266,26 @@ one bounded line, load-aware timing, and never root for a developer home.**
 - It will not clean a group whose exclusive ownership it cannot prove.
   Cleanup fails closed **only for the proof boundary** — the scope you
   selected: the working-directory anchor, the explicit roots, or the Full set.
-  A manifest Cargo cannot resolve *inside* that boundary blocks it. A manifest
-  *outside* it is reported as a bounded `out_of_scope` diagnostic and never
-  blocks: cleaning a healthy anchor while poison exists elsewhere is the
-  intended behaviour, so a boundary clean is never read as a system clean.
+  A manifest Cargo cannot resolve *inside* that boundary blocks it when its
+  output directories cannot be named. When they can be named, only units
+  whose physical outputs intersect those directories are held
+  (`skipped_output_claim`); the unresolved workspace is not cleaned. A
+  manifest *outside* the boundary is reported as a bounded `out_of_scope`
+  diagnostic and never blocks: cleaning a healthy anchor while poison exists
+  elsewhere is the intended behaviour, so a boundary clean is never read as
+  a system clean.
 - A Full cleanup (`cargo cleanme --full`) will not clean a learned root it
   could not prove. The proof boundary is the **learned root**: each one is
   re-walked as its own walk root and judged on its own traversal, and a root
   whose coverage could not be proven is dropped from the candidate set and
-  reported per unit with the reason code `skipped_incomplete_coverage`. That
-  code is a **machine** field: it appears in the JSON envelope's
-  `units[].reason_code`. The human surface names the same fact in prose —
-  the root, the cause, and the alternative — and does not print the code
-  itself. The run exits `1` when **at least one** learned
+  reported per unit with the reason code `skipped_incomplete_coverage`. A
+  proven learned root that contains an unbounded unknown is reported per
+  unit with `skipped_root_blocked`, and the other proven roots are still
+  cleaned. A unit held because its output intersects a named unresolved
+  claim is `skipped_output_claim`. Those codes are **machine** fields: they
+  appear in the JSON envelope's `units[].reason_code`. The human surface
+  names the same facts in prose and does not print the code itself. The
+  run exits `1` when **at least one** learned
   root was unproven, even if every root that could be proven was cleaned — a
   partial Full cleanup must not read as a complete one. When **no** learned root
   could be proven, the scope is blocked with the typed unproven-ownership block
