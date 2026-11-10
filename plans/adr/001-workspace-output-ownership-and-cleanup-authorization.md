@@ -100,6 +100,10 @@ A scan finding only one user of an external cache does NOT prove exclusive owner
 
 ### 7. Shared and externally unproven output is inventory-only
 
+The heading is the M005 rule. The amendment of 2026-11-10, at the end of
+this ADR, narrows it: an idle `Shared` or `ExternalUnproven` artifact
+directory is cleanable. `Uncertain` is not.
+
 M005 may discover, measure, deduplicate, and report `Shared` and `ExternalUnproven` output.
 
 It MUST NOT invoke Cargo clean against those groups.

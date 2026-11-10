@@ -95,7 +95,7 @@ unresolved tree does not block the boundary and does not hold an
 intersecting unit. A recent or unstattable unknown keeps the ADR 010
 rule: a named output claim holds intersecting units, and an unnamed
 claim blocks the boundary that contains it. Discovery does not shrink.
-This amendment does not authorize a release.
+The 2026-10-21 sentence that a `Shared` output "is never deleted" is narrowed by ADR 001's amendment of 2026-11-10: an idle `Shared` or `ExternalUnproven` artifact directory is cleanable. Discovery still does not shrink, and a `Shared` classification is not promoted to `PrivateBounded`. This amendment does not authorize a release.
 
 **Amendment 2026-11-09 — ADR 010.** Owner-directed the same day by the
 instruction to complete M022. Item 4's sentence "an in-boundary `MergeAll`
