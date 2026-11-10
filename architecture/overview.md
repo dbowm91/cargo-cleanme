@@ -19,10 +19,10 @@ distinction matters.
 - **What it is:** a Cargo subcommand (`cargo cleanme`) that finds inactive Cargo
   build artifacts on a machine and either reports or safely reclaims them.
 - **Shape:** one binary (`src/main.rs`) over one library (`src/lib.rs`) of 16
-  modules, 18 source files, 43,085 lines in `src/` (19,168 of them outside
+  modules, 18 source files, 46,269 lines in `src/` (20,689 of them outside
   every `#[cfg(test)]` scope), no async runtime of its own, and exactly one
   binary dependency that matters for safety (`cargo metadata`).
-- **Version:** 0.2.13 (published; latest published tag `v0.2.13`) ·
+- **Version:** 0.2.14 (release candidate; latest published tag `v0.2.13`) ·
   **Edition:** 2024 · **MSRV:** 1.89
 - **Deep dives:** 16 documents, one per component, linked from §4 and §12.
 
@@ -117,9 +117,9 @@ property C045 established — or editing the generated text per shell.
 |---|---|---|
 | Source files | 18 | `src/` |
 | Library modules | 16 | `src/lib.rs` |
-| Total lines in `src/` | 43,085 | `wc -l src/*.rs` |
-| Production lines | 19,168 | total minus every `#[cfg(test)]` scope |
-| Inline `#[test]` functions | 602 | `#[test]` attributes in `src/` |
+| Total lines in `src/` | 46,269 | `wc -l src/*.rs` |
+| Production lines | 20,689 | total minus every `#[cfg(test)]` scope |
+| Inline `#[test]` functions | 625 | `#[test]` attributes in `src/` |
 | Integration test files | 2 | `tests/cli_contract.rs`, `tests/end_to_end.rs` |
 | Contract-checker scripts | 17 | `scripts/` — the set is machine-gated, see §9 |
 | GitHub workflows | 6 | `.github/workflows/` |
@@ -149,19 +149,19 @@ the file itself; the integration suites in `tests/` are counted separately in
 
 | Module | total | prod | tests | Module | total | prod | tests |
 |---|---:|---:|---:|---|---:|---:|---:|
-| `cleanup.rs` | 12180 | 4536 | 138 | `output.rs` | 1113 | 543 | 22 
-| `workspace.rs` | 6930 | 2418 | 87 | `progress.rs` | 1002 | 542 | 16 
+| `cleanup.rs` | 14138 | 5442 | 154 | `output.rs` | 1129 | 556 | 22 
+| `workspace.rs` | 7716 | 2734 | 93 | `progress.rs` | 1020 | 560 | 16 
 | `update.rs` | 3342 | 1499 | 54 | `report.rs` | 395 | 190 | 11 
-| `discovery.rs` | 2653 | 1125 | 42 | `traverse.rs` | 1098 | 770 | 12 
-| `interactive.rs` | 3606 | 1817 | 76 | `domain.rs` | 500 | 471 | 1 
+| `discovery.rs` | 2754 | 1142 | 43 | `traverse.rs` | 1334 | 984 | 12 
+| `interactive.rs` | 3610 | 1818 | 76 | `domain.rs` | 513 | 484 | 1 
 | `config.rs` | 1547 | 616 | 21 | `editor.rs` | 292 | 160 | 5 
-| `main.rs` | 2513 | 2008 | 12 | `error.rs` | 16 | 16 | 0 
-| `cli.rs` | 2874 | 980 | 61 | `lib.rs` | 16 | 16 | 0 
+| `main.rs` | 2554 | 2020 | 12 | `error.rs` | 16 | 16 | 0 
+| `cli.rs` | 2885 | 991 | 61 | `lib.rs` | 16 | 16 | 0 
 | `policy.rs` | 1673 | 825 | 26 | | | | 
 | `discovery_state.rs` | 1335 | 636 | 18 | | | | 
 
 Two observations a reader should carry forward. **Coverage is concentrated**:
-`cleanup.rs` and `workspace.rs` alone hold 225 of the 602 inline tests, and
+`cleanup.rs` and `workspace.rs` alone hold 247 of the 625 inline tests, and
 `main.rs` — where the two pipelines are stitched together — is where the
 orchestration decisions live. And **the biggest files are the biggest risk**:
 `cleanup.rs` is where bytes get deleted.
@@ -759,7 +759,7 @@ things a reviewer should check first in any change.
 | `tests/cli_contract.rs` | 83 contract tests over the CLI surface, exit codes, and reason codes. | [14 — Testing](14-testing-and-verification.md) |
 | `tests/end_to_end.rs` | 4 end-to-end tests over a real fixture. | [14 — Testing](14-testing-and-verification.md) |
 | `tests/common/` | The shared fixture harness. | [14 — Testing](14-testing-and-verification.md) |
-| `src/**/*.rs` inline tests | 602 `#[test]` functions, concentrated in `cleanup.rs` (138) and `workspace.rs` (87). | [14 — Testing](14-testing-and-verification.md) |
+| `src/**/*.rs` inline tests | 625 `#[test]` functions, concentrated in `cleanup.rs` (154) and `workspace.rs` (93). | [14 — Testing](14-testing-and-verification.md) |
 | `scripts/` (17) | The contract-checker set: release contract, release identity, staged-release validation, installer contract, doc citations, fixture portability, selector qualification, post-release smoke contract, and the release/benchmark tooling. The exact set is machine-gated — a new checker cannot ship undocumented. | [14 — Testing](14-testing-and-verification.md) §5 |
 | `.github/workflows/` (6) | `ci.yml`, `post-release-smoke.yml`, `qualify-cargo-selectors.yml`, `release-binaries.yml`, `release-drift.yml`, `validate-staged-release.yml`. | [15 — Distribution](15-distribution-and-release.md) |
 | `packaging/` | `install.sh` and `install.ps1` plus their qualification harness. | [15 — Distribution](15-distribution-and-release.md) |

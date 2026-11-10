@@ -2,7 +2,7 @@
 
 > Component deep dive · part of the [architecture overview](overview.md)
 
-Covers three files: `src/domain.rs` (500 lines), `src/error.rs` (16 lines),
+Covers three files: `src/domain.rs` (513 lines), `src/error.rs` (16 lines),
 `src/lib.rs` (16 lines).
 
 ---

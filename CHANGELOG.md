@@ -6,6 +6,42 @@ All notable changes to cargo-cleanme are documented here. The format follows
 stance: the `0.x` line may make breaking changes in any release, and the
 command-line, JSON, and release-asset contracts are the stable surface.
 
+## [0.2.14] - 2026-11-10
+
+### Added
+
+- **Idle `shared` and `external-unproven` artifact directories are cleaned.**
+  A target directory is rebuildable regardless of how many workspaces use it,
+  so cleanup now authorizes an artifact directory when every project that uses
+  it is idle. One active owner still protects the whole directory, and
+  `uncertain` paths — source trees, symlinks, and paths whose identity cannot
+  be established — are never cleaned (C048; ADR 001 amendment).
+- **A Full cleanup attributes an unresolved manifest to its learned root.** On
+  `cargo cleanme --full`, a blocking unknown or a discovery diagnostic now
+  skips only the proven learned root that contains it, with the reason code
+  `skipped_root_blocked`. The other proven roots still reach `cargo clean`, and
+  the run exits `1` (C047).
+- **A named output claim narrows an unresolved manifest's hold.** When Cargo
+  cannot resolve a manifest but its output directories can be named (the
+  `CARGO_TARGET_DIR` / `CARGO_BUILD_TARGET_DIR` / `build.target-dir` chain),
+  only units whose physical output intersects those directories are skipped,
+  with the reason code `skipped_output_claim`. An unnamed or unreadable claim
+  still blocks its boundary (M022; ADR 010).
+
+### Changed
+
+- **Scan resolution is cheaper.** A discovered workspace root pays one
+  `cargo locate-project`; members that successful `cargo metadata` already
+  named are no longer located, and failed metadata still covers nothing. On
+  Linux and macOS, inventory sizing and source activity reuse the directory
+  walk (M021).
+- The machine `units[].reason_code` field can now carry
+  `skipped_root_blocked` and `skipped_output_claim`; the JSON envelope shape is
+  unchanged, and a run that skips either exits `1`.
+- CLI help now describes the idle shared cleanup rule, the `config`
+  subcommands, `--config`, and `--older-than`; several config comments were
+  corrected to match the cleanup rule.
+
 ## [0.2.13] - 2026-11-06
 
 ### Fixed

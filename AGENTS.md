@@ -7,17 +7,19 @@ the one architecture deep dive your change touches.
 
 A single Rust crate that finds Cargo build output and cleans it **through
 Cargo**, never by deleting directories. One binary over one library of 16
-modules, 18 source files, 43,085 lines in `src/`. No async runtime of its own.
+modules, 18 source files, 46,269 lines in `src/`. No async runtime of its own.
 `cargo metadata` is the only binary dependency that matters for safety.
 
-The working tree is **0.2.13, the published version**; `CHANGELOG.md` has no
-`[Unreleased]` section. Twenty-one releases are published on crates.io (v0.1.0 through v0.1.6,
-then 0.2.0, 0.2.1, 0.2.2, 0.2.3, 0.2.4, 0.2.5, 0.2.6, 0.2.7, 0.2.8, 0.2.9,
-0.2.10, 0.2.11, 0.2.12). **v0.2.0 is yanked; the other twenty are not.**
-**v0.2.12 has no GitHub release** — its draft was published prematurely and
-reverted, burning the tag under the immutable-release policy, so self-update
-into it fails closed; 0.2.13 is its replacement. Bumping `Cargo.toml` is not a publication — see
-`docs/RELEASING.md` and `scripts/release-check.sh`.
+The working tree is **0.2.14, the release candidate** (bump committed, tag and
+publication pending); `CHANGELOG.md` has no `[Unreleased]` section. Twenty-one
+releases are published on crates.io (v0.1.0 through v0.1.6, then 0.2.0, 0.2.1,
+0.2.2, 0.2.3, 0.2.4, 0.2.5, 0.2.6, 0.2.7, 0.2.8, 0.2.9, 0.2.10, 0.2.11, 0.2.12,
+0.2.13); this release makes twenty-two. **v0.2.0 is yanked; the other twenty
+are not.** **v0.2.12 has no GitHub release** — its draft was published
+prematurely and reverted, burning the tag under the immutable-release policy,
+so self-update into it fails closed; 0.2.13 is its replacement. Bumping
+`Cargo.toml` is not a publication — see `docs/RELEASING.md` and
+`scripts/release-check.sh`.
 
 ## Read this before your first change
 
@@ -242,10 +244,10 @@ source of truth for module line counts and the inline-test total; verify each
 against `src/`, fix the overview first, then align the deep dives.
 
 The same rule applies to **per-platform test counts**, which have disagreed
-across three documents: they are 602 declared, 600 on Linux, 547 on Windows,
-596 on macOS. Those three figures count `src/` — the **lib target and the bin
+across three documents: they are 625 declared, 623 on Linux, 569 on Windows,
+619 on macOS. Those three figures count `src/` — the **lib target and the bin
 target together** — while a CI lane prints one number per target, so the Linux
-lane's library line reads 588 and the Windows lane's 536. Derive them with a
+lane's library line reads 611 and the Windows lane's 558. Derive them with a
 brace-tracking parser that evaluates each
 test's *effective* gate set against `rustc --print cfg --target <triple>`, and
 cross-check against `cargo test --lib --bins -- --list`. **Count the tests a gate
@@ -263,7 +265,7 @@ The Windows figure can be checked without a Windows host: cross-compile the
 test binary for `x86_64-pc-windows-gnu` (the `windows-gnu` std is
 installable, and `mingw-w64` supplies the C toolchain `ring` needs) and
 confirm it carries exactly the derived set of tests and no others. That check
-is what settled the figure at 547.
+is what settled the figure at 569.
 
 ## 7. Planning and decision records
 

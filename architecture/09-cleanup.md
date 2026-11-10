@@ -2,8 +2,8 @@
 
 > Component deep dive · part of the [architecture overview](overview.md)
 
-Module under review: `src/cleanup.rs`, 12180 lines (4536 production, 7644 lines
-of test code, 138 `#[test]` functions). It is the largest module in the crate
+Module under review: `src/cleanup.rs`, 14138 lines (5442 production, 8696 lines
+of test code, 154 `#[test]` functions). It is the largest module in the crate
 and the densest concentration of safety logic. Every other module decides *what
 to look at*; this one decides *what may be destroyed*, proves the decision
 still holds, and only then acts.
@@ -1264,11 +1264,11 @@ safety hole.
 
 ## 10. Testing
 
-**Numbers (verified by grep):** 138 `#[test]` functions; the test module opens at
-`cleanup.rs:4542` (`#[cfg(test)]` at 4541), so production is everything outside
-every `#[cfg(test)]` scope — 4536 lines — and the test module runs 4542–12180
-(7639 lines, 63% of the file). One earlier item is test-only but is *not* the
-module: the `#[cfg(test)]` helper `runtime_clean_capabilities` at 4418–4421.
+**Numbers (verified by grep):** 154 `#[test]` functions; the test module opens at
+`cleanup.rs:5448` (`#[cfg(test)]` at 5447), so production is everything outside
+every `#[cfg(test)]` scope — 5442 lines — and the test module runs 5448–14138
+(8691 lines, 61% of the file). One earlier item is test-only but is *not* the
+module: the `#[cfg(test)]` helper `runtime_clean_capabilities` at 5286–5288.
 No fixture
 files are needed: workspaces are built on disk and mtimes backdated so recency
 gates run without sleeping.

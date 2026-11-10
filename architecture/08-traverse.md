@@ -7,7 +7,7 @@
 > `source_activity` noted in §6 was reviewed and **kept** (see
 > [overview §10.1](overview.md)).
 
-`src/traverse.rs` — 1098 lines, 328 of them inline tests (`traverse.rs:771-1098`).
+`src/traverse.rs` — 1334 lines, 349 of them inline tests (`traverse.rs:986-1334`).
 
 ## 1. Responsibility
 

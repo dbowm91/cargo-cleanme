@@ -2,8 +2,8 @@
 
 > Component deep dive · part of the [architecture overview](overview.md)
 
-`src/discovery.rs` — 2653 lines; production code ends at `:1125`, the inline
-`#[cfg(test)]` module opens at `:1126` and holds 42 `#[test]` functions. It is
+`src/discovery.rs` — 2754 lines; production code ends at `:1142`, the inline
+`#[cfg(test)]` module opens at `:1143` and holds 43 `#[test]` functions. It is
 step 3 of the scan pipeline: given the scope decided by
 [`policy.rs`](04-policy-and-scope.md), walk it for `Cargo.toml` files and report
 what could not be seen.

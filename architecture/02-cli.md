@@ -25,8 +25,8 @@
 > (`src/cli.rs:34-37`). The manpage is generated from the same `long_about`,
 > so the help output and the manpage can no longer disagree. See §2.1.
 
-`src/cli.rs` is 2874 lines: 980 production, 1894 inside an inline
-`#[cfg(test)]` module beginning at `src/cli.rs:981`. It is the entire
+`src/cli.rs` is 2885 lines: 991 production, 1893 inside an inline
+`#[cfg(test)]` module beginning at `src/cli.rs:993`. It is the entire
 user-facing contract of the binary — the clap command model, the
 resolved-invocation model, the shim that makes `cargo cleanme …` parse at all,
 and the lexical path helper that lets a relative `ROOT` reach the cleanup
@@ -147,7 +147,7 @@ what "the root is the front door" means: `cargo cleanme --full` and
 | `--package <SPEC>` | — | `Option<String>` | `None` | `CleanupOverrides::package` (`src/cli.rs:550`) |
 | `--cargo-preview` | — | `bool` | `false` | `CleanMode::CargoPreview` (`src/cli.rs:1271-1272`); conflicts with the root's own `--dry-run` / `--dryrun` (`src/cli.rs:1271`) |
 | `--help` / `-h` | `-h` | clap built-in | — | clap help path |
-| `--version` / `-V` | `-V` | clap built-in (from `version`, `src/cli.rs:102`) | — | `cargo-cleanme 0.2.13` |
+| `--version` / `-V` | `-V` | clap built-in (from `version`, `src/cli.rs:102`) | — | `cargo-cleanme 0.2.14` |
 
 **`--verbose` is a rendering shape, not a mode.** It is `global = true`
 (`src/cli.rs:62`), so every report-producing subcommand honours it, and it
@@ -916,8 +916,8 @@ clap uses for a usage error.
 ### 7.1 Inline module: 61 `#[test]` functions
 
 `src/cli.rs` has **61** `#[test]` functions (plus two helper constructors and one
-`argv` helper). `#[cfg(test)]` is at `src/cli.rs:981`, `mod tests {` opens at
-`src/cli.rs:982`, and the module runs to end of file (1894 of 2874 lines,
+`argv` helper). `#[cfg(test)]` is at `src/cli.rs:992`, `mod tests {` opens at
+`src/cli.rs:993`, and the module runs to end of file (1893 of 2885 lines,
 including helpers).
 
 | Test | Line | What it pins |

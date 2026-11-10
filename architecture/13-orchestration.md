@@ -1,7 +1,7 @@
 # Orchestration — argument dispatch and the two pipelines
 
 > Component deep dive · part of the [architecture overview](overview.md)
-> **Status:** re-derived against `src/main.rs` at 2513 lines. The substantive
+> **Status:** re-derived against `src/main.rs` at 2554 lines. The substantive
 > changes since the previous revision of this file are: **ADR 007** made the
 > proof boundary the *selected scope*, so an out-of-boundary unprovable is
 > reported and never blocks; **M014** added the CWD-anchored default, `scan

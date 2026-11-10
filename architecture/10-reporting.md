@@ -9,7 +9,7 @@
 > today** (G1-G6), including two contract gaps in the JSON DTOs that no schema
 > document covers.
 
-Covers `src/report.rs` (395 lines, 190 production) and `src/output.rs` (1113
+Covers `src/report.rs` (395 lines, 190 production) and `src/output.rs` (1129
 lines, 272 production) together. They are two projections of the same data, and
 the contrast is the point: the human renderer predates the machine contract; the
 DTO layer exists to protect it. `output.rs` now carries a third surface — the

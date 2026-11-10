@@ -2,7 +2,7 @@
 
 > Component deep dive · part of the [architecture overview](overview.md)
 
-`src/progress.rs` — 1002 lines, 542 production (`progress.rs:542` opens the test
+`src/progress.rs` — 1020 lines, 560 production (`progress.rs:560` opens the test
 module), 16 `#[test]` functions.
 
 ## 1. Responsibility
