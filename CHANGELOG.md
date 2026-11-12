@@ -6,6 +6,17 @@ All notable changes to cargo-cleanme are documented here. The format follows
 stance: the `0.x` line may make breaking changes in any release, and the
 command-line, JSON, and release-asset contracts are the stable surface.
 
+## [Unreleased]
+
+### Fixed
+
+- **A proven `target/` directory with no `CACHEDIR.TAG` is cleaned.** Cargo
+  refuses `cargo clean --target-dir` when the marker is missing and accepts
+  the same directory when `CARGO_TARGET_DIR` pins it and the flag is omitted.
+  Nested package `target/` directories and ordinary workspace targets were
+  deferred on the flag's check. A marker that is present but not Cargo's
+  signature is still left untouched.
+
 ## [0.2.14] - 2026-11-10
 
 ### Added

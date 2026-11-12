@@ -371,15 +371,16 @@ so a cleaned shared unit is labeled `shared`.
 `config.toml` states the same boundary: an allow-list entry does not admit
 `uncertain` output and does not reclassify `external-unproven`. Overview §8
 is the crate-wide statement. `external_outside_root_allowed_via_configured_root`
-runs the real Cargo path and skips an external directory that has no
-`CACHEDIR.TAG`; the marker is what refuses it, not the ownership class.
+runs the real Cargo path and skips an external directory whose
+`CACHEDIR.TAG` is present but not Cargo's signature; the invalid marker is
+what refuses it, not the ownership class. A missing marker does not.
 
 **One naming trap.** The test at `:2060` is named
 `external_outside_root_allowed_via_configured_root`, which reads as "an allowed
-root makes external output cleanable". The fixture has no `CACHEDIR.TAG`,
-so both the bare run and the allow-listed run skip on the marker proof. The
-allow list is not what admits an external artifact directory, and it cannot
-admit one that fails the marker.
+root makes external output cleanable". The fixture's `CACHEDIR.TAG` is not
+Cargo's signature, so both the bare run and the allow-listed run skip on the
+marker proof. The allow list is not what admits an external artifact
+directory, and it cannot admit one that fails the marker.
 
 **`ownership_skip_detail`** (`:1362-1373`) exists to state both halves of the rule
 (doc comment `:1358-1361`): the class is unproven *and* configuration does not fix
@@ -585,9 +586,12 @@ The doc comment `:3150-3166` enumerates the frozen state. Execution order in
    member (`:3671-3693`), and fresh output activity + sizing per covering root
    (`:4058-4093`). Both `t >= cutoff` and `t > start` are rejected
    (`:3707`, refusing at `:3708-3712`) — a future-dated mtime reads as active, not as old.
-10. `:4187` — `require_cargo_markers` (`:4251-4256`): every covering root
-    needs a `CACHEDIR.TAG` that is a regular non-symlink file starting with
-    Cargo's signature bytes.
+10. `require_cargo_markers`: a covering root whose `CACHEDIR.TAG` is present
+    must be a regular non-symlink file starting with Cargo's signature. A
+    missing marker does not defer the root. Cargo refuses
+    `cargo clean --target-dir` in that case and accepts the same directory,
+    including a nested package `target/`, when `CARGO_TARGET_DIR` pins it and
+    the flag is omitted. An invalid marker still defers.
 11. `:4104-4122` — target/build resolution and the build==target collapse.
 12. `:4028-4050` — assemble the provisional proof (`:4028-4050`), compute `frozen_env` (`:4230`), attach (`:4028-4050`).
 
@@ -666,7 +670,7 @@ module:
 | `preview_is_default_and_simulate_invokes_no_clean` | `:5930` | Simulate: no clean call. |
 | `simulation_parity_valid_private_reaches_cleanable_with_zero_clean_calls` | `:8767` | Simulate reaches cleanable with zero clean calls. |
 | `combined_roots_share_one_ownership_proof_and_simulation_never_cleans` | `:11159` | Two roots, one shared universe proof; zero cleans. |
-| `simulation_parity_missing_and_invalid_markers_both_skip` | `:8707` | Marker failures skip identically in Simulate and CargoPreview. |
+| `simulation_parity_missing_and_invalid_markers_both_skip` | `:8707` | A missing marker is cleanable in Simulate; an invalid signature skips in Simulate and CargoPreview. |
 | `the_listing_never_spawns_a_clean` | `:5817` | The interactive listing never spawns a clean. |
 | `metadata_failure_blocks_boundary_with_zero_spawns` | `:6768` | A metadata failure inside the boundary blocks with zero spawns. |
 | `nested_outputs_skip_at_unit_gate_with_zero_spawns` | `:6729` | A nested output is rejected at the unit gate with zero spawns. |
@@ -1111,7 +1115,7 @@ The candidate is skipped; the run continues to the next unit.
 | Covering root gone/type/symlink | `:4162-4185` → `:3780-3808` | "preflight changed: …" |
 | Source became active | `:4034-4041` | "…source became active" |
 | Output became active | `:4083-4088` | "…output became active" |
-| Marker invalid | `:3723` → `:3994-4023` | "Cargo CACHEDIR.TAG marker is missing…" |
+| Marker invalid | `read_cache_marker` | "Cargo CACHEDIR.TAG is not a regular file…" or "…cache marker signature…" A missing marker is not this row. |
 
 Covered by `RaceRunner`-based tests: `race_target_replacement_skips_before_clean`
 `:8938`, `race_covering_root_disappears_skips` `:9215`,

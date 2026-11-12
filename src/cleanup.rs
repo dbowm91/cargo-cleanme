@@ -3055,9 +3055,12 @@ pub fn clean_with_roots_policy_selector_guarded(
                     observer.unit_completed(cleanup_phase);
                     continue;
                 }
-                // M-6: markers are part of the proof (step 11); re-prove at
-                // the last moment so a marker removed or replaced in the
-                // proof→spawn window skips instead of spawning.
+                // M-6: an invalid marker is part of the proof (step 11); re-prove
+                // at the last moment so a marker replaced with a non-Cargo
+                // signature in the proof→spawn window skips instead of
+                // spawning. A marker that is simply absent does not skip:
+                // the spawn omits `--target-dir` and the frozen environment
+                // pins the directory, which is the invocation Cargo accepts.
                 if let Err(failure) = require_cargo_markers(&proof.covering) {
                     skipped(&mut report, failure.detail, None, failure.code);
                     observer.unit_completed(cleanup_phase);
@@ -3065,11 +3068,36 @@ pub fn clean_with_roots_policy_selector_guarded(
                 }
                 let cwd = proof.workspace_root.clone();
                 let targets = clean_invocation_dirs(&proof);
+                // Re-read immediately before spawn. An invalid marker is the
+                // same refusal as the check above. An absent marker is pinned
+                // through the environment, without `--target-dir`.
+                let explicit_flags: Result<Vec<bool>, ProofFailure> = targets
+                    .iter()
+                    .map(|target_dir| match read_cache_marker(target_dir) {
+                        CacheMarker::Signed => Ok(true),
+                        CacheMarker::Absent => Ok(false),
+                        CacheMarker::Invalid(failure) => Err(failure),
+                    })
+                    .collect();
+                let explicit_flags = match explicit_flags {
+                    Ok(flags) => flags,
+                    Err(failure) => {
+                        skipped(&mut report, failure.detail, None, failure.code);
+                        observer.unit_completed(cleanup_phase);
+                        continue;
+                    }
+                };
                 let mut details: Vec<String> = Vec::new();
                 let mut spawn_failure: Option<String> = None;
-                for target_dir in &targets {
+                for (target_dir, explicit_target_dir) in targets.iter().zip(explicit_flags) {
                     let isolated = target_dir != &proof.target;
-                    let args = clean_args_for(&proof, mode, selector.as_ref(), target_dir);
+                    let args = clean_args_for(
+                        &proof,
+                        mode,
+                        selector.as_ref(),
+                        target_dir,
+                        explicit_target_dir,
+                    );
                     let isolated_env;
                     let spawned = if isolated {
                         isolated_env = isolated_clean_env(target_dir);
@@ -4884,11 +4912,14 @@ fn final_cleanup_proof_roots(
         .saturating_add(crate::domain::elapsed_nanos(activity_start.elapsed()));
     let sizing_start = std::time::Instant::now();
     let mut fresh_bytes = 0u64;
-    // Each covering root is its own `cargo clean`. A member `target/` that is
-    // too recent, or that Cargo would refuse for a missing cache marker, must
-    // not defer the workspace target beside it. When nothing remains, the
+    // Each covering root is its own `cargo clean`. A member or nested package
+    // `target/` that is too recent, or whose cache marker is present but
+    // invalid, must not defer the workspace target beside it. A missing
+    // marker does not defer: Cargo refuses `cargo clean --target-dir` in that
+    // case and accepts the same directory when it is pinned with
+    // `CARGO_TARGET_DIR` and the flag is omitted. When nothing remains, the
     // unit skips for the same reason a single-root proof used to: activity
-    // first, then the marker.
+    // first, then an invalid marker.
     let mut cleanable: Vec<PathBuf> = Vec::new();
     let mut saw_active: Option<ProofFailure> = None;
     let mut saw_marker: Option<ProofFailure> = None;
@@ -5116,12 +5147,14 @@ fn frozen_env(ctx: &RevalidatedContext) -> Result<Vec<(OsString, OsString)>, Pro
     Ok(env)
 }
 
-/// Directories one workspace clean must pass to `cargo clean --target-dir`.
+/// Directories one workspace clean must invoke `cargo clean` against.
 ///
-/// The metadata target and build directory share one invocation: `--target-dir`
-/// names the target, and the frozen environment names the build directory.
-/// Every other covering root is a member's or a refused nested package's
-/// conventional `target/`, which that invocation does not touch.
+/// The metadata target and build directory share one invocation: the frozen
+/// environment names both, and `--target-dir` is added only when that
+/// directory carries a valid cache marker. Every other covering root is a
+/// member's or a refused nested package's conventional `target/`, which the
+/// workspace invocation does not touch, so it gets its own invocation pinned
+/// to that one path.
 /// Environment for a conventional package `target/` that is not the
 /// metadata target. Both directories are pinned to that one path, so the
 /// invocation cannot follow the workspace's build directory.
@@ -5153,6 +5186,7 @@ fn clean_args_for(
     mode: CleanMode,
     selector: Option<&CleanupSelector>,
     target_dir: &Path,
+    explicit_target_dir: bool,
 ) -> Vec<OsString> {
     let mut args = vec![OsString::from("clean")];
     if mode == CleanMode::CargoPreview {
@@ -5163,9 +5197,15 @@ fn clean_args_for(
     args.push(OsString::from("--locked"));
     args.push(OsString::from("--manifest-path"));
     args.push(ctx.root_manifest.as_os_str().to_owned());
-    // Freeze target via explicit arg as well as env (equivalent, Cargo-owned).
-    args.push(OsString::from("--target-dir"));
-    args.push(target_dir.as_os_str().to_owned());
+    // `--target-dir` and `CARGO_TARGET_DIR` are not equivalent. Cargo requires
+    // a valid `CACHEDIR.TAG` only for the flag; the same directory, including
+    // a nested package `target/` that is not the workspace default, is cleaned
+    // when the environment pins it and the flag is omitted. The flag stays
+    // when the marker is valid, so Cargo's own check still runs for that case.
+    if explicit_target_dir {
+        args.push(OsString::from("--target-dir"));
+        args.push(target_dir.as_os_str().to_owned());
+    }
     if let Some(CleanupSelector::Profile(profile)) = selector {
         args.push(OsString::from("--profile"));
         args.push(OsString::from(profile));
@@ -5389,32 +5429,57 @@ fn co_owner_is_active(
     Ok(false)
 }
 
-fn require_cargo_markers(covering: &[PathBuf]) -> Result<(), ProofFailure> {
-    for root in covering {
-        let tag = root.join("CACHEDIR.TAG");
-        let meta = fs::symlink_metadata(&tag).map_err(|_| {
-            ProofFailure::new(
-                CleanupReasonCode::SkippedMarkerInvalid,
-                "Cargo CACHEDIR.TAG marker is missing; cleanup deferred",
-            )
-        })?;
-        if !meta.is_file() || meta.file_type().is_symlink() {
-            return Err(ProofFailure::new(
-                CleanupReasonCode::SkippedMarkerInvalid,
-                "Cargo CACHEDIR.TAG is not a regular file; cleanup deferred",
-            ));
-        }
-        let bytes = fs::read(&tag).map_err(|e| {
-            ProofFailure::new(
+const CARGO_CACHE_SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55";
+
+/// What `CACHEDIR.TAG` says about one proven artifact directory.
+///
+/// `Signed` is the only state in which Cargo accepts `--target-dir`. `Absent`
+/// is still cleanable: Cargo cleans that directory when `CARGO_TARGET_DIR`
+/// names it and the flag is left off, which is how a nested package `target/`
+/// and an ordinary workspace target without the marker are reclaimed.
+/// `Invalid` is a marker that is present and is not Cargo's, so the directory
+/// is not cleaned.
+enum CacheMarker {
+    Signed,
+    Absent,
+    Invalid(ProofFailure),
+}
+
+fn read_cache_marker(root: &Path) -> CacheMarker {
+    let tag = root.join("CACHEDIR.TAG");
+    let meta = match fs::symlink_metadata(&tag) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return CacheMarker::Absent,
+        Err(e) => {
+            return CacheMarker::Invalid(ProofFailure::new(
                 CleanupReasonCode::SkippedMarkerInvalid,
                 format!("cannot read Cargo cache marker: {e}"),
-            )
-        })?;
-        if !bytes.starts_with(b"Signature: 8a477f597d28d172789f06886806bc55") {
-            return Err(ProofFailure::new(
-                CleanupReasonCode::SkippedMarkerInvalid,
-                "target directory does not have Cargo's cache marker signature; cleanup deferred",
             ));
+        }
+        Ok(meta) => meta,
+    };
+    if !meta.is_file() || meta.file_type().is_symlink() {
+        return CacheMarker::Invalid(ProofFailure::new(
+            CleanupReasonCode::SkippedMarkerInvalid,
+            "Cargo CACHEDIR.TAG is not a regular file; cleanup deferred",
+        ));
+    }
+    match fs::read(&tag) {
+        Err(e) => CacheMarker::Invalid(ProofFailure::new(
+            CleanupReasonCode::SkippedMarkerInvalid,
+            format!("cannot read Cargo cache marker: {e}"),
+        )),
+        Ok(bytes) if bytes.starts_with(CARGO_CACHE_SIGNATURE) => CacheMarker::Signed,
+        Ok(_) => CacheMarker::Invalid(ProofFailure::new(
+            CleanupReasonCode::SkippedMarkerInvalid,
+            "target directory does not have Cargo's cache marker signature; cleanup deferred",
+        )),
+    }
+}
+
+fn require_cargo_markers(covering: &[PathBuf]) -> Result<(), ProofFailure> {
+    for root in covering {
+        if let CacheMarker::Invalid(failure) = read_cache_marker(root) {
+            return Err(failure);
         }
     }
     Ok(())
@@ -5660,6 +5725,24 @@ mod tests {
     }
 
     type RecordedCall = (PathBuf, Vec<OsString>, Vec<(OsString, OsString)>);
+
+    /// The directory one recorded `cargo clean` was aimed at.
+    ///
+    /// A signed cache marker is passed as `--target-dir`. A missing marker is
+    /// pinned with `CARGO_TARGET_DIR` and the flag is omitted.
+    fn pinned_clean_dirs(calls: &[RecordedCall]) -> Vec<PathBuf> {
+        calls
+            .iter()
+            .filter_map(|(_, args, env)| {
+                if let Some(pos) = args.iter().position(|arg| arg == "--target-dir") {
+                    return args.get(pos + 1).map(PathBuf::from);
+                }
+                env.iter()
+                    .find(|(key, _)| key == "CARGO_TARGET_DIR")
+                    .map(|(_, value)| PathBuf::from(value))
+            })
+            .collect()
+    }
     // Fake cleanup runner with recording + configurable Cargo metadata.
     struct FakeCleanupRunner {
         calls: Mutex<Vec<RecordedCall>>,
@@ -7801,8 +7884,9 @@ mod tests {
         }
     }
 
-    /// A package `target/` Cargo will not clean (no cache marker) is left in
-    /// place. The workspace target beside it is still cleaned.
+    /// A package `target/` with no cache marker is cleaned by pinning
+    /// `CARGO_TARGET_DIR` and omitting `--target-dir`. The marked workspace
+    /// target beside it is still cleaned with the flag.
     #[test]
     fn a_markerless_package_target_does_not_block_its_workspace() {
         let d = tempfile::tempdir().unwrap();
@@ -7822,14 +7906,7 @@ mod tests {
         assert!(report.scope_blocked.is_none(), "{report:?}");
         let row = row_for(&report, &root);
         assert_eq!(row.outcome, CleanOutcome::Cleaned, "{report:?}");
-        let dirs: Vec<PathBuf> = runner
-            .clean_calls()
-            .iter()
-            .filter_map(|(_, args, _)| {
-                let pos = args.iter().position(|arg| arg == "--target-dir")?;
-                Some(PathBuf::from(&args[pos + 1]))
-            })
-            .collect();
+        let dirs = pinned_clean_dirs(&runner.clean_calls());
         let workspace_canonical = fs::canonicalize(&workspace_target).unwrap();
         assert!(
             dirs.iter()
@@ -7839,13 +7916,27 @@ mod tests {
         let member_canonical = fs::canonicalize(&member_target).unwrap();
         assert!(
             dirs.iter()
-                .all(|dir| dir != &member_canonical && dir != &member_target),
-            "marker-less package target was spawned: {dirs:?}"
+                .any(|dir| dir == &member_canonical || dir == &member_target),
+            "marker-less package target was not cleaned: {dirs:?}\ncalls {:?}",
+            runner.clean_calls()
+        );
+        assert!(
+            runner.clean_calls().iter().any(|(_, args, env)| {
+                args.iter().all(|arg| arg != "--target-dir")
+                    && env.iter().any(|(key, value)| {
+                        key == "CARGO_TARGET_DIR"
+                            && (Path::new(value) == member_canonical
+                                || Path::new(value) == member_target)
+                    })
+            }),
+            "the marker-less target must be pinned through the environment, not --target-dir: {:?}",
+            runner.clean_calls()
         );
     }
 
     /// The only output is a package `target/` with no cache marker. Cargo
-    /// would refuse it, so the unit is still deferred rather than deleted.
+    /// refuses `--target-dir` for it and accepts the environment pin, so the
+    /// unit is cleaned rather than deferred.
     #[test]
     fn a_markerless_package_target_alone_is_still_deferred() {
         let d = tempfile::tempdir().unwrap();
@@ -7863,14 +7954,18 @@ mod tests {
         let report = clean_default(d.path(), CleanMode::Execute, &runner);
         assert!(report.scope_blocked.is_none(), "{report:?}");
         let row = row_for(&report, &root);
-        assert_eq!(
-            row.reason_code,
-            CleanupReasonCode::SkippedMarkerInvalid,
-            "{report:?}"
-        );
+        assert_eq!(row.outcome, CleanOutcome::Cleaned, "{report:?}");
+        let member_canonical = fs::canonicalize(&member_target).unwrap();
         assert!(
-            runner.clean_calls().is_empty(),
-            "{:?}",
+            runner.clean_calls().iter().any(|(_, args, env)| {
+                args.iter().all(|arg| arg != "--target-dir")
+                    && env.iter().any(|(key, value)| {
+                        key == "CARGO_TARGET_DIR"
+                            && (Path::new(value) == member_canonical
+                                || Path::new(value) == member_target)
+                    })
+            }),
+            "marker-less package target was not pinned through the environment: {:?}",
             runner.clean_calls()
         );
     }
@@ -9862,6 +9957,10 @@ mod tests {
         let outside = d.path().join("outside-target");
         std::fs::create_dir_all(&outside).unwrap();
         std::fs::write(outside.join("artifact.bin"), vec![1u8; 1024]).unwrap();
+        // A missing marker is cleanable: Cargo accepts that directory when it
+        // is pinned through the environment. An invalid marker is not, and an
+        // allow-list entry must not bypass it.
+        std::fs::write(outside.join("CACHEDIR.TAG"), b"not cargo\n").unwrap();
         std::fs::create_dir_all(proj.join(".cargo")).unwrap();
         let outside_toml = outside.display().to_string().replace('\\', "/");
         std::fs::write(
@@ -9879,7 +9978,7 @@ mod tests {
         assert_eq!(skipped.results.len(), 1);
         assert_eq!(skipped.results[0].outcome, CleanOutcome::Skipped);
         assert!(
-            skipped.results[0].detail.contains("CACHEDIR.TAG"),
+            skipped.results[0].detail.contains("signature"),
             "the marker proof still refuses, past the ownership gate: {}",
             skipped.results[0].detail
         );
@@ -9899,7 +9998,7 @@ mod tests {
         assert_eq!(allowed.results.len(), 1);
         assert_eq!(allowed.results[0].outcome, CleanOutcome::Skipped);
         assert!(
-            allowed.results[0].detail.contains("CACHEDIR.TAG"),
+            allowed.results[0].detail.contains("signature"),
             "an allow-list entry does not skip the marker proof: {}",
             allowed.results[0].detail
         );
@@ -9907,8 +10006,13 @@ mod tests {
 
     #[test]
     fn missing_marker_skips_instead_of_failing() {
+        // The name is historical. A missing marker used to skip, because
+        // `cargo clean --target-dir` refuses it. Cargo cleans the same
+        // directory when `CARGO_TARGET_DIR` pins it and the flag is omitted,
+        // so a proven target — nested or not — is previewed rather than
+        // deferred. An invalid marker still skips; that case is the parity
+        // test below.
         let (_d, root, target) = valid_fixture(1);
-        // Remove marker to trigger clean skip (not failure).
         std::fs::remove_file(target.join("CACHEDIR.TAG")).unwrap();
         let old = SystemTime::now() - Duration::from_secs(3600);
         backdate(&root, old);
@@ -9916,9 +10020,20 @@ mod tests {
         let noop = NoopObserver;
         let report = clean_with(&root, 0, &[], CleanMode::CargoPreview, &runner, &noop).unwrap();
         assert_eq!(report.results.len(), 1);
-        assert_eq!(report.results[0].outcome, CleanOutcome::Skipped);
-        assert!(report.results[0].detail.contains("CACHEDIR.TAG"));
-        assert!(runner.clean_calls().is_empty());
+        assert_eq!(report.results[0].outcome, CleanOutcome::Previewed);
+        let calls = runner.clean_calls();
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        let (_, args, env) = &calls[0];
+        assert!(
+            args.iter().all(|arg| arg != "--target-dir"),
+            "a missing marker must not be passed as --target-dir: {args:?}"
+        );
+        let pinned = env
+            .iter()
+            .find(|(key, _)| key == "CARGO_TARGET_DIR")
+            .map(|(_, value)| PathBuf::from(value));
+        let want = fs::canonicalize(&target).unwrap_or(target);
+        assert_eq!(pinned.as_deref(), Some(want.as_path()), "{env:?}");
     }
 
     // --- C002 §9 simulation parity: Simulate and Execute pre-spawn gates match.
@@ -9950,7 +10065,8 @@ mod tests {
 
     #[test]
     fn simulation_parity_missing_and_invalid_markers_both_skip() {
-        // Missing marker.
+        // A missing marker is cleanable in both modes. Simulate still spawns
+        // nothing; the disposition is what changed.
         {
             let (_d, root, target) = valid_fixture(1);
             std::fs::remove_file(target.join("CACHEDIR.TAG")).unwrap();
@@ -9959,30 +10075,14 @@ mod tests {
             let exec_runner = FakeCleanupRunner::new(&root, &target, 1);
             assert_eq!(
                 simulate_disposition(&root, &target, &sim_runner, CleanMode::Simulate),
-                CleanOutcome::Skipped
+                CleanOutcome::Simulated
             );
             assert!(sim_runner.clean_calls().is_empty());
-            // Execute dry decision (no spawn) also skips.
-            let adapter = WorkspaceCleanupAdapter {
-                runner: &exec_runner as &dyn CleanupRunner,
-            };
-            let mut counters = ScanCounters::default();
-            let mut diags = Vec::new();
             let noop = NoopObserver;
-            let ws = workspace::resolve_workspaces(
-                &[root.join("Cargo.toml")],
-                &adapter,
-                &mut counters,
-                &mut diags,
-                &noop,
-            );
-            // Fallback: direct clean_with Simulate for Execute parity is enough
-            // here because both share `final_cleanup_proof`; assert zero clean.
             let exec_report =
                 clean_with(&root, 0, &[], CleanMode::Simulate, &exec_runner, &noop).unwrap();
-            assert_eq!(exec_report.results[0].outcome, CleanOutcome::Skipped);
-            assert!(exec_report.results[0].detail.contains("CACHEDIR.TAG"));
-            let _ = (ws, target);
+            assert_eq!(exec_report.results[0].outcome, CleanOutcome::Simulated);
+            assert!(exec_runner.clean_calls().is_empty());
         }
         // Invalid marker signature.
         {
@@ -10693,7 +10793,9 @@ mod tests {
 
     #[test]
     fn race_marker_disappears_and_changes_skip() {
-        // Disappears.
+        // Disappears. Absence is the invocation Cargo accepts through the
+        // environment pin, so the unit stays cleanable. A replaced signature
+        // below is the refusal.
         {
             let (_d, root, target) = valid_fixture(1);
             let target_clone = target.clone();
@@ -10702,8 +10804,7 @@ mod tests {
             });
             let noop = NoopObserver;
             let report = clean_with(&root, 0, &[], CleanMode::Simulate, &runner, &noop).unwrap();
-            assert_eq!(report.results[0].outcome, CleanOutcome::Skipped);
-            assert!(report.results[0].detail.contains("CACHEDIR"));
+            assert_eq!(report.results[0].outcome, CleanOutcome::Simulated);
         }
         // Changes (corrupted signature).
         {
@@ -13257,6 +13358,7 @@ mod tests {
             CleanMode::CargoPreview,
             Some(&CleanupSelector::Profile("dev".into())),
             &ctx.target,
+            true,
         );
         let args: Vec<String> = args
             .iter()
@@ -13277,6 +13379,7 @@ mod tests {
             CleanMode::CargoPreview,
             Some(&CleanupSelector::Package("app-a@1.0.0".into())),
             &ctx.target,
+            true,
         );
         let args: Vec<String> = args
             .iter()
