@@ -10826,8 +10826,12 @@ mod tests {
     fn race_covering_becomes_symlink_skips_and_changes_classification() {
         let (_d, root, target) = valid_fixture(1);
         let target_clone = target.clone();
-        let other = root.parent().unwrap().join("symlink-other");
-        std::fs::create_dir_all(&other).unwrap();
+        #[cfg(unix)]
+        let other = {
+            let other = root.parent().unwrap().join("symlink-other");
+            std::fs::create_dir_all(&other).unwrap();
+            other
+        };
         let runner = RaceRunner::new(&root, &target, move || {
             let _ = fs::remove_dir_all(&target_clone);
             #[cfg(unix)]
@@ -10837,7 +10841,12 @@ mod tests {
             }
             #[cfg(not(unix))]
             {
-                let _ = fs::create_dir_all(&target_clone);
+                // Windows CI cannot create directory symlinks without
+                // elevation. A same-path type change still trips the
+                // covering preflight this race is proving; recreating an
+                // empty directory would stay cleanable under markerless
+                // provenance and pass for the wrong reason.
+                let _ = fs::write(&target_clone, b"not-a-directory");
             }
         });
         let noop = NoopObserver;
