@@ -131,19 +131,22 @@ fn is_manifest_name(name: &OsStr) -> bool {
 fn vcs(n: &OsStr) -> bool {
     n == OsStr::new(".git") || n == OsStr::new(".hg") || n == OsStr::new(".svn")
 }
-fn system_prune(_path: &Path) -> bool {
+fn system_prune(path: &Path) -> bool {
     #[cfg(target_os = "linux")]
-    if ["/proc", "/sys", "/dev", "/run"]
-        .iter()
-        .any(|excluded| _path == Path::new(excluded))
     {
-        return true;
+        ["/proc", "/sys", "/dev", "/run"]
+            .iter()
+            .any(|excluded| path == Path::new(excluded))
     }
     #[cfg(target_os = "macos")]
-    if _path == Path::new("/dev") {
-        return true;
+    {
+        path == Path::new("/dev")
     }
-    false
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = path;
+        false
+    }
 }
 
 /// Effective rustup home when its identity is known and absolute.
