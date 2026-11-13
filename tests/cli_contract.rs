@@ -517,9 +517,9 @@ fn json_scan_is_one_versioned_document_and_stats_stay_on_stderr() {
 /// `root.is_some()` reported `"routine"` for a scan that was in fact pinned to
 /// one explicit root — the label a consumer uses to tell what was scanned.
 ///
-/// M012A: rootless `scan` is now Full, so the configured-root case is reached
-/// through `scan --known`, which is the operation that still consults the
-/// maintenance scope resolver.
+/// A CLI root reports `"explicit"`. Bare `scan` is the full reconciliation
+/// and does not consult `scan.root`; that parse is covered without walking
+/// the machine.
 #[test]
 fn json_scope_label_follows_the_resolved_scope_not_the_cli_flags() {
     let dir = tempfile::tempdir().unwrap();
@@ -543,17 +543,19 @@ fn json_scope_label_follows_the_resolved_scope_not_the_cli_flags() {
         command.output().unwrap()
     };
 
-    // Configured root, no CLI root: resolved Explicit, so reported "explicit".
-    let from_config = run(&["--known"]);
+    let parsed = cargo_cleanme::cli::Cli::try_parse_normalized_from([
+        "cargo-cleanme".into(),
+        "--config".into(),
+        config.to_str().unwrap().into(),
+        "scan".into(),
+    ])
+    .unwrap();
     assert!(
-        from_config.status.success(),
-        "{}",
-        String::from_utf8_lossy(&from_config.stderr)
-    );
-    let json: serde_json::Value = serde_json::from_slice(&from_config.stdout).unwrap();
-    assert_eq!(
-        json["scope"], "explicit",
-        "a configured scan.root resolves to an explicit scope: {json}"
+        matches!(
+            parsed.invocation(),
+            cargo_cleanme::cli::Invocation::Scan(cargo_cleanme::cli::ScanIntent::Full)
+        ),
+        "bare scan is the full reconciliation and does not consult scan.root"
     );
 
     // The CLI root still reports "explicit" — the existing contract, unchanged.
@@ -963,21 +965,22 @@ fn cargo_failures_with_shared_generic_line_keep_distinct_cause_groups() {
     assert!(!log_line.contains("workspace root beta"));
 }
 
-/// M012A §7: incompatible scan scope selectors are rejected by the parser, so
-/// they cannot reach traversal at all.
+/// Removed scan selectors are rejected by the parser, so they cannot reach
+/// traversal at all.
 ///
-/// The pass condition is the specific failure — clap's conflict error on
-/// stderr with nothing on stdout — rather than "the command failed", which a
-/// Full scan or a config error could also produce.
+/// The pass condition is the specific failure — an unexpected argument, exit
+/// 2, nothing on stdout — rather than "the command failed", which a Full scan
+/// or a config error could also produce.
 #[test]
-fn scan_scope_conflicts_are_rejected_before_any_traversal() {
+fn removed_scan_selectors_are_rejected_before_any_traversal() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.toml");
     fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
     for args in [
+        vec!["scan", "--all"],
+        vec!["scan", "--known"],
+        vec!["scan", "--full"],
         vec!["scan", dir.path().to_str().unwrap(), "--known"],
-        vec!["scan", dir.path().to_str().unwrap(), "--full"],
-        vec!["scan", "--known", "--full"],
     ] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
         command.args(["--config", config.to_str().unwrap(), "--no-progress"]);
@@ -994,7 +997,7 @@ fn scan_scope_conflicts_are_rejected_before_any_traversal() {
             "{args:?} wrote a report before being rejected"
         );
         assert!(
-            String::from_utf8_lossy(&output.stderr).contains("cannot be used with"),
+            String::from_utf8_lossy(&output.stderr).contains("unexpected argument"),
             "{args:?}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
@@ -2843,73 +2846,6 @@ fn update_dry_run_reaches_the_same_non_mutating_path_from_either_spelling() {
     }
 }
 
-/// `scan --known` resolves the Routine scope when no `scan.root` is configured,
-/// and the Explicit scope when one is.
-///
-/// Platform scope: `directories` resolves `$HOME` on Unix, which is what bounds
-/// the Routine seed search to this fixture. Windows resolves the profile
-/// through a known-folder API that ignores the environment.
-#[cfg(unix)]
-#[test]
-fn known_scan_resolves_routine_without_a_configured_root_and_explicit_with_one() {
-    let fixture = MaintenanceFixture::new(false);
-    let home = tempfile::tempdir().unwrap();
-    fs::create_dir_all(home.path().join("projects")).unwrap();
-    let seeded = common::inactive_project(&home.path().join("projects"), "routine-project");
-    let pinned_config = fixture.temp.path().join("configured.toml");
-    fs::write(
-        &pinned_config,
-        format!(
-            "[scan]\nrecency_seconds = 300\nroot = {}\n",
-            toml::Value::String(seeded.to_str().unwrap().replace('\\', "\\\\"))
-        ),
-    )
-    .unwrap();
-
-    let run = |config: &std::path::Path, root: &std::path::Path| {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
-        command.args([
-            "--config",
-            config.to_str().unwrap(),
-            "--no-progress",
-            "--format",
-            "json",
-            "scan",
-            "--known",
-        ]);
-        let output = command
-            .env("HOME", home.path())
-            .env("PATH", path_with(&fixture.bin))
-            .env("FIXTURE_ROOT", root)
-            .env("FIXTURE_TARGET", &fixture.target)
-            .env("CARGO_LOG", &fixture.log)
-            .env("CARGO_ARGS_LOG", &fixture.args_log)
-            // ADR 009: the read-only maintenance inventory covers the working
-            // directory too, so the scenario's home is the directory it
-            // stands in. The seeded project is under it, so the manifest
-            // count the assertion checks is unchanged.
-            .current_dir(home.path())
-            .output()
-            .unwrap();
-        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
-    };
-
-    let routine = run(&fixture.config, &seeded);
-    assert_eq!(routine["operation"], "scan", "{routine}");
-    assert_eq!(
-        routine["scope"], "routine",
-        "no configured root means the Routine scope: {routine}"
-    );
-    assert_eq!(
-        routine["result"]["discovered_manifests"], 1,
-        "the seeded project must actually be discovered, or the label proves nothing: {routine}"
-    );
-
-    let explicit = run(&pinned_config, &seeded);
-    assert_eq!(explicit["operation"], "scan", "{explicit}");
-    assert_eq!(explicit["scope"], "explicit", "{explicit}");
-}
-
 /// A relative root is folded against the invocation directory *lexically*.
 ///
 /// The OS resolves `..` physically — through symlinks — while Cargo resolves a
@@ -3276,60 +3212,13 @@ fn log_mode_zero_result_maintenance_is_status_ok() {
     assert!(line.contains(" cleaned=0 "), "{line}");
 }
 
-/// M012B §4/§5: scan summaries carry the resolved scope.
+/// M012B §4/§5: a bounded scan summary carries the resolved scope.
 #[cfg(unix)]
 #[test]
 fn log_mode_scan_reports_the_resolved_scope() {
     let fixture = MaintenanceFixture::new(false);
     let home = tempfile::tempdir().unwrap();
     let seeded = common::inactive_project(&home.path().join("projects"), "seeded");
-    let run = |config: &std::path::Path| {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
-        command.args([
-            "--config",
-            config.to_str().unwrap(),
-            "--no-progress",
-            "--format",
-            "log",
-            "scan",
-            "--known",
-        ]);
-        let output = command
-            .env("HOME", home.path())
-            .env("PATH", path_with(&fixture.bin))
-            .env("FIXTURE_ROOT", &seeded)
-            .env("FIXTURE_TARGET", seeded.join("target"))
-            .env("CARGO_LOG", &fixture.log)
-            .env("CARGO_ARGS_LOG", &fixture.args_log)
-            // ADR 009: the read-only maintenance inventory covers the working
-            // directory too; the home is the scenario's directory.
-            .current_dir(home.path())
-            .output()
-            .unwrap();
-        assert_bounded_log_line(&output.stdout)
-    };
-    let routine = run(&fixture.config);
-    assert!(routine.contains(" op=scan "), "{routine}");
-    assert!(routine.contains(" status=ok "), "{routine}");
-    assert!(routine.contains(" scope=routine "), "{routine}");
-    assert!(routine.contains(" manifests=1 "), "{routine}");
-    assert!(
-        routine.contains(" groups=1 "),
-        "the seeded project must actually be found, or the line proves nothing: {routine}"
-    );
-
-    let pinned = fixture.temp.path().join("configured.toml");
-    fs::write(
-        &pinned,
-        format!(
-            "[scan]\nrecency_seconds = 300\nroot = {}\n",
-            toml::Value::String(seeded.to_str().unwrap().replace('\\', "\\\\"))
-        ),
-    )
-    .unwrap();
-    let explicit = run(&pinned);
-    assert!(explicit.contains(" scope=explicit "), "{explicit}");
-
     let cli_root = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"))
         .args([
             "--config",
@@ -3340,10 +3229,21 @@ fn log_mode_scan_reports_the_resolved_scope() {
             "scan",
             seeded.to_str().unwrap(),
         ])
+        .env("PATH", path_with(&fixture.bin))
+        .env("FIXTURE_ROOT", &seeded)
+        .env("FIXTURE_TARGET", seeded.join("target"))
+        .env("CARGO_LOG", &fixture.log)
+        .env("CARGO_ARGS_LOG", &fixture.args_log)
         .output()
         .unwrap();
     let explicit = assert_bounded_log_line(&cli_root.stdout);
+    assert!(explicit.contains(" op=scan "), "{explicit}");
+    assert!(explicit.contains(" status=ok "), "{explicit}");
     assert!(explicit.contains(" scope=explicit "), "{explicit}");
+    assert!(
+        explicit.contains(" manifests=1 "),
+        "the seeded project must actually be found, or the line proves nothing: {explicit}"
+    );
 }
 
 /// M012B §6: `--stats` stays an explicit stderr override and does not touch the
@@ -3631,23 +3531,21 @@ fn scan_emits_exactly_one_json_document() {
         "the internal-scan report guard was removed; see architecture/13-orchestration.md §4"
     );
 
-    // M019 test 8: the Full cleanup's internal reconciliation must not emit
-    // its own report. The canonical spelling moved to the root, so the
-    // suppression now has to hold for `cargo cleanme --full` as well as for
-    // the hidden alias — and the assertion is made against the *Full branch*,
-    // not against the file as a whole: a suppression anywhere in the file
-    // would satisfy a weaker check.
+    // `--full` cleans persisted learned roots and must not run a platform
+    // reconciliation as a side effect (that would emit a second document, or
+    // hide a walk behind EmitReport::No). The Full branch loads learned state
+    // instead.
     let branch = source
         .find("CleanupScope::Full =>")
         .expect("the Full cleanup branch exists");
-    let call = source[branch..]
-        .find("run_scan(")
-        .map(|offset| &source[branch + offset..])
-        .expect("the Full branch runs a reconciliation");
-    let window = &call[..call.len().min(400)];
+    let window = &source[branch..branch + source[branch..].len().min(200)];
     assert!(
-        window.contains("EmitReport::No"),
-        "the Full cleanup's internal scan must not emit a report: {window}"
+        window.contains("resolve_full_from_learned"),
+        "the Full cleanup must load learned roots rather than re-scan the machine: {window}"
+    );
+    assert!(
+        !window.contains("run_scan("),
+        "the Full cleanup must not call run_scan: {window}"
     );
 }
 
@@ -4941,87 +4839,6 @@ fn the_working_directory_is_exempt_from_the_maintainability_rule() {
     );
 }
 
-/// ADR 009: the configured ignore list still prunes the working directory's
-/// subtree in the read-only inventory.
-///
-/// The exemption is from the maintainability rule only. An explicit operator
-/// exclusion outranks a default, so a configured `ignore` still prunes the
-/// subtree the operator is standing in.
-///
-/// This is asserted where the filters apply. Every cleanup scope bypasses the
-/// discovery filters — ADR 007 §1: "`clean ROOT` proves exactly those roots" —
-/// so `scan.ignore` has never applied to a cleanup, before or after ADR 009.
-#[cfg(unix)]
-#[test]
-fn a_configured_ignore_still_covers_the_working_directory() {
-    let fixture = WorkingDirectoryScopeFixture::new();
-    let config = fixture.case.join("ignoring.toml");
-    fs::write(
-        &config,
-        format!(
-            "[scan]\nrecency_seconds = 300\nignore = [{}]\n",
-            toml::Value::String(fixture.sandbox.to_str().unwrap().replace('\\', "\\\\"))
-        ),
-    )
-    .unwrap();
-
-    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
-    command.args([
-        "--config",
-        config.to_str().unwrap(),
-        "--no-progress",
-        "--format",
-        "json",
-        "scan",
-        "--known",
-    ]);
-    let output = command
-        .env("HOME", &fixture.home)
-        .env("XDG_STATE_HOME", &fixture.state_home)
-        .env("PATH", path_with(&fixture.bin))
-        .env("FIXTURE_ROOT", &fixture.project)
-        .env("FIXTURE_TARGET", &fixture.target)
-        .env("CARGO_LOG", &fixture.log)
-        .env("CARGO_ARGS_LOG", &fixture.args_log)
-        .current_dir(&fixture.sandbox)
-        .output()
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(
-        json["result"]["summary"]["group_count"], 0,
-        "a configured ignore must still prune the working directory's subtree: {json}"
-    );
-
-    // The premise: without the ignore, the same run does find it.
-    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-cleanme"));
-    command.args([
-        "--config",
-        fixture.config.to_str().unwrap(),
-        "--no-progress",
-        "--format",
-        "json",
-        "scan",
-        "--known",
-    ]);
-    let output = command
-        .env("HOME", &fixture.home)
-        .env("XDG_STATE_HOME", &fixture.state_home)
-        .env("PATH", path_with(&fixture.bin))
-        .env("FIXTURE_ROOT", &fixture.project)
-        .env("FIXTURE_TARGET", &fixture.target)
-        .env("CARGO_LOG", &fixture.log)
-        .env("CARGO_ARGS_LOG", &fixture.args_log)
-        .current_dir(&fixture.sandbox)
-        .output()
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(
-        json["result"]["summary"]["group_count"], 1,
-        "without the ignore the working directory's project must be found, or the \
-         prune proves nothing: {json}"
-    );
-}
-
 /// ADR 009: `clean ROOT` keeps its own scope and does not gain the working
 /// directory.
 ///
@@ -5311,7 +5128,7 @@ fn a_scope_selector_on_a_read_only_subcommand_is_a_usage_error() {
     let config = dir.path().join("config.toml");
     fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
     for args in [
-        vec!["--full", "scan", "--all"],
+        vec!["--full", "scan"],
         vec!["--full", "config", "path"],
         vec!["--full", "update"],
     ] {
@@ -5352,8 +5169,8 @@ fn a_policy_override_on_a_read_only_subcommand_is_a_usage_error() {
     let config = dir.path().join("config.toml");
     fs::write(&config, "[scan]\nrecency_seconds = 300\n").unwrap();
     for args in [
-        vec!["--profile", "release", "scan", "--all"],
-        vec!["--older-than", "60", "scan", "--all"],
+        vec!["--profile", "release", "scan"],
+        vec!["--older-than", "60", "scan"],
         vec!["--package", "fixture", "update"],
         vec!["--exclude", "/a/*", "config", "show"],
     ] {

@@ -26,17 +26,19 @@ quickstart; this document has the detail.
 | `--dry-run` | Same selection simulated end to end, zero `cargo clean` processes |
 | `-i` / `--interactive` | Terminal selection list over the resolved units, then clean |
 | `cargo cleanme ROOT` | **Cleanup of one bounded root** (Execute) |
-| `cargo cleanme --full` | **Full cleanup**: reconcile the machine, then clean the learned roots it can prove |
-| `cargo cleanme scan --all` | Full read-only reconciliation |
-| `cargo cleanme scan ROOT` | One explicit read-only scope |
-| `cargo cleanme scan --known` | Routine read-only inventory of the maintenance scope |
+| `cargo cleanme --full` | **Full cleanup** of learned roots from the last `scan` (no machine-wide walk) |
+| `cargo cleanme scan` | Full read-only reconciliation of the machine; learns project roots |
+| `cargo cleanme scan ROOT` | Bounded read-only walk; updates the learned list for that directory |
 | `cargo cleanme clean …` | **hidden** compatibility alias — `clean ROOT`, `clean --known`, and `clean --full` still work, and mean what the root-level spellings mean |
 | `cargo cleanme config path\|show\|edit` | locate, print, or edit the config |
 | `cargo cleanme update [--dry-run]` | self-update to the latest stable release |
 
 `cargo cleanme …` and `cargo-cleanme …` are the same binary and behave
-identically. `scan --all` and `--full` take **no** `ROOT`; the
-scan form walks the platform roots, and the cleanup form reconciles them first.
+identically. `scan` walks the platform and learns where Cargo projects live.
+`cargo cleanme --full` cleans those learned roots without re-walking the
+machine. With no learned roots yet, `--full` nudges you to run `scan` first.
+A learned root whose directory is gone is dropped; `--full` mentions that
+only with `--verbose`.
 
 **The root is the cleanup front door.** `cargo cleanme ROOT` and
 `cargo cleanme --full` are the canonical spellings. `cargo cleanme clean ROOT`
@@ -167,18 +169,15 @@ done so.
 ### scan
 
 ```sh
-cargo cleanme scan --all              # Full: exhaustive platform-root walk
+cargo cleanme scan                 # full machine walk
 cargo cleanme scan ~/projects      # one explicit scope
-cargo cleanme scan --known         # Routine read-only inventory
-cargo cleanme scan --known --format json
 cargo cleanme scan ~/p --no-progress --stats
 ```
 
-`scan` requires exactly one scope selector — `ROOT`, `--known`, or `--all`
-(`-a`) — and bare `scan` is a usage error, so the machine-wide reconciliation
-is never one keystroke from the front door. `scan --full` remains accepted as a
-hidden alias of `--all`.
-`ROOT` with `--known` or `--all`, and `--known` with `--all`, are usage errors.
+`scan` with no ROOT walks the platform. That walk is what expires learned
+roots, including a root whose directory no longer exists. `scan ROOT` bounds
+the walk to that directory and updates the learned list for projects found
+there. `scan --all`, `scan --full`, and `scan --known` are not selectors.
 
 Output is deterministic: size-descending, with a stable path tie-break, and a
 deduplicated inventory total. It is an **estimate of reclaimable bytes**, never

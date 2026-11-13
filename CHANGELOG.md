@@ -6,6 +6,30 @@ All notable changes to cargo-cleanme are documented here. The format follows
 stance: the `0.x` line may make breaking changes in any release, and the
 command-line, JSON, and release-asset contracts are the stable surface.
 
+## [Unreleased]
+
+### Changed
+
+- **`cargo cleanme scan` walks the machine.** It no longer requires `--all`.
+  `scan --all`, `scan --full`, and `scan --known` are rejected. `scan ROOT`
+  remains a bounded walk and updates the global learned list for that
+  directory only. A learned root whose directory is gone is removed from
+  discovery state even when the platform walk is incomplete.
+- **`cargo cleanme --full` cleans learned roots only.** It no longer walks
+  the platform. Run `cargo cleanme scan` (or `scan ROOT`) to learn and
+  refresh that list. With no learned roots, it prints a cold-start nudge
+  toward `scan` instead of a silent empty cleanup. A missing learned root
+  is skipped; `--verbose` names it.
+
+### Fixed
+
+- **A proven `target/` directory with no `CACHEDIR.TAG` is cleaned.** Cargo
+  refuses `cargo clean --target-dir` when the marker is missing and accepts
+  the same directory when `CARGO_TARGET_DIR` pins it and the flag is omitted.
+  Nested package `target/` directories and ordinary workspace targets were
+  deferred on the flag's check. A marker that is present but not Cargo's
+  signature is still left untouched.
+
 ## [0.2.14] - 2026-11-10
 
 ### Added
