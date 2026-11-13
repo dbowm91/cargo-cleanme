@@ -85,18 +85,17 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
 }
 
 fn runnable_file(path: &Path) -> bool {
-    if !path.is_file() {
-        return false;
-    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        path.metadata()
-            .is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
+        path.is_file()
+            && path
+                .metadata()
+                .is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
     }
     #[cfg(not(unix))]
     {
-        true
+        path.is_file()
     }
 }
 

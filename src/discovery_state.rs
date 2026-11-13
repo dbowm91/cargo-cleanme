@@ -430,6 +430,11 @@ pub fn reconcile_scoped(
     home: Option<&Path>,
 ) -> DiscoveryState {
     let scope = fs::canonicalize(scope).unwrap_or_else(|_| scope.to_path_buf());
+    // Keep home in the same spelling as canonicalized projects so the
+    // "parent is home" filter does not promote `home/app` to `home` on
+    // macOS (`/var` vs `/private/var`).
+    let home = home.map(|h| fs::canonicalize(h).unwrap_or_else(|_| h.to_path_buf()));
+    let home = home.as_deref();
     let mut next = prior.clone();
     next.schema_version = CURRENT_SCHEMA;
 
@@ -469,17 +474,22 @@ pub fn reconcile_scoped(
         let Some(project) = observation.workspace.as_deref() else {
             continue;
         };
-        if !path_is_under(project, &scope) || !automatic_root_is_maintainable(project, home) {
+        // Scope is canonicalized above; raw observation spellings (macOS
+        // `/var` vs `/private/var`) must match that form before the
+        // under-scope gate, or a real scoped scan silently learns nothing.
+        let project = fs::canonicalize(project).unwrap_or_else(|_| project.to_path_buf());
+        if !path_is_under(&project, &scope) || !automatic_root_is_maintainable(&project, home) {
             continue;
         }
         let candidate = project
             .parent()
             .filter(|parent| Some(*parent) != home && !is_broad_root(parent))
+            .map(Path::to_path_buf)
             .unwrap_or(project);
-        if is_broad_root(candidate) || !automatic_root_is_maintainable(candidate, home) {
+        if is_broad_root(&candidate) || !automatic_root_is_maintainable(&candidate, home) {
             continue;
         }
-        let path = fs::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf());
+        let path = fs::canonicalize(&candidate).unwrap_or(candidate);
         if !path_is_under(&path, &scope) {
             continue;
         }
@@ -1549,6 +1559,8 @@ mod tests {
             "roots outside the scoped walk stay: {:?}",
             next.learned_roots
         );
+        let inside = fs::canonicalize(&inside).unwrap();
+        let scope = fs::canonicalize(&scope).unwrap();
         assert!(
             next.learned_roots
                 .iter()
