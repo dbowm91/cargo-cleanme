@@ -35,7 +35,7 @@ proof boundary that was blocked, not the whole machine.
 $ cargo cleanme --format log
 cargo-cleanme op=clean status=ok scope=routine mode=execute cleaned=7 skipped=3 failed=0 reclaimed_bytes=19778387968 diagnostics=0
 
-$ cargo cleanme scan --all --format log
+$ cargo cleanme scan --format log
 cargo-cleanme op=scan status=ok scope=full manifests=184 groups=31 bytes=51335569408 diagnostics=2
 
 $ cargo cleanme --format log
@@ -186,7 +186,7 @@ max_wait_ms = 86400000
   only when the Routine scope does not already reach it, and your home
   directory *contains* the seed roots — so a daily job run from your home
   keeps the bounded machine-wide sweep and does not widen into everything
-  under your home. `cargo cleanme scan --all --format log` is Full
+  under your home. `cargo cleanme scan --format log` is Full
   reconciliation and **never deletes
   anything**, but it walks the platform roots and can be expensive on a
   machine with a large filesystem — hence weekly, at night, behind load gating.
@@ -234,7 +234,7 @@ load gating:
 
 ```cron
 0 2 * * * /home/user/.cargo/bin/cargo-cleanme --format log >> /home/user/.local/state/cargo-cleanme.log 2>&1
-0 3 * * 0 /home/user/.cargo/bin/cargo-cleanme scan --all --format log >> /home/user/.local/state/cargo-cleanme.log 2>&1
+0 3 * * 0 /home/user/.cargo/bin/cargo-cleanme scan --format log >> /home/user/.local/state/cargo-cleanme.log 2>&1
 ```
 
 **systemd timers** — gives you `OnFailure`, `RandomizedDelaySec`, and the
@@ -364,7 +364,7 @@ read as "the tool declined" rather than as a crash:
 |---|---|---|
 | `cargo cleanme config show --format json` | `2` | `cargo-cleanme: configuration error: config command does not support --format json; use human or log output` |
 | `cargo cleanme --full` (no fresh generation) | `2` | `cargo-cleanme: configuration error: full reconciliation produced no fresh generation; no cleanup commands were run against stale learned roots` |
-| `cargo cleanme --full scan --all` | `2` | `cargo-cleanme: configuration error: `scan` does not accept --full: these are cleanup flags, and `cargo cleanme scan` is read-only. Run the cleanup without the subcommand, or run `scan` on its own.` |
+| `cargo cleanme --full scan` | `2` | `cargo-cleanme: configuration error: `scan` does not accept --full: these are cleanup flags, and `cargo cleanme scan` is read-only. Run the cleanup without the subcommand, or run `scan` on its own.` |
 | `cargo cleanme --older-than 3600 clean --older-than 60` | `2` | `cargo-cleanme: configuration error: --older-than was given at the root and on `clean`. The two values are ambiguous; give it at one level only.` |
 
 In `--format log` the same refusals are one bounded stderr line —

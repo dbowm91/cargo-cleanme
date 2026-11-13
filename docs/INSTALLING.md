@@ -1,12 +1,12 @@
 # Installing cargo-cleanme
 
 Twenty-two releases are published on crates.io: v0.1.0
-through v0.1.6, then v0.2.0 through v0.2.14. Twenty-one of them carry GitHub
-releases — `v0.2.12` never did (its draft was published prematurely and
-reverted, burning the tag under the immutable-release policy; see
-`CHANGELOG.md`). **Twenty-one of them are installable**
-(twenty with prebuilt binaries; `v0.2.12` is
-cargo-installable only). **0.2.0 is yanked**: it could delete files it did not own, and
+through v0.1.6, then v0.2.0 through v0.2.14 (0.2.15 is the release candidate
+in this tree). Twenty-one of them carry GitHub releases — `v0.2.12` never did
+(its draft was published prematurely and reverted, burning the tag under the
+immutable-release policy; see `CHANGELOG.md`). **Twenty-one of them are
+installable** (twenty with prebuilt binaries; `v0.2.12` is cargo-installable
+only). **0.2.0 is yanked**: it could delete files it did not own, and
 `cargo install` will no longer select it for a new installation. See
 [TROUBLESHOOTING.md](TROUBLESHOOTING.md#check-this-first-known-defects-by-version)
 before installing anything at or below that version.

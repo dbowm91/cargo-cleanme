@@ -44,9 +44,8 @@ Simulated  my-app/target  4.02 MiB
 4.02 MiB would be reclaimed from 1 directory (simulation only — no `cargo clean` command was invoked)
 ```
 
-**2. Scan is read-only.** `scan` needs an explicit scope selector; bare `scan`
-is a usage error, so the machine-wide reconciliation is never one keystroke from
-the front door:
+**2. Scan is read-only.** Bare `scan` walks the machine and learns where Cargo
+projects live; `scan ROOT` bounds that walk to one directory:
 
 ```console
 $ cargo cleanme scan ~/projects --no-progress
@@ -87,7 +86,7 @@ and `--format log` are byte-for-byte identical with and without it.
 
 ```console
 $ cargo cleanme ~/projects/my-app --dry-run --format json
-{"schema_version":1,"cargo_cleanme_version":"0.2.14","operation":"clean","scope":"explicit","mode":"simulate","result":{"discovered_manifests":1,"resolved_workspaces":1,"units_considered":1,"scope_blocked":false,"scope_reason":null,"unresolved_ownership":0,"unresolved_participants":[],"selected_roots":["~/projects/my-app"],"effective_policy":{"min_reclaimable_bytes":0,"min_inactive_seconds":null,"include":[],"exclude":[]},"selector_kind":null,"selector_value":null,"state_generation_last_full_at":null,"units":[{"workspace_root":"~/projects/my-app","output_roots":["~/projects/my-app/target"],"ownership":"private","policy_disposition":"selected","outcome":"simulated","reason_code":"simulated","before_bytes":4210688,"selector_estimate_bytes":4210688,"output_union_before_bytes":4210688,"after_bytes":null,"observed_decrease_bytes":null,"detail":"simulation: no `cargo clean` command was invoked"}],"summary":{"previewed":0,"simulated":1,"cleaned":0,"skipped":0,"failed":0,"diagnostics":0}}}
+{"schema_version":1,"cargo_cleanme_version":"0.2.15","operation":"clean","scope":"explicit","mode":"simulate","result":{"discovered_manifests":1,"resolved_workspaces":1,"units_considered":1,"scope_blocked":false,"scope_reason":null,"unresolved_ownership":0,"unresolved_participants":[],"selected_roots":["~/projects/my-app"],"effective_policy":{"min_reclaimable_bytes":0,"min_inactive_seconds":null,"include":[],"exclude":[]},"selector_kind":null,"selector_value":null,"state_generation_last_full_at":null,"units":[{"workspace_root":"~/projects/my-app","output_roots":["~/projects/my-app/target"],"ownership":"private","policy_disposition":"selected","outcome":"simulated","reason_code":"simulated","before_bytes":4210688,"selector_estimate_bytes":4210688,"output_union_before_bytes":4210688,"after_bytes":null,"observed_decrease_bytes":null,"detail":"simulation: no `cargo clean` command was invoked"}],"summary":{"previewed":0,"simulated":1,"cleaned":0,"skipped":0,"failed":0,"diagnostics":0}}}
 ```
 
 For a scheduler, `--format log` is one bounded ASCII line on stdout — no paths,
@@ -110,10 +109,9 @@ field list and scheduler integration.
 | `cargo cleanme --dry-run` | Simulation: every gate runs, nothing is removed | **never**, not even preview |
 | `cargo cleanme -i` / `--interactive` | Choose cleanup units from a terminal list, then clean | yes |
 | `cargo cleanme ROOT` | Cleanup of one bounded root (Execute by default) | yes |
-| `cargo cleanme --full` | Full cleanup: reconcile the machine, then clean the learned roots it can prove | yes |
-| `cargo cleanme scan --all` | Full read-only reconciliation of the machine | never |
-| `cargo cleanme scan --known` | Routine read-only inventory | never |
-| `cargo cleanme scan ROOT` | One bounded read-only scope | never |
+| `cargo cleanme --full` | Full cleanup of learned roots from the last `scan` (no machine-wide walk) | yes |
+| `cargo cleanme scan` | Full read-only reconciliation of the machine; learns project roots | never |
+| `cargo cleanme scan ROOT` | One bounded read-only scope; updates the learned list for that directory | never |
 | `cargo cleanme --cargo-preview` | Cargo's own `clean --dry-run --verbose`, after the same proof | yes, as a dry run |
 | `cargo cleanme config path\|show\|edit` | Locate, print, or edit the config | never |
 | `cargo cleanme update [--dry-run]` | Self-update to the latest stable release | never |
@@ -127,7 +125,8 @@ A directory whose name collides with a subcommand name (`scan`, `clean`,
 `config`, `update`) is read as that subcommand; spell it `./scan` to name such
 a directory. So `cargo cleanme .` is a bounded cleanup of `.`.
 
-`scan --full` remains accepted as a hidden alias of `scan --all`.
+`scan --all`, `scan --full`, and `scan --known` are rejected: bare `scan` is
+the machine walk, and `scan ROOT` is the bounded one.
 
 The **maintenance scope** is a configured legacy `scan.root` when one is set
 (exclusive), otherwise bounded seed roots under your home plus active learned
@@ -169,7 +168,7 @@ typed blocker, not a crash. Read the block — it is inside `result`:
 
 ```console
 $ cargo cleanme ~/projects/broken --format json; echo "exit $?"
-{"schema_version":1,"cargo_cleanme_version":"0.2.14","operation":"clean","scope":"explicit","mode":"execute","result":{"discovered_manifests":1,"resolved_workspaces":0,"units_considered":0,"scope_blocked":true,"scope_reason":"cleanup ownership could not be proven: 1 discovered Cargo manifest did not resolve; no cleanup commands were run","unresolved_ownership":1,"unresolved_participants":[{"manifest":"~/projects/broken/Cargo.toml","stage":"locate","reason":"cargo locate-project failed: error: unclosed table, expected `]` | --> Cargo.toml:1:9 | |"}],"selected_roots":["~/projects/broken"],"effective_policy":{"min_reclaimable_bytes":0,"min_inactive_seconds":null,"include":[],"exclude":[]},"selector_kind":null,"selector_value":null,"state_generation_last_full_at":null,"units":[],"summary":{"previewed":0,"simulated":0,"cleaned":0,"skipped":0,"failed":0,"diagnostics":1}}}
+{"schema_version":1,"cargo_cleanme_version":"0.2.15","operation":"clean","scope":"explicit","mode":"execute","result":{"discovered_manifests":1,"resolved_workspaces":0,"units_considered":0,"scope_blocked":true,"scope_reason":"cleanup ownership could not be proven: 1 discovered Cargo manifest did not resolve; no cleanup commands were run","unresolved_ownership":1,"unresolved_participants":[{"manifest":"~/projects/broken/Cargo.toml","stage":"locate","reason":"cargo locate-project failed: error: unclosed table, expected `]` | --> Cargo.toml:1:9 | |"}],"selected_roots":["~/projects/broken"],"effective_policy":{"min_reclaimable_bytes":0,"min_inactive_seconds":null,"include":[],"exclude":[]},"selector_kind":null,"selector_value":null,"state_generation_last_full_at":null,"units":[],"summary":{"previewed":0,"simulated":0,"cleaned":0,"skipped":0,"failed":0,"diagnostics":1}}}
 exit 1
 ```
 
@@ -179,7 +178,7 @@ Refusals exit `2` before any report is formed:
 |---|---|
 | `cargo cleanme config show --format json` | `configuration error: config command does not support --format json; use human or log output` — `config` has no JSON envelope, so it refuses loudly rather than emitting non-JSON. `--format log` is accepted and exits `0`. |
 | `cargo cleanme --full` | `full reconciliation produced no fresh generation; no cleanup commands were run against stale learned roots` — a Full cleanup needs a *fresh* generation of learned roots to clean from. An **incomplete** reconciliation is no longer a refusal: the cleanup is then partial, and it exits `1`. |
-| `cargo cleanme --full scan --all` | `` `scan` does not accept --full: these are cleanup flags, and `cargo cleanme scan` is read-only `` — a cleanup flag handed to a read-only or local-only subcommand is rejected, never silently discarded. |
+| `cargo cleanme --full scan` | `` `scan` does not accept --full: these are cleanup flags, and `cargo cleanme scan` is read-only `` — a cleanup flag handed to a read-only or local-only subcommand is rejected, never silently discarded. |
 
 The Full cleanup's proof boundary is the **learned root**: it cleans the roots
 it can prove, names the ones it cannot on stderr, and exits `1` if any of them
@@ -257,8 +256,8 @@ and `--dry-run` changed from Cargo preview to simulation.
 
 | 0.1.x | Now | Meaning |
 |---|---|---|
-| `cargo cleanme` | `cargo cleanme scan --known` | same old read-only Routine inventory |
-| `cargo cleanme scan --full` | `cargo cleanme scan --all` | Full reconciliation |
+| `cargo cleanme` | `cargo cleanme --dry-run` | Routine selection as a simulation (bare `cargo cleanme` now cleans) |
+| `cargo cleanme scan --full` | `cargo cleanme scan` | Full machine reconciliation |
 | `cargo cleanme clean R --dry-run` | `cargo cleanme R --cargo-preview` | same Cargo preview |
 | `cargo cleanme clean R --dryrun` | `cargo cleanme R --dry-run` | same simulation |
 | `cargo cleanme clean R --yes` | `cargo cleanme R` | Execute is now the default |

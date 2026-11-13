@@ -203,11 +203,11 @@ First check which admitted roots are actually yours: cache, download, temp,
 and system-software locations (`~/Library/Caches`, `~/Downloads`,
 `/private/tmp`, `/usr/local`, …) are already omitted from Routine admission,
 so a remaining block comes from inside a real developer root. Options that
-keep the happy path (`scan --all`, then bare `cargo cleanme`) intact:
+keep the happy path (`scan`, then bare `cargo cleanme`) intact:
 
 - Fix the upstream workspace configuration (usually adding the stray crate to
   `workspace.exclude` or giving it an empty `[workspace]` table), then rerun
-  `cargo cleanme scan --all` so the next Full reconciliation observes a resolving
+  `cargo cleanme scan` so the next Full reconciliation observes a resolving
   tree.
 - Or narrow what is discovered at all: pin `scan.root` in `config.toml` to the
   subtree you maintain and run from inside it. `scan.root` is an exclusive
@@ -325,8 +325,9 @@ disagree, README.md is the source of truth.
 modes. Nothing in your config needs to change.
 
 **If you want the old read-only behaviour unconditionally**, use
-`cargo cleanme scan --known` and put it in the same place you used to run the
-bare command. A configured legacy `scan.root` still wins as an explicit
+`cargo cleanme --dry-run` for a Routine preview, or `cargo cleanme scan`
+for a machine-wide inventory, and put it in the same place you used to run
+the bare command. A configured legacy `scan.root` still wins as an explicit
 override for bare maintenance, so a config that pins `scan.root` keeps
 *discovering* exactly what it always pinned — 0.1.x never cleaned anything at
 all, and neither does a pinned `scan.root` on its own. It also does not widen
@@ -497,7 +498,7 @@ The excluded units are ordinary skipped rows, not dropped ones — an
 illustrative fragment:
 
 ```json
-{"outcome":"skipped","reason_code":"skipped_incomplete_coverage","detail":"the learned root /home/you/projects/legacy could not be proven: …; the workspace was left untouched — run `cargo cleanme scan --all` for the read-only inventory, or `cargo cleanme ROOT` for a bounded scope"}
+{"outcome":"skipped","reason_code":"skipped_incomplete_coverage","detail":"the learned root /home/you/projects/legacy could not be proven: …; the workspace was left untouched — run `cargo cleanme scan` for the read-only inventory, or `cargo cleanme ROOT` for a bounded scope"}
 ```
 
 The narrowing happens **after** ownership classification, so a shared output
@@ -540,13 +541,13 @@ so the scope is blocked with the standard unproven-ownership block, whose
 `scope_reason` reads:
 
 ```text
-no learned root could be proven: 1 root(s) had incomplete coverage (/home/you/projects/legacy); no cleanup commands were run — run `cargo cleanme scan --all` for the read-only inventory, or `cargo cleanme ROOT` for a bounded scope
+no learned root could be proven: 1 root(s) had incomplete coverage (/home/you/projects/legacy); no cleanup commands were run — run `cargo cleanme scan` for the read-only inventory, or `cargo cleanme ROOT` for a bounded scope
 ```
 
 The run exits `1`. It never exits `0` with zero rows — an operator script must
 not read "success" for a cleanup that never ran.
 
-The remedy is the same in both cases: run `cargo cleanme scan --all` on its own
+The remedy is the same in both cases: run `cargo cleanme scan` on its own
 and read its diagnostics, fix what it reports — an unreadable subtree, a stale
 learned location — and rerun. To clean a bounded subtree in the meantime, name
 it explicitly: `cargo cleanme ROOT`.
@@ -598,7 +599,7 @@ and reports the ones it cannot. See
 [The Full cleanup cleans only what it can prove](#the-full-cleanup-cleans-only-what-it-can-prove)
 above.
 
-Run `cargo cleanme scan --all` on its own and read its exit code and
+Run `cargo cleanme scan` on its own and read its exit code and
 diagnostics: a partial Full scan exits `1` and does not publish a new
 learned-state generation. Fix what the scan reports — an unreadable subtree, a
 stale learned location — and rerun.
@@ -618,7 +619,7 @@ the tool honoured. (`--dry-run` is deliberately not in that list: a read-only
 subcommand ignores it, and ignoring it changes nothing.)
 
 Run the cleanup without the subcommand (`cargo cleanme --full`), or run the
-subcommand on its own (`cargo cleanme scan --all`).
+subcommand on its own (`cargo cleanme scan`).
 
 ### The same override given at both levels exits 2
 
@@ -656,7 +657,7 @@ Run the same scope without `-i` to see what it resolved. A cleanup unit only
 exists for a workspace with measured affected output, so an empty list usually
 means there was nothing built to clean, everything was modified inside
 `recency_seconds` (default 300), or the anchor contains no Cargo workspace at
-all. `cargo cleanme scan --all` shows the machine-wide inventory without
+all. `cargo cleanme scan` shows the machine-wide inventory without
 changing anything.
 
 ## Installation

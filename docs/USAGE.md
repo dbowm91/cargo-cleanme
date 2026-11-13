@@ -69,9 +69,8 @@ cleanup of `.` — not a subcommand, and not a usage error.
 | `--package SPEC` | clean one validated workspace package |
 | `--cargo-preview` | after the same proof, run Cargo's own `clean --dry-run --verbose` |
 | `--yes` | hidden alias for the default Execute mode (`clean` only) |
-| `--known` | Routine roots (`clean`, `scan`) |
-| `--full` | Full cleanup: reconcile the machine, then clean the learned roots it can prove |
-| `-a` / `--all` | Full machine reconciliation (`scan`; `--full` is a hidden alias) |
+| `--known` | Routine roots (`clean` only — the bare-invocation alias) |
+| `--full` | Full cleanup of learned roots from the last `scan` (no platform walk) |
 | `-i` / `--interactive` | choose cleanup units from a terminal list (needs a TTY) |
 
 The policy overrides — `--min-reclaimable-bytes`, `--older-than`, `--include`,
@@ -95,21 +94,20 @@ aliases that print nothing.
 
 A cleanup flag handed to a read-only or local-only subcommand is a **usage
 error** (exit `2`), never a silently discarded flag:
-`cargo cleanme --full scan --all`, `cargo cleanme --full config path`,
-`cargo cleanme --full update`, and `cargo cleanme --profile release scan --all`
+`cargo cleanme --full scan`, `cargo cleanme --full config path`,
+`cargo cleanme --full update`, and `cargo cleanme --profile release scan`
 are all rejected. Run the cleanup without the subcommand, or run the subcommand
 on its own. `--dry-run` is deliberately **not** in that set: a read-only
 subcommand ignores it, and ignoring it changes nothing.
 
 ### The maintenance scope
 
-Bare invocation, `clean --known`, and `scan --known` all resolve the scope the
-same way:
+Bare invocation and `clean --known` resolve the scope the same way:
 
 1. a configured legacy `scan.root`, if set, is an **exclusive explicit
    override** — nothing else is searched and cleanup targets exactly that root;
 2. otherwise the **Routine scope**: bounded seed roots under your home plus
-   active learned roots from prior Full reconciliations, **plus the working
+   active learned roots from prior `scan` runs, **plus the working
    directory** — the workspace that encloses it and the directory itself.
 
 The working directory is part of the scope, so a bare run cleans what is under
@@ -136,13 +134,14 @@ workspace outside the anchor stays `shared`. It is cleaned when every owner is
 idle, and kept when any owner is active. Units the
 anchor excludes are reported as typed `skipped_outside_selection` rows rather
 than dropped, so "nothing was selected" never looks like "nothing was
-eligible". `scan --known` is not anchored: it is the read-only inventory over
-the whole maintenance scope.
+eligible".
 
-`scan --all` is **always** Full and deliberately ignores `scan.root`, so a
-configured root can never silently narrow the canonical reconciliation command.
-`scan ROOT` remains the explicit per-invocation override, and any explicit
+`cargo cleanme scan` (no ROOT) walks the platform and learns project roots. It
+ignores a configured `scan.root`, so that setting can never silently narrow the
+canonical reconciliation command. `scan ROOT` bounds the walk to one directory
+and updates the global learned list for projects found there; an explicit
 effective scope bypasses the configured `ignore`/`unignore` filters.
+`scan --all`, `scan --full`, and `scan --known` are rejected.
 
 Full means an exhaustive **attempt** across the platform roots available to
 the current user, not elevated access. If traversal cannot read a subtree,
@@ -197,7 +196,7 @@ cargo cleanme -i --dry-run                        # choose units, simulate, clea
 cargo cleanme ~/projects                          # explicit root (Execute)
 cargo cleanme ~/projects --dry-run                # simulation, no cargo clean
 cargo cleanme ~/projects --cargo-preview          # Cargo's own dry-run, after the same proof
-cargo cleanme --full --dry-run                    # reconcile Full, then simulate
+cargo cleanme --full --dry-run                    # learned-root Full cleanup, simulated
 cargo cleanme ~/projects --min-reclaimable-bytes 104857600
 cargo cleanme --older-than 2592000 --exclude '**/archived'
 ```
@@ -227,17 +226,16 @@ selection to the working directory; only `cargo cleanme ROOT` and
 
 #### The Full cleanup cleans the learned roots it can prove
 
-`cargo cleanme --full` does not clean "the platform roots". Its proof boundary
-is the **learned root**: it cleans the learned roots it can prove, and it
-discloses the ones it cannot.
+`cargo cleanme --full` does not walk the platform. Its proof boundary is the
+**learned root** recorded by a prior `cargo cleanme scan` (or `scan ROOT`):
+it measures each remaining root, cleans the ones it can prove, and discloses
+the ones it cannot. With no learned roots yet, it prints a cold-start nudge
+toward `scan` and exits `0` without cleaning.
 
-1. The Full reconciliation runs and produces a generation of learned roots.
-2. When the platform walk **completed**, every learned root is proven by
-   definition — the walk read each root's subtree. When the platform walk was
-   **incomplete**, each learned root is re-walked **as its own walk root**,
-   using the same prune and filter sets as the platform walk, and the
-   per-walk-root attribution decides — root by root — whether that root's
-   subtree was fully read.
+1. Load discovery state and drop learned roots whose directories are gone.
+2. Re-walk **each** remaining learned root as its own walk root, using the
+   same prune and filter sets as a platform scan, and decide — root by root —
+   whether that root's subtree was fully read.
 3. The roots that were proven are cleanup candidates. The roots that were not
    are **unproven**: a unit under an unproven root that the selection would
    otherwise have admitted is removed from the *candidate* set and reported
@@ -245,8 +243,7 @@ discloses the ones it cannot.
    root, the cause, and the alternative. Because the narrowing happens
    **after** ownership classification, a shared output between a proven root
    and an unproven one stays `Shared`. It is cleaned when every owner is idle.
-   The filter can
-   only remove candidates — never add one or reclassify one.
+   The filter can only remove candidates — never add one or reclassify one.
 
    An unproven root is also **outside the proof boundary**: an unreadable
    region inside it blocks *that root*, not the whole scope. That is the one
@@ -256,12 +253,11 @@ discloses the ones it cannot.
    still blocks the scope that contains it: an unreadable automatic root is
    indeterminate coverage, not absence.
 
-An incomplete traversal proves **no absence**. So an incomplete Full cleanup
-**retains** every prior learned root: nothing is expired, no root is narrowed,
-and the generation it consumed is held **in memory** and never published — the
-learned state on disk is left exactly as it was. The read-only `scan --all`
-keeps the opposite rule: an incomplete reconciliation still publishes nothing,
-and learned roots still expire only on a complete reconciliation.
+`--full` does **not** publish a new learned-state generation. Learning and
+expiry happen on `scan`: a complete `cargo cleanme scan` replaces the
+generation; a bounded `scan ROOT` updates the list for that directory only
+and leaves `last_full_at` unchanged. A missing learned root during `--full`
+is skipped (named only with `--verbose`).
 
 The run discloses the residual:
 
@@ -273,7 +269,7 @@ The run discloses the residual:
 - if **no** learned root could be proven, the scope is blocked with the
   standard unproven-ownership block (`no learned root could be proven: N
   root(s) had incomplete coverage (...)`) and the run exits `1`. It never
-  exits `0` with zero rows;
+  exits `0` with zero rows after it had roots to measure;
 - a proven learned root that contains an unbounded unknown, or a discovery
   diagnostic from that root's walk, is skipped with `skipped_root_blocked`.
   The other proven roots still reach `cargo clean`. The run exits `1`. If
@@ -296,7 +292,7 @@ not be recognised as shared. Under the withdrawn whole-system rule such a
 region blocked the entire operation; under the per-root rule it blocks the
 root that contains it, and the uncertainty inside it is **disclosed, not
 fixed**: the skipped root, the cause, and the fact that the boundary was not
-fully cleaned. Run `cargo cleanme scan --all` for the read-only inventory, or
+fully cleaned. Run `cargo cleanme scan` for the read-only inventory, or
 `cargo cleanme ROOT` for a bounded scope whose coverage you can see.
 
 The old refusal is gone. `clean --full` no longer exits `2` with `full
@@ -352,8 +348,8 @@ five rows that matter:
 
 | 0.1.x | Now | Same thing? |
 |---|---|---|
-| `cargo cleanme` (read-only Routine scan) | `cargo cleanme scan --known` | yes |
-| `cargo cleanme scan --full` | `cargo cleanme scan --all` | yes |
+| `cargo cleanme` (read-only Routine scan) | `cargo cleanme --dry-run` | Routine selection as a simulation |
+| `cargo cleanme scan --full` | `cargo cleanme scan` | yes |
 | `cargo cleanme clean R --dry-run` (Cargo preview) | `cargo cleanme R --cargo-preview` | yes |
 | `cargo cleanme clean R --dryrun` (simulation) | `cargo cleanme R --dry-run` | yes |
 | `cargo cleanme clean R --yes` (execute) | `cargo cleanme R` | yes |
@@ -388,14 +384,14 @@ the editor exits and rejects an invalid file.
 | Scope | How to ask | What it walks |
 |---|---|---|
 | explicit | `cargo cleanme ROOT` / `scan ROOT` | that directory, recursively |
-| Routine | `scan --known` | seed roots under Projects/projects, Developer, dev, Code/code, src, repos/Repos, GitHub/github, workspace/workspaces, **plus** active learned roots, **plus** the working directory when the Routine scope does not already reach it |
-| Full | `scan --all` | the full platform roots, exhaustively |
+| Routine | bare `cargo cleanme` / `clean --known` | seed roots under Projects/projects, Developer, dev, Code/code, src, repos/Repos, GitHub/github, workspace/workspaces, **plus** active learned roots, **plus** the working directory when the Routine scope does not already reach it |
+| Full | `scan` (learn) then `--full` (clean) | `scan` walks the platform roots; `--full` cleans the learned roots it can prove |
 
 Explicit CLI roots take precedence over `scan.root`. Either explicit scope
 bypasses the user ignore/unignore search filters. Routine and Full honor them.
 
-A never-learned unusual location stays undiscovered until `scan --all` (Full) or an
-explicit scan visits it.
+A never-learned unusual location stays undiscovered until `scan` (or an
+explicit `scan ROOT`) visits it.
 
 ## Discovery model
 
@@ -611,7 +607,7 @@ groups. The read-only scan report stays physical-group oriented.
 `2` covers every `AppError` — an invalid or unreadable config, an invalid scan
 root, an I/O error, a scan failure, a self-update refusal, and any Clap usage
 error. Two M019 refusals live here: a **cleanup flag handed to a read-only or
-local-only subcommand** (`cargo cleanme --full scan --all`), and the **same
+local-only subcommand** (`cargo cleanme --full scan`), and the **same
 override given at both levels** (`cargo cleanme --older-than 3600 clean
 --older-than 60`). Neither is a silently discarded flag.
 
@@ -937,7 +933,7 @@ Discovery state is machine-local JSON and is normally self-managed.
 
 - Routine scans fall back to seed/configured roots when state is missing or
   unusable.
-- A successful `scan --all` (Full) replaces corrupt or obsolete state **after**
+- A successful `scan` (Full) replaces corrupt or obsolete state **after**
   reconciliation completes. An incomplete Full scan leaves it untouched.
 - A Full **cleanup** (`cargo cleanme --full`) is different: an incomplete
   traversal proves no absence, so every prior learned root is **retained** —
@@ -965,7 +961,7 @@ Discovery state is machine-local JSON and is normally self-managed.
   partial/failed Full passes, newer schemas, and unpublishable state never
   shrink the learned scope.
 
-A Full `scan --all` on a typical workstation reports permission-denied diagnostics
+A Full `scan` on a typical workstation reports permission-denied diagnostics
 for platform roots it cannot read. Those are expected, and they are why a
 Full scan can be "incomplete" while still returning a usable report.
 

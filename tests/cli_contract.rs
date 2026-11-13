@@ -4308,7 +4308,7 @@ fn out_of_anchor_poison_does_not_block_bare_routine_cleanup() {
     let diagnostics = json["result"]["summary"]["diagnostics"].as_u64().unwrap();
     assert!(
         diagnostics >= 1,
-        "the poison is counted in the machine summary (paths are visible via `scan --all`, whose diagnostics array carries them): {json}"
+        "the poison is counted in the machine summary (paths are visible via `scan`, whose diagnostics array carries them): {json}"
     );
 }
 

@@ -6,7 +6,7 @@ All notable changes to cargo-cleanme are documented here. The format follows
 stance: the `0.x` line may make breaking changes in any release, and the
 command-line, JSON, and release-asset contracts are the stable surface.
 
-## [Unreleased]
+## [0.2.15] - 2026-11-13
 
 ### Changed
 

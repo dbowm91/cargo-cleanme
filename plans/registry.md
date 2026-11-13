@@ -23,11 +23,12 @@ roadmap. The smoke counts and release digests it used to repeat live in
 
 ## Published baseline
 
-`Cargo.toml` and `CHANGELOG.md` say **0.2.14** is the published version.
-crates.io carries v0.1.0 through v0.1.6 and v0.2.0 through v0.2.14.
-**v0.2.0 is yanked.** v0.2.12 is on crates.io and has no GitHub release, so
-self-update into it fails closed; 0.2.13 is its replacement. 0.2.14 carries
-C047, C048, M021, and M022; its receipt is
+`Cargo.toml` and `CHANGELOG.md` say **0.2.15** is the release candidate;
+**0.2.14** remains the published version until this tag ships. crates.io
+carries v0.1.0 through v0.1.6 and v0.2.0 through v0.2.14. **v0.2.0 is yanked.**
+v0.2.12 is on crates.io and has no GitHub release, so self-update into it
+fails closed; 0.2.13 is its replacement. 0.2.14 carries C047, C048, M021, and
+M022; its receipt is
 `plans/closure/distribution-release-update/r033-status.md`. This file does
 not re-query crates.io. The next release that changes the count must change
 this paragraph in the same pass; nothing gates the sentence.

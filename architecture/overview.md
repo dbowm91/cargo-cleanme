@@ -19,10 +19,10 @@ distinction matters.
 - **What it is:** a Cargo subcommand (`cargo cleanme`) that finds inactive Cargo
   build artifacts on a machine and either reports or safely reclaims them.
 - **Shape:** one binary (`src/main.rs`) over one library (`src/lib.rs`) of 16
-  modules, 18 source files, 46,269 lines in `src/` (20,689 of them outside
+  modules, 18 source files, 46,596 lines in `src/` (20,962 of them outside
   every `#[cfg(test)]` scope), no async runtime of its own, and exactly one
   binary dependency that matters for safety (`cargo metadata`).
-- **Version:** 0.2.14 (published; latest published tag `v0.2.14`) ·
+- **Version:** 0.2.15 (release candidate; latest published tag `v0.2.14`) ·
   **Edition:** 2024 · **MSRV:** 1.89
 - **Deep dives:** 16 documents, one per component, linked from §4 and §12.
 
@@ -57,8 +57,8 @@ documented twin.
 |---|---|---|---|
 | **Maintenance cleanup** | `cargo cleanme` (bare) | Routine scope: bounded seed roots plus active learned roots, **plus the working directory** when the Routine scope does not already reach it — or a configured `scan.root`, which is an exclusive override. Proves ownership per candidate and cleans eligible units. | Yes — via `cargo clean` |
 | **Bounded cleanup** | `cargo cleanme ROOT` | One bounded root. Bypasses discovery filters. `cargo cleanme .` is a bounded cleanup of `.`. | Yes — via `cargo clean` |
-| **Full cleanup** | `cargo cleanme --full` | Runs a complete Full reconciliation first, then cleans the learned roots it could **prove**. | Yes — via `cargo clean` |
-| **Read-only scan** | `cargo cleanme scan --all`<br>`cargo cleanme scan ROOT`<br>`cargo cleanme scan --known` | The machine reconciliation, a bounded explicit scan, or the routine inventory. **A bare `cargo cleanme scan` is a usage error** (exit 2) — the `scan-scope` ArgGroup requires exactly one selector. | No |
+| **Full cleanup** | `cargo cleanme --full` | Cleans the learned roots from the last `scan` that it can **prove**. No platform walk; cold start nudges toward `scan`. | Yes — via `cargo clean` |
+| **Read-only scan** | `cargo cleanme scan`<br>`cargo cleanme scan ROOT` | Bare `scan` is the machine reconciliation that learns project roots; `scan ROOT` is a bounded walk that updates the learned list for that directory. `scan --all` / `--full` / `--known` are rejected. | No |
 | **Config** | `cargo cleanme config path\|show\|edit` | Resolve, print, or open the configuration file. `config --format json` is a **hard rejection** (exit 2); `--format log` is honoured. | No (except `edit`, which edits the file) |
 | **Self-update** | `cargo cleanme update` | Resolve and apply the latest published release. | Yes — replaces the binary |
 
@@ -89,14 +89,16 @@ discarded flag.
 `--include` and `--exclude` are matched against the **workspace root**, not
 the physical output root — a pattern like `**/target` matches nothing.
 
-Exactly two short forms exist in the whole CLI: `-i` (global) and `-a`
-(`scan`-only), plus clap's own `-h` and `-V`.
+Exactly one short form exists in the product CLI: `-i` (global), plus clap's
+own `-h` and `-V`. (`-a` / `--all` on `scan` was removed when bare `scan`
+became the machine walk.)
 
-Four spellings are deliberately **hidden** compatibility aliases rather than
+Three spellings are deliberately **hidden** compatibility aliases rather than
 removals: `--dryrun` (for `--dry-run`), `--yes` (for the now-default
-Execute mode), `scan --full` (for `scan --all`), and the `clean` subcommand
-itself. `man/cargo-cleanme-clean.1` still ships and still documents a working
-spelling; it is generated from the same clap model, so it cannot drift. The
+Execute mode), and the `clean` subcommand itself. `scan --all`, `scan --full`,
+and `scan --known` are rejected. `man/cargo-cleanme-clean.1` still ships and
+still documents a working spelling; it is generated from the same clap model,
+so it cannot drift. The
 **five generated completions advertise the alias too** — `clap_complete`
 enumerates every subcommand, hidden ones included, and offers no way to
 suppress one — so `cargo cleanme <TAB>` offers `clean` beside `scan`,

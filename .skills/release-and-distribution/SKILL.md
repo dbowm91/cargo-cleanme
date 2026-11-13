@@ -140,13 +140,15 @@ run it as a routine check.
 
 **Twenty-two** releases are published, `v0.1.0` through `v0.2.14`. **`v0.2.0`
 is yanked**; the other twenty-one are installable. The current source version is
-`0.2.14`, **published**.
+`0.2.15`, the **release candidate** (publication pending); once published the
+counts become twenty-three published and twenty-two installable.
 
 Two ways to get this wrong, both of which have shipped as bugs in this
 repository's own docs: saying "twenty-one releases are published" (that is the
 *installable* count — 0.2.0 is published, just yanked) and saying "twenty-two
-are installable" (it is twenty-one). The published count is always **one
-higher** than the installable count, and the two errors above are what you get
+are installable" (it is twenty-one while 0.2.15 is still unpublished). The
+published count is always **one higher** than the installable count once a
+yanked release is in the series, and the two errors above are what you get
 when you swap them. State both numbers, or neither.
 
 ## Non-obvious traps
