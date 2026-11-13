@@ -331,8 +331,11 @@ closure records.
   usage errors included (`src/main.rs:34`). The log-format `reason=` codes
   (`config`, `io`, `scan`, `provenance`, `update`) are a **different** axis from
   the exit status.
-- `cargo cleanme scan` with no selector is a **usage error** (exit `2`), not a
-  Full scan. `scan --full` is a hidden alias of `scan --all`.
+- `cargo cleanme scan` with no ROOT is the full machine reconciliation that
+  learns and expires project roots. `scan ROOT` is the bounded walk and updates
+  the learned list for that directory only. `scan --all`, `scan --full`, and
+  `scan --known` are not selectors. `cargo cleanme --full` cleans learned roots
+  without re-walking the machine.
 
 ### Open decisions — do not resolve them yourself
 

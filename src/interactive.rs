@@ -1796,7 +1796,7 @@ pub fn run_interactive(candidates: Vec<CleanupCandidate>) -> Result<SessionResul
         format!(
             "interactive selection requires a terminal ({reason}); \
              drop -i to clean without choosing interactively, or \
-             use `cargo cleanme scan --all` to inspect the same units read-only"
+             use `cargo cleanme scan` to inspect the same units read-only"
         )
     })?;
     drive(&mut CrosstermTerminal, candidates)

@@ -8,6 +8,19 @@ command-line, JSON, and release-asset contracts are the stable surface.
 
 ## [Unreleased]
 
+### Changed
+
+- **`cargo cleanme scan` walks the machine.** It no longer requires `--all`.
+  `scan --all`, `scan --full`, and `scan --known` are rejected. `scan ROOT`
+  remains a bounded walk and updates the global learned list for that
+  directory only. A learned root whose directory is gone is removed from
+  discovery state even when the platform walk is incomplete.
+- **`cargo cleanme --full` cleans learned roots only.** It no longer walks
+  the platform. Run `cargo cleanme scan` (or `scan ROOT`) to learn and
+  refresh that list. With no learned roots, it prints a cold-start nudge
+  toward `scan` instead of a silent empty cleanup. A missing learned root
+  is skipped; `--verbose` names it.
+
 ### Fixed
 
 - **A proven `target/` directory with no `CACHEDIR.TAG` is cleaned.** Cargo

@@ -385,9 +385,8 @@ pub fn discover_manifests_with_attribution(
                 severity: DiagnosticSeverity::Info,
                 category: DiagnosticCategory::PlatformRoot,
                 path: None,
-                message:
-                    "no Routine roots are available; run `scan --full` or scan an explicit root"
-                        .into(),
+                message: "no Routine roots are available; run `scan` or scan an explicit root"
+                    .into(),
             });
         }
         let profile_subtrees = env::var_os("CARGO_CLEANME_PROFILE_SUBTREES").is_some();

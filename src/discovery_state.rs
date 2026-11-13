@@ -414,6 +414,154 @@ pub fn reconcile_full(
     Reconciliation::Publish(next)
 }
 
+/// Fold a bounded `scan ROOT` into the global learned list.
+///
+/// Positive observations under `scope` are merged. Learned roots *outside*
+/// `scope` are never expired: the walk did not look there. When
+/// `coverage_complete` is true, a learned root under `scope` that is
+/// positively gone (`ENOENT`) is dropped. `last_full_at` is unchanged — only
+/// a machine-wide `scan` advances that generation.
+pub fn reconcile_scoped(
+    prior: &DiscoveryState,
+    observations: &[ProjectObservation],
+    scope: &Path,
+    coverage_complete: bool,
+    now: u64,
+    home: Option<&Path>,
+) -> DiscoveryState {
+    let scope = fs::canonicalize(scope).unwrap_or_else(|_| scope.to_path_buf());
+    let mut next = prior.clone();
+    next.schema_version = CURRENT_SCHEMA;
+
+    for observation in observations {
+        let workspace = observation.workspace.clone().unwrap_or_else(|| {
+            observation
+                .manifest
+                .parent()
+                .unwrap_or(&observation.manifest)
+                .to_path_buf()
+        });
+        let resolution = if observation.workspace.is_some() {
+            ResolutionStatus::Resolved
+        } else {
+            ResolutionStatus::ManifestObservedUnresolved
+        };
+        if let Some(existing) = next.projects.iter_mut().find(|record| {
+            record.manifest.as_ref() == Some(&observation.manifest)
+                || (record.manifest.is_none() && record.workspace == workspace)
+        }) {
+            existing.workspace = workspace;
+            existing.manifest = Some(observation.manifest.clone());
+            existing.resolution = resolution;
+            existing.observed_at = now.max(existing.observed_at);
+        } else {
+            next.projects.push(ProjectRecord {
+                workspace,
+                manifest: Some(observation.manifest.clone()),
+                resolution,
+                observed_at: now,
+            });
+        }
+    }
+
+    let mut learned = next.learned_roots;
+    for observation in observations {
+        let Some(project) = observation.workspace.as_deref() else {
+            continue;
+        };
+        if !path_is_under(project, &scope) || !automatic_root_is_maintainable(project, home) {
+            continue;
+        }
+        let candidate = project
+            .parent()
+            .filter(|parent| Some(*parent) != home && !is_broad_root(parent))
+            .unwrap_or(project);
+        if is_broad_root(candidate) || !automatic_root_is_maintainable(candidate, home) {
+            continue;
+        }
+        let path = fs::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf());
+        if !path_is_under(&path, &scope) {
+            continue;
+        }
+        if let Some(existing) = learned.iter_mut().find(|root| root.path == path) {
+            existing.last_project_seen_at = existing.last_project_seen_at.max(now);
+        } else {
+            learned.push(LearnedRoot {
+                path,
+                last_project_seen_at: now,
+            });
+        }
+    }
+
+    if coverage_complete {
+        learned.retain(|root| {
+            !(path_is_under(&root.path, &scope) && learned_root_is_absent(&root.path))
+        });
+    }
+
+    learned.sort_by(|a, b| a.path.cmp(&b.path));
+    let mut collapsed: Vec<LearnedRoot> = Vec::new();
+    let mut representative: HashMap<PathBuf, usize> = HashMap::new();
+    for root in learned {
+        let mut cursor = Some(root.path.as_path());
+        let parent = loop {
+            let Some(candidate) = cursor else { break None };
+            if let Some(&index) = representative.get(candidate) {
+                break Some(index);
+            }
+            cursor = candidate.parent();
+        };
+        match parent {
+            Some(index) => {
+                collapsed[index].last_project_seen_at = collapsed[index]
+                    .last_project_seen_at
+                    .max(root.last_project_seen_at);
+            }
+            None => {
+                representative.insert(root.path.clone(), collapsed.len());
+                collapsed.push(root);
+            }
+        }
+    }
+    next.learned_roots = collapsed;
+    next
+}
+
+fn path_is_under(path: &Path, scope: &Path) -> bool {
+    path == scope || path.starts_with(scope)
+}
+
+/// Learned roots whose directory is positively gone.
+///
+/// `ENOENT` from `symlink_metadata` is evidence about that one path. It does
+/// not depend on a platform walk finishing, and no other error counts: a
+/// permission failure, a symlink, or a path that is no longer a directory
+/// stays.
+pub fn absent_learned_roots(state: &DiscoveryState) -> Vec<PathBuf> {
+    state
+        .learned_roots
+        .iter()
+        .filter(|root| learned_root_is_absent(&root.path))
+        .map(|root| root.path.clone())
+        .collect()
+}
+
+/// `state` with `absent` learned roots removed. Nothing else changes: the
+/// generation timestamp and every root that still exists stay.
+pub fn without_learned_roots(state: &DiscoveryState, absent: &[PathBuf]) -> DiscoveryState {
+    let mut next = state.clone();
+    next.learned_roots
+        .retain(|root| !absent.iter().any(|path| path == &root.path));
+    next
+}
+
+fn learned_root_is_absent(path: &Path) -> bool {
+    matches!(
+        fs::symlink_metadata(path).map_err(|error| error.kind()),
+        Err(std::io::ErrorKind::NotFound)
+    )
+}
+
 fn is_broad_root(path: &Path) -> bool {
     if path.parent().is_none() {
         return true;
@@ -1215,8 +1363,10 @@ mod tests {
             "without uncertainty the age rule must drop the root: {:?}",
             state.learned_roots
         );
-        // An incomplete Full never prunes: without a complete traversal there
-        // is no evidence of absence at all.
+        // An incomplete Full never prunes by what it failed to see: without a
+        // complete traversal there is no evidence of absence from the walk.
+        // A directory `symlink_metadata` reports missing is a separate fact
+        // and is dropped by `absent_learned_roots`, not by this reconciliation.
         assert_eq!(
             reconcile_full(
                 &prior,
@@ -1229,6 +1379,34 @@ mod tests {
             ),
             Reconciliation::NoPublication("Full traversal was incomplete")
         );
+    }
+
+    #[test]
+    fn absent_learned_roots_drops_only_a_missing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("still-here");
+        fs::create_dir(&existing).unwrap();
+        let absent = dir.path().join("deleted-worktree");
+        let state = DiscoveryState {
+            learned_roots: vec![
+                LearnedRoot {
+                    path: existing.clone(),
+                    last_project_seen_at: 1,
+                },
+                LearnedRoot {
+                    path: absent.clone(),
+                    last_project_seen_at: 1,
+                },
+            ],
+            last_full_at: Some(42),
+            ..Default::default()
+        };
+        let gone = absent_learned_roots(&state);
+        assert_eq!(gone, vec![absent.clone()]);
+        let pruned = without_learned_roots(&state, &gone);
+        assert_eq!(pruned.last_full_at, Some(42));
+        assert_eq!(pruned.learned_roots.len(), 1);
+        assert_eq!(pruned.learned_roots[0].path, existing);
     }
 
     #[test]
@@ -1331,5 +1509,52 @@ mod tests {
             state.learned_roots
         );
         assert!(state.learned_roots.is_empty());
+    }
+
+    #[test]
+    fn scoped_reconcile_learns_under_the_root_and_leaves_outsiders() {
+        let home = tempfile::tempdir().unwrap();
+        let scope = home.path().join("projects");
+        let inside = scope.join("eggfetch");
+        let outside = home.path().join("other/app");
+        fs::create_dir_all(&inside).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let prior = DiscoveryState {
+            schema_version: CURRENT_SCHEMA,
+            last_full_at: Some(10),
+            learned_roots: vec![LearnedRoot {
+                path: outside.clone(),
+                last_project_seen_at: 10,
+            }],
+            ..Default::default()
+        };
+        let next = reconcile_scoped(
+            &prior,
+            &[ProjectObservation {
+                manifest: inside.join("Cargo.toml"),
+                workspace: Some(inside.clone()),
+            }],
+            &scope,
+            true,
+            20,
+            Some(home.path()),
+        );
+        assert_eq!(
+            next.last_full_at,
+            Some(10),
+            "scoped scan must not advance last_full_at"
+        );
+        assert!(
+            next.learned_roots.iter().any(|root| root.path == outside),
+            "roots outside the scoped walk stay: {:?}",
+            next.learned_roots
+        );
+        assert!(
+            next.learned_roots
+                .iter()
+                .any(|root| root.path == inside || root.path == scope),
+            "the scoped walk must learn the observed project: {:?}",
+            next.learned_roots
+        );
     }
 }

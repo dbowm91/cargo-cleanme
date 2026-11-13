@@ -351,15 +351,17 @@ struct ResolvedCleanup {
     /// so a shared output between a proven root and an unproven one stays
     /// `Shared`. Empty for every scope but the Full cleanup.
     unproven_roots: Vec<cargo_cleanme::domain::UnprovenRoot>,
-    /// M018: how long the verification pass took, when it ran.
+    /// How long the Full cleanup's per-learned-root coverage pass took.
     ///
-    /// The gate's cost is a real cost, and the plan's stop conditions make it
-    /// measurable rather than assumed: `None` means the pass did not run,
-    /// which is the case for every scope but an incomplete Full cleanup.
+    /// `None` means the pass did not run (every scope but Full, or a Full
+    /// cold start with no learned roots to measure).
     verification_elapsed: Option<std::time::Duration>,
     /// True for Routine/Full scopes whose roots are automatic hints; false
     /// for explicit scopes where every defect stays a fatal usage error.
     automatic: bool,
+    /// True when `--full` found no learned roots: nudge the operator toward
+    /// `cargo cleanme scan` instead of looking like a silent no-op.
+    needs_scan_nudge: bool,
 }
 
 /// The **static** preconditions of an interactive run.
@@ -406,7 +408,7 @@ fn check_interactive_preconditions(
         return Err(AppError::Config(format!(
             "interactive selection requires a terminal ({reason}); \
              drop -i to clean without choosing interactively, or \
-             use `cargo cleanme scan --all` to inspect the same units read-only"
+             use `cargo cleanme scan` to inspect the same units read-only"
         )));
     }
     // The geometry is checked here too, for the same reason: the frame is
@@ -421,7 +423,7 @@ fn check_interactive_preconditions(
         return Err(AppError::Config(format!(
             "interactive selection requires a usable terminal ({reason}); \
              drop -i to clean without choosing interactively, or \
-             use `cargo cleanme scan --all` to inspect the same units read-only"
+             use `cargo cleanme scan` to inspect the same units read-only"
         )));
     }
     Ok(())
@@ -549,13 +551,17 @@ fn run_cleanup(
             selector,
             roots_blocked: 0,
         };
-        emit_cleanup(
-            &empty,
-            &resolved,
-            &[],
-            options,
-            "no bounded cleanup roots are known; no cleanup commands were run",
-        )?;
+        let empty_note = if resolved.needs_scan_nudge {
+            FULL_COLD_START_NOTE
+        } else {
+            "no bounded cleanup roots are known; no cleanup commands were run"
+        };
+        if resolved.needs_scan_nudge && options.format != OutputFormat::Human {
+            // JSON/log keep a machine document on stdout; the nudge is human
+            // guidance and belongs on stderr.
+            eprintln!("cargo-cleanme: {FULL_COLD_START_NOTE}");
+        }
+        emit_cleanup(&empty, &resolved, &[], options, empty_note)?;
         return Ok(0);
     }
     // Which resolved units are candidates. Resolved *here*, after the root set
@@ -881,7 +887,7 @@ fn zero_proven_block(
         cargo_cleanme::cleanup::ScopeBlockReason::OwnershipUnproven,
         format!(
             "no learned root could be proven: {} root(s) had incomplete coverage ({}); \
-             no cleanup commands were run — run `cargo cleanme scan --all` for the read-only \
+             no cleanup commands were run — run `cargo cleanme scan` for the read-only \
              inventory, or `cargo cleanme ROOT` for a bounded scope",
             paths.len(),
             paths.join(", ")
@@ -947,39 +953,94 @@ fn resolve_full_verdict(
     Ok(resolved)
 }
 
-/// M018: verify each learned root's coverage as its own walk root.
+/// Human guidance when `--full` has no learned roots to clean.
+const FULL_COLD_START_NOTE: &str = "Nothing to clean.\n\n\
+No learned project roots are known yet. Run `cargo cleanme scan` to walk the \
+machine and learn where Cargo projects live — that can take several minutes. \
+Then `cargo cleanme --full` cleans those learned roots. \
+`cargo cleanme scan ROOT` learns only under one directory.";
+
+/// Resolve `--full` from persisted learned roots — no platform walk.
 ///
-/// The pass runs only when the platform walk was incomplete. A completed
-/// platform walk read every learned root's subtree, so every root is proven
-/// by definition and a second traversal would buy nothing.
-///
-/// It uses the same policy — and therefore the same prune and filter sets —
-/// as the platform walk, because its verdict stands in for that walk's.
-fn verify_learned_root_coverage(
-    outcome: &ScanOutcome,
+/// `cargo cleanme scan` (or `scan ROOT`) is what learns and updates that list.
+/// This path loads it, measures each root's coverage, and cleans the ones it
+/// can prove.
+fn resolve_full_from_learned(
     config: &config::Config,
     options: RunOptions,
-) -> Result<
-    Option<(
-        Vec<cargo_cleanme::domain::RootCoverage>,
-        std::time::Duration,
-    )>,
-    AppError,
-> {
-    if outcome.code == 0 {
-        return Ok(None);
-    }
-    let Some(state) = outcome.full_state.as_ref() else {
-        return Ok(None);
+) -> Result<ResolvedCleanup, AppError> {
+    let loaded = cargo_cleanme::discovery_state::load_default();
+    let Some((prior, _)) = cargo_cleanme::discovery_state::full_reconciliation_prior(&loaded)
+    else {
+        if let Some(message) = loaded.diagnostic() {
+            eprintln!("cargo-cleanme: {message}; Full cleanup has no learned roots to use");
+        }
+        return Ok(ResolvedCleanup {
+            roots: Vec::new(),
+            scope_label: "full",
+            state_generation: None,
+            omitted_diagnostics: Vec::new(),
+            omitted: Vec::new(),
+            blocked: None,
+            unproven_roots: Vec::new(),
+            verification_elapsed: None,
+            automatic: true,
+            needs_scan_nudge: true,
+        });
     };
-    let roots: Vec<std::path::PathBuf> = state
+    let mut notices = Vec::new();
+    let gone = cargo_cleanme::discovery_state::absent_learned_roots(&prior);
+    if !remember_only_existing_learned_roots(&prior, &mut notices) {
+        eprintln!(
+            "cargo-cleanme: discovery state was not saved; cleaning the in-memory learned roots only"
+        );
+    }
+    if options.verbose {
+        note_absent_learned_roots(&gone, &mut notices);
+    }
+    for notice in &notices {
+        eprintln!("cargo-cleanme: {notice}");
+    }
+    let state = cargo_cleanme::discovery_state::without_learned_roots(&prior, &gone);
+    if state.learned_roots.is_empty() {
+        return Ok(ResolvedCleanup {
+            roots: Vec::new(),
+            scope_label: "full",
+            state_generation: state.last_full_at,
+            omitted_diagnostics: Vec::new(),
+            omitted: Vec::new(),
+            blocked: None,
+            unproven_roots: Vec::new(),
+            verification_elapsed: None,
+            automatic: true,
+            needs_scan_nudge: true,
+        });
+    }
+    let roots: Vec<_> = state
         .learned_roots
         .iter()
         .map(|root| root.path.clone())
         .collect();
-    if roots.is_empty() {
-        return Ok(None);
-    }
+    let (coverage, verification_elapsed) = verify_learned_roots(&roots, config, options)?;
+    // Always judge from the per-root coverage pass: there is no platform walk
+    // whose completion could prove every root by definition.
+    let verdict =
+        cargo_cleanme::policy::full_cleanup_roots(1, Some(state), Some(coverage.as_slice()))?;
+    resolve_full_verdict(verdict, Some(verification_elapsed))
+}
+
+/// Measure coverage for each learned root as its own walk root.
+fn verify_learned_roots(
+    roots: &[std::path::PathBuf],
+    config: &config::Config,
+    options: RunOptions,
+) -> Result<
+    (
+        Vec<cargo_cleanme::domain::RootCoverage>,
+        std::time::Duration,
+    ),
+    AppError,
+> {
     let policy = cargo_cleanme::policy::resolve(
         cargo_cleanme::domain::ScanRequest {
             cli_root: None,
@@ -993,15 +1054,10 @@ fn verify_learned_root_coverage(
     let observer: &dyn cargo_cleanme::progress::ProgressObserver = &renderer;
     observer.phase(cargo_cleanme::progress::ScanPhase::Discovery);
     let started = std::time::Instant::now();
-    let coverage = cargo_cleanme::discovery::verify_root_coverage(&roots, &policy, observer);
-    // The bars must come down before the cleanup's own renderer starts, or
-    // two draw targets own the terminal at once.
+    let coverage = cargo_cleanme::discovery::verify_root_coverage(roots, &policy, observer);
     renderer.finish_and_clear();
     let (coverage, _diagnostics) = coverage?;
-    // The gate's cost is measured, not assumed: the plan's stop conditions
-    // make an unbounded verification pass a reason to stop, and a number is
-    // the only way to know.
-    Ok(Some((coverage, started.elapsed())))
+    Ok((coverage, started.elapsed()))
 }
 
 /// Resolve a cleanup scope into concrete bounded roots and its machine label.
@@ -1010,7 +1066,7 @@ fn verify_learned_root_coverage(
 /// flags that were passed, because it is a machine contract.
 fn resolve_cleanup_roots(
     scope: &CleanupScope,
-    config_path: &std::path::Path,
+    _config_path: &std::path::Path,
     config: &config::Config,
     options: RunOptions,
     runner: &dyn cargo_cleanme::workspace::CargoRunner,
@@ -1035,52 +1091,10 @@ fn resolve_cleanup_roots(
                 unproven_roots: Vec::new(),
                 verification_elapsed: None,
                 automatic: false,
+                needs_scan_nudge: false,
             })
         }
-        CleanupScope::Full => {
-            // The Full reconciliation here is a *side effect of choosing cleanup
-            // roots*, not something the user asked to see. Emitting its report
-            // would put an unrelated document ahead of the cleanup report on
-            // stdout and, in JSON mode, would emit two JSON documents — breaking
-            // the one-document-per-invocation property the automation contract
-            // depends on. Diagnostics and --stats still reach stderr.
-            //
-            // C028: roots come from the in-memory generation just reconciled,
-            // never from a disk reload that could be an older generation when
-            // publication failed, was unsupported, or was unavailable. No
-            // fresh generation means no cleanup.
-            let outcome = run_scan(
-                ScanIntent::Full,
-                config_path,
-                options,
-                EmitReport::No,
-                cargo_cleanme::discovery_state::ReconciliationMode::IncompleteRetain,
-            )?;
-            if !outcome.publish_ok {
-                eprintln!(
-                    "cargo-cleanme: discovery state was not saved; cleaning the reconciled in-memory generation only"
-                );
-            }
-            // M018: the proof boundary is the learned root, not the platform
-            // root. When the platform walk could not complete, each learned
-            // root is re-walked as its own walk root, so the per-root
-            // attribution decides — per root — whether that root's subtree was
-            // fully read. The pass costs a second traversal of the learned
-            // roots' subtrees, and only runs when the platform walk was
-            // incomplete: a completed platform walk proves every learned root
-            // by definition.
-            let coverage = verify_learned_root_coverage(&outcome, config, options)?;
-            let (coverage, verification_elapsed) = match coverage {
-                Some((coverage, elapsed)) => (Some(coverage), Some(elapsed)),
-                None => (None, None),
-            };
-            let verdict = cargo_cleanme::policy::full_cleanup_roots(
-                outcome.code,
-                outcome.full_state,
-                coverage.as_deref(),
-            )?;
-            resolve_full_verdict(verdict, verification_elapsed)
-        }
+        CleanupScope::Full => resolve_full_from_learned(config, options),
         // Bare maintenance and `clean` with no scope selector land here and use
         // exactly the same maintenance policy: a configured legacy
         // `scan.root` is an exclusive Explicit override, otherwise bounded
@@ -1117,6 +1131,7 @@ fn resolve_cleanup_roots(
                         unproven_roots: Vec::new(),
                         verification_elapsed: None,
                         automatic: false,
+                        needs_scan_nudge: false,
                     })
                 }
                 ScanScope::ExplicitRoots(roots) => {
@@ -1135,6 +1150,7 @@ fn resolve_cleanup_roots(
                         unproven_roots: Vec::new(),
                         verification_elapsed: None,
                         automatic: false,
+                        needs_scan_nudge: false,
                     })
                 }
                 ScanScope::Routine(_) => {
@@ -1369,6 +1385,7 @@ fn admit_automatic(
         unproven_roots: Vec::new(),
         verification_elapsed: None,
         automatic: true,
+        needs_scan_nudge: false,
     })
 }
 
@@ -1522,6 +1539,52 @@ fn collapse_roots(roots: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
 /// not the flags that were passed.
 ///
 /// Deriving it from `full` / `root.is_some()` was wrong for a configured
+/// Write `prior` back with learned roots that no longer exist removed.
+///
+/// The generation timestamp is unchanged. Roots the walk merely failed to see
+/// stay. Returns whether the write succeeded; an empty removal is success and
+/// writes nothing.
+fn remember_only_existing_learned_roots(
+    prior: &cargo_cleanme::discovery_state::DiscoveryState,
+    notices: &mut Vec<String>,
+) -> bool {
+    let gone = cargo_cleanme::discovery_state::absent_learned_roots(prior);
+    if gone.is_empty() {
+        return true;
+    }
+    let pruned = cargo_cleanme::discovery_state::without_learned_roots(prior, &gone);
+    match cargo_cleanme::discovery_state::publish(&pruned) {
+        Ok(()) => true,
+        Err(error) => {
+            notices.push(format!("discovery state was not saved: {error}"));
+            false
+        }
+    }
+}
+
+/// Verbose-only note naming learned roots whose directories are gone.
+fn note_absent_learned_roots(gone: &[std::path::PathBuf], notices: &mut Vec<String>) {
+    if gone.is_empty() {
+        return;
+    }
+    let mut paths: Vec<String> = gone
+        .iter()
+        .map(|path| sanitize_path_text(&path.display().to_string()))
+        .collect();
+    paths.sort();
+    let extra = paths.len().saturating_sub(3);
+    let shown = paths.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+    let sample = if extra == 0 {
+        shown
+    } else {
+        format!("{shown}, and {extra} more")
+    };
+    notices.push(format!(
+        "pruned {} learned root(s) that no longer exist: {sample}",
+        paths.len()
+    ));
+}
+
 /// `scan.root`: `policy::resolve` turns that into `ScanScope::Explicit`, so a
 /// scan pinned to one root reported `"routine"`. The label is a machine
 /// contract (`plans/output-schema-v1.md`), so it is derived from the resolved
@@ -1557,8 +1620,6 @@ enum EmitReport {
 /// fresh in-memory generation is blocked.
 struct ScanOutcome {
     code: i32,
-    full_state: Option<cargo_cleanme::discovery_state::DiscoveryState>,
-    publish_ok: bool,
 }
 
 fn run_scan(
@@ -1576,9 +1637,7 @@ fn run_scan(
     let c = config::load_or_create(config_path)?;
     // Rootless `scan` is Full and never consults a configured `scan.root`:
     // configuration must not be able to silently narrow the canonical
-    // reconciliation command. `scan ROOT` is the explicit CLI override, and
-    // `scan --known` is the read-only maintenance scope.
-    let is_maintenance = matches!(intent, ScanIntent::Maintenance);
+    // reconciliation command. `scan ROOT` is the explicit CLI override.
     let (root, full) = match intent {
         ScanIntent::Full => (None, true),
         // The scan root is folded against the invocation directory *lexically*,
@@ -1590,29 +1649,18 @@ fn run_scan(
         // scan discover a manifest it could then not resolve, and report an
         // empty inventory with exit 0.
         ScanIntent::Explicit(root) => (Some(cli::absolutize_root(&root)?), false),
-        ScanIntent::Maintenance => (None, false),
     };
-    let mut policy = cargo_cleanme::policy::resolve(
+    // Kept for the Explicit post-resolution learn step: `policy::resolve`
+    // consumes `root`, and a bounded scan still has to know which directory
+    // may update the global learned list.
+    let scoped_learn_root = root.clone();
+    let policy = cargo_cleanme::policy::resolve(
         domain::ScanRequest {
             cli_root: root,
             full,
         },
         &c.scan,
     )?;
-    // ADR 009: the read-only maintenance inventory must cover the same
-    // universe the maintenance cleanup would act on, or it is not an
-    // inventory of it. A configured `scan.root` is an exclusive override and
-    // keeps its own scope.
-    if is_maintenance && let domain::ScanScope::Routine(roots) = &mut policy.scope {
-        // ADR 009: the same rule as the cleanup path — the working directory
-        // joins only when the Routine scope does not already reach it.
-        let routine = roots.clone();
-        if working_directory_is_unreached(&routine) {
-            roots.extend(working_directory_scope_paths(
-                &cargo_cleanme::cleanup::SystemCleanupRunner,
-            ));
-        }
-    }
     let recency = policy.recency;
 
     // Inline progress is transient stderr state; final report remains stdout.
@@ -1682,10 +1730,7 @@ fn run_scan(
     );
     let _resolution_elapsed = resolution_start.elapsed();
 
-    use cargo_cleanme::discovery_state::StateLoad;
     let loaded_state = cargo_cleanme::discovery_state::load_default();
-    let mut full_state: Option<cargo_cleanme::discovery_state::DiscoveryState> = None;
-    let mut publish_ok = true;
     // State notices are collected here and fanned out to stderr only after
     // `finish_and_clear`: a raw `eprintln!` while the bars are live bypasses
     // the coordinated draw target and corrupts the frame, orphaning bar lines
@@ -1738,11 +1783,13 @@ fn run_scan(
                     .as_deref(),
             ) {
                 cargo_cleanme::discovery_state::Reconciliation::Publish(next) => {
-                    // The proven in-memory generation travels with this scan
-                    // outcome regardless of what publication does next, so a
-                    // Full cleanup can consume exactly what the traversal
-                    // proved even when the save fails.
-                    full_state = Some(next.clone());
+                    // A learned root whose directory is gone is not a failure.
+                    // Drop it so a later `--full` does not report it as
+                    // unproven. A complete reconciliation already drops it; an
+                    // incomplete one retains every prior root, including ones
+                    // `symlink_metadata` can prove are gone.
+                    let gone = cargo_cleanme::discovery_state::absent_learned_roots(&next);
+                    let next = cargo_cleanme::discovery_state::without_learned_roots(&next, &gone);
                     if mode == cargo_cleanme::discovery_state::ReconciliationMode::Complete {
                         match cargo_cleanme::discovery_state::publish(&next) {
                             Ok(()) => {
@@ -1754,50 +1801,94 @@ fn run_scan(
                                 }
                             }
                             Err(error) => {
-                                publish_ok = false;
                                 pending_notices
                                     .push(format!("discovery state was not saved: {error}"));
                             }
                         }
                     } else {
-                        // M018: the retained generation is consumed in memory
-                        // only. The persisted state keeps describing the last
-                        // *complete* reconciliation, so an incomplete pass can
-                        // never advance the generation a later run trusts.
+                        // An incomplete pass must not advance the generation a
+                        // later run trusts. It may still forget roots that are
+                        // positively gone: that edit does not expire anything
+                        // the walk failed to see.
+                        let _ = remember_only_existing_learned_roots(&prior, &mut pending_notices);
                         pending_notices.push(
-                            "discovery state was not updated: the Full traversal was incomplete; \
-                             the learned roots were retained and verified in memory"
+                            "discovery state kept its previous generation: the Full traversal was \
+                             incomplete; learned roots that still exist were retained"
                                 .into(),
                         );
                     }
+                    if options.verbose {
+                        let noted = if mode
+                            == cargo_cleanme::discovery_state::ReconciliationMode::Complete
+                        {
+                            cargo_cleanme::discovery_state::absent_learned_roots(&prior)
+                        } else {
+                            gone
+                        };
+                        note_absent_learned_roots(&noted, &mut pending_notices);
+                    }
                 }
                 cargo_cleanme::discovery_state::Reconciliation::NoPublication(reason) => {
-                    publish_ok = false;
-                    pending_notices.push(format!("discovery state was not reconciled: {reason}"));
+                    let gone = cargo_cleanme::discovery_state::absent_learned_roots(&prior);
+                    if gone.is_empty() {
+                        pending_notices
+                            .push(format!("discovery state was not reconciled: {reason}"));
+                    } else {
+                        let _ = remember_only_existing_learned_roots(&prior, &mut pending_notices);
+                        if options.verbose {
+                            note_absent_learned_roots(&gone, &mut pending_notices);
+                        }
+                    }
                 }
             }
         } else {
-            publish_ok = false;
             let message = loaded_state
                 .diagnostic()
                 .unwrap_or_else(|| "discovery state cannot be safely read".into());
             pending_notices.push(format!("{message}; Full state reconciliation was skipped"));
         }
-    } else if let StateLoad::Loaded(prior) = loaded_state {
-        let now = cargo_cleanme::discovery_state::now_seconds();
-        let observed: Vec<_> = workspaces.iter().map(|w| w.root.clone()).collect();
-        let mut next = prior;
-        for project in &observed {
-            for root in &mut next.learned_roots {
-                if project.starts_with(&root.path) {
-                    root.last_project_seen_at = root.last_project_seen_at.max(now);
+    } else if let Some(root) = &scoped_learn_root {
+        // A bounded `scan ROOT` updates the global learned list for what it
+        // saw under that directory. Roots outside the walk are untouched;
+        // only a bare `scan` may expire them by age.
+        if let Some((prior, _)) =
+            cargo_cleanme::discovery_state::full_reconciliation_prior(&loaded_state)
+        {
+            let now = cargo_cleanme::discovery_state::now_seconds();
+            let home = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf());
+            let observations: Vec<_> = manifests
+                .iter()
+                .map(|manifest| {
+                    let workspace = workspaces.iter().find_map(|ws| {
+                        ws.members
+                            .iter()
+                            .any(|member| &member.manifest_path == manifest)
+                            .then(|| ws.root.clone())
+                    });
+                    cargo_cleanme::discovery_state::ProjectObservation {
+                        manifest: manifest.clone(),
+                        workspace,
+                    }
+                })
+                .collect();
+            let next = cargo_cleanme::discovery_state::reconcile_scoped(
+                &prior,
+                &observations,
+                root,
+                full_traversal_complete,
+                now,
+                home.as_deref(),
+            );
+            match cargo_cleanme::discovery_state::publish(&next) {
+                Ok(()) => {}
+                Err(error) => {
+                    pending_notices.push(format!("discovery state was not saved: {error}"));
                 }
             }
-        }
-        if !observed.is_empty()
-            && let Err(error) = cargo_cleanme::discovery_state::publish(&next)
-        {
-            pending_notices.push(format!("discovery state was not saved: {error}"));
+        } else if let Some(message) = loaded_state.diagnostic() {
+            pending_notices.push(format!(
+                "{message}; bounded scan could not update learned roots"
+            ));
         }
     }
 
@@ -2005,17 +2096,9 @@ fn run_scan(
     // branch has always ignored the identical failure. Failing the exit code
     // here made the two branches disagree about the same event.
     if full_incomplete {
-        return Ok(ScanOutcome {
-            code: 1,
-            full_state,
-            publish_ok,
-        });
+        return Ok(ScanOutcome { code: 1 });
     }
-    Ok(ScanOutcome {
-        code: 0,
-        full_state,
-        publish_ok,
-    })
+    Ok(ScanOutcome { code: 0 })
 }
 
 #[cfg(test)]
@@ -2048,54 +2131,28 @@ mod tests {
         }
     }
 
-    /// M018: the cost control. A completed platform walk read every learned
-    /// root's subtree, so every root is proven by definition and the
-    /// verification pass is not entered at all.
-    ///
-    /// *Fails if:* the cost control regresses into an unconditional re-walk.
-    /// The Full cleanup would then traverse every learned root twice on every
-    /// run, including the runs that never needed it.
+    /// `--full` always measures each learned root: there is no platform walk
+    /// whose completion could prove every root by definition.
     #[test]
-    fn a_complete_platform_walk_needs_no_verification_pass() {
+    fn full_cleanup_measures_each_learned_root() {
         let options = RunOptions {
             no_progress: true,
             stats: false,
             format: OutputFormat::Human,
             verbose: false,
         };
-        let state = cargo_cleanme::discovery_state::DiscoveryState {
-            schema_version: cargo_cleanme::discovery_state::CURRENT_SCHEMA,
-            last_full_at: Some(1),
-            learned_roots: vec![cargo_cleanme::discovery_state::LearnedRoot {
-                path: std::path::PathBuf::from("/work/a"),
-                last_project_seen_at: 1,
-            }],
-            ..Default::default()
-        };
-        let complete = ScanOutcome {
-            code: 0,
-            full_state: Some(state.clone()),
-            publish_ok: true,
-        };
-        let coverage = verify_learned_root_coverage(&complete, &config::Config::default(), options)
-            .expect("the pass does not fail");
+        let root = tempfile::tempdir().unwrap();
+        let (coverage, _elapsed) = verify_learned_roots(
+            &[root.path().to_path_buf()],
+            &config::Config::default(),
+            options,
+        )
+        .expect("the pass does not fail");
+        assert_eq!(coverage.len(), 1);
         assert!(
-            coverage.is_none(),
-            "a completed platform walk needs no second walk"
-        );
-        // An incomplete one does enter the pass — otherwise the gate would
-        // have nothing to judge and would fail closed forever.
-        let incomplete = ScanOutcome {
-            code: 1,
-            full_state: Some(state),
-            publish_ok: true,
-        };
-        let coverage =
-            verify_learned_root_coverage(&incomplete, &config::Config::default(), options)
-                .expect("the pass does not fail");
-        assert!(
-            coverage.is_some(),
-            "an incomplete platform walk must be measured per root"
+            coverage[0].complete,
+            "an empty readable learned root is proven: {:?}",
+            coverage[0]
         );
     }
 

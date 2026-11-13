@@ -269,7 +269,7 @@ impl CleanupSelection {
                         CleanupReasonCode::SkippedIncompleteCoverage,
                         format!(
                             "the learned root {} could not be proven: {}; the workspace was left \
-                             untouched — run `cargo cleanme scan --all` for the read-only \
+                             untouched — run `cargo cleanme scan` for the read-only \
                              inventory, or `cargo cleanme ROOT` for a bounded scope",
                             u.root.display(),
                             u.detail
@@ -6736,7 +6736,7 @@ mod tests {
             "the detail must name the cause: {detail}"
         );
         assert!(
-            detail.contains("scan --all"),
+            detail.contains("cargo cleanme scan"),
             "the detail must name what the operator can do: {detail}"
         );
         // The readable root's unit is not excluded: the exclusion is per root.

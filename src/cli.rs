@@ -111,14 +111,14 @@ directory is part of that scope, so a bare run cleans what is under it -- and th
 scope only ever grows, never narrows. `--dry-run` performs the identical decision \
 and proof path while invoking no `cargo clean` process at all.\n\n\
 The root is the cleanup front door: `cargo cleanme ROOT` cleans one bounded \
-root, `cargo cleanme --full` runs the Full cleanup -- a complete machine \
-reconciliation, then the learned roots it can prove -- and `--cargo-preview` and \
-the policy overrides work here too. A directory whose name collides with a \
-subcommand name is read as that subcommand; spell it `./scan` to name it.\n\n\
-`cargo cleanme scan` needs a scope: `--all` is the full read-only machine \
-reconciliation and the only operation allowed to expire learned roots, \
-`scan ROOT` is a bounded explicit scan, and `scan --known` is the read-only \
-maintenance inventory.\n\n\
+root, `cargo cleanme --full` cleans the learned roots from the last `scan` \
+(no machine-wide walk), and `--cargo-preview` and the policy overrides work \
+here too. A directory whose name collides with a subcommand name is read as \
+that subcommand; spell it `./scan` to name it.\n\n\
+`cargo cleanme scan` is the read-only machine reconciliation: it walks the \
+platform, learns where Cargo projects live, and is the only operation allowed \
+to expire learned roots. `scan ROOT` bounds that walk to one directory and \
+updates the learned list for that directory only.\n\n\
 Deletion is always delegated to Cargo; cargo-cleanme never removes a directory itself."
 )]
 pub struct Cli {
@@ -234,36 +234,15 @@ fn configure_cleanup_alias(command: clap::Command) -> clap::Command {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Reconcile the machine read-only: full with `--all`, explicit with ROOT,
-    /// routine inventory with `--known`.
+    /// Reconcile the machine read-only.
     ///
-    /// Exactly one scope selector is required. An `ArgGroup` expresses that
-    /// rather than a per-argument `required_unless_present_all`, because a
-    /// positional ROOT does not satisfy `required_unless_present` in clap 4 —
-    /// `scan /tmp` still demanded `--all`. The group also makes the selectors
-    /// mutually exclusive as a consequence of the same declaration, so the
-    /// conflict rules cannot drift from the requiredness rules.
-    #[command(group = clap::ArgGroup::new("scan-scope").required(true).args(["root", "known", "all"]))]
+    /// With no ROOT this walks the platform. That is the only operation
+    /// allowed to expire learned roots. An optional ROOT bounds the walk to
+    /// that directory and bypasses configured ignore rules.
     Scan {
         /// Optional bounded root. Makes the scan Explicit and bypasses
         /// configured ignore/unignore filters.
         root: Option<PathBuf>,
-        /// Routine read-only inventory over the maintenance scope.
-        #[arg(long)]
-        known: bool,
-        /// Full machine reconciliation.
-        ///
-        /// Required when no ROOT and no `--known` is given: this is the only
-        /// operation that may expire learned roots, and it walks the whole
-        /// platform, so it is never one keystroke from the front door.
-        //
-        // The historical spelling is a hidden alias of this argument rather
-        // than an argument of its own. An `ArgGroup` renders every one of its
-        // members in the usage line, so a separate hidden argument would have
-        // advertised the alias in `scan --help` — which is what "hidden" is
-        // supposed to mean — and in the generated completions.
-        #[arg(short = 'a', long, alias = "full")]
-        all: bool,
     },
     /// Print, show, or edit the config file.
     Config {
@@ -341,25 +320,23 @@ pub enum CleanupScope {
     Maintenance,
     /// One bounded explicit root supplied as `cargo cleanme ROOT`.
     Root(PathBuf),
-    /// `cargo cleanme --full`: complete Full reconciliation first, then cleanup
-    /// of the learned roots it retained.
+    /// `cargo cleanme --full`: clean the learned roots from the last `scan`.
+    ///
+    /// No platform walk. `cargo cleanme scan` (or `scan ROOT`) is what learns
+    /// and updates that list.
     Full,
 }
 
 /// Which roots a read-only scan selects.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ScanIntent {
-    /// `scan --all`: full machine reconciliation under platform policy.
+    /// `scan`: full machine reconciliation under platform policy.
     ///
     /// This never consults a configured `scan.root`; configuration must not be
-    /// able to silently narrow the canonical reconciliation command. `scan`
-    /// with no selector is a usage error, not this variant.
+    /// able to silently narrow the canonical reconciliation command.
     Full,
     /// `scan ROOT`: bounded explicit scan that bypasses discovery filters.
     Explicit(PathBuf),
-    /// `scan --known`: the non-Full maintenance scope, read-only. Learned roots
-    /// may advance positive observations but are never pruned here.
-    Maintenance,
 }
 
 /// Advanced cleanup policy overrides.
@@ -423,14 +400,11 @@ pub enum Invocation {
     Update {
         dry_run: bool,
     },
-    /// An argv shape clap should have rejected before it reached this point.
+    /// An argv shape the parser accepted and the resolver refuses.
     ///
-    /// `scan` requires one of ROOT / `--known` / `--all`; clap enforces that,
-    /// so this arm is unreachable through the parser. It exists because the
-    /// compiler cannot see clap's invariant, and the two available fallbacks
-    /// were both wrong: defaulting to Full would silently run the machine-wide
-    /// reconciliation the flag exists to gate, and panicking would exit 101,
-    /// outside the 0/1/2 contract.
+    /// Clap cannot see every conflict across the root and a subcommand. This
+    /// arm is how those shapes stay usage errors (exit 2) instead of panics
+    /// (exit 101) or a silently different operation.
     UsageError(String),
 }
 
@@ -479,21 +453,13 @@ impl Cli {
                 Ok(request) => Invocation::Cleanup(request),
                 Err(message) => Invocation::UsageError(message),
             },
-            Some(Command::Scan { root, known, all }) => {
+            Some(Command::Scan { root }) => {
                 if let Some(message) = self.reject_cleanup_flags_for("scan") {
                     return Invocation::UsageError(message);
                 }
-                match (root, *known, *all) {
-                    (Some(root), _, _) => Invocation::Scan(ScanIntent::Explicit(root.clone())),
-                    (None, true, _) => Invocation::Scan(ScanIntent::Maintenance),
-                    // clap requires one of ROOT / --known / --all, so reaching the
-                    // Full arm means an explicit flag (or its hidden alias) was
-                    // actually given rather than defaulted.
-                    (None, false, true) => Invocation::Scan(ScanIntent::Full),
-                    // Unreachable through `clap`; fail closed rather than guess.
-                    (None, false, false) => {
-                        Invocation::UsageError("scan requires a ROOT, --known, or --all".into())
-                    }
+                match root {
+                    Some(root) => Invocation::Scan(ScanIntent::Explicit(root.clone())),
+                    None => Invocation::Scan(ScanIntent::Full),
                 }
             }
             Some(Command::Config { command }) => {
@@ -1158,7 +1124,7 @@ mod tests {
     #[test]
     fn a_subcommand_wins_over_a_positional_of_the_same_shape() {
         assert_eq!(
-            Cli::try_parse_from(["cargo-cleanme", "scan", "--all"])
+            Cli::try_parse_from(["cargo-cleanme", "scan"])
                 .unwrap()
                 .invocation(),
             Invocation::Scan(ScanIntent::Full)
@@ -1682,11 +1648,11 @@ mod tests {
     #[test]
     fn a_cleanup_flag_on_a_read_only_subcommand_is_a_usage_error() {
         for args in [
-            vec!["cargo-cleanme", "--full", "scan", "--all"],
+            vec!["cargo-cleanme", "--full", "scan"],
             vec!["cargo-cleanme", "--full", "config", "path"],
             vec!["cargo-cleanme", "--full", "update"],
-            vec!["cargo-cleanme", "--profile", "release", "scan", "--all"],
-            vec!["cargo-cleanme", "--older-than", "60", "scan", "--all"],
+            vec!["cargo-cleanme", "--profile", "release", "scan"],
+            vec!["cargo-cleanme", "--older-than", "60", "scan"],
             vec!["cargo-cleanme", "--include", "/a/*", "update"],
             vec!["cargo-cleanme", "--cargo-preview", "config", "show"],
         ] {
@@ -1931,8 +1897,8 @@ mod tests {
     #[test]
     fn the_interactive_flag_is_refused_on_the_read_only_subcommands() {
         for args in [
-            vec!["cargo-cleanme", "scan", "--known", "--interactive"],
-            vec!["cargo-cleanme", "--interactive", "scan", "--known"],
+            vec!["cargo-cleanme", "scan", "--interactive"],
+            vec!["cargo-cleanme", "--interactive", "scan"],
             vec!["cargo-cleanme", "config", "show", "--interactive"],
             vec!["cargo-cleanme", "update", "--interactive"],
         ] {
@@ -2106,39 +2072,24 @@ mod tests {
     }
 
     #[test]
-    fn scan_scope_selection_is_full_explicit_or_maintenance() {
-        // M014: Full is no longer reachable without an explicit selector.
-        // `scan` alone is a usage error, so the machine-wide reconciliation --
-        // the only operation that may expire learned roots -- is never one
-        // keystroke from the front door.
-        assert!(
-            Cli::try_parse_from(["cargo-cleanme", "scan"]).is_err(),
-            "bare `scan` must require ROOT, --known, or --all"
+    fn scan_with_no_root_is_the_full_reconciliation() {
+        assert_eq!(
+            Cli::try_parse_from(["cargo-cleanme", "scan"])
+                .unwrap()
+                .invocation(),
+            Invocation::Scan(ScanIntent::Full)
         );
-        // Both spellings of the Full selector reach the same intent.
-        for spelling in [
-            ["cargo-cleanme", "scan", "--all"],
-            ["cargo-cleanme", "scan", "-a"],
-            ["cargo-cleanme", "scan", "--full"],
-        ] {
-            assert_eq!(
-                Cli::try_parse_from(spelling).unwrap().invocation(),
-                Invocation::Scan(ScanIntent::Full),
-                "{spelling:?} must resolve to Full"
-            );
-        }
         assert_eq!(
             Cli::try_parse_from(["cargo-cleanme", "scan", "/tmp"])
                 .unwrap()
                 .invocation(),
             Invocation::Scan(ScanIntent::Explicit(PathBuf::from("/tmp")))
         );
-        assert_eq!(
-            Cli::try_parse_from(["cargo-cleanme", "scan", "--known"])
-                .unwrap()
-                .invocation(),
-            Invocation::Scan(ScanIntent::Maintenance)
-        );
+        // The old scan selectors are gone. `clean --known` is a different
+        // flag and still selects maintenance cleanup.
+        assert!(Cli::try_parse_from(["cargo-cleanme", "scan", "--all"]).is_err());
+        assert!(Cli::try_parse_from(["cargo-cleanme", "scan", "--full"]).is_err());
+        assert!(Cli::try_parse_from(["cargo-cleanme", "scan", "--known"]).is_err());
     }
 
     #[test]
@@ -2283,46 +2234,22 @@ mod tests {
     }
 
     #[test]
-    fn hidden_full_alias_is_not_advertised_in_scan_help() {
-        // The *scan* subcommand's `--full` is the hidden alias for `--all`, and
-        // it must not be advertised there. The root's own `--full` is the
-        // canonical Full cleanup flag (M019) and is advertised at the root.
-        //
-        // The alias is an alias of the `--all` argument rather than an
-        // argument of its own: an `ArgGroup` renders every one of its members
-        // in the usage line, so a separate hidden argument would have
-        // advertised the alias here.
+    fn scan_help_does_not_advertise_removed_selectors() {
+        // `--full` on the root is the cleanup flag. Scan no longer has
+        // `--all`, `--full`, or `--known`.
         let mut command = Cli::command();
         let scan = command
             .find_subcommand_mut("scan")
             .expect("scan subcommand");
-        let usage = scan.render_usage().to_string();
-        assert!(
-            !usage.contains("--full"),
-            "the scan's --full alias must not be advertised in the usage line: {usage}"
-        );
         let help = scan.render_long_help().to_string();
+        assert!(!help.contains("--all"), "{help}");
+        assert!(!help.contains("--full"), "{help}");
+        assert!(!help.contains("--known"), "{help}");
+        let root = Cli::command().render_long_help().to_string();
         assert!(
-            !help.contains("--full"),
-            "the scan's --full alias must not appear in the help: {help}"
+            root.contains("--full"),
+            "the cleanup --full flag stays on the root: {root}"
         );
-        // The alias still selects the full scope.
-        let parsed = Cli::try_parse_from(["cargo-cleanme", "scan", "--full"])
-            .expect("the historical spelling must still parse");
-        let Some(Command::Scan { all, .. }) = parsed.command else {
-            panic!("scan --full must be a scan");
-        };
-        assert!(all, "the alias must select the full scope");
-        let all = scan
-            .get_arguments()
-            .find(|arg| arg.get_id() == "all")
-            .expect("the scan --all flag");
-        assert!(!all.is_hide_set(), "--all must stay advertised");
-        let known = scan
-            .get_arguments()
-            .find(|arg| arg.get_id() == "known")
-            .expect("the scan --known flag");
-        assert!(!known.is_hide_set(), "--known must stay advertised");
     }
 
     #[test]
@@ -2506,17 +2433,10 @@ mod tests {
         // before or after a subcommand and through the external form.
         for args in [
             vec!["cargo-cleanme", "--format", "log"],
-            vec!["cargo-cleanme", "scan", "--all", "--format", "log"],
-            vec!["cargo-cleanme", "--format", "log", "scan", "--all"],
+            vec!["cargo-cleanme", "scan", "--format", "log"],
+            vec!["cargo-cleanme", "--format", "log", "scan"],
             vec!["cargo-cleanme", "clean", "/x", "--format", "log"],
-            vec![
-                "cargo-cleanme",
-                "cleanme",
-                "--format",
-                "log",
-                "scan",
-                "--all",
-            ],
+            vec!["cargo-cleanme", "cleanme", "--format", "log", "scan"],
         ] {
             let normalized: Vec<OsString> = args.iter().map(OsString::from).collect();
             let parsed = Cli::try_parse_from(normalize_cargo_argv_with(normalized, true)).unwrap();
@@ -2777,8 +2697,8 @@ mod tests {
                 argv(&["cargo-cleanme", "cleanme", "--dry-run"]),
             ),
             (
-                argv(&["cargo-cleanme", "scan", "--known"]),
-                argv(&["cargo-cleanme", "cleanme", "scan", "--known"]),
+                argv(&["cargo-cleanme", "scan"]),
+                argv(&["cargo-cleanme", "cleanme", "scan"]),
             ),
             (
                 argv(&["cargo-cleanme", "config", "path"]),

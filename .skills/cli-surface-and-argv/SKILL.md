@@ -29,30 +29,11 @@ skill is about *how to change it without breaking it*.
 
 ## The one thing to get right
 
-> **A selector that is missing must be a usage error, never a silent default.**
+> **`cargo cleanme scan` with no ROOT is the full machine walk.**
 
-The machine-wide Full reconciliation is the operation this tool can least afford
-to run by accident, and it is the one whose absence-of-argument spelling has
-changed twice. `cargo cleanme scan` with no selector is a **usage error (exit
-2)** — not Full, not Routine.
-
-It is enforced by one `ArgGroup`:
-
-```rust
-// src/cli.rs:244
-#[command(group = clap::ArgGroup::new("scan-scope").required(true).args(["root", "known", "all", "full"]))]
-```
-
-Two properties come from that single declaration, and both are load-bearing:
-
-1. the group is **required**, so `scan` alone is rejected;
-2. the group's members are **mutually exclusive**, so `scan --known --all` is
-   rejected.
-
-Do not replace it with per-argument `required_unless_present_all`. In clap 4 a
-*positional* ROOT does not satisfy `required_unless_present`, so `scan /tmp`
-would still demand `--all`. That is why the group exists, and the comment above
-it says so.
+`scan ROOT` bounds that walk. `scan --all`, `scan --full`, and `scan --known`
+are not selectors; clap rejects them. `clean --known` is a different flag and
+still means the maintenance cleanup.
 
 ## `Invocation::UsageError` is not dead code
 
@@ -124,7 +105,6 @@ subcommand must never silently fall back to Execute.
 |---|---|---|
 | `--dryrun` | yes | `--dry-run` (Simulate) |
 | `--yes` | yes | the default (Execute) |
-| `scan --full` | yes | `scan --all` |
 | the `clean` subcommand | yes | the root front door |
 | `clean --full` | yes | `cargo cleanme --full` |
 
@@ -293,9 +273,8 @@ ignoring arm explicit rather than accidental.
 
 ## Before you claim the change is safe
 
-- `cargo cleanme scan` is still a **usage error** (exit 2) with a message that
-  names the required selectors.
-- `cargo cleanme scan --known --all` is still a usage error.
+- `cargo cleanme scan` is the full machine walk. `scan ROOT` is the bounded
+  walk. `scan --all`, `scan --full`, and `scan --known` are usage errors.
 - `--dry-run`, `--cargo-preview`, and `--yes` still conflict pairwise **on
   `clean`**, and the mode triple still maps onto exactly three modes.
 - `cargo cleanme`, `cargo cleanme ROOT` and `cargo cleanme --full` all work,

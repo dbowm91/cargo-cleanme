@@ -68,9 +68,6 @@ _arguments "${_arguments_options[@]}" : \
 '--format=[Select human-readable output, the versioned JSON automation contract, or one bounded ASCII summary line for unattended schedulers]:FORMAT:((human\:""
 json\:""
 log\:"One bounded ASCII summary line per report, for unattended schedulers that retain a short history tail. Not a machine contract\: complete consumers use \`json\`"))' \
-'--known[Routine read-only inventory over the maintenance scope]' \
-'-a[Full machine reconciliation]' \
-'--all[Full machine reconciliation]' \
 '--no-progress[Disable transient progress UI (useful for benchmarks and debugging)]' \
 '--stats[Print detailed scan/cleanup counters and phase timings to stderr. Never changes deterministic stdout. \`--no-progress --stats\` is the canonical benchmark/debug combination]' \
 '--verbose[Show the detailed human surface\: every workspace considered (including the ones that were skipped), the scope census, the per-phase counters, and the diagnostic detail]' \
@@ -293,7 +290,7 @@ _cargo_commands() {
 (( $+functions[_cargo__subcmd__cargo-cleanme_commands] )) ||
 _cargo__subcmd__cargo-cleanme_commands() {
     local commands; commands=(
-'scan:Reconcile the machine read-only\: full with \`--all\`, explicit with ROOT, routine inventory with \`--known\`' \
+'scan:Reconcile the machine read-only' \
 'config:Print, show, or edit the config file' \
 'clean:Preview or execute cleanup of revalidated Cargo build artifacts' \
 'update:Update this cargo-cleanme to the latest stable published release' \
@@ -350,7 +347,7 @@ _cargo__subcmd__help_commands() {
 (( $+functions[_cargo__subcmd__help__subcmd__cargo-cleanme_commands] )) ||
 _cargo__subcmd__help__subcmd__cargo-cleanme_commands() {
     local commands; commands=(
-'scan:Reconcile the machine read-only\: full with \`--all\`, explicit with ROOT, routine inventory with \`--known\`' \
+'scan:Reconcile the machine read-only' \
 'config:Print, show, or edit the config file' \
 'clean:Preview or execute cleanup of revalidated Cargo build artifacts' \
 'update:Update this cargo-cleanme to the latest stable published release' \
