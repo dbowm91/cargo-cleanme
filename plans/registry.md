@@ -23,13 +23,12 @@ roadmap. The smoke counts and release digests it used to repeat live in
 
 ## Published baseline
 
-`Cargo.toml` and `CHANGELOG.md` say **0.2.15** is the release candidate;
-**0.2.14** remains the published version until this tag ships. crates.io
-carries v0.1.0 through v0.1.6 and v0.2.0 through v0.2.14. **v0.2.0 is yanked.**
-v0.2.12 is on crates.io and has no GitHub release, so self-update into it
-fails closed; 0.2.13 is its replacement. 0.2.14 carries C047, C048, M021, and
-M022; its receipt is
-`plans/closure/distribution-release-update/r033-status.md`. This file does
+`Cargo.toml` and `CHANGELOG.md` say **0.2.15** is the published version.
+crates.io carries v0.1.0 through v0.1.6 and v0.2.0 through v0.2.15.
+**v0.2.0 is yanked.** v0.2.12 is on crates.io and has no GitHub release, so
+self-update into it fails closed; 0.2.13 is its replacement. 0.2.15 carries
+the scan / `--full` split and markerless proven-target cleanup; its receipt is
+`plans/closure/distribution-release-update/r034-status.md`. This file does
 not re-query crates.io. The next release that changes the count must change
 this paragraph in the same pass; nothing gates the sentence.
 
@@ -61,10 +60,11 @@ cache collection, and stronger provenance than the shipped attestation, each
 need their own plan. An idle roadmap is not permission to start one.
 
 The distribution line has no open milestone. v0.2.13 replaced the
-unreleasable v0.2.12, and v0.2.14 carries C047, C048, M021, and M022. Its
+unreleasable v0.2.12, and v0.2.15 carries the scan / `--full` split. Its
 GitHub release is immutable with a valid attestation, crates.io sha256 is
-`ee472f81…`, automatic smoke `42885742223` is green on five targets, and the
-receipt is `plans/closure/distribution-release-update/r033-status.md`.
+`e01cddd9…`, the automatic smoke `43492187343` failed the crates.io wait, the
+manual re-run `43495428163` is green on five targets, and the receipt is
+`plans/closure/distribution-release-update/r034-status.md`.
 
 ## Current cleanup rule
 
