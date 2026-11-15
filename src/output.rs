@@ -716,12 +716,12 @@ pub mod log {
             assert_ascii_and_bounded(&line);
         }
 
-        /// M015/E: the partition was human-only; M016 added `islands` by
-        /// conscious decision; M017/ADR 007 removes it again with scoped
-        /// proof as the default (it never shipped: 0.2.9 unpublished). This
-        /// list is updated deliberately, not deleted: if a field is ever
-        /// added to the machine result, this fails and forces a conscious
-        /// contract decision — not a quiet schema drift.
+        /// Explicit keys make the cleanup result schema reviewable.
+        /// Added or removed fields are machine-contract changes.
+        /// The assertion below detects either change.
+        /// Update this list with any intentional schema revision.
+        /// Keep the expected keys sorted for deterministic diffs.
+        /// Do not derive the expectation from the produced object.
         #[test]
         fn cleanup_json_result_key_set_is_stable() {
             let report = empty_report();
@@ -778,10 +778,10 @@ pub mod log {
             assert_ascii_and_bounded(&line);
         }
 
-        /// M017/ADR 007: a boundary-blocked run logs blocked with counts and
-        /// no paths. The block message lives in the JSON scope_reason and
-        /// the human block message only — prose never reaches a retained
-        /// history line.
+        /// A boundary-blocked run logs `blocked` with counts and no paths.
+        /// Its reason is in JSON `scope_reason` and the human block message.
+        /// Prose never reaches the retained history line.
+        /// Keep this summary bounded and path-free.
         #[test]
         fn cleanup_line_reports_blocked_run_with_counts() {
             let mut report = empty_report();

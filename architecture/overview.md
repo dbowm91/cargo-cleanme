@@ -336,7 +336,7 @@ responsible for; the **Breaks** line says what a defect there would cost.
   canonical workspace root, through the `CargoRunner` trait
   (`src/workspace.rs:29`) so tests can substitute a fake. It owns capability
   probing (which `cargo clean` features this Cargo supports),
-  `attribute_unknown` (`src/workspace.rs:452`) for classifying a resolution
+  `attribute_unknown` (`src/workspace.rs:463`) for classifying a resolution
   failure, physical grouping — `build_groups` (`src/workspace.rs:1516`)
   collapses nested and duplicate output roots so bytes are counted once — and
   `analyze_groups` (`src/workspace.rs:2150`), which measures and classifies.

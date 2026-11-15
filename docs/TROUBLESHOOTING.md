@@ -1,833 +1,151 @@
-# cargo-cleanme troubleshooting
+# Troubleshooting cargo-cleanme
 
-## Check this first: known defects by version
+Start by checking the version and the command you ran:
 
-Every row below is a case where a correct-looking run did the wrong thing, and
-none of them was found by a test — each was found by the project's own release
-rehearsals or post-release interrogation. The `0.1.x` updater defects are the
-oldest; the 0.2.0 defects are the reason 0.2.0 is yanked; the `exclude` defect
-is the reason the table now leads with a matching rule rather than with an
-action.
+```sh
+cargo cleanme --version
+```
 
-| If you are on | Check | Fixed in |
+For a safe preview of a bounded cleanup, use `cargo cleanme ROOT --dry-run`.
+For a read-only inventory, use `cargo cleanme scan ROOT`.
+
+## Known issues in older releases
+
+Use the latest release. These historical versions had important defects:
+
+| Version | Issue | Fixed |
 |---|---|---|
-| **0.2.10 and earlier** | An output root **inside another package's directory** was classified private and cleaned — deleting that package's **checked-in files** and reporting the space as reclaimed | **0.2.11** (C044 D1; a covering root nested inside a package directory is never a cleanup target) |
-| **0.2.10 and earlier** | A direct `cargo cleanme cleanme` **silently discarded your ROOT**: the Cargo-injected token was stripped by spelling, and since the ROOT positional moved to the root the two are spelled alike. The scope label changed from `explicit` to `routine` and your project trees joined the selected roots | **0.2.11** (the injected token is identified by launch context, not by spelling) |
-| **0.2.10 and earlier** | A command-line `--exclude` **spelled through a symlink protected nothing** — the configured patterns were canonicalised and the command line's were not, so the tree you asked to keep was deleted | **0.2.11** (one canonicaliser serves both) |
-| **0.2.10 and earlier** | A root `--profile` **silently discarded a `clean --package`**, and the run exited `0` after doing a *different* destructive action | **0.2.11** (the cross-level pair is a usage error) |
-| **0.2.10 and earlier** | Two human surfaces wrote **path text raw**, so a directory name carrying a control byte could rewrite the line you were reading | **0.2.11** (every human surface routes through the shared escaper) |
-| **0.2.9 and earlier** | A bare `cargo cleanme` in a directory the machine's known roots do not reach did **nothing** — it reported a clean result over an empty scope, because the working directory was a filter over a universe that did not contain it | **0.2.10** (ADR 009; the working directory joins the maintenance scope) |
-| **0.2.9 and earlier** | `cargo cleanme -i` with nothing to select was refused as a **configuration error** (exit `2`), while the same scope without `-i` exited `0` — two spellings of one scope disagreed | **0.2.10** (both now say `Nothing to clean.` and exit `0`) |
-| **0.2.8 and earlier** | A manifest **outside** the selected scope that Cargo could not resolve **blocked the whole scope** — bare `cargo cleanme` refused to clean units it had already proved, and reported the out-of-scope manifest as the reason | **0.2.9** (M017 / ADR 007; the proof boundary is now the selected scope) |
-| **0.2.3 and earlier** | A deleted automatically learned scan location (for example a removed worktree) aborts bare `cargo cleanme` with `invalid scan root … No such file or directory` | **0.2.4** (C028; see below) |
-| **0.2.1 and earlier** | An `exclude` naming a directory with `[` or `]` in its canonical path **did not exclude it** on Windows | **0.2.2** |
-| **0.2.0** | `--dry-run clean ROOT` **performed a real cleanup** | **0.2.1** (0.2.0 yanked) |
-| **0.2.0** | A region containing another project's **source tree was deleted** | **0.2.1** (0.2.0 yanked) |
-| **0.1.1 – 0.1.4** | `update` could replace a binary **Cargo owns**, silently, with exit `0` | **0.1.5** |
-| **0.1.1 – 0.1.2** | `update` could never complete a commit | **0.1.3** |
+| `0.2.0` | Could run a real cleanup for a misplaced `--dry-run`, and could delete another project's source tree. This release is yanked. | `0.2.1` |
+| `0.2.10` and earlier | A nested output root could be treated as private even when it was inside another package's source tree. | `0.2.11` |
+| `0.2.12` | The crate was published without a matching GitHub release, so self-update to that version cannot find its release assets. | `0.2.13` |
 
-**0.2.0 is yanked, and it is the one release where that is the right call.**
-Every earlier defect in this table was a *wrong or incomplete* action; the
-program's other behaviour was correct, and yanking would have misdescribed
-them. 0.2.0 could delete files it did not own, and it did so while reporting
-success and exiting `0`. There is no honest description of 0.2.0 that also says
-"everything else was fine", so it is yanked. Existing installations and
-lockfiles are unaffected — a yank stops new resolution, it does not break what
-you already have.
+If you ran `0.2.0` or `0.2.10` and earlier, review your version-control status and backups for affected source files. See the [changelog](../CHANGELOG.md) for release-specific details.
 
-### If you are on 0.2.10 or earlier: an output root inside a package's tree was deleted
+## Cleanup finds nothing
 
-The tool deletes only what it can prove it owns, and the proof is a *physical*
-one: the target directory must belong to the package under cleanup and to
-nothing else. Until 0.2.11, a covering root nested **inside** another package's
-directory was classified `PrivateBounded` and cleaned — so a `target/`
-directory that sat under a second project's source tree was treated as the
-first project's exclusive property. The run then deleted the second project's
-**checked-in files** and reported the space it had reclaimed as a successful
-cleanup.
+Bare `cargo cleanme` performs cleanup. It uses the maintenance scope and
+selects workspaces related to the current working directory. A configured
+`scan.root` replaces the normal maintenance scope. A project outside the
+selected roots, a project with no build output, or output touched within the
+activity window may produce nothing to clean.
 
-The rule that was broken, as it stood in 0.2.10, was: nothing is deleted on
-the strength of a timestamp; every candidate must first prove it is an
-artifact directory and not another project's source. A timestamp — the target
-directory's mtime — was enough. Idle shared and external artifact directories
-are cleanable now. A directory that contains source, a nested package, or a
-symlink is still never cleaned.
-
-A covering root nested inside a package directory is now refused during
-resolution and re-proved at the spawn, so the second pass cannot be fooled by
-state that changed between the two. If you ran 0.2.10 or earlier over a tree
-where one project's build directory sat under another's sources, check that
-project's working tree; the tool's report will say `would-clean` for units it
-now refuses to touch.
-
-### If you are on 0.2.3 or earlier: a deleted learned location aborts bare cleanup
-
-Bare `cargo cleanme` fails before doing anything:
-
-```text
-cargo-cleanme: invalid scan root /home/you/.codex/worktrees/1749: No such file or directory (os error 2)
-```
-
-That path is a transient developer tree the tool learned on an earlier Full
-reconciliation and that has since been deleted. Every other root would have
-been safe to process, but the stale advisory path reaches the strict
-explicit-root validation and aborts the whole run with exit `2`. Nothing is
-cleaned, and nothing is corrupted — the failure is availability, not safety.
-
-Until you are on the release carrying the C028 corrective, work around it by
-naming an explicit scope, which never consults learned state:
+Try a read-only scan or name the root explicitly:
 
 ```sh
-cargo cleanme ~/Projects --dry-run   # preview first
-cargo cleanme ~/Projects              # then run it
+cargo cleanme scan ~/projects/my-app
+cargo cleanme ~/projects/my-app --dry-run
 ```
 
-Deleting `discovery-state.json` also unblocks the run (learned roots are
-rebuilt by the next Full `scan`), at the cost of forgetting every learned
-location. With the corrective in place, the stale location is omitted with a
-diagnostic, symlinked or unreadable automatic locations block with a typed
-report instead of a fatal error, and explicit roots stay strict.
+The default activity window is 300 seconds. Recently active projects are
+protected; wait for the window to pass rather than changing file timestamps.
 
-## Full scans report partial coverage for unreadable subtrees
+## Cleanup is blocked or exits 1
 
-Full scans run with the current user's permissions. They continue inventorying
-accessible paths, but `dua-core` does not attach the failing child path to its
-traversal error event. The report therefore describes the skipped region as
-unknown-location coverage loss rather than labeling the selected root as
-unreadable. A partial Full scan exits `1` and does not publish a new complete
-learned-state generation. Use an explicit accessible root to narrow the scan;
-do not run as root just to suppress the diagnostic.
+Cleanup fails closed when the selected scope cannot be proven complete. Check
+the report and stderr for unresolved manifests or discovery errors inside the
+selected boundary. An unresolved manifest outside that boundary is reported
+but does not block it.
 
-Full inventory and Routine maintenance have different purposes. A valid Cargo
-manifest in a cache remains visible during Full discovery, but only a
-Cargo-resolved workspace in a durable developer location can create a new
-automatic Routine root. Existing cache/runtime roots are filtered during
-Routine admission; explicitly named roots retain their strict semantics.
-Repeated omitted roots are summarized by reason with a count and a few example
-paths, so transient worktree IDs do not each produce their own stderr line.
-The saved learned-root hints are still advisory entries in discovery state and
-may be reconsidered on a later Routine run; this summary does not persistently
-retire them. Complete Full reconciliation remains the existing negative-state
-pruning path.
-
-## A manifest is found but its Cargo workspace cannot be resolved
-
-Full discovery walks for `Cargo.toml` files before asking Cargo to resolve
-workspaces. It can therefore find orphaned workspace members, invalid manifests,
-or dependency snapshots that Cargo cannot treat as a workspace. The report keeps
-these manifests unresolved, but does not learn them as Routine roots.
-
-Cleanup fails closed **only for the proof boundary** — the scope you selected:
-the working-directory anchor, the explicit roots, or the Full set. A manifest
-Cargo cannot resolve *inside* that boundary blocks it. A manifest *outside* it
-is reported as a bounded `out_of_scope` diagnostic and never blocks: cleaning a
-healthy anchor while poison exists elsewhere is the intended behaviour, so a
-boundary clean is never read as a system clean.
-
-Inside the boundary the block is narrower than "every unresolved manifest". A
-manifest Cargo itself named — a refused manifest it would not fold into
-another workspace — or one it recorded as a scope note has no unknown owner to
-merge, so it is reported and never blocks.
-
-An in-boundary manifest with an unknown owner is a claim when its output
-directories can be named, and a block when they cannot. The named directories
-are the ones Cargo 1.89 would use for that workspace: `CARGO_TARGET_DIR` when
-set, otherwise `CARGO_BUILD_TARGET_DIR` or `build.target-dir`, plus
-`CARGO_BUILD_BUILD_DIR` or `build.build-dir` when set, otherwise
-`<workspace>/target`. Config is read from the workspace `.cargo/config.toml`
-and `.cargo/config`, then each ancestor, then the Cargo home config. A missing
-file is skipped. An unreadable or unparseable file, a non-string `target-dir`
-or `build-dir`, an unknown workspace root, or a source the reader does not
-account for makes the claim unbounded, and the boundary that contains the
-manifest blocks. A finite claim does not block that boundary. A unit whose
-physical output intersects a named directory is skipped with
-`skipped_output_claim` and is not spawned. A unit that misses every named
-directory still has to pass the existing ownership gates. The unresolved
-manifest stays discovered and is not cleaned, including its own `target`. The
-claim is read again before each spawn; a change blocks the units not yet
-spawned.
-
-On `cargo cleanme --full` the boundary is the proven learned root that
-contains the manifest. An unbounded unknown, or a discovery diagnostic on that
-root's walk, skips the units under that root with `skipped_root_blocked` and
-leaves every other proven learned root eligible. An explicit `cargo cleanme
-ROOT` and a bare maintenance run stay one boundary: the same poison blocks
-that whole scope when the claim is unbounded, and holds only the intersecting
-units when the claim is finite.
-
-An unresolved manifest in learned root A can still have written output inside
-learned root B. A finite named redirect holds the unit it touches. An unnamed
-or unreadable redirect still blocks the boundary that contains the unknown.
-Source trees that merely sit in different directories do not close that
-residual. A `target` shared between two resolved workspaces stays shared.
-
-Reproduce the exact lookup with the same Cargo executable used by the scan:
+For a manifest Cargo cannot resolve, reproduce the lookup with:
 
 ```sh
-cd /path/to/manifest-parent
 cargo locate-project --workspace --manifest-path /path/to/Cargo.toml
 ```
 
-The scan diagnostic retains a bounded, sanitized excerpt of Cargo's stderr.
-Error wording varies by Cargo version; the command above is the authoritative
-detail for that manifest. A valid sibling workspace may still appear in a
-read-only partial scan, while cleanup remains fail-closed for the **proof
-boundary** — the scope you selected: the working-directory anchor, the explicit
-roots, or the Full set. A manifest Cargo cannot resolve *inside* that boundary
-blocks it; a manifest *outside* it is reported as a bounded `out_of_scope`
-diagnostic and never blocks.
+Fix the manifest or workspace configuration, then retry the same preview.
+An active unresolved manifest with a known output location may hold only the
+cleanup units whose outputs intersect it. If the output location cannot be
+identified, cleanup of the affected boundary is blocked.
 
-## Bare cleanup reports 0 CleanupUnits with hundreds of unresolved manifests
+A Full cleanup (`cargo cleanme --full`) uses learned roots and verifies each
+root. If some roots cannot be proven, it can clean the proven roots and exits
+`1` to report the partial result. If there are no learned roots, it prints a
+message recommending `cargo cleanme scan` and exits `0`; run the scan before
+using Full cleanup.
 
-A bare `cargo cleanme` that ends with `0 CleanupUnit(s)` and `cleanup
-ownership could not be proven: N discovered Cargo manifests did not resolve`
-did not measure zero workspaces. The `0` means resolution never got as far as
-building cleanup units: a manifest Cargo cannot resolve *inside* the proof
-boundary blocks it when that manifest's output directories cannot be named.
-A manifest whose output can be named holds only the units whose physical
-outputs intersect those directories; a sibling with a disjoint conventional
-`target` is still cleaned. For a bare run the
-boundary is the working-directory anchor — the directory you are standing in,
-the tree below it, and its own ancestors — so the manifests that blocked are the
-ones **inside** that anchor, not the ones elsewhere on the machine. A manifest
-*outside* the boundary is reported as a bounded `out_of_scope` diagnostic and
-never blocks.
+Exit code `1` can also mean a cleanup unit failed or was held by an unresolved
+output claim. Read the report before retrying.
 
-This is most often vendored or misconfigured trees *inside* an otherwise
-healthy root — for example tree-sitter grammar crates that believe they belong
-to a parent workspace that does not list them (`current package believes it's
-in a workspace when it's not`), `fuzz/` crates in the same state, or toolchain
-sources requiring nightly Cargo — rather than a permissions problem.
+## A filter seems to have no effect
 
-First check which admitted roots are actually yours: cache, download, temp,
-and system-software locations (`~/Library/Caches`, `~/Downloads`,
-`/private/tmp`, `/usr/local`, …) are already omitted from Routine admission,
-so a remaining block comes from inside a real developer root. Options that
-keep the happy path (`scan`, then bare `cargo cleanme`) intact:
-
-- Fix the upstream workspace configuration (usually adding the stray crate to
-  `workspace.exclude` or giving it an empty `[workspace]` table), then rerun
-  `cargo cleanme scan` so the next Full reconciliation observes a resolving
-  tree.
-- Or narrow what is discovered at all: pin `scan.root` in `config.toml` to the
-  subtree you maintain and run from inside it. `scan.root` is an exclusive
-  override for the discovery scope, so a manifest outside the pinned subtree is
-  never discovered and can never block.
-- Or move the working directory. The proof boundary for a bare run is the
-  working-directory anchor, so running from the healthy subtree turns poison
-  elsewhere into an `out_of_scope` diagnostic instead of a block. Per-invocation
-  `cargo cleanme ROOT` remains available for one-off work.
-
-The tool does not clean around an unresolved manifest whose output it cannot
-name and then call the result a system clean. Cleanup fails closed **only for
-the proof boundary** — the scope you selected: the working-directory anchor,
-the explicit roots, or, on `--full`, the learned root that contains the
-unknown. A manifest Cargo cannot resolve *inside* that boundary blocks it
-when its output cannot be named, and holds the units it may have written when
-its output can be named. A manifest *outside* it is reported as a bounded
-`out_of_scope` diagnostic and never blocks: cleaning a healthy anchor while
-poison exists elsewhere is the intended behaviour, so a boundary clean is
-never read as a system clean.
-
-The proof is complete coverage *inside* the boundary: every manifest there is
-accounted for, so no unknown output configuration inside it can overlap the
-bytes being deleted. Crossing the boundary is not a licence to delete unproven
-bytes — it is a statement about where complete proof is required, and the
-report says how many out-of-scope participants it reported without blocking.
-
-### If you are on 0.2.0: two things it could do that it should never have done
-
-Both were found by the project's own post-release interrogation and confirmed by
-reproducing them against the published binary. Both are fixed in **0.2.1**.
-
-**1. `cargo cleanme --dry-run clean ROOT` deleted your build artifacts.**
-`--dry-run` before the subcommand is the spelling Cargo itself passes to an
-external subcommand, and it was accepted — then discarded. Cleanup fell through
-to its default, ran `cargo clean` for real, and printed `Cleaned …` with exit
-`0`. The words `--dry-run` were in your command line the whole time.
-
-If you ran 0.2.0 in that form, the damage is bounded to build output; no source
-file was touched. Rebuild with `cargo build`.
-
-**2. A project could have another project's source tree inside its output
-directory.** If workspace A declares an output directory (a redirected
-`build.target-dir`, for instance) and an independently resolved workspace B has
-its sources inside it, A's region was classified `private` and cleaned. B's
-`Cargo.toml`, `Cargo.lock`, `.cargo/config.toml`, and `src/` were deleted along
-with A's artifacts.
-
-Check whether you have this shape before cleaning anything:
+`scan.ignore` and `scan.unignore` apply to Routine maintenance when no
+`scan.root` is configured, and to machine-wide scans. A configured `scan.root`
+or a command-line root is an explicit scope, so the filters are bypassed:
 
 ```sh
-# every Cargo.toml on this machine, to find neighbours living in someone's output dir
-find ~ -name Cargo.toml -not -path '*/.cargo/registry/*' 2>/dev/null
+cargo cleanme scan . --config ./filters.toml
 ```
 
-If a nested project does not exist in your layout, there is nothing to repair.
+The command above uses an explicit root, so configured ignore filters do not
+apply. To test those filters, run `cargo cleanme scan` or a bare maintenance
+command with no configured `scan.root`. `scan.ignore` patterns and
+`scan.unignore` paths must be absolute.
+`scan.unignore` is a literal path, not a glob.
 
-Until you are on 0.2.1, do not run `cargo cleanme` without `--dry-run`.
+Cleanup `include` and `exclude` patterns match canonical workspace roots, not
+build output directories. For example, `**/archived` matches a workspace root
+named `archived`; `**/archived/**` requires another path segment after it.
 
-One breaking change arrived in **0.2.0**, listed separately below, because it
-changes what a bare `cargo cleanme` *does* rather than fixing a defect. Detection
-and repair steps for the `0.1.x` defects, plus the reasoning, are in
-[UPDATE.md](UPDATE.md#known-defects-by-version).
+## `--dry-run` and `--cargo-preview` differ
 
-Quick check for the first one, if you installed with `cargo install --root`:
+`--dry-run` runs the application's cleanup checks without invoking `cargo
+clean`. `--cargo-preview` runs Cargo's own `clean --dry-run --verbose` after the
+same safety checks. Use `--dry-run` when you want the application simulation
+with no cleanup command.
 
-```sh
-cargo cleanme --version                      # the version the file reports now
-cargo install --list | grep cargo-cleanme     # the version Cargo believes it owns
-```
+## A scheduled run cleans nothing or fails
 
-If those disagree, run `cargo install cargo-cleanme --locked --force`.
+Check these in order:
 
-## A preview run makes the next cleanup find nothing
+1. **Working directory:** a bare scheduled command is anchored to the scheduler's
+   working directory. Use an explicit `ROOT` for a fixed scope.
+2. **Config:** a configured `scan.root` replaces the normal maintenance scope.
+3. **Account and permissions:** run as the user who can read the intended project
+   roots. Running as root may use a different home and config.
+4. **Activity:** projects touched within `scan.recency_seconds` are protected.
+5. **Exit code:** use the process status. A partial Full cleanup may have a log
+   line with `status=ok` while exiting `1`.
 
-**Symptom.** `cargo cleanme scan <root>` finds the project, but
-`cargo cleanme <root>` reports `0 CleanupUnit(s)` and cleans nothing.
-The scan that ran a moment earlier showed the group.
+See [Unattended operation](AUTOMATION.md) for scheduling and output guidance.
 
-**Cause.** `--cargo-preview` runs Cargo's own `cargo clean --dry-run
---verbose`, and Cargo writes `target/.rustc_info.json` while doing it. That
-file is now fresh, so the output group is **active** — and an active group is
-protected by the recency guard (`recency_seconds`, default 300) and is
-excluded from cleanup. The preview changed the thing it was previewing.
+## The command is not found
 
-This is the activity guard working as designed; it is the *preview* that
-tripped it. `--dry-run` does not have this effect, because it spawns nothing
-at all and so never lets Cargo touch the target directory.
+For Cargo installations, make sure Cargo's binary directory is on PATH. For
+prebuilt installations, add the destination reported by the installer. The
+POSIX installer prints PATH guidance and can update supported zsh or bash
+startup files. The PowerShell installer does not modify PATH.
 
-**Check.**
+See [Installing](INSTALLING.md#path) for details.
 
-```sh
-ls -l <root>/target/.rustc_info.json
-```
+## The installer fails
 
-If that file's mtime is within the recency window, that is the cause.
+- **No prebuilt binary for this host:** use `cargo install cargo-cleanme --locked`.
+- **Missing or mismatched checksum:** stop and retry later. The installer
+  refuses to place an unverified binary.
+- **Network or release-host error:** retry later or install from crates.io. A
+  transport failure is not treated as a missing asset.
+- **Destination already exists:** pass `--force` (PowerShell: `-Force`) only if
+  you intend to replace it.
 
-**Work around it.** Wait out the window, or use `--older-than` to require
-more quiet than the recency guard already demands. Do not backdate a real
-project's `target/` directory to work around it — the recency guard exists so
-that a build in progress is never cleaned.
+## Self-update refuses
 
-## Upgrading from 0.1.x: bare `cargo cleanme` now cleans
-
-**Applies to 0.1.x only.** Bare `cargo cleanme` was a read-only Routine scan on
-0.1.x. On 0.2.0 it is a Routine **cleanup**, and `--dry-run` on `clean` changed
-from Cargo's own preview to application simulation.
-
-The 0.1.x → 0.2.x spelling table lives in
-[README.md §Upgrading from 0.1.x](../README.md#upgrading-from-01x). It is
-published there only, so the two copies cannot drift apart; if they ever
-disagree, README.md is the source of truth.
-
-`--dryrun` and `--yes` still work on `clean`, hidden, mapping to the canonical
-modes. Nothing in your config needs to change.
-
-**If you want the old read-only behaviour unconditionally**, use
-`cargo cleanme --dry-run` for a Routine preview, or `cargo cleanme scan`
-for a machine-wide inventory, and put it in the same place you used to run
-the bare command. A configured legacy `scan.root` still wins as an explicit
-override for bare maintenance, so a config that pins `scan.root` keeps
-*discovering* exactly what it always pinned — 0.1.x never cleaned anything at
-all, and neither does a pinned `scan.root` on its own. It also does not widen
-what gets cleaned: the proof boundary for a bare run is the working-directory
-anchor, so only the units that anchor admits are candidates. Stand where you
-want cleaned, or name the root explicitly with `cargo cleanme ROOT`.
-
-## Unattended / scheduler runs
-
-→ [docs/AUTOMATION.md](AUTOMATION.md) for the full integration.
-
-### A scheduled run reports `cleaned=0` and nothing happens
-
-Almost always **scope, not a bug**. Check in this order:
-
-1. **Is the scheduler running as you?** The normal Linux greggd service runs as
-   `greggd` with `ProtectHome=true` and generally cannot see your home
-   directory, where the build output is. A successful run with an empty scope
-   looks exactly like a successful run that cleaned something. Use a
-   user-owned/rootless greggd.
-2. **Is the path absolute?** `command = ["cargo-cleanme", …]` does not inherit
-   your interactive `PATH`. Use the full path to the binary.
-3. **Is `scan.root` set?** A configured `scan.root` is an exclusive override: it
-   replaces the Routine scope entirely rather than adding to it.
-4. **Is everything too recent?** Anything modified inside `recency_seconds`
-   (default 300) is protected. A nightly job is far outside that window.
-
-### A scheduled run exits `1` with `status=blocked`
-
-The scope was refused **before** anything was deleted, by design. The `reason=`
-code tells you which:
-
-| `reason=` | Cause | Retry? |
-|---|---|---|
-| `ownership_unproven` | a manifest inside the proof boundary could not be resolved, so coverage of the boundary is unproven | usually no — fix the workspace |
-| `incomplete_discovery` | the ownership universe could not be proven complete inside the proof boundary: a discovery diagnostic inside it, a manifest set that changed under the proof, or an admission premise that changed | usually no |
-
-Both are *success-shaped* results: a typed blocker, not a crash. The boundary is
-the scope the run was given — for a scheduled bare run, the working directory
-the scheduler started in — and a manifest outside it is reported, not blocking.
-See [USAGE.md §Cleanup safety model](USAGE.md#cleanup-safety-model) for the
-underlying safety model.
-
-### A scheduled run exits `2` with `status=error` and no summary line
-
-The run failed before a report existed — almost always an invalid or unreadable
-`config.toml`, or a root that cannot be used. There is no summary line because
-there is no report to summarise. Re-run it in the foreground without
-`--format log` to get the full message.
-
-### A log line is missing a field you expected
-
-Optional fields are dropped from the tail of the line when including them would
-exceed 384 bytes. `op`, `status`, `scope`, and `mode` are structural and never
-dropped. If you need complete data, use `--format json`.
-
-## Discovery filters
-
-### `unignore` re-admitted siblings (fixed after 0.1.6)
-
-**Applies to 0.1.6 and earlier.** On those releases, a literal `ignore` plus an
-`unignore` beneath it re-admitted the *whole* ignored subtree, so projects you
-never meant to re-included showed up in the report — and a `clean` could then
-consider them.
-
-| `ignore` | `unignore` | 0.1.6 and earlier | fixed |
-|---|---|---|---|
-| `/home/you/projects/archived` | `…/archived/keepme` | **2** — over-broad | **1** — correct |
-| `/home/you/projects/archived/**` | `…/archived/keepme` | **1** | **1** |
-| `/home/you/projects/archived/*` | `…/archived/keepme` | **1** | **1** |
-
-**Fix.** Upgrade past 0.1.6. The walk now carries the exclusion it inherits from
-an ignored ancestor, so it enters the ancestor only far enough to reach the
-exact `unignore` path and refuses the siblings. Nothing in your config needs to
-change, and the `/**` and `/*` forms above keep working unchanged.
-
-**If you cannot upgrade yet**, make the ignore pattern cover its own children by
-appending `/**` (or `/*`):
-
-```toml
-[scan]
-ignore   = ["/home/you/projects/archived/**"]
-unignore = ["/home/you/projects/archived/keepme"]
-```
-
-This is correct on every release, but it is a workaround for a defect that no
-longer exists — prefer the plain literal form once you are past 0.1.6.
-
-### An `ignore` rule seems to do nothing
-
-If you are testing with an explicit root, that is the reason:
-
-```sh
-cargo cleanme scan .                          # filters are BYPASSED
-cargo cleanme scan --config ./filters.toml    # Routine scope: filters apply
-```
-
-`ignore` and `unignore` apply to global discovery and the Routine scope. An
-explicit root — a CLI `ROOT` argument or the config's `root` key — bypasses
-them, because a caller who names one directory means it.
-
-### A relative path in your config is rejected
-
-`configuration error: ignore pattern must be absolute: <value>`, exit `2`. The
-path-valued settings must be absolute: `scan.root`, `scan.ignore`,
-`scan.unignore`, and `cleanup.allowed_output_roots`. Each is rejected with its
-own field name in the message (`scan.root must be absolute: …`,
-`unignore must be absolute: …`,
-`cleanup.allowed_output_roots must be absolute: …`).
-
-`include` and `exclude` are **not** in that list. They are globs, not paths,
-and they are matched against the canonical workspace root — see
-[An `exclude` pattern does not match](#an-exclude-pattern-does-not-match).
-
-### An `exclude` pattern does not match
-
-`include` and `exclude` are matched against the **canonical workspace root**,
-not against output directories or anything beneath it. A trailing `/**` requires
-a segment after the name, so it never matches the directory itself:
-
-```toml
-exclude = ["**/archived/**"]   # does not match a workspace root that IS .../archived
-exclude = ["**/archived"]      # matches
-```
-
-On **0.2.1 and earlier** an `exclude` naming a directory whose canonical path
-contains `[` or `]` — legal in a Windows file name — silently failed to match
-it, because the canonical rewrite refused every Windows spelling and so spliced
-the name in unescaped: `real[abc]` was read as a character class. A project you
-excluded could therefore still be cleaned. **Fixed in 0.2.2**: directory names in
-a pattern are matched literally on every platform, and `docs/USAGE.md` documents
-the rule. Before the fix, work around it with a prefix that resolves to a name
-without brackets, or with patterns written against the canonical path.
-
-## The Full cleanup cleans only what it can prove
-
-`cargo cleanme --full` does not clean "the platform roots". Its proof boundary
-is the **learned root**: it cleans the learned roots it can prove, and it
-discloses the ones it cannot. `cargo cleanme clean --full` is the same
-operation under its hidden alias.
-
-### A Full cleanup exits `1` and says a learned root was skipped
-
-```text
-cargo-cleanme: learned root /home/you/projects/legacy was skipped: /home/you/projects/legacy could not be walked: scan root is unavailable
-```
-
-The platform walk could not complete, so each learned root is re-walked **as its
-own walk root** and judged on its own traversal. A root whose subtree could not
-be fully read is **unproven**: a unit under it that the selection would
-otherwise have admitted is removed from the *candidate* set and reported with
-the reason code `skipped_incomplete_coverage`, whose detail names the root, the
-cause, and the alternative.
-
-The run still exits `1`, even when every root that *could* be proven was cleaned
-successfully — a partial Full cleanup must not read as a complete one to an
-unattended script. A real run of `cargo cleanme --full --dry-run` on a machine
-with unreadable subtrees reports the unproven roots on stderr, simulates the
-proven ones, and exits `1`:
-
-```text
-cargo-cleanme: discovery state was not updated: the Full traversal was incomplete; the learned roots were retained and verified in memory
-cargo-cleanme: learned root /home/you/.codex/worktrees/1749 was skipped: /home/you/.codex/worktrees/1749 could not be walked: scan root is unavailable
-cargo-cleanme: learned root /tmp was skipped: 15 traversal error(s) under /tmp: 15 permission-denied, 0 vanished, 0 other; the skipped region's location is unknown
-```
-
-The excluded units are ordinary skipped rows, not dropped ones — an
-illustrative fragment:
-
-```json
-{"outcome":"skipped","reason_code":"skipped_incomplete_coverage","detail":"the learned root /home/you/projects/legacy could not be proven: …; the workspace was left untouched — run `cargo cleanme scan` for the read-only inventory, or `cargo cleanme ROOT` for a bounded scope"}
-```
-
-The narrowing happens **after** ownership classification, so a shared output
-between a proven root and an unproven one stays `shared`. An idle shared
-artifact directory is still cleanable. The filter can only remove candidates — never add one or
-reclassify one.
-
-It is also the one filter that may move the **proof boundary**, because it
-states a *proof* fact rather than narrowing your choice: that root's
-traversal could not be completed. So an unreadable region **inside an
-unproven learned root** blocks that root and not the whole run — the other
-learned roots are still cleaned. Every other unreadable root still blocks the
-run that contains it, because an unreadable root is indeterminate coverage,
-not absence.
-
-### A Full cleanup skips one proven learned root and cleans the others
-
-A proven learned root can still contain a manifest Cargo cannot resolve, or a
-discovery diagnostic from that root's own walk. That root's units are skipped
-with `skipped_root_blocked`. The detail names the learned root, whether the
-cause was an unresolved manifest or a discovery diagnostic, and the count. It
-does not reuse `skipped_incomplete_coverage`, which means the root's own
-traversal did not complete. The other proven roots still reach `cargo clean`.
-The run exits `1`. If every proven root is blocked, the run is the existing
-scope block, exit `1`, and no `cargo clean` is spawned.
-
-An explicit `cargo cleanme ROOT` containing the same poison is still one
-boundary. A bare maintenance run is still one boundary.
-
-The cross-root residual stays: an unresolved manifest in root A can have
-pointed its output at a path inside root B. A finite named redirect holds the
-unit it intersects. An unnamed or unreadable redirect blocks the boundary that
-contains the unknown. The tool does not treat two source trees as disjoint
-just because their directories do not nest.
-
-### A Full cleanup is blocked because no learned root could be proven
-
-When **no** learned root could be proven, the Full cleanup has proven nothing,
-so the scope is blocked with the standard unproven-ownership block, whose
-`scope_reason` reads:
-
-```text
-no learned root could be proven: 1 root(s) had incomplete coverage (/home/you/projects/legacy); no cleanup commands were run — run `cargo cleanme scan` for the read-only inventory, or `cargo cleanme ROOT` for a bounded scope
-```
-
-The run exits `1`. It never exits `0` with zero rows — an operator script must
-not read "success" for a cleanup that never ran.
-
-The remedy is the same in both cases: run `cargo cleanme scan` on its own
-and read its diagnostics, fix what it reports — an unreadable subtree, a stale
-learned location — and rerun. To clean a bounded subtree in the meantime, name
-it explicitly: `cargo cleanme ROOT`.
-
-## Refusals that exit 2
-
-The refusals below stop the run before any cleanup command runs. Each is a typed
-error with exit `2`, not a crash, and each has a remedy. The last entry in this
-section is the exception: it is a case that is **not** a refusal, recorded here
-because it used to be one.
-
-### `config show --format json` exits 2
-
-```text
-cargo-cleanme: configuration error: config command does not support --format json; use human or log output
-```
-
-`config show` prints the effective `config.toml` as TOML and `config path`
-prints a filesystem path. Neither is JSON, so putting one on a `--format json`
-stdout would break the one-JSON-document-per-invocation contract the rest of
-the CLI keeps. The `config` command therefore refuses rather than emit
-non-JSON, for every subcommand.
-
-`--format log` is accepted and exits `0`: it reports the action
-(`cargo-cleanme op=config status=ok action=show`) and keeps the config text
-out of the line. To read the config from a script, ask for the path and read
-the file:
-
-```sh
-cargo cleanme config path
-```
-
-### `cargo cleanme --full` refuses with exit 2
-
-```text
-cargo-cleanme: configuration error: full reconciliation produced no fresh generation; no cleanup commands were run against stale learned roots
-```
-
-A Full cleanup cleans from a Full reconciliation, and it needs a **fresh
-generation** of learned roots to clean from. When the reconciliation published
-no new generation there is no proven root set to work from, so the cleanup
-refuses before any `cargo clean` runs.
-
-This is now the **only** refusal the Full cleanup has. The other one — `full
-reconciliation reported an incomplete scan (exit N); no cleanup commands were run
-against its unproven learned roots` — is **gone**: an incomplete reconciliation
-is no longer a refusal but a **partial** run that cleans the roots it can prove
-and reports the ones it cannot. See
-[The Full cleanup cleans only what it can prove](#the-full-cleanup-cleans-only-what-it-can-prove)
-above.
-
-Run `cargo cleanme scan` on its own and read its exit code and
-diagnostics: a partial Full scan exits `1` and does not publish a new
-learned-state generation. Fix what the scan reports — an unreadable subtree, a
-stale learned location — and rerun.
-
-### A cleanup flag handed to a read-only subcommand exits 2
-
-```text
-cargo-cleanme: configuration error: `scan` does not accept --full: these are cleanup flags, and `cargo cleanme scan` is read-only. Run the cleanup without the subcommand, or run `scan` on its own.
-```
-
-A cleanup flag — `--full`, `--min-reclaimable-bytes`, `--older-than`,
-`--include`, `--exclude`, `--profile`, `--package`, `--cargo-preview`, or a
-root `ROOT` — means nothing to `scan`, `config`, or `update`. Handing one to a
-read-only or local-only subcommand is a **usage error**, never a silently
-discarded flag: a flag you typed and the tool ignored looks exactly like a flag
-the tool honoured. (`--dry-run` is deliberately not in that list: a read-only
-subcommand ignores it, and ignoring it changes nothing.)
-
-Run the cleanup without the subcommand (`cargo cleanme --full`), or run the
-subcommand on its own (`cargo cleanme scan`).
-
-### The same override given at both levels exits 2
-
-```text
-cargo-cleanme: configuration error: --older-than was given at the root and on `clean`. The two values are ambiguous; give it at one level only.
-```
-
-The policy overrides — `--min-reclaimable-bytes`, `--older-than`, `--include`,
-`--exclude`, `--profile`, `--package`, `--cargo-preview` — are **root-level**
-flags; `clean` keeps them as hidden aliases. Giving the same one at both levels
-is ambiguous, so the tool refuses instead of silently preferring one of the two
-values. The same rule covers the scope selectors: `--full`, `ROOT`, and
-`--known`.
-
-Give it at one level only: `cargo cleanme --older-than 3600 ROOT`, or
-`cargo cleanme clean --older-than 60 ROOT`.
-
-### `-i` says "Nothing to clean." and exits 0
-
-```text
-Nothing to clean.
-```
-
-The scope resolved and proved no cleanup unit, so there was nothing to choose
-from. That is a plain negative result, not a usage error, and it is the same
-answer the same scope gives cleaned *without* `-i` — the two spellings agree
-on the exit code (`0`).
-
-In 0.2.9 and earlier this was a refusal: `cargo-cleanme: configuration error: no
-cleanup units are available to select; nothing would be cleaned`, exit `2`. An
-unattended caller could not tell "there was nothing to do" from "the command
-was wrong".
-
-Run the same scope without `-i` to see what it resolved. A cleanup unit only
-exists for a workspace with measured affected output, so an empty list usually
-means there was nothing built to clean, everything was modified inside
-`recency_seconds` (default 300), or the anchor contains no Cargo workspace at
-all. `cargo cleanme scan` shows the machine-wide inventory without
-changing anything.
-
-## Installation
-
-### `install.sh` says the host has no prebuilt binary
-
-Musl targets, Windows ARM64, and ARMv7 have no prebuilt cargo-cleanme binary.
-Build from the registry instead:
-
-```sh
-cargo install cargo-cleanme --locked
-```
-
-`install.ps1` behaves the same way on a non-x64 Windows host. This is
-intentional: those hosts are Cargo-only, and the wrappers say so rather than
-silently installing something else.
-
-### `install.sh` says it could not reach the release host
-
-The wrappers distinguish *absence* from *failure*. A `404` on the binary means
-the release genuinely has no artifact and Cargo is used instead. A `5xx`, a TLS
-error, or a timeout is a **hard failure** and will never fall back to Cargo,
-because a release host outage must not silently become a locally built binary
-with a different provenance. Retry later, or install from crates.io.
-
-### `install.sh` says the checksum is missing or malformed
-
-Every release asset ships a `.sha256` sidecar, and it is mandatory. A missing,
-truncated, or non-hex digest stops the install. This is not a bug to work
-around: it means the release evidence is incomplete, and installing bytes whose
-integrity cannot be checked is exactly what the sidecar exists to prevent.
-
-If the *payload* hash mismatches, the download is corrupt or was tampered with.
-Nothing is installed. Re-run the installer.
-
-### `install.sh` needs `curl` and a SHA-256 tool
-
-Both `curl` and (`sha256sum` or `shasum`) must be present for a prebuilt
-install. Without them, use `cargo install cargo-cleanme --locked`.
-
-### The installer says the destination already exists
-
-Re-run with `--force` (`-Force` in PowerShell) to replace it. Without that
-flag the installer refuses rather than overwriting a file you did not ask it to
-touch. Note that `--force` does not preserve the previous file's permissions.
-
-### I want a system-wide install
-
-The wrappers never call `sudo`, `su`, `doas`, or `Start-Process -Verb RunAs`.
-Run the installer yourself from an elevated shell and it will use
-`/usr/local/bin`, `%ProgramFiles%\cargo-cleanme\bin`, or the platform default.
-
-A system-wide install never edits a user profile.
-
-### `cargo-cleanme` is installed but a new terminal cannot find it
-
-If the install directory is not on `PATH`, the POSIX installer prints the exact
-command to add it for the current shell. It additionally appends a guarded block
-to your zsh or bash startup file so new shells find it — see
-[PATH integration](INSTALLING.md#path-integration). Two caveats:
-
-- the block takes effect in **new** shells. The shell you ran the installer from
-  cannot be changed by it, which is why the export line is printed too;
-- if you see `could not add … (it is not a writable regular file)` or `could not
-  write …`, nothing was changed and the binary is still installed. Add the
-  directory to `PATH` yourself, or re-run with `--dir` pointing at a directory
-  already on `PATH`.
-
-## `cargo cleanme update`
-
-### `update` refuses and prints a `cargo install` command
-
-Your installation is Cargo-managed: the running executable lives in a Cargo bin
-root that Cargo's own `.crates.toml` records. Cargo owns that file and its
-bookkeeping, so replacing it from inside the tool would make
-`cargo install --list` and uninstall describe a state that no longer exists.
-
-Run the printed command instead:
+A Cargo-managed installation must be updated through Cargo:
 
 ```sh
 cargo install cargo-cleanme --locked --force
 ```
 
-This is the intended path for registry installs, not a limitation to work
-around. It also means an update through Cargo picks up the full dependency
-graph, which a single-binary replacement does not.
+`cargo cleanme update` only replaces a supported self-managed installation. It
+also refuses to downgrade, to replace a build newer than the published release,
+or to update a host without a published binary. See [Self-update](UPDATE.md).
 
-### `update` could not reach the registry
+## Exit codes
 
-Current releases identify themselves to the registry with a descriptive
-User-Agent, which crates.io requires. In `0.1.0` the updater used your system's
-`curl` executable, which has no way to set one, so crates.io answered HTTP 403
-and `update` always failed. `0.1.1` replaced it with a transport that can, and
-every release since then uses that transport — so this failure mode is a
-network or proxy problem on your side, not a known defect here.
+| Code | Meaning |
+|---|---|
+| `0` | Completed, including when there was nothing to clean or safe skips occurred |
+| `1` | Incomplete scan, blocked or partial cleanup, or an operation failure |
+| `2` | Invalid command, configuration, or another fatal error before a report |
 
-If you see a transport failure, check outbound HTTPS and any proxy
-configuration, then retry. It will not silently switch to a different transport,
-and it prints the manager command to use instead.
-
-### `update` says this host has no published binary
-
-Same as the installers: musl, Windows ARM64, and ARMv7 are Cargo-only. Use
-`cargo install cargo-cleanme --locked`.
-
-### `update` says the installation is not provably ours to replace
-
-`update` refuses to touch a file it cannot positively identify. It never infers
-ownership from the file name, the directory it lives in, or `PATH` order. If
-this happened to a real installation, reinstall it with the published installer
-or via Cargo, then retry.
-
-### `update` says it is already current
-
-That is success. `update` only offers strictly newer stable releases, and it
-refuses prereleases, because it cannot express "I accept that tradeoff" the way
-an explicit `cargo install` can.
-
-### `update` says this build is newer than the published release
-
-Also correct. If you are running a build from `main` or
-`cargo install --git`, its version is ahead of the latest published release.
-The registry is the version authority for *releases*, not for a build that was
-never published, so `update` refuses to replace it with the older one instead of
-reporting a bogus "newer version available".
-
-Install the published release directly to go back to a released version:
-
-```sh
-cargo install cargo-cleanme --locked --force
-```
-
-## Integrity and security expectations
-
-**`.sha256` files are integrity evidence, not authenticity.** They prove that
-the bytes you downloaded are the bytes the release built. They are not a
-signature and make no claim about *who* produced them. An attacker who can
-replace both the binary and its sidecar passes the check.
-
-There is currently no **maintainer-key signature**, no notarization, and no
-transparency log. The release binaries themselves are unsigned for every
-target. What exists instead is a GitHub **release attestation**: GitHub signs
-an attestation binding the release to its repository, tag, commit, and every
-asset digest, and `scripts/verify-release-attestation.py` verifies it and fails
-closed on every non-pass state. Its trust root is GitHub's release and
-attestation infrastructure, not an independent maintainer key, so it is a
-narrower claim than a signature you can check yourself — and it is not
-something the updater verifies today. Treat the download channel as part of
-your trust boundary. See
-[RELEASING.md §Release authenticity](RELEASING.md#release-authenticity-immutable-releases-and-attestations).
-
-A successfully committed update is also not a guarantee of behavior: the
-candidate is verified to be exactly `cargo-cleanme X.Y.Z` and to match the
-release digest, and that is the full extent of the check. The updater checks
-the `.sha256` sidecar, not the attestation.
-
-## Shell completions and the manpage
-
-Both are generated from the command model and checked into the repository. If
-you add a flag, regenerate them or the drift gate fails:
-
-```sh
-cargo run --quiet --features dev-tools --bin generate-docs
-```
-
-They document the `cargo cleanme` spelling, because that is what works after a
-registry install. A directly downloaded binary is also invokable as
-`cargo-cleanme`.
-
-## Getting help
-
-If something here is wrong or a case is missing, that is a bug worth
-reporting with the exact command, the exact output, and your platform.
+When reporting a problem, include the version, operating system, exact command,
+exit code, and human-readable output. Redact private paths before sharing logs.

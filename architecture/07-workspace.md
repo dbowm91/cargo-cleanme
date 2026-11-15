@@ -85,8 +85,8 @@ methods. Nothing else in the file is reachable from outside.
 | `working_directory_scope_roots` | `(dir: &Path, runner: &dyn CargoRunner) -> Vec<PathBuf>` (`:695-702`) | **ADR 009.** The two roots the operator's position contributes to the maintenance scope: the enclosing workspace, when there is one, and the directory itself. |
 | `capability_from_metadata` | `(had_build_field: bool, target: &str, build: Option<&str>, env_set: bool) -> CargoCapabilities` (`:125-149`) | Pure state machine over metadata evidence. No IO. |
 | `clean_capabilities_from_version` | `(version: &str) -> CargoCleanCapabilities` (`:153-172`) | Exact-string allowlist of Cargo versions whose `cargo clean` selector behaviour was qualified. |
-| `UnknownDisposition` | 3-variant enum (`:414-435`) | The M015 proof-island assignment for one unresolved manifest: `PassengerOf { named_manifest }`, `ScopeNote`, `MergeAll`. |
-| `attribute_unknown` | `(participant: &UnresolvedOwnershipParticipant, workspaces: &[ResolvedWorkspace]) -> UnknownDisposition` (`:449-468`) | Pure failure-class attribution. No spawns, no mutation, no counter or diagnostic changes. |
+| `UnknownDisposition` | 3-variant enum (`:443-453`) | Failure-class attribution for one unresolved manifest: `PassengerOf { named_manifest }`, `ScopeNote`, `MergeAll`. |
+| `attribute_unknown` | `(participant: &UnresolvedOwnershipParticipant, workspaces: &[ResolvedWorkspace]) -> UnknownDisposition` (`:463-489`) | Pure failure-class attribution. No spawns, no mutation, no counter or diagnostic changes. |
 
 ### Grouping
 
@@ -433,53 +433,29 @@ vector, which is exactly why the doc comment at `:767-770` says its
 partial-result behaviour is "intentionally unchanged" and the read-only scan
 stays tolerant.
 
-**Failure-class attribution is report-only (M015); there is no enforcement
-pass-through.** A manifest Cargo refuses with `current package believes it's
-in a workspace when it's not` stays an unresolved participant — and under ADR
-007 it is an **out-of-boundary** participant that is reported, never blocking;
-an in-boundary one blocks the boundary. Withholding it from `unresolved` would
-narrow the block without ADR cover, which is exactly what
-M015's non-goals forbid (`src/workspace.rs:1076-1084`). What M015 adds is a
-pure decision function over the failure classes,
-`attribute_unknown` (`src/workspace.rs:419-438`), returning
-`UnknownDisposition` (`src/workspace.rs:432-442`): only `RefusedByCargo`
-unknowns (Cargo ran and refused the manifest, so it owns no bytes) avoid the
-merge — as a passenger of the island Cargo named
-(`believed_workspace_manifest`, `src/workspace.rs:372-387`) when that
-workspace resolved here, else a scope-level note. Every other class
-(transport, unparseable output, lost workers, metadata, identity) is
-`MergeAll`, today's block; the capability is recorded where the failure is
-classified, never re-parsed from message text. The one narrow parse of a Cargo
-*message* lives in `believed_workspace_manifest` (`:390-440`) — the last one in
-the module — and it **fails closed**: when the parse returns `None` (wrong
-class, or a truncated reason) the disposition is `ScopeNote`, never a passenger
-of an unproven island (`:446-451`, `:426-436`).
-Permission, transport, parse,
-and metadata failures are untouched. Pinned by
-`misconfigured_member_with_resolved_parent_still_blocks_but_attributes_as_passenger`
-and `misconfigured_member_with_unresolved_parent_still_blocks`
-(`src/workspace.rs:3745-3851`), the per-class table
-`attribute_unknown_merges_every_unproven_class` (`src/workspace.rs:3927`),
+**Failure-class attribution classifies; cleanup decides whether to block.** A
+Cargo refusal stays in `unresolved` for reporting. Outside the selected boundary
+it becomes an `out_of_scope` diagnostic; inside, it is a passenger when Cargo
+names a resolved workspace or a scope note otherwise. Both dispositions are
+report-only (`src/cleanup.rs:3631-3674`).
+
+`attribute_unknown` (`src/workspace.rs:463-489`) returns `PassengerOf` when a
+refused manifest names a workspace resolved in this run, otherwise `ScopeNote`
+(`believed_workspace_manifest`, `src/workspace.rs:373-386`). Other failure
+classes return `MergeAll`; cleanup blocks them only while the manifest may
+still be active (`src/cleanup.rs:3663-3674`). The capability is recorded at
+failure time, never inferred from message text. Missing or truncated workspace
+names fail closed to `ScopeNote` (`src/workspace.rs:470-487`).
+
+Pinned by `misconfigured_member_with_resolved_parent_still_blocks_but_attributes_as_passenger`
+(`src/workspace.rs:4740`),
+`attribute_unknown_merges_every_unproven_class` (`src/workspace.rs:4922`),
 `attribute_unknown_reports_refused_manifest_as_scope_note_without_naming_evidence`
-(`src/workspace.rs:3978`),
+(`src/workspace.rs:4974`),
 `attribute_unknown_assigns_refused_believed_manifest_to_resolved_island`
-(`src/workspace.rs:4001`),
+(`src/workspace.rs:4998`), and
 `attribute_unknown_with_unresolved_named_parent_is_scope_note_not_passenger`
-(`src/workspace.rs:4050`),
-`attribute_unknown_truncated_believed_reason_is_scope_note`
-(`src/workspace.rs:4502`), and the resolution-level capability pins
-`resolution_records_refused_capability_for_cargo_refused_locate`
-(`src/workspace.rs:4085`) and
-`resolution_records_unproven_capability_for_metadata_failure`
-(`src/workspace.rs:4566`). Enforcement of the passenger shape arrived with
-M016 under the accepted ADR 004 amendment and became the default under
-M017/ADR 007: a refused passenger rides along while staying named in
-`unresolved_ownership` (never a unit row); see [Cleanup](09-cleanup.md)
-§ "Scoped proof is the default (M017)". The three-way split that consumes
-`attribute_unknown` lives in `cleanup.rs:2619-2643` — blocking (`MergeAll`),
-reported in-boundary (`PassengerOf` / `ScopeNote`), and out-of-boundary are
-three separate lists, and only the first blocks. Resolution itself is
-unchanged — still report-only.
+(`src/workspace.rs:5050`).
 
 ### Progress
 

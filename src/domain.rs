@@ -178,14 +178,14 @@ pub struct ResolvedWorkspace {
     pub nested_package_roots: Vec<PathBuf>,
 }
 
-/// What an unresolved manifest proves about its own byte-ownership (M015).
+/// What an unresolved manifest proves about its byte-ownership.
 ///
-/// The proof-island certificate distinguishes unknowns Cargo itself refused —
-/// no Cargo command can place output for them, so they merge nothing — from
-/// unknowns whose byte-capability is unproven and therefore merge every
-/// island. The class is recorded where the failure is classified, never
-/// re-parsed from message text: a copy-edit to a diagnostic must not silently
-/// reclassify an unknown from merging to non-merging.
+/// A Cargo refusal proves Cargo could not use the manifest.
+/// Transport, parse, metadata, identity, and discovery failures do not.
+/// Cleanup applies the capability to the selected boundary and activity.
+/// The class is recorded when failure occurs, never parsed from message text.
+/// The class alone does not decide whether cleanup blocks.
+/// Editing a diagnostic must not change ownership classification.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UnknownCapability {
     /// `cargo locate-project` ran and refused the manifest (nonzero exit):
@@ -193,8 +193,8 @@ pub enum UnknownCapability {
     /// Transport failures, unparseable output, and lost workers are *not*
     /// this class — Cargo never examined the manifest there.
     RefusedByCargo,
-    /// Byte-capability unproven: transport, unparseable output, lost worker,
-    /// metadata, identity, and discovery-hole unknowns. Merges everything.
+    /// Byte-capability is unproven after transport, parse, metadata, identity,
+    /// worker, or discovery failures. Cleanup decides whether it blocks.
     Unproven,
 }
 

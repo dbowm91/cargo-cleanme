@@ -1,236 +1,120 @@
 # cargo-cleanme
 
-Find reclaimable Cargo build artifacts and clean them **through Cargo** — never
-by deleting directories.
+Find inactive Cargo build artifacts and clean them **through Cargo**, never by
+removing directories directly.
 
-`cargo cleanme` with no arguments **cleans**. Every deletion is delegated to
-Cargo and gated on a fresh, complete ownership proof; `--dry-run` runs the whole
-decision path and removes nothing. Scanning is the separate, always read-only
-operation.
+The default command performs cleanup. Use `--dry-run` to review the same
+selection and safety checks without invoking cleanup. Use `scan` to inventory
+output without cleaning it.
 
 ## Install
+
+From crates.io:
 
 ```sh
 cargo install cargo-cleanme --locked
 ```
 
-Or a verified prebuilt binary:
+Prebuilt installers are available for Linux, macOS, and Windows. See
+[Installing](docs/INSTALLING.md) for platform support, install options, and
+verification details.
+
+Cargo exposes the binary as `cargo cleanme`; you can also run it directly as
+`cargo-cleanme`.
+
+## Quick start
+
+Inspect one project, preview its cleanup, then clean it:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/dbowm91/cargo-cleanme/main/packaging/install.sh | sh
+cargo cleanme scan ~/projects/my-app
+cargo cleanme ~/projects/my-app --dry-run
+cargo cleanme ~/projects/my-app
 ```
 
-Installing the package is enough for Cargo to expose the external subcommand,
-so `cargo cleanme …` and `cargo-cleanme …` are equivalent.
+`scan` does not clean build output. A machine scan updates cargo-cleanme's
+local learned-root state. `--dry-run` runs the cleanup checks without invoking
+`cargo clean`. The final command uses Cargo to remove eligible build output.
 
-→ [docs/INSTALLING.md](docs/INSTALLING.md) for pinned versions, Windows,
-destination and PATH handling, and what the installer refuses to do.
+> **Important for users upgrading from 0.1.x:** bare `cargo cleanme` now
+> performs cleanup. Use `cargo cleanme --dry-run` to preview, or `cargo cleanme
+> scan` to inventory without cleaning.
 
-## Quickstart
+## Common commands
 
-Every transcript below is **real output**, captured from a build of this source
-tree against a project whose `target/` directory was left untouched for two
-hours. The paths are abbreviated to `~/…`; the byte counts, the row order, and
-the wording are the tool's.
-
-**1. Look before you leap.** `--dry-run` runs the whole decision path —
-discovery, resolution, ownership proof, authorization, sizing, revalidation,
-reporting — and spawns nothing at all:
-
-```console
-$ cargo cleanme ~/projects/my-app --dry-run --no-progress
-Simulated  my-app/target  4.02 MiB
-
-4.02 MiB would be reclaimed from 1 directory (simulation only — no `cargo clean` command was invoked)
-```
-
-**2. Scan is read-only.** Bare `scan` walks the machine and learns where Cargo
-projects live; `scan ROOT` bounds that walk to one directory:
-
-```console
-$ cargo cleanme scan ~/projects --no-progress
-my-app/target  4.02 MiB  [private]
-
-  4.02 MiB inventory estimate across 1 inactive Cargo output groups
-```
-
-`[private]`, `[shared]`, and `[external-unproven]` are artifact directories.
-They are cleaned when every project that uses them is idle. `[uncertain]` is a
-source tree, a symlink, or a path that could not be identified, and it is never
-cleaned. One active project protects a directory it shares.
-
-> **If `scan` reports 0 groups on a project you just built, that is the safety
-> guard working.** Anything touched within the last 300 seconds is *active* and
-> protected. Wait, or backdate the sources, and it will appear.
-
-**3. Clean it.** Same selection, same proof, and Cargo does the deleting:
-
-```console
-$ cargo cleanme ~/projects/my-app --no-progress
-Cleaned  my-app/target  4.02 MiB
-
-4.02 MiB reclaimed from 1 directory
-```
-
-The default surface says **what happened and how much space it freed** — one
-line per directory that was actually cleaned, and one tally at the bottom. The
-workspaces it *skipped* are counted, not listed: on a machine with a thousand
-Cargo workspaces, a line each would be debugging information, not a result.
-
-Add `--verbose` when you want the full detail: every workspace considered
-(including the skipped ones), the scope census, the per-phase counters, and
-the diagnostic detail. It changes the **human** surface only — `--format json`
-and `--format log` are byte-for-byte identical with and without it.
-
-**4. Or parse it.** One versioned JSON document on stdout, nothing else:
-
-```console
-$ cargo cleanme ~/projects/my-app --dry-run --format json
-{"schema_version":1,"cargo_cleanme_version":"0.2.15","operation":"clean","scope":"explicit","mode":"simulate","result":{"discovered_manifests":1,"resolved_workspaces":1,"units_considered":1,"scope_blocked":false,"scope_reason":null,"unresolved_ownership":0,"unresolved_participants":[],"selected_roots":["~/projects/my-app"],"effective_policy":{"min_reclaimable_bytes":0,"min_inactive_seconds":null,"include":[],"exclude":[]},"selector_kind":null,"selector_value":null,"state_generation_last_full_at":null,"units":[{"workspace_root":"~/projects/my-app","output_roots":["~/projects/my-app/target"],"ownership":"private","policy_disposition":"selected","outcome":"simulated","reason_code":"simulated","before_bytes":4210688,"selector_estimate_bytes":4210688,"output_union_before_bytes":4210688,"after_bytes":null,"observed_decrease_bytes":null,"detail":"simulation: no `cargo clean` command was invoked"}],"summary":{"previewed":0,"simulated":1,"cleaned":0,"skipped":0,"failed":0,"diagnostics":0}}}
-```
-
-For a scheduler, `--format log` is one bounded ASCII line on stdout — no paths,
-no progress, at most 384 bytes:
-
-```console
-$ cargo cleanme ~/projects/my-app --dry-run --format log
-cargo-cleanme op=clean status=ok scope=explicit mode=simulate cleaned=0 skipped=0 failed=0 diagnostics=0
-```
-
-**Anything parsing output should parse `--format json`**, which is the complete
-versioned contract. → [docs/AUTOMATION.md](docs/AUTOMATION.md) for the log
-field list and scheduler integration.
-
-## Commands
-
-| Command | What it does | Runs `cargo clean`? |
-|---|---|---|
-| `cargo cleanme` | Cleanup of the maintenance scope, anchored at the working directory (Execute) | yes |
-| `cargo cleanme --dry-run` | Simulation: every gate runs, nothing is removed | **never**, not even preview |
-| `cargo cleanme -i` / `--interactive` | Choose cleanup units from a terminal list, then clean | yes |
-| `cargo cleanme ROOT` | Cleanup of one bounded root (Execute by default) | yes |
-| `cargo cleanme --full` | Full cleanup of learned roots from the last `scan` (no machine-wide walk) | yes |
-| `cargo cleanme scan` | Full read-only reconciliation of the machine; learns project roots | never |
-| `cargo cleanme scan ROOT` | One bounded read-only scope; updates the learned list for that directory | never |
-| `cargo cleanme --cargo-preview` | Cargo's own `clean --dry-run --verbose`, after the same proof | yes, as a dry run |
-| `cargo cleanme config path\|show\|edit` | Locate, print, or edit the config | never |
-| `cargo cleanme update [--dry-run]` | Self-update to the latest stable release | never |
-
-The root is the cleanup front door: `cargo cleanme ROOT` and `cargo cleanme
---full` are the canonical spellings. `cargo cleanme clean ROOT` and
-`cargo cleanme clean --full` remain accepted and **hidden**, so every published
-spelling keeps working — but `clean` is absent from `cargo cleanme --help`.
-
-A directory whose name collides with a subcommand name (`scan`, `clean`,
-`config`, `update`) is read as that subcommand; spell it `./scan` to name such
-a directory. So `cargo cleanme .` is a bounded cleanup of `.`.
-
-`scan --all`, `scan --full`, and `scan --known` are rejected: bare `scan` is
-the machine walk, and `scan ROOT` is the bounded one.
-
-The **maintenance scope** is a configured legacy `scan.root` when one is set
-(exclusive), otherwise bounded seed roots under your home plus active learned
-roots **plus the working directory** — the workspace that encloses it and the
-directory itself. The scope only ever *grows*: the working directory is added to
-the roots, never substituted for them. Bare `cargo cleanme` and `clean --known`
-keep only the units anchored at the working directory; `cargo cleanme ROOT` and
-`cargo cleanme --full` keep every resolved unit, because their roots already
-bound the scope. Ownership is proven across the whole resolved universe
-*before* the anchor narrows anything, so a target shared with a project
-elsewhere stays shared and is cleaned only when every owner is idle.
-
-→ [docs/USAGE.md](docs/USAGE.md) for the full command and flag reference, the
-discovery model, and the cleanup safety model.
-
-## Clean modes
-
-| Flag | Mode | Runs `cargo clean`? |
-|---|---|---|
-| *(none)* | Execute | yes |
-| `--dry-run` | Simulation | **never**, not even preview |
-| `--cargo-preview` | Cargo preview | yes, as `cargo clean --dry-run --verbose` |
-
-`--dry-run` differs from Execute *only* in that it stops before spawning
-anything, which makes it the mode to use when testing a change to the gates.
-`--cargo-preview` is the lower-level debugging view that hands the mutation
-decision to Cargo itself.
-
-## Exit codes
-
-| Code | Meaning |
+| Command | Purpose |
 |---|---|
-| `0` | the operation completed, including safe per-unit skips |
-| `1` | scope incomplete, ownership unproven, a learned root could not be proven, or an operation failed |
-| `2` | invocation or configuration error, before a report could be formed |
+| `cargo cleanme` | Clean the maintenance scope, anchored to the working directory |
+| `cargo cleanme --dry-run` | Simulate maintenance without invoking `cargo clean` |
+| `cargo cleanme ROOT` | Clean one bounded root |
+| `cargo cleanme --full` | Clean learned project roots that can be proven |
+| `cargo cleanme scan` | Inventory the machine and reconcile learned roots; does not clean build output |
+| `cargo cleanme scan ROOT` | Inventory one directory and update its learned roots; does not clean build output |
+| `cargo cleanme --interactive` | Choose cleanup units in a terminal |
+| `cargo cleanme config path\|show\|edit` | Locate, view, or edit configuration |
+| `cargo cleanme update --dry-run` | Check for an update without replacing the binary |
+| `cargo cleanme update` | Update a supported self-managed installation |
 
-`1` on `clean` with `scope_blocked: true` is a *success-shaped* result with a
-typed blocker, not a crash. Read the block — it is inside `result`:
+The `clean` subcommand remains as a hidden compatibility alias. The canonical
+cleanup forms are `cargo cleanme`, `cargo cleanme ROOT`, and
+`cargo cleanme --full`.
 
-```console
-$ cargo cleanme ~/projects/broken --format json; echo "exit $?"
-{"schema_version":1,"cargo_cleanme_version":"0.2.15","operation":"clean","scope":"explicit","mode":"execute","result":{"discovered_manifests":1,"resolved_workspaces":0,"units_considered":0,"scope_blocked":true,"scope_reason":"cleanup ownership could not be proven: 1 discovered Cargo manifest did not resolve; no cleanup commands were run","unresolved_ownership":1,"unresolved_participants":[{"manifest":"~/projects/broken/Cargo.toml","stage":"locate","reason":"cargo locate-project failed: error: unclosed table, expected `]` | --> Cargo.toml:1:9 | |"}],"selected_roots":["~/projects/broken"],"effective_policy":{"min_reclaimable_bytes":0,"min_inactive_seconds":null,"include":[],"exclude":[]},"selector_kind":null,"selector_value":null,"state_generation_last_full_at":null,"units":[],"summary":{"previewed":0,"simulated":0,"cleaned":0,"skipped":0,"failed":0,"diagnostics":1}}}
-exit 1
-```
+A bare cleanup uses the maintenance scope and selects workspaces related to the
+current directory. A configured `scan.root` replaces that scope. `ROOT` names
+one bounded scope. `--full` cleans learned roots and does not perform a new
+machine-wide scan. Run `cargo cleanme scan` first to discover and learn roots.
 
-Refusals exit `2` before any report is formed:
+A directory named `scan`, `config`, `update`, or `clean` is parsed as a
+subcommand. Use `./scan` to name a directory called `scan`.
 
-| Command | Refusal |
+## Safety in brief
+
+- Cleanup is always performed by `cargo clean`; cargo-cleanme does not delete
+  directories itself.
+- Recently active projects are protected. The default activity window is 300
+  seconds.
+- A shared output directory is eligible only when every known owner is idle.
+- Source trees, symlinks, and paths whose ownership cannot be proven are never
+  cleaned.
+- Ownership is checked again immediately before cleanup. An unresolved
+  manifest inside the selected scope can block that scope; unresolved manifests
+  outside it are reported without blocking it.
+
+`--dry-run` is the application simulation and invokes no `cargo clean` command.
+`--cargo-preview` is different: after the same safety checks, it invokes
+Cargo's own `clean --dry-run --verbose` for inspection.
+
+## Output and exit status
+
+Use `--format json` for complete, versioned machine-readable reports. Use
+`--format log` for a bounded one-line scheduler summary. The log format is not a
+machine contract; scripts should parse JSON. See
+[Unattended operation](docs/AUTOMATION.md).
+
+| Exit code | Meaning |
 |---|---|
-| `cargo cleanme config show --format json` | `configuration error: config command does not support --format json; use human or log output` — `config` has no JSON envelope, so it refuses loudly rather than emitting non-JSON. `--format log` is accepted and exits `0`. |
-| `cargo cleanme --full` | `full reconciliation produced no fresh generation; no cleanup commands were run against stale learned roots` — a Full cleanup needs a *fresh* generation of learned roots to clean from. An **incomplete** reconciliation is no longer a refusal: the cleanup is then partial, and it exits `1`. |
-| `cargo cleanme --full scan` | `` `scan` does not accept --full: these are cleanup flags, and `cargo cleanme scan` is read-only `` — a cleanup flag handed to a read-only or local-only subcommand is rejected, never silently discarded. |
-
-The Full cleanup's proof boundary is the **learned root**: it cleans the roots
-it can prove, names the ones it cannot on stderr, and exits `1` if any of them
-was unproven — even when every root that could be proven was cleaned
-successfully.
-
-→ [docs/USAGE.md](docs/USAGE.md#exit-codes) for the full exit-code table and
-[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for symptom-first triage.
-
-A run that finds **nothing to clean** is not a refusal. It prints one plain
-line, `Nothing to clean.`, and exits `0` — the same for both spellings, and the
-same whether the scope was empty or the interactive surface had nothing to
-offer.
+| `0` | Completed, including when there was nothing to clean or safe units were skipped |
+| `1` | Partial or blocked scan/cleanup, unproven ownership, or an operation failure |
+| `2` | Usage, configuration, or other fatal error |
 
 ## Configuration
 
+Configuration is created automatically when needed. View or edit it with:
+
 ```sh
-cargo cleanme config path   # where the config lives
-cargo cleanme config show   # effective settings
-cargo cleanme config edit   # $VISUAL, then $EDITOR, then a common editor
+cargo cleanme config path
+cargo cleanme config show
+cargo cleanme config edit
 ```
 
-Created on first use, never overwritten, and validated after every edit.
-
-```toml
-[scan]
-recency_seconds = 300          # protect anything touched in the last 5 minutes
-ignore = []                    # absolute glob patterns
-unignore = []                  # absolute literal paths, NOT globs
-learned_root_retention_days = 30
-
-[cleanup]
-allowed_output_roots = []      # authorizes a location; never grants ownership
-
-[cleanup.policy]
-min_reclaimable_bytes = 0
-include = []
-exclude = []
-```
-
-`allowed_output_roots` can widen where cleanup is *permitted*. It can never turn
-a shared or unproven group into a cleanable one.
-
-→ [docs/USAGE.md](docs/USAGE.md#configuration) for every key, its default, and
-its validation rules.
+The default activity window is 300 seconds. `scan.ignore` accepts absolute glob
+patterns; `scan.unignore` accepts literal absolute paths, not globs. Cleanup
+policies can set a minimum size, an additional quiet period, and workspace-root
+include or exclude patterns. `cleanup.allowed_output_roots` authorizes a
+location but never proves ownership. See the
+[configuration reference](docs/USAGE.md#configuration).
 
 ## Prebuilt release targets
-
-[`release/eggpack/distribution.toml`](release/eggpack/distribution.toml) is the
-single authority for this matrix and the asset names. The tables here and in
-[docs/INSTALLING.md](docs/INSTALLING.md) are hand-copied transcriptions of it
-and must be kept in sync with it.
 
 | Target triple | Install name |
 |---|---|
@@ -240,78 +124,39 @@ and must be kept in sync with it.
 | `aarch64-apple-darwin` | `cargo-cleanme` |
 | `x86_64-pc-windows-msvc` | `cargo-cleanme.exe` |
 
-Each asset ships a `.sha256` sidecar. `armv7-unknown-linux-gnueabihf` is a
-recognized host with **no** prebuilt binary: it is Cargo-install-only, as are
-musl, Windows ARM64/ARMv7, and any unlisted OS or architecture.
-
-The Linux targets are built against a glibc 2.17 floor, but that floor is
-**not yet claimed** as support — no runtime evidence for the exact release bytes
-exists yet, so nothing here advertises a minimum glibc. See
-[the ABI floor section](docs/INSTALLING.md#linux-abi-floor).
-
-## Upgrading from 0.1.x
-
-Bare `cargo cleanme` changed from a read-only Routine scan to Routine cleanup,
-and `--dry-run` changed from Cargo preview to simulation.
-
-| 0.1.x | Now | Meaning |
-|---|---|---|
-| `cargo cleanme` | `cargo cleanme --dry-run` | Routine selection as a simulation (bare `cargo cleanme` now cleans) |
-| `cargo cleanme scan --full` | `cargo cleanme scan` | Full machine reconciliation |
-| `cargo cleanme clean R --dry-run` | `cargo cleanme R --cargo-preview` | same Cargo preview |
-| `cargo cleanme clean R --dryrun` | `cargo cleanme R --dry-run` | same simulation |
-| `cargo cleanme clean R --yes` | `cargo cleanme R` | Execute is now the default |
-
-The "Now" column spells the canonical root-level form. `cargo cleanme clean R`
-is still accepted, and still means exactly the same thing — it is the hidden
-alias of `cargo cleanme R`.
-
-`--dryrun` and `--yes` still work on `clean` as hidden aliases for the
-pre-1.0 migration period. They print nothing.
+ARMv7 Linux (`armv7-unknown-linux-gnueabihf`), musl, Windows ARM64, and
+Windows ARMv7 are Cargo-install-only. No minimum glibc version is currently
+advertised. The prebuilt installers verify SHA-256 checksums, but the checksum
+is not a publisher signature. Details are in [Installing](docs/INSTALLING.md).
 
 ## Documentation
 
-| Document | What it covers |
-|---|---|
-| [docs/USAGE.md](docs/USAGE.md) | full command and flag reference, discovery model, cleanup safety model, config, JSON schema, selectors |
-| [docs/AUTOMATION.md](docs/AUTOMATION.md) | bounded log output, scheduler integration, unattended limits and exit-code triage |
-| [docs/INSTALLING.md](docs/INSTALLING.md) | install paths, prebuilt targets, destinations, PATH handling, uninstalling |
-| [docs/UPDATE.md](docs/UPDATE.md) | self-update rules, what it refuses, integrity vs authenticity |
-| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | known defects by version, symptom-first triage, installer and updater failure modes |
-| [docs/RELEASING.md](docs/RELEASING.md) | maintainer release checklist |
-| [CHANGELOG.md](CHANGELOG.md) | released changes, including known defects per version |
+- [Using cargo-cleanme](docs/USAGE.md): commands, scopes, safety, configuration,
+  and output formats
+- [Unattended operation](docs/AUTOMATION.md): scheduler and log-format guidance
+- [Installing](docs/INSTALLING.md): install methods, platform support, and
+  uninstalling
+- [Troubleshooting](docs/TROUBLESHOOTING.md): common problems and fixes
+- [Self-update](docs/UPDATE.md): update behavior and limitations
+- [Changelog](CHANGELOG.md): changes and known issues by release
 
-For contributors and coding agents: [AGENTS.md](AGENTS.md) and
-[architecture/overview.md](architecture/overview.md).
+## Compatibility
 
-## Support and policy
-
-- **MSRV** 1.89. **Prebuilt** for the five targets in
-  [Prebuilt release targets](#prebuilt-release-targets). Musl, Windows ARM64, and
-  ARMv7 are Cargo-only. **No glibc floor is advertised yet.**
-- **Integrity, not full authenticity.** Published `.sha256` files prove the
-  bytes match what the release built; they do not prove *who* built them.
-  There is no maintainer-key signature and no transparency log. Each release
-  additionally carries a GitHub **release attestation** that the release
-  pipeline verifies — but the **shipped updater does not verify attestations**,
-  so the trust root for an install is still the `.sha256` sidecar plus HTTPS.
-  macOS binaries are unsigned and not notarized.
-- **Pre-1.0.** Breaking changes to the CLI, JSON schema, or asset names can
-  occur in any `0.x` release. Read [CHANGELOG.md](CHANGELOG.md) before
-  upgrading. `1.0.0` is when those are declared stable.
-
-→ [docs/INSTALLING.md](docs/INSTALLING.md#support-and-release-policy) for the
-full policy, and [docs/INSTALLING.md](docs/INSTALLING.md#signing-and-notarization)
-for what an install can and cannot prove.
+The project is pre-1.0. Breaking changes to the CLI, JSON schema, or release
+assets may occur in any 0.x release. Read the changelog before upgrading.
 
 ## Uninstall
 
+For a Cargo installation:
+
 ```sh
-cargo uninstall cargo-cleanme     # if installed with cargo
-rm -f "$(cargo cleanme config path)"
+cargo uninstall cargo-cleanme
 ```
 
-→ [docs/INSTALLING.md](docs/INSTALLING.md#uninstalling).
+For a prebuilt or manual installation, delete the binary from its destination.
+To remove configuration too, run `cargo cleanme config path` before removing the
+binary, then delete the file it reports. Keep that file if you want to preserve
+your settings.
 
 ## License
 

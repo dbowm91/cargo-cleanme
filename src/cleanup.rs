@@ -900,13 +900,13 @@ impl ScopeBlock {
     }
 }
 
-/// Output-placement environment a partition was computed under (M015
-/// certificate §4.4).
+/// Output-placement environment captured for cleanup's final proof.
 ///
-/// A change to either variable between discovery and spawn moves output
-/// placement out from under the partition, so activation (M016) must treat a
-/// mismatch as a merge. M015 records the snapshot as evidence and proves the
-/// detector ([`output_env_matches`]) with tests.
+/// A change to either variable between discovery and spawn blocks the
+/// remaining units before Cargo runs.
+/// `output_env_matches` compares fresh values with this snapshot.
+/// Absent and empty variables remain distinct.
+/// The snapshot is rechecked before every dispatch.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OutputProvenanceSnapshot {
     pub cargo_target_dir: Option<OsString>,
@@ -923,12 +923,12 @@ fn snapshot_output_env(get: &dyn Fn(&str) -> Option<OsString>) -> OutputProvenan
     }
 }
 
-/// True when the current output-placement environment still matches a
-/// snapshot. Absent and empty are distinct: unsetting a variable is a change.
+/// True when the output-placement environment matches its snapshot.
+/// An absent variable differs from an empty one.
 ///
-/// M016/B wires this as the §4-rule-4 merge detector: the partition's
-/// provenance snapshot is re-compared before each island's first dispatch,
-/// and any mismatch merges the remaining islands into one blocked scope.
+/// Cleanup checks this before each Cargo dispatch.
+/// A mismatch blocks the remaining units before Cargo runs.
+/// This revalidation preserves the cleanup proof.
 fn output_env_matches(
     snapshot: &OutputProvenanceSnapshot,
     get: &dyn Fn(&str) -> Option<OsString>,
@@ -936,17 +936,17 @@ fn output_env_matches(
     *snapshot == snapshot_output_env(get)
 }
 
-// The M015/M016 proof-island machinery (`PartitionMergeCause`,
-// `ProofIsland`, `ProofPartition`, `compute_proof_partition`,
-// `retain_proceed_island_units`, `append_partitioned_suffix`,
-// `partition_section`, `partition_outcome_section`) was removed by
-// M017/ADR 007: scoped proof is the default, so there are no islands to
-// compute or report. The certificate's load-bearing remainder —
-// `UnknownCapability` classification with `attribute_unknown`, the
-// refused-manifest passenger rule, and per-dispatch environment
-// re-verification — lives on in the boundary split above. History:
-// M015 designed the certificate, M016 activated it behind a flag; both
-// records stand, and neither shipped to users (0.2.9 unpublished).
+// The selected scope is the proof boundary.
+// Cleanup classifies unresolved manifests against the selected boundary.
+// Out-of-boundary participants are diagnostics, never blockers.
+// Passengers and scope notes are reported, never blocking.
+// Only active in-boundary `MergeAll` participants can block.
+//
+// Final proof refreshes attribution before each dispatch.
+// Output-environment drift invalidates the remaining cleanup proof.
+// A mismatch blocks remaining units before Cargo runs.
+//
+// See `split_unresolved_for_boundary` for the blocking policy.
 
 /// The complete outcome of one cleanup run.
 ///
@@ -2260,10 +2260,10 @@ fn discover_and_resolve_universe(
     })
 }
 
-// M016/A removed by M017/ADR 007 with the island it filtered to (see the
-// note where the partition types lived). Dispatch needs no filtering:
-// `resolve_cleanup_scope` already emits only in-boundary units, and the
-// block sites return before dispatch when in-boundary poison exists.
+// Dispatch needs no second proof filter.
+// `resolve_cleanup_scope` already emits only in-boundary units.
+// Blocking sites return before dispatch when in-boundary poison exists.
+// Out-of-boundary participants remain diagnostics, not candidates.
 #[allow(clippy::too_many_arguments)]
 pub fn clean_with_roots_policy_selector_guarded(
     roots: &[PathBuf],
@@ -2324,9 +2324,9 @@ pub fn clean_with_roots_policy_selector_guarded(
     // The blocked report carries the counters measured up to the point the
     // block was raised, exactly as the successful path does at the end.
     report.counters = counters.clone();
-    // Output-placement environment snapshot for per-dispatch re-verification
-    // (M016 mechanism, retained). Taken once up front; compared before every
-    // unit dispatch below.
+    // Capture the output-placement environment once before dispatch.
+    // Recheck it before every unit.
+    // Any mismatch stops further cleanup.
     let provenance = snapshot_output_env(&|key| std::env::var_os(key));
     let per_root = selection_is_per_learned_root(selection);
     let (blocking_participants, reported_participants, _) = split_unresolved_for_boundary(
@@ -2532,12 +2532,12 @@ pub fn clean_with_roots_policy_selector_guarded(
         root_blocks.iter().map(|block| block.root.clone()).collect();
     let finite_fingerprint = claim_fingerprint(&finite_claims);
     let unbounded_count = unbounded_participants.len();
-    // M017/ADR 007: the output environment is re-verified before every unit
-    // dispatch (M016 verified per island first-dispatch; without islands the
-    // same check runs per unit — a few environment reads, no spawns). A
-    // mismatch blocks the remaining units in the fail-closed direction,
-    // before any further spawn. Simulate rehearses the same check so it
-    // predicts Execute instead of diverging from it.
+    // Recheck output-environment provenance before every unit dispatch.
+    // Compare `CARGO_TARGET_DIR` and `CARGO_BUILD_BUILD_DIR` as captured values.
+    // Absent and empty values are distinct.
+    // A mismatch blocks remaining units before another Cargo spawn.
+    // Simulate applies the same gate so it predicts Execute.
+    // The check fails closed before cleanup can use stale output placement.
     // The authorization roots are resolved once for the whole run and reused
     // by every unit's gate: they are loop-invariant, and resolving them per
     // unit repeated the same filesystem work for every unit.
@@ -3296,20 +3296,20 @@ pub fn blocked_listing_detail(
     detail
 }
 
-// M017/ADR 007 removed `physical_outputs` with the partition (its only
-// caller): grouping classifies unprovable physical identity without it.
-// M017/ADR 007 removed the proof-island machinery that lived here
-// (`compute_proof_partition` through `partition_outcome_section`, plus
-// `outputs_overlap` which only the partition used): scoped proof is the
-// default, so there are no islands to compute or report. See the note where
-// the partition types lived for what carried forward.
+// Grouping classifies each physical identity directly.
+// Unresolved manifests are split against the selected cleanup boundary.
+// Out-of-boundary participants remain diagnostic-only.
+// In-boundary passengers and scope notes are reported, never blocking.
+// Active in-boundary `MergeAll` participants may block.
+// The manifest set is refreshed before each dispatch.
+// Growth, shrinkage, or changed paths fail closed.
 
 /// H-2 universe-stability predicate: the rediscovered manifest set must equal
 /// the hoisted snapshot exactly — growth, shrinkage, or any difference blocks
 /// the remaining scope instead of proceeding against a stale claimant set.
 ///
-/// Extracted pure (M015/F) so the TOCTOU control can prove the detector
-/// carries the detection: the naive always-stable stub passes growth through.
+/// Kept pure so the TOCTOU test can prove changed sets are detected.
+/// An always-stable stub would incorrectly accept manifest growth.
 fn universe_manifests_stable(initial: &[PathBuf], fresh_sorted: &[PathBuf]) -> bool {
     initial == fresh_sorted
 }
@@ -3476,10 +3476,10 @@ pub fn list_cleanup_candidates(
     })
 }
 
-// `island_held_view` was removed by M017/ADR 007 with the islands: without
-// islands there is no held context. The `-i` refusal carries the block
-// detail only; out-of-scope poison is visible in the human report line and
-// the JSON diagnostics of any run, not in the picker.
+// The picker has no held-context rows; it refuses when the boundary blocks.
+// The refusal carries block details instead of offering an unproven list.
+// Out-of-scope participants are diagnostic-only and do not hold a picker row.
+// Their details appear in normal human output and JSON diagnostics.
 
 fn compile_policy_globs(patterns: &[String]) -> Result<globset::GlobSet, AppError> {
     let mut builder = globset::GlobSetBuilder::new();
@@ -3635,11 +3635,11 @@ fn boundary_admits(selection: &CleanupSelection, manifest: &Path) -> bool {
 ///   corrected behavior; a test asserting the old whole-scope block here
 ///   names the defect this decision fixes.
 /// - In-boundary `PassengerOf`/`ScopeNote`: reported, never blocks. Cargo
-///   named the owner (refused manifest) or the scope (believed member), so
-///   there is no unknown owner to merge — the M016 passenger rule, now the
-///   default.
-/// - In-boundary `MergeAll`: blocks the boundary. Unknown ownership inside
-///   the boundary still fails closed.
+///   names its owner (refused manifest) or the scope (believed member),
+///   leaving no unproven owner to block.
+///   Cleanup reports these participants by default.
+/// - In-boundary `MergeAll`: blocks only while its manifest may still be
+///   active. Stale unresolved manifests are reported, never blocking.
 ///
 /// Returns `(blocking, reported_in_boundary, out_of_boundary)`.
 fn split_unresolved_for_boundary(
@@ -7387,10 +7387,10 @@ mod tests {
         );
     }
 
-    /// M016 kennel: two output-disjoint staged workspaces plus a refused
-    /// orphan — the live G1 shape as a repo-owned fixture. The orphan's
-    /// locate fails, so it owns no bytes (scope note), while A and B stay
-    /// output-disjoint: two would-proceed islands and one scope note.
+    /// Two output-disjoint workspaces and a refused orphan form the fixture.
+    /// The locate failure makes the orphan a report-only scope note.
+    /// It must not block either workspace.
+    /// The repo-owned fixture makes this premise reproducible.
     fn island_pair(d: &tempfile::TempDir) -> (PathBuf, PathBuf, PathBuf) {
         // macOS: TMPDIR's /var is a symlink; discovery canonicalizes.
         let base = d.path().canonicalize().unwrap();
@@ -7405,8 +7405,8 @@ mod tests {
         (root_a, root_b, orphan)
     }
 
-    /// M017: run the guarded engine the one way it runs now — scoped proof
-    /// is the default, no flag.
+    /// Run the guarded engine with the selected scope as the proof boundary.
+    /// This is the default behavior; no opt-in flag is needed.
     fn outcome_for(mode: CleanMode) -> CleanOutcome {
         match mode {
             CleanMode::Simulate => CleanOutcome::Simulated,
@@ -7606,8 +7606,8 @@ mod tests {
         assert_eq!(report.resolved_workspaces, 2);
         assert_eq!(report.discovered_manifests, 3);
         assert_eq!(report.failed, 0);
-        // JSON carries the note on `unresolved_participants`; there is no
-        // islands axis anymore.
+        // JSON reports the scope note under `unresolved_participants`.
+        // No partition-result field belongs in the contract.
         let value = serde_json::to_value(crate::output::cleanup(&report, "routine", None)).unwrap();
         assert!(
             value["result"]["islands"].is_null(),
@@ -7617,7 +7617,7 @@ mod tests {
             .as_array()
             .unwrap();
         assert_eq!(noted.len(), 1, "{value}");
-        // Human render: rows, no block, no island outcomes.
+        // Human output retains the cleaned rows; a scope note does not block.
         let text = report.render(&crate::report::HumanOptions::default());
         assert!(
             !text.contains("cleanup ownership could not be proven"),
@@ -8170,8 +8170,8 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(runner.clean_calls().len(), 1);
-        // The human render carries rows and the block together; there are
-        // no island outcomes anymore.
+        // The human render keeps the earlier row and reports the later block.
+        // It has no separate partition-outcome section.
         let text = report.render(&crate::report::HumanOptions::default());
         assert!(!text.contains("island outcomes"), "{text}");
         assert!(text.contains("universe changed"), "{text}");
@@ -8328,7 +8328,7 @@ mod tests {
         impl CleanupRunner for EnvPoisonRunner<'_> {
             fn run(&self, cwd: &Path, args: &[OsString]) -> io::Result<ProcessOutput> {
                 // Resolution is exactly 3 locates + 2 metadatas; poison from
-                // the 6th runner call on, i.e. after the partition snapshot
+                // the 6th runner call on, after the output-environment snapshot
                 // and before the first dispatch.
                 let n = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
                 if n >= 6

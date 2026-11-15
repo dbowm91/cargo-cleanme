@@ -382,8 +382,8 @@ workspace (`domain.rs:404-407`).
 These are the crate's admission that a scan can be incomplete. A participant
 records one discovered manifest for which no successful `cargo metadata`
 response gave authoritative coverage, plus the `stage` at which resolution gave
-up, a human-readable `reason`, and — since M015 — the `capability` class that
-says what the manifest's own byte-ownership is.
+up, a human-readable `reason`, and the `capability` class that says what the
+manifest's own byte-ownership is.
 
 **`stage` is recorded, not parsed.** The resolver stamps the stage where the
 diagnostic is pushed (`workspace.rs:1049-1061`), rather than re-deriving it by
@@ -391,35 +391,30 @@ substring-matching the message. `reason` is a copy of that message, or the
 literal `"no successful Cargo workspace metadata covered this manifest"`
 (`workspace.rs:1013-1015`). One parse from message text survives, and it is
 narrower: `believed_workspace_manifest` reads the *named* owner out of a
-Cargo refusal message (`workspace.rs:459`) to decide whether a refused manifest
-is a passenger of a resolved island. A parse that returns `None` fails closed
-to `ScopeNote` (`workspace.rs:446-451`).
+Cargo refusal message (`workspace.rs:373-386`) to decide whether a refused
+manifest is a passenger of a resolved workspace. A parse that returns `None`
+fails closed to `ScopeNote` (`workspace.rs:470-487`).
 
-**ADR 007 changed what these participants do.** `cleanup.rs:2710-2751` calls
-`resolve_workspaces_with_coverage`, sets
-`counters.unresolved_ownership = coverage_unresolved.len() as u64`
-(`cleanup.rs:2718`), and then splits the participants three ways
-(`cleanup.rs:2619-2642`):
+**ADR 007 changed how unresolved participants affect cleanup.** Resolution
+records the unresolved ledger (`cleanup.rs:3795-3804`); the boundary split
+(`cleanup.rs:3631-3674`) separates out-of-boundary diagnostics, in-boundary
+reported entries, and potential blockers:
 
-- **Out of boundary** — reported as an informational `OutOfScope` diagnostic
-  (`cleanup.rs:2730-2740`), never blocking, and counted in
-  `CleanReport.out_of_scope_unresolved` (`cleanup.rs:536`).
+- **Out of boundary** — reported as informational `OutOfScope` diagnostics
+  (`cleanup.rs:3819-3828`), never blocking. The count is retained in
+  `CleanReport.out_of_scope_unresolved` (`cleanup.rs:972-976`).
 - **In boundary, `PassengerOf` or `ScopeNote`** — reported, never blocking
-  (`cleanup.rs:2750`). Cargo named the owner, or named the scope; there is no
-  unknown owner left to merge.
-- **In boundary, `MergeAll`** — blocks the boundary, returning a `CleanupScope`
-  with **zero units** (`cleanup.rs:2741-2749`). Unknown ownership *inside* the
-  boundary still fails closed.
+  (`cleanup.rs:3663-3672`).
+- **In boundary, `MergeAll`** — blocks only while the manifest may still be
+  active (`cleanup.rs:3663-3672`). Finite claims do not stop unit construction;
+  unbounded claims block the boundary, except Full cleanup blocks per learned
+  root (`cleanup.rs:3830-3844`).
 
-Grouping, classification and unit construction still run over the complete
-resolved universe (`cleanup.rs:2752`), so a cross-boundary claim still forces
-`Shared` at grouping time even when it does not block. The older behaviour —
-*any* unresolved manifest anywhere zeroing the whole run — is gone; see
-`cleanup.rs:2720-2725` for the decision in the code.
-
-The structured participants that remain are retained on
-`CleanReport.unresolved_ownership` (`cleanup.rs:531`) for audit and projected
-to JSON as `unresolved_participants` (`output.rs:224-232`).
+Grouping and unit construction still use the complete resolved universe
+(`cleanup.rs:3846-3861`), so cross-boundary claims still force `Shared` at
+grouping time. The unresolved participants remain on
+`CleanReport.unresolved_ownership` (`cleanup.rs:968-971`) for audit and are
+projected to JSON as `unresolved_participants` (`output.rs:223-232`).
 
 ---
 

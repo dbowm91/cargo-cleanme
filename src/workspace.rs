@@ -430,36 +430,36 @@ pub(crate) fn refused_nested_workspace(reason: &str) -> bool {
     reason.contains("current:") && named_workspace_manifest(reason).is_some()
 }
 
-/// Island assignment for one unresolved manifest (M015 certificate §4.3).
+/// Classify an unresolved manifest for cleanup's ownership check.
 ///
-/// Total over every failure class: only `RefusedByCargo` unknowns (Cargo
-/// examined the manifest and refused it, so it owns no bytes) avoid the
-/// merge. Everything else — transport, unparseable output, lost workers,
-/// metadata, identity — is `MergeAll`, today's whole-scope block. A refused
-/// manifest that names a workspace resolved in this same run rides as a
-/// passenger of that island; a refused manifest with no resolved owner is a
-/// scope-level note. Neither merges nor blocks beyond the engine's own block,
-/// which M015 never relaxes.
+/// Only `RefusedByCargo` proves the manifest owns no bytes. Other failures
+/// remain `MergeAll`, so cleanup can apply the selected-boundary and
+/// activity checks.
+/// A refused manifest naming a resolved workspace is its passenger.
+/// Without a resolved owner, it is a scope note.
+/// Passengers and scope notes are reported, never blocking.
+///
+/// Cleanup, not this classifier, decides whether `MergeAll` blocks.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum UnknownDisposition {
-    /// Byte-incapable; Cargo named this workspace manifest as the believed
-    /// owner and it resolved here. Reported on that island, merges nothing.
+    /// Cargo refused this manifest and named a resolved workspace.
+    /// Reported as a passenger, never blocking.
     PassengerOf { named_manifest: PathBuf },
-    /// Byte-incapable with no resolved owner named. A scope-level note that
-    /// merges nothing.
+    /// Cargo refused the manifest but named no resolved owner. Reported as
+    /// a scope note, never blocking.
     ScopeNote,
-    /// Byte-capability unproven: merges every island (today's block).
+    /// Cargo may own bytes; cleanup applies boundary and activity checks.
     MergeAll,
 }
 
-/// Decide what one unresolved manifest means for the proof-island partition.
+/// Classify one unresolved manifest by failure class and named workspace.
 ///
-/// Pure: no spawns, no filesystem mutation, no counter or diagnostic changes.
-/// Takes the resolved workspace list directly — the rest of `coverage`
-/// (counts, the unresolved ledger itself) carries no signal this decision
-/// reads. Consortium with [`believed_workspace_manifest`]: the parse
-/// returning `None` (wrong class, truncation) fails closed to `ScopeNote`
-/// for refused manifests — never to a passenger of an unproven island.
+/// Pure: no spawns, mutation, counters, or diagnostics.
+/// Only `RefusedByCargo` can be a passenger or scope note.
+/// A named, resolved workspace yields `PassengerOf`; otherwise use
+/// `ScopeNote`.
+/// Every other failure class is `MergeAll`.
+/// Missing or truncated names fail closed to `ScopeNote`.
 pub fn attribute_unknown(
     participant: &UnresolvedOwnershipParticipant,
     workspaces: &[ResolvedWorkspace],
@@ -1241,15 +1241,15 @@ pub fn resolve_workspaces_with_coverage(
         canonical_manifest_key(&a.manifest) == canonical_manifest_key(&b.manifest)
     });
     attach_nested_package_roots(&mut workspaces, &unresolved);
-    // No enforcement pass-through here, deliberately. A refused manifest that
-    // names a resolved workspace is still an unresolved participant and still
-    // blocks the whole scope under ADR 001 C004/C006: withholding it from
-    // `unresolved` would narrow the block without ADR cover, which is exactly
-    // what M015's non-goals forbid. Report-only attribution for that shape
-    // lives in [`attribute_unknown`] (passenger of the named island), and any
-    // future enforcement belongs to ADR-004-gated activation (M016), not to
-    // resolution. Permission, transport, parse, and metadata failures are
-    // untouched, as is every other failure class.
+    // Keep unresolved manifests for cleanup's boundary classification.
+    // Dropping one could hide an in-boundary claimant or lose an out-of-boundary
+    // diagnostic. Outside entries are reported; only active, in-boundary
+    // `MergeAll` participants block.
+    //
+    // `attribute_unknown` classifies failure class, not blocking policy.
+    // Refused manifests stay visible as passengers or scope notes.
+    // Cleanup rechecks the ledger against fresh workspaces before dispatch.
+    // Permission, transport, parse, and metadata failures remain represented.
     ResolutionCoverage {
         workspaces,
         unresolved,
@@ -4738,13 +4738,13 @@ mod tests {
 
     #[test]
     fn misconfigured_member_with_resolved_parent_still_blocks_but_attributes_as_passenger() {
-        // The live case: `fuzz/Cargo.toml` claims parent workspace `ws`, which
-        // resolves. Under ADR 001 C004/C006 the fuzz manifest stays an
-        // unresolved participant and still blocks — M015 is report-only and
-        // ships no enforcement pass-through. What M015 adds is report-only
-        // attribution: the claimant rides as a passenger of the named island
-        // instead of merging it. The diagnostic stays so the misconfiguration
-        // is visible and fixable.
+        // `fuzz/Cargo.toml` names resolved parent workspace `ws`.
+        // Keep the refusal in the unresolved ledger for cleanup to classify.
+        // Cargo's refusal proves the manifest itself owns no bytes.
+        // Here it is attributed as a passenger of the resolved workspace.
+        // Cleanup reports it; it is not a blocking `MergeAll` unknown.
+        // Keep its diagnostic visible so the misconfiguration is fixable.
+        // This test covers resolution and attribution, not cleanup's gate.
         struct BelievesRunner {
             parent_manifest: PathBuf,
             parent_root: PathBuf,
@@ -4826,8 +4826,8 @@ mod tests {
             "the misconfiguration stays visible as a diagnostic: {:?}",
             diags.iter().map(|d| &d.message).collect::<Vec<_>>()
         );
-        // Report-only attribution: the blocking claimant is a passenger of
-        // the named island, not a merge cause.
+        // The refusal is reported as a passenger of the named workspace,
+        // not a blocking cause.
         let participant = coverage
             .unresolved
             .iter()
@@ -4911,13 +4911,13 @@ mod tests {
         );
     }
 
-    /// M015 package B: every merge-default row of the failure-class table.
+    /// Every unproven failure-class row returns `MergeAll`.
     ///
-    /// The discriminating input per row is the exact reason text that row's
-    /// branch records, and the required verdict is `MergeAll` in all of them
-    /// — including a believed-workspace reason paired with an `Unproven`
-    /// capability, which proves classification follows the recorded branch,
-    /// never the prose. Fails if any class is ever attributed by text.
+    /// Each input uses the exact reason text recorded by that branch.
+    /// The verdict must follow the stored capability, not the prose.
+    /// A believed-workspace reason paired with `Unproven` is the key case.
+    /// Cleanup applies boundary and activity policy separately.
+    /// Fails if classification ever depends on diagnostic text.
     #[test]
     fn attribute_unknown_merges_every_unproven_class() {
         let empty: &[ResolvedWorkspace] = &[];
@@ -4968,8 +4968,8 @@ mod tests {
         }
     }
 
-    /// A refused manifest with no naming evidence is a scope-level note: it
-    /// owns no bytes (Cargo refused it), so it merges nothing.
+    /// A refused manifest with no naming evidence is a report-only scope note.
+    /// Cargo refused it, so cleanup does not block on this disposition.
     #[test]
     fn attribute_unknown_reports_refused_manifest_as_scope_note_without_naming_evidence() {
         let empty: &[ResolvedWorkspace] = &[];
@@ -4992,8 +4992,8 @@ mod tests {
         }
     }
 
-    /// The one attribution rule: a refused manifest naming a workspace that
-    /// resolved here rides as that island's passenger.
+    /// A refused manifest naming a resolved workspace is reported as its
+    /// passenger, never as a blocking `MergeAll` unknown.
     #[test]
     fn attribute_unknown_assigns_refused_believed_manifest_to_resolved_island() {
         let ws = ResolvedWorkspace {
@@ -5042,10 +5042,10 @@ mod tests {
         );
     }
 
-    /// Same claim, named parent not resolved here: refused (owns no bytes)
-    /// but unattributable, so a scope note — never a passenger of an
-    /// unproven island, and never a merge. Fails if the rule ever attributes
-    /// by name alone without checking resolution.
+    /// A refused claim whose named parent is not resolved here becomes a scope
+    /// note, never a passenger. Attribution must verify that the named workspace
+    /// resolved in this run; the name alone is not sufficient.
+    /// Cargo's refusal still makes it report-only, not a blocking unknown.
     #[test]
     fn attribute_unknown_with_unresolved_named_parent_is_scope_note_not_passenger() {
         let empty: &[ResolvedWorkspace] = &[];
@@ -5178,11 +5178,11 @@ mod tests {
         );
     }
 
-    /// Premise pin for M015/F: a symlinked target dir probes as
-    /// `{physical: None, exists: true, is_symlink: true}` — present but
-    /// without provable identity, so the partition merges rather than proving
-    /// through the link. Unix-gated: symlink creation is not portable, and an
-    /// ungated fixture would fail before the behavior under test runs.
+    /// A symlinked target probes as `{physical: None, exists: true,
+    /// is_symlink: true}`: present, but with no provable physical identity.
+    /// Cleanup must not treat it as a proven output root. Unix-gated because
+    /// symlink creation is not portable; an ungated fixture would fail before
+    /// the behavior under test runs.
     #[cfg(unix)]
     #[test]
     fn symlinked_output_root_reports_no_physical_identity() {

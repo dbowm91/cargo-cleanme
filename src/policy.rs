@@ -1552,11 +1552,11 @@ mod tests {
         );
     }
 
-    /// ADR 009: the published learned-root wording is unchanged.
+    /// The learned-root diagnostic is compatibility text.
     ///
-    /// C038's diagnostic is quoted in a closed closure record and in two
-    /// integration assertions. Changing it here would make those records
-    /// describe a message that no longer exists.
+    /// The following assertion pins its public prefix.
+    /// Change the wording only with an intentional contract update.
+    /// This test detects accidental message drift.
     #[test]
     fn the_learned_root_diagnostic_is_unchanged() {
         let mut classified = ClassifiedRoots::default();
