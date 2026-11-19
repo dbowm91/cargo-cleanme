@@ -129,7 +129,7 @@ property C045 established — or editing the generated text per shell.
 
 Runtime dependencies: `clap` 4.5, `crossterm` 0.28, `directories` 6,
 `dua-core` 4.1, `filesize` 0.2, `globset` 0.4, `indicatif` 0.18.6, `serde` 1,
-`serde_json` 1, `thiserror` 2, `toml` 0.8, and the `eggup-*` 0.1.2 family for
+`serde_json` 1, `thiserror` 2, `toml` 0.8, and the `eggup-*` 0.2.x family for
 self-update. `clap_complete` and `clap_mangen` are optional behind the
 `dev-tools` feature and exist only so the `generate-docs` binary can emit
 `completions/` and `man/`.
