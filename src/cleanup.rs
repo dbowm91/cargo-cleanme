@@ -13181,7 +13181,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .iter()
-                .all(|args| { !args.first().is_some_and(|a| a == "clean") }),
+                .all(|args| args.first().is_none_or(|a| a != "clean")),
             "nothing may spawn for an invalid spec"
         );
     }
