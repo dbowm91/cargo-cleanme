@@ -31,24 +31,21 @@
 //!
 //! `eggup-eggfetch` is the only production transport.
 //!
-//! It was not the first choice. `eggup-curl` is smaller, because
-//! `eggup-acquisition` has zero dependencies, and avoiding an embedded HTTP/TLS
-//! stack in a CLI that self-updates rarely is a real advantage. It was
-//! replaced because `CurlConfig` in `eggup-curl` 0.1.2 exposes no User-Agent
-//! seam and the adapter clears the child environment, so every request goes out
-//! as `curl/x.y`. The crates.io registry answers **403** to any non-descriptive
-//! User-Agent, so the curl transport could not read the version authority at
-//! all. This was found by the first live release smoke, not by the fixture
-//! suite, because the fixture suite never talks to the registry.
+//! `eggup-curl` is smaller because `eggup-acquisition` has zero dependencies,
+//! and avoiding an embedded HTTP/TLS stack in a rarely-updating CLI is a real
+//! advantage. At the time of the original transport choice, `eggup-curl` 0.1.2
+//! lacked a User-Agent seam and cleared the child environment, so requests went
+//! out as `curl/x.y`, which crates.io rejected. The first live release smoke
+//! found this; the fixture suite never talks to the registry.
 //!
-//! A transport that cannot perform the required transaction is not qualified,
-//! however small it is. `EggfetchConfig::user_agent` is the seam the
-//! requirement needs, and it costs an embedded TLS stack. That cost is
-//! measured and recorded rather than assumed.
+//! Eggup 0.2.0 adds a configurable User-Agent to `eggup-curl`, but this version
+//! update keeps Eggfetch as the production transport; the curl path has not been
+//! requalified for this application. The embedded TLS-stack cost is measured
+//! and recorded rather than assumed.
 //!
-//! Exactly one production transport is wired. The curl path is deliberately
-//! not kept as a fallback, because a fallback that cannot reach the authority
-//! is a second way to fail for no benefit.
+//! Exactly one production transport is wired; a second adapter is not kept as
+//! a fallback. Switching or composing transports changes the qualified network
+//! path and requires its own end-to-end qualification.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

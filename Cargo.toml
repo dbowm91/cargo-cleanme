@@ -76,22 +76,20 @@ toml = "0.8"
 # and rollback are owned by the published Eggup crates, not reimplemented
 # here.
 #
-# `eggup-eggfetch` is the production transport. It was NOT the first choice:
-# `eggup-curl` is smaller because `eggup-acquisition` has zero dependencies.
-# It is the choice because `CurlConfig` in `eggup-curl` 0.1.2 has no
-# User-Agent seam and the adapter clears the child environment, so the request
-# goes out as `curl/x.y`, and crates.io answers 403 to any non-descriptive
-# User-Agent. A transport that cannot reach the version authority is not
-# qualified, regardless of its size. `EggfetchConfig::user_agent` is the seam
-# the requirement needs.
+# `eggup-eggfetch` remains the qualified production transport. `eggup-curl`
+# is smaller, but the version used during the original choice (`eggup-curl`
+# 0.1.2) lacked a User-Agent seam and cleared the child environment, so requests
+# went out as `curl/x.y` and crates.io rejected them. Eggup 0.2.0 adds a
+# configurable User-Agent to curl; this update does not switch transports. The
+# curl path would need separate qualification.
 #
 # The cost of that correctness is an embedded HTTP/TLS stack
 # (`eggfetch-core` + rustls + tokio). The measured delta is recorded in the M010C
-# closure record. Exactly one production transport is wired; the curl path is
-# not kept as a fallback, because it cannot perform the required transaction.
-eggup-acquisition = "0.1.2"
-eggup-core = "0.1.2"
-eggup-eggfetch = "0.1.2"
+# closure record. Exactly one production transport is wired. Switching to or
+# composing the curl path requires separate end-to-end qualification.
+eggup-acquisition = "0.2.2"
+eggup-core = "0.2.2"
+eggup-eggfetch = "0.2.2"
 # Optional and feature-gated: only the completion/manpage generator needs them,
 # so a normal build and `cargo install` never compile them.
 clap_complete = { version = "4.5", optional = true }
