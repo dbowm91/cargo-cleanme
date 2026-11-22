@@ -22,8 +22,9 @@ dependency, and the only one that writes to its own executable path.
 > names and reading what is there, not by shifting an old number arithmetically.
 > Where a citation is to a *dependency's* source
 > (`eggup-core-0.1.2/src/transaction.rs:583`) it is out of the guard's scope,
-> because the guard only indexes `src/*.rs` and `tests/*.rs`; those are verified
-> against the pinned crate in the cargo registry.
+> because the guard only indexes `src/*.rs` and `tests/*.rs`. These citations
+> record an inspection of Eggup Core 0.1.2, not the current lockfile version; the
+> resolved dependency set is listed in §7.
 
 Three questions are answered definitively below; each is load-bearing elsewhere
 in this document.
@@ -641,8 +642,8 @@ process is really us (`src/update.rs:1206-1208`).
 
 ### Atomicity of the replace
 
-Verified against the dependency source `eggup-core-0.1.2` (version confirmed at
-`Cargo.lock:461-463`):
+This is a historical source audit against `eggup-core 0.1.2`; current resolved
+versions are listed in §7. The dependency-source citations below point to 0.1.2:
 
 1. The **old file is moved aside, not deleted**:
    `fs::rename(&destination, &path)` at
@@ -720,10 +721,10 @@ but the exit code is 0. Only a real run refuses — and a real run refuses
 
 ### Resolved dependency set
 
-From `Cargo.lock`: `eggup-acquisition 0.1.2` (`Cargo.lock:455-457`),
-`eggup-core 0.1.2` (`Cargo.lock:461-463`), `eggup-eggfetch 0.1.2`
-(`Cargo.lock:470-472`), `eggfetch-core 0.2.2` (`Cargo.lock:412-414`).
-Declared at `Cargo.toml:92-94`.
+From `Cargo.lock`: `eggup-acquisition 0.2.2` (`Cargo.lock:455-457`),
+`eggup-core 0.2.2` (`Cargo.lock:461-463`), `eggup-eggfetch 0.2.2`
+(`Cargo.lock:471-473`), `eggfetch-core 0.4.0` (`Cargo.lock:412-414`).
+Declared at `Cargo.toml:90-92`.
 
 | Crate | Used here for | Reference |
 |---|---|---|
@@ -751,9 +752,9 @@ Documented at length in `Cargo.toml:79-91` and restated in the module header
    (`Cargo.toml:85-86`, `src/update.rs:44-47`).
 
 **The cost, stated rather than assumed:** an embedded HTTP/TLS stack —
-`eggfetch-core` + rustls + tokio (`Cargo.toml:88-89`), with `eggfetch-core 0.2.2`
-and `eggfetch-http-connect 0.2.2` confirmed at `Cargo.lock:412-414`,
-`Cargo.lock:444-446`. `Cargo.toml:89-90` says "The measured delta is recorded in
+`eggfetch-core` + rustls + tokio (`Cargo.toml:87-89`), with `eggfetch-core 0.4.0`
+and `eggfetch-http-connect 0.4.0` confirmed at `Cargo.lock:412-414`,
+`Cargo.lock:444-446`. `Cargo.toml:87-88` says "The measured delta is recorded in
 the M010C closure record" — **I did not open that record, so I cannot state the
 measured figure.** The closure record for C011 does state one:
 5,420,664 → 12,125,624 bytes and 82 → 177 normal dependencies

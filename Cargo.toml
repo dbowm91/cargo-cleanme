@@ -87,9 +87,9 @@ toml = "0.8"
 # (`eggfetch-core` + rustls + tokio). The measured delta is recorded in the M010C
 # closure record. Exactly one production transport is wired. Switching to or
 # composing the curl path requires separate end-to-end qualification.
-eggup-acquisition = "0.2.0"
-eggup-core = "0.2.0"
-eggup-eggfetch = "0.2.0"
+eggup-acquisition = "0.2.2"
+eggup-core = "0.2.2"
+eggup-eggfetch = "0.2.2"
 # Optional and feature-gated: only the completion/manpage generator needs them,
 # so a normal build and `cargo install` never compile them.
 clap_complete = { version = "4.5", optional = true }
