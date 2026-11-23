@@ -900,13 +900,13 @@ impl ScopeBlock {
     }
 }
 
-/// Output-placement environment captured for cleanup's final proof.
+/// Snapshot of output-placement variables for cleanup's final proof.
 ///
-/// A change to either variable between discovery and spawn blocks the
-/// remaining units before Cargo runs.
-/// `output_env_matches` compares fresh values with this snapshot.
-/// Absent and empty variables remain distinct.
-/// The snapshot is rechecked before every dispatch.
+/// Covers `CARGO_TARGET_DIR` and `CARGO_BUILD_BUILD_DIR`.
+/// `output_env_matches` compares fresh values.
+/// `None` and empty values are distinct.
+/// Cleanup rechecks before every dispatch.
+/// A mismatch blocks the remaining units.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OutputProvenanceSnapshot {
     pub cargo_target_dir: Option<OsString>,
@@ -923,12 +923,12 @@ fn snapshot_output_env(get: &dyn Fn(&str) -> Option<OsString>) -> OutputProvenan
     }
 }
 
-/// True when the output-placement environment matches its snapshot.
-/// An absent variable differs from an empty one.
+/// Checks whether current output placement matches the snapshot.
+/// `None` and empty values differ.
 ///
-/// Cleanup checks this before each Cargo dispatch.
-/// A mismatch blocks the remaining units before Cargo runs.
-/// This revalidation preserves the cleanup proof.
+/// Cleanup checks this before every Cargo dispatch.
+/// A mismatch blocks the remaining units.
+/// The final proof therefore fails closed.
 fn output_env_matches(
     snapshot: &OutputProvenanceSnapshot,
     get: &dyn Fn(&str) -> Option<OsString>,
@@ -937,14 +937,14 @@ fn output_env_matches(
 }
 
 // The selected scope is the proof boundary.
-// Cleanup classifies unresolved manifests against the selected boundary.
-// Out-of-boundary participants are diagnostics, never blockers.
-// Passengers and scope notes are reported, never blocking.
-// Only active in-boundary `MergeAll` participants can block.
+// Classify unresolved manifests against it.
+// Out-of-boundary participants are diagnostic-only.
+// Passengers and scope notes never block.
+// Only active in-boundary `MergeAll` participants may block.
 //
-// Final proof refreshes attribution before each dispatch.
-// Output-environment drift invalidates the remaining cleanup proof.
-// A mismatch blocks remaining units before Cargo runs.
+// Refresh attribution before each dispatch.
+// Output-environment drift invalidates the proof.
+// A mismatch blocks remaining units.
 //
 // See `split_unresolved_for_boundary` for the blocking policy.
 
@@ -2260,10 +2260,10 @@ fn discover_and_resolve_universe(
     })
 }
 
-// Dispatch needs no second proof filter.
-// `resolve_cleanup_scope` already emits only in-boundary units.
-// Blocking sites return before dispatch when in-boundary poison exists.
-// Out-of-boundary participants remain diagnostics, not candidates.
+// No second proof filter is needed.
+// `resolve_cleanup_scope` emits only in-boundary units.
+// Blocking conditions return before dispatch.
+// Out-of-boundary participants remain diagnostic-only.
 #[allow(clippy::too_many_arguments)]
 pub fn clean_with_roots_policy_selector_guarded(
     roots: &[PathBuf],
@@ -2324,8 +2324,8 @@ pub fn clean_with_roots_policy_selector_guarded(
     // The blocked report carries the counters measured up to the point the
     // block was raised, exactly as the successful path does at the end.
     report.counters = counters.clone();
-    // Capture the output-placement environment once before dispatch.
-    // Recheck it before every unit.
+    // Capture output placement once.
+    // Recheck before each unit dispatch.
     // Any mismatch stops further cleanup.
     let provenance = snapshot_output_env(&|key| std::env::var_os(key));
     let per_root = selection_is_per_learned_root(selection);
@@ -2533,14 +2533,14 @@ pub fn clean_with_roots_policy_selector_guarded(
     let finite_fingerprint = claim_fingerprint(&finite_claims);
     let unbounded_count = unbounded_participants.len();
     // Recheck output-environment provenance before every unit dispatch.
-    // Compare `CARGO_TARGET_DIR` and `CARGO_BUILD_BUILD_DIR` as captured values.
-    // Absent and empty values are distinct.
-    // A mismatch blocks remaining units before another Cargo spawn.
-    // Simulate applies the same gate so it predicts Execute.
-    // The check fails closed before cleanup can use stale output placement.
-    // The authorization roots are resolved once for the whole run and reused
-    // by every unit's gate: they are loop-invariant, and resolving them per
-    // unit repeated the same filesystem work for every unit.
+    // Compare captured `CARGO_TARGET_DIR` and `CARGO_BUILD_BUILD_DIR`.
+    // `None` and empty values differ.
+    // Drift blocks remaining units before another Cargo spawn.
+    // Simulate applies the same gate as Execute.
+    // Stale output placement fails closed.
+    // Resolve authorization roots once for the run.
+    // Reuse this loop-invariant context for every unit.
+    // This avoids repeated filesystem work.
     let authorization = AuthorizationContext::new(&roots, allowed_output_roots);
     // One physical artifact directory is cleaned once. A later workspace that
     // shares it is reported, and its bytes are not counted again.
@@ -3296,13 +3296,13 @@ pub fn blocked_listing_detail(
     detail
 }
 
-// Grouping classifies each physical identity directly.
-// Unresolved manifests are split against the selected cleanup boundary.
-// Out-of-boundary participants remain diagnostic-only.
-// In-boundary passengers and scope notes are reported, never blocking.
-// Active in-boundary `MergeAll` participants may block.
-// The manifest set is refreshed before each dispatch.
-// Growth, shrinkage, or changed paths fail closed.
+// Group physical identities directly.
+// Split unresolved manifests by cleanup boundary.
+// Outside participants remain diagnostic-only.
+// Passengers and scope notes are report-only.
+// Active in-boundary `MergeAll` may block.
+// Refresh manifests before each dispatch.
+// Changes fail closed.
 
 /// H-2 universe-stability predicate: the rediscovered manifest set must equal
 /// the hoisted snapshot exactly — growth, shrinkage, or any difference blocks
@@ -3476,10 +3476,10 @@ pub fn list_cleanup_candidates(
     })
 }
 
-// The picker has no held-context rows; it refuses when the boundary blocks.
-// The refusal carries block details instead of offering an unproven list.
-// Out-of-scope participants are diagnostic-only and do not hold a picker row.
-// Their details appear in normal human output and JSON diagnostics.
+// The picker refuses when the selected boundary blocks.
+// It never offers an unproven list; refusal includes block details.
+// Out-of-boundary participants remain diagnostic-only.
+// Their details appear in human and JSON output.
 
 fn compile_policy_globs(patterns: &[String]) -> Result<globset::GlobSet, AppError> {
     let mut builder = globset::GlobSetBuilder::new();
@@ -3628,18 +3628,18 @@ fn boundary_admits(selection: &CleanupSelection, manifest: &Path) -> bool {
     }
 }
 
-/// ADR 007 three-way split of unresolved participants.
+/// Splits unresolved participants by the selected proof boundary.
 ///
-/// - Out-of-boundary: reported as `out_of_scope` diagnostics, never blocks.
-///   Cleaning a healthy boundary while poison exists elsewhere is the
-///   corrected behavior; a test asserting the old whole-scope block here
-///   names the defect this decision fixes.
-/// - In-boundary `PassengerOf`/`ScopeNote`: reported, never blocks. Cargo
-///   names its owner (refused manifest) or the scope (believed member),
-///   leaving no unproven owner to block.
-///   Cleanup reports these participants by default.
-/// - In-boundary `MergeAll`: blocks only while its manifest may still be
-///   active. Stale unresolved manifests are reported, never blocking.
+/// - Out-of-boundary: diagnostic-only; never blocks.
+///   Healthy boundaries may proceed despite poison elsewhere.
+///   `out_of_anchor_poison_does_not_block_anchor` pins this rule.
+///
+/// - In-boundary `PassengerOf`/`ScopeNote`: report-only.
+///   Cargo identified the owner or scope; no unknown owner remains.
+///   These dispositions never block cleanup.
+///
+/// - In-boundary `MergeAll`: blocks only while the manifest may be active.
+///   Stale unresolved manifests are report-only.
 ///
 /// Returns `(blocking, reported_in_boundary, out_of_boundary)`.
 fn split_unresolved_for_boundary(
@@ -7387,10 +7387,10 @@ mod tests {
         );
     }
 
-    /// Two output-disjoint workspaces and a refused orphan form the fixture.
-    /// The locate failure makes the orphan a report-only scope note.
+    /// Fixture: two output-disjoint workspaces and one refused orphan.
+    /// The orphan is a report-only scope note.
     /// It must not block either workspace.
-    /// The repo-owned fixture makes this premise reproducible.
+    /// Keep this premise reproducible.
     fn island_pair(d: &tempfile::TempDir) -> (PathBuf, PathBuf, PathBuf) {
         // macOS: TMPDIR's /var is a symlink; discovery canonicalizes.
         let base = d.path().canonicalize().unwrap();
@@ -7405,8 +7405,8 @@ mod tests {
         (root_a, root_b, orphan)
     }
 
-    /// Run the guarded engine with the selected scope as the proof boundary.
-    /// This is the default behavior; no opt-in flag is needed.
+    /// Maps each cleanup mode to its reported outcome.
+    /// This helper does not invoke the engine.
     fn outcome_for(mode: CleanMode) -> CleanOutcome {
         match mode {
             CleanMode::Simulate => CleanOutcome::Simulated,
@@ -7606,8 +7606,8 @@ mod tests {
         assert_eq!(report.resolved_workspaces, 2);
         assert_eq!(report.discovered_manifests, 3);
         assert_eq!(report.failed, 0);
-        // JSON reports the scope note under `unresolved_participants`.
-        // No partition-result field belongs in the contract.
+        // Scope notes stay under `unresolved_participants` in JSON.
+        // Partition results are not part of the contract.
         let value = serde_json::to_value(crate::output::cleanup(&report, "routine", None)).unwrap();
         assert!(
             value["result"]["islands"].is_null(),
@@ -8170,8 +8170,8 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(runner.clean_calls().len(), 1);
-        // The human render keeps the earlier row and reports the later block.
-        // It has no separate partition-outcome section.
+        // Earlier cleaned rows remain visible when a later proof blocks.
+        // No partition-outcome section is rendered.
         let text = report.render(&crate::report::HumanOptions::default());
         assert!(!text.contains("island outcomes"), "{text}");
         assert!(text.contains("universe changed"), "{text}");

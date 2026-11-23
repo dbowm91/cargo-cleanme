@@ -178,20 +178,20 @@ pub struct ResolvedWorkspace {
     pub nested_package_roots: Vec<PathBuf>,
 }
 
-/// What an unresolved manifest proves about its byte-ownership.
+/// Evidence about an unresolved manifest's possible byte-ownership.
 ///
 /// A Cargo refusal proves Cargo could not use the manifest.
 /// Transport, parse, metadata, identity, and discovery failures do not.
-/// Cleanup applies the capability to the selected boundary and activity.
-/// The class is recorded when failure occurs, never parsed from message text.
+/// Cleanup applies the selected boundary and activity separately.
+/// Record the class when failure occurs.
+/// Never infer it from diagnostic text.
 /// The class alone does not decide whether cleanup blocks.
-/// Editing a diagnostic must not change ownership classification.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UnknownCapability {
-    /// `cargo locate-project` ran and refused the manifest (nonzero exit):
-    /// the manifest is in no workspace Cargo can see, so it owns no bytes.
-    /// Transport failures, unparseable output, and lost workers are *not*
-    /// this class — Cargo never examined the manifest there.
+    /// `cargo locate-project` ran and refused the manifest.
+    /// Cargo cannot assign it to a workspace, so it owns no bytes.
+    /// Transport, parse, and worker failures are not refusals.
+    /// In those cases Cargo never examined the manifest.
     RefusedByCargo,
     /// Byte-capability is unproven after transport, parse, metadata, identity,
     /// worker, or discovery failures. Cleanup decides whether it blocks.

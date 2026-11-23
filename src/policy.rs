@@ -1552,11 +1552,11 @@ mod tests {
         );
     }
 
-    /// The learned-root diagnostic is compatibility text.
+    /// The learned-root diagnostic prefix is compatibility text.
     ///
-    /// The following assertion pins its public prefix.
+    /// The assertion below pins that prefix.
     /// Change the wording only with an intentional contract update.
-    /// This test detects accidental message drift.
+    /// This catches accidental drift.
     #[test]
     fn the_learned_root_diagnostic_is_unchanged() {
         let mut classified = ClassifiedRoots::default();

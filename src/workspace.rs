@@ -430,16 +430,16 @@ pub(crate) fn refused_nested_workspace(reason: &str) -> bool {
     reason.contains("current:") && named_workspace_manifest(reason).is_some()
 }
 
-/// Classify an unresolved manifest for cleanup's ownership check.
+/// Failure-class attribution for an unresolved manifest.
 ///
-/// Only `RefusedByCargo` proves the manifest owns no bytes. Other failures
-/// remain `MergeAll`, so cleanup can apply the selected-boundary and
-/// activity checks.
-/// A refused manifest naming a resolved workspace is its passenger.
-/// Without a resolved owner, it is a scope note.
-/// Passengers and scope notes are reported, never blocking.
+/// `RefusedByCargo` yields a passenger or scope note; other failures are `MergeAll`.
+/// Passengers and scope notes are report-only.
+/// Cleanup applies boundary and activity policy to `MergeAll`.
 ///
-/// Cleanup, not this classifier, decides whether `MergeAll` blocks.
+/// A named, resolved workspace yields a passenger.
+/// A refusal without a resolved owner yields a scope note.
+/// Missing or truncated names fail closed to `ScopeNote`.
+/// This classifier does not decide whether cleanup blocks.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum UnknownDisposition {
     /// Cargo refused this manifest and named a resolved workspace.
@@ -452,14 +452,14 @@ pub enum UnknownDisposition {
     MergeAll,
 }
 
-/// Classify one unresolved manifest by failure class and named workspace.
+/// Classifies from recorded capability and resolved workspace identity.
 ///
-/// Pure: no spawns, mutation, counters, or diagnostics.
+/// Pure: no spawns, mutations, counters, or diagnostics.
 /// Only `RefusedByCargo` can be a passenger or scope note.
-/// A named, resolved workspace yields `PassengerOf`; otherwise use
-/// `ScopeNote`.
-/// Every other failure class is `MergeAll`.
+/// A resolved named workspace yields `PassengerOf`; otherwise, `ScopeNote`.
 /// Missing or truncated names fail closed to `ScopeNote`.
+/// Other failure classes yield `MergeAll`.
+/// Cleanup separately applies the boundary and activity policy.
 pub fn attribute_unknown(
     participant: &UnresolvedOwnershipParticipant,
     workspaces: &[ResolvedWorkspace],
@@ -1241,15 +1241,15 @@ pub fn resolve_workspaces_with_coverage(
         canonical_manifest_key(&a.manifest) == canonical_manifest_key(&b.manifest)
     });
     attach_nested_package_roots(&mut workspaces, &unresolved);
-    // Keep unresolved manifests for cleanup's boundary classification.
-    // Dropping one could hide an in-boundary claimant or lose an out-of-boundary
-    // diagnostic. Outside entries are reported; only active, in-boundary
-    // `MergeAll` participants block.
+    // Retain every unresolved manifest for cleanup's boundary split.
+    // Dropping one can hide an in-boundary claimant.
+    // It can also lose an out-of-boundary diagnostic.
+    // Outside entries stay visible; active in-boundary `MergeAll` may block.
     //
-    // `attribute_unknown` classifies failure class, not blocking policy.
-    // Refused manifests stay visible as passengers or scope notes.
+    // `attribute_unknown` classifies failure, not blocking policy.
+    // Refused manifests remain reportable as passengers or scope notes.
     // Cleanup rechecks the ledger against fresh workspaces before dispatch.
-    // Permission, transport, parse, and metadata failures remain represented.
+    // Other resolution failures remain represented in the ledger.
     ResolutionCoverage {
         workspaces,
         unresolved,
@@ -4738,13 +4738,13 @@ mod tests {
 
     #[test]
     fn misconfigured_member_with_resolved_parent_still_blocks_but_attributes_as_passenger() {
-        // `fuzz/Cargo.toml` names resolved parent workspace `ws`.
-        // Keep the refusal in the unresolved ledger for cleanup to classify.
-        // Cargo's refusal proves the manifest itself owns no bytes.
-        // Here it is attributed as a passenger of the resolved workspace.
-        // Cleanup reports it; it is not a blocking `MergeAll` unknown.
-        // Keep its diagnostic visible so the misconfiguration is fixable.
-        // This test covers resolution and attribution, not cleanup's gate.
+        // Cargo refuses `fuzz/Cargo.toml` and names the resolved parent `ws`.
+        // The refusal proves the child manifest owns no bytes.
+        // Keep it in the unresolved ledger for cleanup to classify.
+        // It is a report-only passenger of the resolved workspace.
+        // Retain the diagnostic so the misconfiguration stays visible.
+        //
+        // This test covers resolution/attribution, not cleanup's blocking gate.
         struct BelievesRunner {
             parent_manifest: PathBuf,
             parent_root: PathBuf,
@@ -4911,13 +4911,13 @@ mod tests {
         );
     }
 
-    /// Every unproven failure-class row returns `MergeAll`.
+    /// Every unproven failure class yields `MergeAll`.
     ///
-    /// Each input uses the exact reason text recorded by that branch.
-    /// The verdict must follow the stored capability, not the prose.
-    /// A believed-workspace reason paired with `Unproven` is the key case.
+    /// The key case pairs a believed-workspace reason with `Unproven`.
+    /// Classification follows stored capability, not diagnostic prose.
     /// Cleanup applies boundary and activity policy separately.
-    /// Fails if classification ever depends on diagnostic text.
+    /// Each input uses the branch's recorded reason text.
+    /// Fails if classification depends on the message.
     #[test]
     fn attribute_unknown_merges_every_unproven_class() {
         let empty: &[ResolvedWorkspace] = &[];

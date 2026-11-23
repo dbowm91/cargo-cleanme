@@ -716,12 +716,12 @@ pub mod log {
             assert_ascii_and_bounded(&line);
         }
 
-        /// Explicit keys make the cleanup result schema reviewable.
-        /// Added or removed fields are machine-contract changes.
-        /// The assertion below detects either change.
-        /// Update this list with any intentional schema revision.
-        /// Keep the expected keys sorted for deterministic diffs.
-        /// Do not derive the expectation from the produced object.
+        /// Keep cleanup result keys explicit and sorted.
+        /// Additions and removals change the machine contract.
+        /// This assertion detects either change.
+        /// Update the expected list only for intentional revisions.
+        /// A sorted list makes diffs deterministic.
+        /// Never derive expectations from the produced object.
         #[test]
         fn cleanup_json_result_key_set_is_stable() {
             let report = empty_report();
@@ -778,10 +778,10 @@ pub mod log {
             assert_ascii_and_bounded(&line);
         }
 
-        /// A boundary-blocked run logs `blocked` with counts and no paths.
-        /// Its reason is in JSON `scope_reason` and the human block message.
-        /// Prose never reaches the retained history line.
-        /// Keep this summary bounded and path-free.
+        /// Log boundary blocks with bounded counts and no paths.
+        /// Keep the reason in JSON and human output.
+        /// No prose reaches the retained history line.
+        /// Keep the summary path-free.
         #[test]
         fn cleanup_line_reports_blocked_run_with_counts() {
             let mut report = empty_report();
